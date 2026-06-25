@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <title>Contabilidade by Attentive</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body, #root { height: 100%; }
+    body {
+      font-family: 'DM Sans', system-ui, sans-serif;
+      background: #161B29; color: #E8EAF0;
+      -webkit-font-smoothing: antialiased;
+    }
+    a { color: inherit; text-decoration: none; }
+    button { font-family: inherit; cursor: pointer; }
+    input, select, textarea { font-family: inherit; }
+    .btn { border: none; border-radius: 8px; padding: 9px 16px; font-size: 14px; font-weight: 600; color: #fff; background: #4A7CFF; }
+    .btn-ghost { background: transparent; border: 1px solid rgba(255,255,255,0.12); color: #E8EAF0; }
+    .btn:disabled { opacity: .5; cursor: not-allowed; }
+    .input { width: 100%; background: #1B212E; border: 1px solid rgba(255,255,255,0.10); border-radius: 8px; padding: 9px 11px; color: #E8EAF0; font-size: 14px; }
+    label { display: block; font-size: 12px; color: #9BA3BC; margin-bottom: 4px; }
+    table { width: 100%; border-collapse: collapse; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <script type="text/babel" data-presets="react">
+    const { useState, useEffect, createContext, useContext } = React;
+
+    // ===== Supabase (banco NOVO do Contabilidade; chave publishable é pública por design) =====
+    const supabase = window.supabase.createClient(
+      'https://uiyxwhitsqpdkhipjnzi.supabase.co',
+      'sb_publishable_AWzmjmGkqPVQe_S8ZJcjZQ_gInlnF8m'
+    );
+
+    // ===== Tokens do design system (mesma paleta do protótipo) =====
+    const theme = {
+      sidebar: '#1A2236', accent: '#4A7CFF', contentBg: '#161B29', card: '#1F2634',
+      cb: 'rgba(255,255,255,0.06)', text: '#E8EAF0', sub: '#9BA3BC', input: '#1B212E',
+      border: 'rgba(255,255,255,0.08)', green: '#30A46C', yellow: '#F5A623', red: '#E5484D',
+    };
+
+    // ===== Auth =====
+    const AuthCtx = createContext(null);
+    const useAuth = () => useContext(AuthCtx);
+    function AuthProvider({ children }) {
+      const [session, setSession] = useState(null);
+      const [loading, setLoading] = useState(true);
+      useEffect(() => {
+        supabase.auth.getSession().then(({ data }) => { setSession(data.session); setLoading(false); });
+        const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => setSession(s));
+        return () => sub.subscription.unsubscribe();
+      }, []);
+      const value = {
+        session, user: session?.user ?? null, loading,
+        signIn: (email, password) => supabase.auth.signInWithPassword({ email, password }),
+        signOut: () => supabase.auth.signOut(),
+      };
+      return <AuthCtx.Provider value={value}>{children}</AuthCtx.Provider>;
+    }
+
+    // ===== Login =====
+    function Login() {
+      const { signIn } = useAuth();
+      const [email, setEmail] = useState('');
+      const [password, setPassword] = useState('');
+      const [erro, setErro] = useState('');
+      const [busy, setBusy] = useState(false);
+      async function entrar(e) {
+        e.preventDefault(); setErro(''); setBusy(true);
+        const { error } = await signIn(email, password);
+        setBusy(false);
+        if (error) setErro(error.message);
+      }
+      return (
+        <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', background: theme.contentBg }}>
+          <form onSubmit={entrar} style={{ width: 360, background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 28 }}>
+            <h1 style={{ fontSize: 19, marginBottom: 4 }}>Contabilidade by Attentive</h1>
+            <p style={{ color: theme.sub, fontSize: 13, marginBottom: 20 }}>Entre para continuar</p>
+            <label>E-mail</label>
+            <input className="input" type="email" value={email} onChange={e => setEmail(e.target.value)} required style={{ marginBottom: 14 }} />
+            <label>Senha</label>
+            <input className="input" type="password" value={password} onChange={e => setPassword(e.target.value)} required style={{ marginBottom: 18 }} />
+            {erro && <p style={{ color: theme.red, fontSize: 13, marginBottom: 12 }}>{erro}</p>}
+            <button className="btn" style={{ width: '100%' }} disabled={busy}>{busy ? 'Entrando…' : 'Entrar'}</button>
+            <p style={{ color: theme.sub, fontSize: 11.5, marginTop: 14, lineHeight: 1.5 }}>
+              Os usuários são criados no painel do Supabase (Authentication → Users). Sem cadastro aberto.
+            </p>
+          </form>
+        </div>
+      );
+    }
+
+    // ===== Dashboard =====
+    function Card({ titulo, valor }) {
+      return (
+        <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: '18px 18px' }}>
+          <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 8 }}>{titulo}</p>
+          <p style={{ fontSize: 28, fontWeight: 700 }}>{valor === null ? '…' : valor}</p>
+        </div>
+      );
+    }
+    function Dashboard() {
+      const [stats, setStats] = useState({ clientes: null });
+      useEffect(() => {
+        supabase.from('clientes').select('id', { count: 'exact', head: true })
+          .then(({ count }) => setStats(s => ({ ...s, clientes: count ?? 0 })));
+      }, []);
+      return (
+        <div>
+          <h1 style={{ fontSize: 22, marginBottom: 4 }}>Dashboard</h1>
+          <p style={{ color: theme.sub, fontSize: 13, marginBottom: 24 }}>Visão geral do escritório</p>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(200px,1fr))', gap: 14 }}>
+            <Card titulo="Clientes" valor={stats.clientes} />
+            <Card titulo="Fechamentos em andamento" valor="—" />
+            <Card titulo="Pendências" valor="—" />
+          </div>
+          <p style={{ color: theme.sub, fontSize: 12.5, marginTop: 28, lineHeight: 1.6 }}>
+            Esta é a fundação funcional (núcleo). O próximo passo é ligar a importação do razão,
+            o balancete e a conciliação.
+          </p>
+        </div>
+      );
+    }
+
+    // ===== Fechamentos =====
+    function Fechamentos() {
+      return (
+        <div>
+          <h1 style={{ fontSize: 22, marginBottom: 4 }}>Fechamentos</h1>
+          <p style={{ color: theme.sub, fontSize: 13 }}>
+            Próxima onda: importação do razão, balancete e conciliação por competência.
+          </p>
+        </div>
+      );
+    }
+
+    // ===== Clientes =====
+    const vazio = {
+      codigo_dominio: '', tipo: 'Matriz', codigo_matriz: '', razao_social: '',
+      nome_fantasia: '', cnpj: '', regime_tributario: 'Simples', tipo_fechamento: '',
+      competencia_inicio: '', integracao_financeira: 'Não usa', analista: '', observacoes: '',
+    };
+    function Campo({ label, children, full }) {
+      return (
+        <div style={{ gridColumn: full ? '1 / -1' : 'auto' }}>
+          <label>{label}</label>
+          {children}
+        </div>
+      );
+    }
+    function Clientes() {
+      const [lista, setLista] = useState([]);
+      const [loading, setLoading] = useState(true);
+      const [erro, setErro] = useState('');
+      const [form, setForm] = useState(vazio);
+      const [salvando, setSalvando] = useState(false);
+      const [editId, setEditId] = useState(null);
+      const [aberto, setAberto] = useState(false);
+      async function carregar() {
+        setLoading(true); setErro('');
+        const { data, error } = await supabase.from('clientes').select('*').order('razao_social', { ascending: true });
+        if (error) setErro(error.message); else setLista(data || []);
+        setLoading(false);
+      }
+      useEffect(() => { carregar(); }, []);
+      function abrirNovo() { setForm(vazio); setEditId(null); setAberto(true); }
+      function abrirEdit(c) { setForm({ ...vazio, ...c }); setEditId(c.id); setAberto(true); }
+      async function salvar(e) {
+        e.preventDefault(); setSalvando(true); setErro('');
+        const payload = { ...form };
+        if (payload.tipo === 'Matriz') payload.codigo_matriz = null;
+        delete payload.id; delete payload.created_at; delete payload.updated_at; delete payload.ativo;
+        let res;
+        if (editId) res = await supabase.from('clientes').update(payload).eq('id', editId);
+        else res = await supabase.from('clientes').insert(payload);
+        setSalvando(false);
+        if (res.error) { setErro(res.error.message); return; }
+        setAberto(false); carregar();
+      }
+      async function excluir(c) {
+        if (!confirm(`Excluir ${c.razao_social}?`)) return;
+        const { error } = await supabase.from('clientes').delete().eq('id', c.id);
+        if (error) setErro(error.message); else carregar();
+      }
+      const set = (k) => (e) => setForm(f => ({ ...f, [k]: e.target.value }));
+      return (
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+            <div>
+              <h1 style={{ fontSize: 22 }}>Clientes</h1>
+              <p style={{ color: theme.sub, fontSize: 13, marginTop: 2 }}>{lista.length} cadastrado(s)</p>
+            </div>
+            <button className="btn" onClick={abrirNovo}>+ Novo cliente</button>
+          </div>
+          {erro && <p style={{ color: theme.red, fontSize: 13, marginBottom: 14 }}>Erro: {erro}</p>}
+          <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'hidden' }}>
+            <table>
+              <thead>
+                <tr style={{ background: theme.input }}>
+                  {['Código', 'Razão social', 'Regime', 'Integração fin.', 'Analista', ''].map(h => (
+                    <th key={h} style={{ textAlign: 'left', padding: '11px 14px', fontSize: 11, color: theme.sub, textTransform: 'uppercase', letterSpacing: .3 }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {loading ? (
+                  <tr><td colSpan={6} style={{ padding: 20, color: theme.sub }}>Carregando…</td></tr>
+                ) : lista.length === 0 ? (
+                  <tr><td colSpan={6} style={{ padding: 20, color: theme.sub }}>Nenhum cliente. Clique em “+ Novo cliente”.</td></tr>
+                ) : lista.map(c => (
+                  <tr key={c.id} style={{ borderTop: `1px solid ${theme.border}` }}>
+                    <td style={{ padding: '11px 14px', fontSize: 13, color: theme.sub }}>{c.codigo_dominio}{c.tipo === 'Filial' ? ' (filial)' : ''}</td>
+                    <td style={{ padding: '11px 14px', fontSize: 13 }}>{c.razao_social}</td>
+                    <td style={{ padding: '11px 14px', fontSize: 13, color: theme.sub }}>{c.regime_tributario}</td>
+                    <td style={{ padding: '11px 14px', fontSize: 13, color: theme.sub }}>{c.integracao_financeira}</td>
+                    <td style={{ padding: '11px 14px', fontSize: 13, color: theme.sub }}>{c.analista}</td>
+                    <td style={{ padding: '11px 14px', fontSize: 12, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                      <button className="btn btn-ghost" style={{ padding: '5px 10px', fontSize: 12, marginRight: 6 }} onClick={() => abrirEdit(c)}>editar</button>
+                      <button className="btn btn-ghost" style={{ padding: '5px 10px', fontSize: 12 }} onClick={() => excluir(c)}>excluir</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {aberto && (
+            <div onClick={() => setAberto(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 50 }}>
+              <form onClick={e => e.stopPropagation()} onSubmit={salvar} style={{ width: 560, maxHeight: '90vh', overflow: 'auto', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
+                <h2 style={{ fontSize: 17, marginBottom: 16 }}>{editId ? 'Editar cliente' : 'Novo cliente'}</h2>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                  <Campo label="Código no Domínio"><input className="input" value={form.codigo_dominio} onChange={set('codigo_dominio')} required /></Campo>
+                  <Campo label="Tipo">
+                    <select className="input" value={form.tipo} onChange={set('tipo')}>
+                      <option>Matriz</option><option>Filial</option>
+                    </select>
+                  </Campo>
+                  {form.tipo === 'Filial' && (
+                    <Campo label="Código da matriz"><input className="input" value={form.codigo_matriz || ''} onChange={set('codigo_matriz')} /></Campo>
+                  )}
+                  <Campo label="Razão social" full={form.tipo !== 'Filial'}><input className="input" value={form.razao_social} onChange={set('razao_social')} required /></Campo>
+                  <Campo label="Nome fantasia"><input className="input" value={form.nome_fantasia || ''} onChange={set('nome_fantasia')} /></Campo>
+                  <Campo label="CNPJ"><input className="input" value={form.cnpj || ''} onChange={set('cnpj')} /></Campo>
+                  <Campo label="Regime tributário">
+                    <select className="input" value={form.regime_tributario} onChange={set('regime_tributario')}>
+                      <option>Simples</option><option>Presumido</option><option>Real</option>
+                    </select>
+                  </Campo>
+                  <Campo label="Tipo de fechamento"><input className="input" value={form.tipo_fechamento || ''} onChange={set('tipo_fechamento')} /></Campo>
+                  <Campo label="Competência de início (MM/AAAA)"><input className="input" value={form.competencia_inicio || ''} onChange={set('competencia_inicio')} placeholder="01/2026" /></Campo>
+                  <Campo label="Integração financeira">
+                    <select className="input" value={form.integracao_financeira} onChange={set('integracao_financeira')}>
+                      <option>Não usa</option><option>Sistema</option><option>Excel</option>
+                    </select>
+                  </Campo>
+                  <Campo label="Analista"><input className="input" value={form.analista || ''} onChange={set('analista')} /></Campo>
+                  <Campo label="Observações" full><textarea className="input" rows={2} value={form.observacoes || ''} onChange={set('observacoes')} /></Campo>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
+                  <button type="button" className="btn btn-ghost" onClick={() => setAberto(false)}>Cancelar</button>
+                  <button className="btn" disabled={salvando}>{salvando ? 'Salvando…' : 'Salvar'}</button>
+                </div>
+              </form>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ===== Layout (navegação por estado, em vez de react-router) =====
+    function Layout({ view, setView }) {
+      const { user, signOut } = useAuth();
+      const itens = [
+        { id: 'dashboard', label: 'Dashboard' },
+        { id: 'clientes', label: 'Clientes' },
+        { id: 'fechamentos', label: 'Fechamentos' },
+      ];
+      const Page = view === 'clientes' ? Clientes : view === 'fechamentos' ? Fechamentos : Dashboard;
+      return (
+        <div style={{ display: 'flex', minHeight: '100vh' }}>
+          <aside style={{ width: 230, background: theme.sidebar, padding: '22px 14px', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ fontWeight: 700, fontSize: 16, padding: '0 8px 20px' }}>
+              Contabilidade<br /><span style={{ color: theme.accent }}>by Attentive</span>
+            </div>
+            <nav style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              {itens.map(i => {
+                const active = view === i.id;
+                return (
+                  <button key={i.id} onClick={() => setView(i.id)} style={{
+                    textAlign: 'left', border: 'none', cursor: 'pointer',
+                    padding: '10px 12px', borderRadius: 8, fontSize: 14,
+                    color: active ? '#fff' : theme.sub,
+                    background: active ? 'rgba(74,124,255,0.16)' : 'transparent',
+                  }}>{i.label}</button>
+                );
+              })}
+            </nav>
+            <div style={{ marginTop: 'auto', padding: '0 8px' }}>
+              <p style={{ color: theme.sub, fontSize: 11.5, marginBottom: 8 }}>{user?.email}</p>
+              <button className="btn btn-ghost" style={{ width: '100%', fontSize: 13 }} onClick={signOut}>Sair</button>
+            </div>
+          </aside>
+          <main style={{ flex: 1, background: theme.contentBg, padding: '28px 32px', overflow: 'auto' }}>
+            <Page />
+          </main>
+        </div>
+      );
+    }
+
+    // ===== App =====
+    function Main() {
+      const { session, loading } = useAuth();
+      const [view, setView] = useState('dashboard');
+      if (loading) return <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', color: theme.sub }}>Carregando…</div>;
+      if (!session) return <Login />;
+      return <Layout view={view} setView={setView} />;
+    }
+    function App() { return <AuthProvider><Main /></AuthProvider>; }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
