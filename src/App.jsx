@@ -5,7 +5,9 @@ import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import Clientes from './pages/Clientes'
 import Fechamentos from './pages/Fechamentos'
+import ImportarRazao from './pages/ImportarRazao'
 import EmBreve from './pages/EmBreve'
+import { AppDataProvider } from './lib/appData'
 import { theme } from './lib/theme'
 
 function Protegido({ children }) {
@@ -20,9 +22,6 @@ const EM_BREVE = [
   { path: 'documentos', titulo: 'Documentos Recebidos', icon: 'ti-file-check', onda: 3,
     sub: 'Documentos do cliente por competência',
     descricao: 'Recebimento e conferência dos documentos enviados pelo cliente em cada competência, alimentando o gate de Status do fechamento.' },
-  { path: 'razao', titulo: 'Importar Razão', icon: 'ti-file-import', onda: 3,
-    sub: 'Upload do razão (Excel do Domínio)',
-    descricao: 'Upload do Excel do Domínio, parse das ~30 colunas e gravação por competência (data, conta, contrapartida, histórico, débito, crédito). Valida contas contra o plano e sinaliza contas sem cadastro.' },
   { path: 'integracao', titulo: 'Integração', icon: 'ti-plug-connected', onda: 5,
     sub: 'Financeira, fiscal, folha e patrimônio',
     descricao: 'Pipeline pré-razão para clientes com integração financeira via Excel: importa extrato, separa contabilizado × não identificado e gera o arquivo no layout do Domínio. Abas Fiscal/Folha/Patrimônio.' },
@@ -57,10 +56,11 @@ function Rotas() {
   return (
     <Routes>
       <Route path="/login" element={session ? <Navigate to="/" replace /> : <Login />} />
-      <Route element={<Protegido><Layout /></Protegido>}>
+      <Route element={<Protegido><AppDataProvider><Layout /></AppDataProvider></Protegido>}>
         <Route index element={<Dashboard />} />
         <Route path="clientes" element={<Clientes />} />
         <Route path="fechamentos" element={<Fechamentos />} />
+        <Route path="razao" element={<ImportarRazao />} />
         {EM_BREVE.map(m => (
           <Route key={m.path} path={m.path} element={
             <EmBreve titulo={m.titulo} sub={m.sub} descricao={m.descricao} icon={m.icon} onda={m.onda} />
