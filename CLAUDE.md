@@ -1,39 +1,36 @@
-import { useEffect, useState } from 'react'
-import { supabase } from '../lib/supabase'
-import { theme } from '../lib/theme'
+# CLAUDE.md
 
-export default function Dashboard() {
-  const [stats, setStats] = useState({ clientes: null })
+**Leia `CONTEXT.md` no início de cada sessão.** É o contexto-mestre do produto
+"Contabilidade by Attentive" (visão, módulos, regras do Domínio/LALUR/banco×resultado,
+layout dos arquivos, ordem de construção).
 
-  useEffect(() => {
-    supabase.from('clientes').select('id', { count: 'exact', head: true })
-      .then(({ count }) => setStats(s => ({ ...s, clientes: count ?? 0 })))
-  }, [])
+## Como este repositório está organizado
 
-  return (
-    <div>
-      <h1 style={{ fontSize: 22, marginBottom: 4 }}>Dashboard</h1>
-      <p style={{ color: theme.sub, fontSize: 13, marginBottom: 24 }}>Visão geral do escritório</p>
+- **App funcional (React + Vite + Supabase):** raiz do projeto (`src/`, `index.html`, `package.json`).
+  - Já funcional: autenticação (Supabase Auth) e **Cadastro de Clientes** ponta a ponta
+    (lê e grava na tabela `clientes`).
+  - Esqueleto pronto para as próximas ondas: Fechamentos (razão, balancete, conciliação).
+- **Schema do banco:** `supabase/schema.sql` (rodar no SQL Editor do Supabase).
+- **Protótipo de referência (UX/regras):** `prototipo/prototipo-plataforma-contabil.html`
+  e servido em `/prototipo.html`. É **referência visual** — não é o código de produção.
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(200px,1fr))', gap: 14 }}>
-        <Card titulo="Clientes" valor={stats.clientes} />
-        <Card titulo="Fechamentos em andamento" valor="—" />
-        <Card titulo="Pendências" valor="—" />
-      </div>
+## Regras de trabalho
 
-      <p style={{ color: theme.sub, fontSize: 12.5, marginTop: 28, lineHeight: 1.6 }}>
-        Esta é a fundação funcional (núcleo). O próximo passo é ligar a importação do razão,
-        o balancete e a conciliação, reaproveitando a referência visual em <code>/prototipo</code>.
-      </p>
-    </div>
-  )
-}
+1. Construir por ondas, começando pelo **núcleo**: clientes → import do razão → balancete → conciliação.
+2. Preservar histórico por **vigência** nas tabelas de cadastro (nunca sobrescrever).
+3. Toda justificativa/correção registra **usuário e data** (tabela `auditoria`).
+4. **Segurança:** a chave `service_role` do Supabase **nunca** vai ao front nem ao Git.
+   Só a `anon`/publishable, via `VITE_SUPABASE_ANON_KEY` no `.env.local` (que está no `.gitignore`).
+5. Pare e peça confirmação antes de: criar repositório, push, deploy de produção, e antes
+   de criar/alterar tabelas no Supabase.
 
-function Card({ titulo, valor }) {
-  return (
-    <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: '18px 18px' }}>
-      <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 8 }}>{titulo}</p>
-      <p style={{ fontSize: 28, fontWeight: 700 }}>{valor === null ? '…' : valor}</p>
-    </div>
-  )
-}
+## Rodar localmente
+
+```bash
+npm install
+cp .env.example .env.local   # preencha VITE_SUPABASE_ANON_KEY
+npm run dev
+```
+
+Antes do primeiro login, rode `supabase/schema.sql` no Supabase e crie um usuário em
+Authentication → Users.
