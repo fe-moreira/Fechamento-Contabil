@@ -34,8 +34,15 @@ export default function BaseInformacoes() {
   }
   useEffect(() => {
     setParticularidades([]); setContatos([]); setCargas({})
-    if (empresaId) carregarCargas()
+    if (!empresaId) return
+    carregarCargas()
+    supabase.from('clientes').select('particularidades, contatos').eq('id', empresaId).single()
+      .then(({ data }) => { setParticularidades(data?.particularidades || []); setContatos(data?.contatos || []) })
   }, [empresaId])
+
+  function persistir(campo, valor) {
+    supabase.from('clientes').update({ [campo]: valor }).eq('id', empresaId).then(() => {})
+  }
 
   if (!empresaId) {
     return (
@@ -47,11 +54,21 @@ export default function BaseInformacoes() {
 
   function salvarPartic(texto, idx) {
     const item = { t: texto, u: user?.email || 'você', d: hoje() }
-    setParticularidades(l => idx == null ? [...l, item] : l.map((x, i) => i === idx ? item : x))
+    const novo = idx == null ? [...particularidades, item] : particularidades.map((x, i) => i === idx ? item : x)
+    setParticularidades(novo); persistir('particularidades', novo)
+  }
+  function removerPartic(idx) {
+    const novo = particularidades.filter((_, j) => j !== idx)
+    setParticularidades(novo); persistir('particularidades', novo)
   }
   function salvarContato(c, idx) {
     const item = { ...c, u: user?.email || 'você', d: hoje() }
-    setContatos(l => idx == null ? [...l, item] : l.map((x, i) => i === idx ? item : x))
+    const novo = idx == null ? [...contatos, item] : contatos.map((x, i) => i === idx ? item : x)
+    setContatos(novo); persistir('contatos', novo)
+  }
+  function removerContato(idx) {
+    const novo = contatos.filter((_, j) => j !== idx)
+    setContatos(novo); persistir('contatos', novo)
   }
 
   return (
@@ -69,7 +86,7 @@ export default function BaseInformacoes() {
           : particularidades.map((x, i) => (
             <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, padding: '7px 0', borderBottom: `1px solid ${theme.border}` }}>
               <span style={{ color: theme.text, fontSize: 13, flex: 1 }}>{x.t} <span style={{ color: theme.sub, fontSize: 11 }}>— atualizado por {x.u} · {x.d}</span></span>
-              <Acoes onEdit={() => setModal({ tipo: 'partic', idx: i, valor: x.t })} onDel={() => setParticularidades(l => l.filter((_, j) => j !== i))} />
+              <Acoes onEdit={() => setModal({ tipo: 'partic', idx: i, valor: x.t })} onDel={() => removerPartic(i)} />
             </div>
           ))}
       </div>
@@ -90,7 +107,7 @@ export default function BaseInformacoes() {
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                 <span style={{ color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{x.u} · {x.d}</span>
-                <Acoes onEdit={() => setModal({ tipo: 'contato', idx: i, valor: x })} onDel={() => setContatos(l => l.filter((_, j) => j !== i))} />
+                <Acoes onEdit={() => setModal({ tipo: 'contato', idx: i, valor: x })} onDel={() => removerContato(i)} />
               </div>
             </div>
           ))}
