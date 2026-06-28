@@ -7,7 +7,6 @@ import { theme } from '../lib/theme'
 
 const PRINCIPAL = [
   { to: '/', end: true, icon: 'ti-layout-dashboard', label: 'Dashboard' },
-  { to: '/clientes', icon: 'ti-users', label: 'Cadastro de Clientes' },
 ]
 
 const FECHAMENTO = [
