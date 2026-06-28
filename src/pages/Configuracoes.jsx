@@ -1,53 +1,32 @@
-import { useAuth } from '../components/AuthProvider'
-import { useAppData } from '../lib/appData'
+import { Link } from 'react-router-dom'
 import { theme } from '../lib/theme'
 
+// Espelha a tela de Configurações do protótipo: título + grade de cards.
 export default function Configuracoes() {
-  const { user } = useAuth()
-  const { empresas, empresaNome, competencia } = useAppData()
-
   return (
     <div>
-      <h1 style={{ fontSize: 22, fontWeight: 500, marginBottom: 4 }}>Configurações</h1>
-      <p style={{ color: theme.sub, fontSize: 13, marginBottom: 22 }}>Informações do ambiente e da sessão.</p>
+      <p style={{ fontSize: 22, fontWeight: 500, color: theme.text, margin: '0 0 4px' }}>Configurações</p>
+      <p style={{ fontSize: 13, color: theme.sub, margin: '0 0 22px' }}>Parâmetros do sistema.</p>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(280px,1fr))', gap: 16, maxWidth: 720 }}>
-        <Bloco titulo="Sessão" icon="ti-user-shield" linhas={[
-          ['Usuário', user?.email || '—'],
-          ['Empresa selecionada', empresaNome || 'nenhuma'],
-          ['Competência', competencia],
-        ]} />
-        <Bloco titulo="Escritório" icon="ti-building" linhas={[
-          ['Clientes cadastrados', String(empresas.length)],
-          ['Plataforma', 'Contabilidade by Attentive'],
-        ]} />
-        <Bloco titulo="Segurança" icon="ti-lock" linhas={[
-          ['Banco de dados', 'Supabase (RLS habilitado)'],
-          ['Acesso', 'Somente usuários autenticados'],
-        ]} />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 14 }}>
+        <Cfg to="/clientes" icon="ti-users" titulo="Cadastro de Clientes" sub="Importação em lote, filiais, CNPJ" />
+        <Cfg icon="ti-user-shield" titulo="Usuários" sub="Perfis: auxiliar × analista" />
       </div>
-
-      <p style={{ color: theme.sub, fontSize: 12.5, marginTop: 24, lineHeight: 1.6, maxWidth: 720 }}>
-        Gestão de usuários, papéis e preferências do escritório entram nas próximas ondas. As chaves de
-        ambiente ficam na Vercel e no Supabase — nunca no código.
-      </p>
     </div>
   )
 }
 
-function Bloco({ titulo, icon, linhas }) {
-  return (
-    <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: 20 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 14 }}>
-        <i className={`ti ${icon}`} style={{ color: theme.accent, fontSize: 18 }} />
-        <h3 style={{ fontSize: 14 }}>{titulo}</h3>
+function Cfg({ to, icon, titulo, sub }) {
+  const card = (
+    <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: 20, display: 'flex', alignItems: 'center', gap: 14, cursor: 'pointer' }}>
+      <span style={{ background: 'rgba(74,124,255,0.15)', borderRadius: 10, width: 42, height: 42, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+        <i className={`ti ${icon}`} style={{ color: theme.accent, fontSize: 20 }} />
+      </span>
+      <div>
+        <p style={{ color: theme.text, fontSize: 14, fontWeight: 500, margin: 0 }}>{titulo}</p>
+        <p style={{ color: theme.sub, fontSize: 12, margin: '2px 0 0' }}>{sub}</p>
       </div>
-      {linhas.map(([k, v]) => (
-        <div key={k} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '7px 0', borderTop: `1px solid ${theme.border}` }}>
-          <span style={{ fontSize: 12.5, color: theme.sub }}>{k}</span>
-          <span style={{ fontSize: 12.5, color: theme.text, textAlign: 'right' }}>{v}</span>
-        </div>
-      ))}
     </div>
   )
+  return to ? <Link to={to}>{card}</Link> : card
 }
