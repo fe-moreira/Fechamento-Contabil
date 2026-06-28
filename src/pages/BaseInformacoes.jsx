@@ -2,11 +2,10 @@ import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
-import { theme } from '../lib/theme'
+import { theme, money } from '../lib/theme'
 
 const hoje = () => new Date().toLocaleDateString('pt-BR')
 
-// Cards de carga: tipo permitido em cargas_cadastro (plano|depara|apelidos|financeiro|bancoresult).
 const CARGAS = [
   { tipo: 'plano', icon: 'ti-list-numbers', title: 'Plano de contas', sub: 'Com tipo de conciliação' },
   { tipo: 'depara', icon: 'ti-arrows-transfer-down', title: 'De/Para integrações', sub: 'Acumulador → conta' },
@@ -22,6 +21,8 @@ export default function BaseInformacoes() {
   const [particularidades, setParticularidades] = useState([])
   const [contatos, setContatos] = useState([])
   const [cargas, setCargas] = useState({})
+  const [periodo, setPeriodo] = useState('')
+  const [dist, setDist] = useState(null)   // linha de dist_lucros_config
   const [modal, setModal] = useState(null)
 
   async function carregarCargas() {
@@ -32,43 +33,56 @@ export default function BaseInformacoes() {
     for (const c of (data || [])) (grp[c.tipo] ||= []).push(c)
     setCargas(grp)
   }
+  async function carregarDist() {
+    const { data } = await supabase.from('dist_lucros_config').select('*')
+      .eq('cliente_id', empresaId).order('created_at', { ascending: false }).limit(1).maybeSingle()
+    setDist(data || null)
+  }
   useEffect(() => {
-    setParticularidades([]); setContatos([]); setCargas({})
+    setParticularidades([]); setContatos([]); setCargas({}); setPeriodo(''); setDist(null)
     if (!empresaId) return
-    carregarCargas()
-    supabase.from('clientes').select('particularidades, contatos').eq('id', empresaId).single()
-      .then(({ data }) => { setParticularidades(data?.particularidades || []); setContatos(data?.contatos || []) })
+    carregarCargas(); carregarDist()
+    supabase.from('clientes').select('particularidades, contatos, competencia_inicio').eq('id', empresaId).single()
+      .then(({ data }) => {
+        setParticularidades(data?.particularidades || [])
+        setContatos(data?.contatos || [])
+        setPeriodo(data?.competencia_inicio || '')
+      })
   }, [empresaId])
 
-  function persistir(campo, valor) {
+  function persistirCliente(campo, valor) {
     supabase.from('clientes').update({ [campo]: valor }).eq('id', empresaId).then(() => {})
   }
 
   if (!empresaId) {
-    return (
-      <Wrapper>
-        <Aviso texto="Selecione uma empresa no menu lateral para ver a Base de Informações." />
-      </Wrapper>
-    )
+    return <Wrapper><Aviso texto="Selecione uma empresa no menu lateral para ver a Base de Informações." /></Wrapper>
   }
 
   function salvarPartic(texto, idx) {
     const item = { t: texto, u: user?.email || 'você', d: hoje() }
     const novo = idx == null ? [...particularidades, item] : particularidades.map((x, i) => i === idx ? item : x)
-    setParticularidades(novo); persistir('particularidades', novo)
+    setParticularidades(novo); persistirCliente('particularidades', novo)
   }
   function removerPartic(idx) {
     const novo = particularidades.filter((_, j) => j !== idx)
-    setParticularidades(novo); persistir('particularidades', novo)
+    setParticularidades(novo); persistirCliente('particularidades', novo)
   }
   function salvarContato(c, idx) {
     const item = { ...c, u: user?.email || 'você', d: hoje() }
     const novo = idx == null ? [...contatos, item] : contatos.map((x, i) => i === idx ? item : x)
-    setContatos(novo); persistir('contatos', novo)
+    setContatos(novo); persistirCliente('contatos', novo)
   }
   function removerContato(idx) {
     const novo = contatos.filter((_, j) => j !== idx)
-    setContatos(novo); persistir('contatos', novo)
+    setContatos(novo); persistirCliente('contatos', novo)
+  }
+  function salvarPeriodo(v) {
+    setPeriodo(v); persistirCliente('competencia_inicio', v); setModal(null)
+  }
+  async function salvarDist(cfg) {
+    if (dist) await supabase.from('dist_lucros_config').update(cfg).eq('id', dist.id)
+    else await supabase.from('dist_lucros_config').insert({ cliente_id: empresaId, usuario: user?.email, ...cfg })
+    await carregarDist(); setModal(null)
   }
 
   return (
@@ -119,13 +133,15 @@ export default function BaseInformacoes() {
         <CargaCard {...CARGAS[0]} ultima={cargas.plano?.at(-1)} onClick={() => setModal({ tipo: 'carga', carga: CARGAS[0] })} />
         <CargaCard {...CARGAS[1]} ultima={cargas.depara?.at(-1)} onClick={() => setModal({ tipo: 'carga', carga: CARGAS[1] })} />
         <CargaCard {...CARGAS[2]} ultima={cargas.apelidos?.at(-1)} onClick={() => setModal({ tipo: 'carga', carga: CARGAS[2] })} />
-        <SimplesCard icon="ti-file-description" title="Modelos de relatório" sub="Balancete, DRE, DFC" badge={{ txt: 'em breve', cor: theme.sub }} />
+        <SimplesCard icon="ti-file-description" title="Modelos de relatório" sub="Balancete, DRE, DFC" onClick={() => setModal({ tipo: 'modelos' })} />
         <SimplesCard icon="ti-calendar-event" title="Período de início" sub="Trava o passado"
-          onClick={() => setModal({ tipo: 'simples', titulo: 'Período de início', texto: 'O período de início (competência que trava o passado) é definido no Cadastro de Clientes, no campo “Competência de início”.' })} />
+          badge={periodo ? { txt: `início ${periodo}`, cor: theme.green, bg: 'rgba(48,164,108,0.15)' } : { txt: 'carga pendente', cor: theme.yellow, bg: 'rgba(245,166,35,0.15)' }}
+          onClick={() => setModal({ tipo: 'periodo' })} />
         <CargaCard {...CARGAS[3]} ultima={cargas.financeiro?.at(-1)} onClick={() => setModal({ tipo: 'carga', carga: CARGAS[3] })} />
         <CargaCard {...CARGAS[4]} ultima={cargas.bancoresult?.at(-1)} onClick={() => setModal({ tipo: 'carga', carga: CARGAS[4] })} />
-        <SimplesCard icon="ti-users" title="Distribuição de lucros" sub="Limite, alíquota e sócios (IRRF 2026)" badge={{ txt: 'em breve', cor: theme.sub }}
-          onClick={() => setModal({ tipo: 'simples', titulo: 'Distribuição de lucros · IRRF 2026', texto: 'Configuração de limite (R$ 50.000), alíquota (10%), contas observadas e sócios. A apuração por sócio entra junto com o gate de Status.' })} />
+        <SimplesCard icon="ti-users" title="Distribuição de lucros" sub="Limite, alíquota e sócios (IRRF 2026)"
+          badge={dist ? { txt: 'configurado', cor: theme.green, bg: 'rgba(48,164,108,0.15)' } : null}
+          onClick={() => setModal({ tipo: 'dist' })} />
       </div>
 
       {/* Modais */}
@@ -140,8 +156,14 @@ export default function BaseInformacoes() {
       {modal?.tipo === 'contato' && (
         <ModalContato valorInicial={modal.valor} onClose={() => setModal(null)} onSalvar={c => { salvarContato(c, modal.idx); setModal(null) }} />
       )}
-      {modal?.tipo === 'simples' && (
-        <ModalSimples titulo={modal.titulo} texto={modal.texto} onClose={() => setModal(null)} />
+      {modal?.tipo === 'periodo' && (
+        <ModalPeriodo valorInicial={periodo} onClose={() => setModal(null)} onSalvar={salvarPeriodo} />
+      )}
+      {modal?.tipo === 'dist' && (
+        <ModalDist inicial={dist} onClose={() => setModal(null)} onSalvar={salvarDist} />
+      )}
+      {modal?.tipo === 'modelos' && (
+        <ModalSimples titulo="Modelos de relatório" texto="Os modelos do escritório (Balancete, DRE, DFC, Balanço) já são gerados na tela de Relatórios a partir do balancete da competência, com exportação para Excel/CSV. A personalização de modelos por cliente entra em breve." onClose={() => setModal(null)} />
       )}
     </Wrapper>
   )
@@ -158,7 +180,7 @@ function CargaCard({ icon, title, sub, ultima, onClick }) {
       </div>
       {ultima
         ? <span style={badge('rgba(48,164,108,0.15)', theme.green)}>vigência {ultima.vigencia}</span>
-        : <span style={badge('rgba(255,255,255,0.06)', theme.sub)}>importar</span>}
+        : <span style={badge('rgba(245,166,35,0.15)', theme.yellow)}>carga pendente</span>}
     </div>
   )
 }
@@ -170,7 +192,7 @@ function SimplesCard({ icon, title, sub, onClick, badge: b }) {
         <p style={{ color: theme.text, fontSize: 14, fontWeight: 500, margin: 0 }}>{title}</p>
         <p style={{ color: theme.sub, fontSize: 12, margin: '2px 0 0' }}>{sub}</p>
       </div>
-      {b && <span style={badge('rgba(255,255,255,0.06)', b.cor)}>{b.txt}</span>}
+      {b && <span style={badge(b.bg || 'rgba(255,255,255,0.06)', b.cor)}>{b.txt}</span>}
     </div>
   )
 }
@@ -226,16 +248,13 @@ function ModalCarga({ carga, historico, empresaId, usuario, onClose, onImportado
   return (
     <Modal titulo={carga.title} sub={carga.sub} onClose={onClose} largura={620}>
       <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 14 }}>Cada carga cria uma <b style={{ color: theme.text }}>vigência</b> e preserva o histórico (nada é sobrescrito).</p>
-
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
         <div><label>Vigência (MM/AAAA)</label><input className="input" value={vigencia} onChange={e => setVigencia(e.target.value)} placeholder="01/2026" /></div>
         <div><label>Arquivo (.xlsx, .xls, .csv)</label><input type="file" accept=".xlsx,.xls,.csv" onChange={aoEscolher} style={{ fontSize: 13, color: theme.sub, marginTop: 6 }} /></div>
       </div>
       {preview && <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 12 }}><i className="ti ti-file-spreadsheet" /> {preview.nome} — {preview.dados.length} linha(s)</p>}
       {erro && <p style={{ color: theme.red, fontSize: 13, marginBottom: 12 }}>{erro}</p>}
-
       <button className="btn" disabled={salvando} onClick={importar}><i className="ti ti-cloud-upload" /> {salvando ? 'Importando…' : 'Importar carga'}</button>
-
       <p style={{ color: theme.sub, fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: .6, margin: '22px 0 10px' }}>Histórico de vigências</p>
       {historico.length === 0
         ? <p style={{ color: theme.sub, fontSize: 12.5 }}>Nenhuma carga ainda.</p>
@@ -275,12 +294,87 @@ function ModalContato({ valorInicial, onClose, onSalvar }) {
   )
 }
 
+function ModalPeriodo({ valorInicial, onClose, onSalvar }) {
+  const [v, setV] = useState(valorInicial || '')
+  const [erro, setErro] = useState('')
+  return (
+    <Modal titulo="Período de início" sub="Competência que trava o passado." onClose={onClose}>
+      <label>Competência de início (MM/AAAA)</label>
+      <input className="input" value={v} onChange={e => setV(e.target.value)} placeholder="04/2026" autoFocus />
+      {erro && <p style={{ color: theme.red, fontSize: 12.5, marginTop: 8 }}>{erro}</p>}
+      <Rodape onClose={onClose} onSalvar={() => /^\d{2}\/\d{4}$/.test(v) ? onSalvar(v) : setErro('Use o formato MM/AAAA.')} />
+    </Modal>
+  )
+}
+
+function ModalDist({ inicial, onClose, onSalvar }) {
+  const [limite, setLimite] = useState(inicial?.limite ?? 50000)
+  const [aliquota, setAliquota] = useState(inicial?.aliquota ?? 10)
+  const [contas, setContas] = useState(inicial?.contas?.length ? inicial.contas : [{ cod: '', nome: '' }])
+  const [socios, setSocios] = useState(inicial?.socios?.length ? inicial.socios : [{ nome: '', ident: '' }])
+  const [salvando, setSalvando] = useState(false)
+
+  const upd = (set, i, k) => e => set(l => l.map((x, j) => j === i ? { ...x, [k]: e.target.value } : x))
+  const rem = (set, i) => set(l => l.filter((_, j) => j !== i))
+
+  async function salvar() {
+    setSalvando(true)
+    await onSalvar({
+      limite: Number(limite) || 0, aliquota: Number(aliquota) || 0,
+      contas: contas.filter(c => c.cod || c.nome), socios: socios.filter(s => s.nome || s.ident),
+    })
+    setSalvando(false)
+  }
+
+  return (
+    <Modal titulo="Distribuição de lucros · IRRF 2026" sub="Lei 15.270/2025 — limite, alíquota, contas observadas e sócios." onClose={onClose} largura={640}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
+        <div><label>Limite mensal por sócio (R$)</label><input className="input" type="number" value={limite} onChange={e => setLimite(e.target.value)} /></div>
+        <div><label>Alíquota de IRRF (%)</label><input className="input" type="number" value={aliquota} onChange={e => setAliquota(e.target.value)} /></div>
+      </div>
+
+      <LinhaTitulo titulo="Contas de distribuição observadas" onAdd={() => setContas(l => [...l, { cod: '', nome: '' }])} />
+      {contas.map((c, i) => (
+        <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+          <input className="input" style={{ width: 130 }} placeholder="Código" value={c.cod} onChange={upd(setContas, i, 'cod')} />
+          <input className="input" style={{ flex: 1 }} placeholder="Nome da conta" value={c.nome} onChange={upd(setContas, i, 'nome')} />
+          <i className="ti ti-trash" onClick={() => rem(setContas, i)} style={{ color: theme.sub, cursor: 'pointer', alignSelf: 'center' }} />
+        </div>
+      ))}
+
+      <LinhaTitulo titulo="Sócios" onAdd={() => setSocios(l => [...l, { nome: '', ident: '' }])} />
+      {socios.map((s, i) => (
+        <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+          <input className="input" style={{ flex: 1 }} placeholder="Nome do sócio" value={s.nome} onChange={upd(setSocios, i, 'nome')} />
+          <input className="input" style={{ flex: 1 }} placeholder="Identificação no razão (CC/histórico)" value={s.ident} onChange={upd(setSocios, i, 'ident')} />
+          <i className="ti ti-trash" onClick={() => rem(setSocios, i)} style={{ color: theme.sub, cursor: 'pointer', alignSelf: 'center' }} />
+        </div>
+      ))}
+
+      <p style={{ color: theme.sub, fontSize: 11.5, margin: '12px 0 0' }}>Estimativa para revisão humana — o razão não distingue sozinho lucro de 2025 (isento) de lucro novo.</p>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
+        <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+        <button className="btn" disabled={salvando} onClick={salvar}>{salvando ? 'Salvando…' : 'Salvar configuração'}</button>
+      </div>
+    </Modal>
+  )
+}
+
 function ModalSimples({ titulo, texto, onClose }) {
   return (
     <Modal titulo={titulo} onClose={onClose}>
       <p style={{ color: theme.text, fontSize: 13.5, lineHeight: 1.6 }}>{texto}</p>
       <Rodape onClose={onClose} fechar />
     </Modal>
+  )
+}
+
+function LinhaTitulo({ titulo, onAdd }) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '14px 0 8px' }}>
+      <span style={{ color: theme.sub, fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: .4 }}>{titulo}</span>
+      <button className="btn btn-ghost" style={{ fontSize: 12, padding: '4px 10px' }} onClick={onAdd}><i className="ti ti-plus" /> Adicionar</button>
+    </div>
   )
 }
 
