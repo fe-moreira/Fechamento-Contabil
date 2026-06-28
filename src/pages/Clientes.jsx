@@ -10,7 +10,6 @@ const vazio = {
 
 // Helpers da importação em lote (planilha-modelo: aba "Clientes", 15 colunas).
 const norm = (s) => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim()
-const txt = (v) => { const s = String(v ?? '').trim(); return s || null }
 const simNao = (v) => /^sim/i.test(String(v ?? '').trim())
 
 export default function Clientes() {
@@ -64,43 +63,58 @@ export default function Clientes() {
         analista: H.findIndex(h => h.includes('analista')),
         observacoes: H.findIndex(h => h.includes('observ')),
       }
-      const g = (row, k) => (col[k] >= 0 ? row[col[k]] : '')
+      // Valor da célula já limpo; '' quando vazia (célula vazia nunca sobrescreve nada).
+      const raw = (row, k) => (col[k] >= 0 ? String(row[col[k]] ?? '').trim() : '')
 
-      const novos = []
+      const registros = []
       for (const row of linhas.slice(1)) {
-        const cod = String(g(row, 'codigo_dominio') ?? '').trim()
-        const razao = String(g(row, 'razao_social') ?? '').trim()
+        const cod = raw(row, 'codigo_dominio')
+        const razao = raw(row, 'razao_social')
         if (!cod && !razao) continue
-        const tipo = norm(g(row, 'tipo')).startsWith('fil') ? 'Filial' : 'Matriz'
-        novos.push({
-          codigo_dominio: cod || null, tipo,
-          codigo_matriz: tipo === 'Filial' ? (String(g(row, 'codigo_matriz') ?? '').trim() || null) : null,
-          razao_social: razao || null,
-          nome_fantasia: txt(g(row, 'nome_fantasia')),
-          cnpj: txt(g(row, 'cnpj')),
-          regime_tributario: txt(g(row, 'regime_tributario')),
-          tipo_fechamento: txt(g(row, 'tipo_fechamento')),
-          competencia_inicio: txt(g(row, 'competencia_inicio')),
-          carga_saldos: simNao(g(row, 'carga_saldos')),
-          coleta_razao: simNao(g(row, 'coleta_razao')),
-          sistema_financeiro: txt(g(row, 'sistema_financeiro')),
-          integracao_financeira: txt(g(row, 'integracao_financeira')) || 'Não usa',
-          analista: txt(g(row, 'analista')),
-          observacoes: txt(g(row, 'observacoes')),
-        })
+
+        // Só inclui no objeto os campos que VIERAM preenchidos na planilha.
+        const campos = {}
+        if (cod) campos.codigo_dominio = cod
+        if (razao) campos.razao_social = razao
+        const tipoRaw = raw(row, 'tipo')
+        if (tipoRaw) campos.tipo = tipoRaw.toLowerCase().startsWith('fil') ? 'Filial' : 'Matriz'
+        const cm = raw(row, 'codigo_matriz'); if (cm) campos.codigo_matriz = cm
+        for (const k of ['nome_fantasia', 'cnpj', 'regime_tributario', 'tipo_fechamento', 'competencia_inicio', 'sistema_financeiro', 'integracao_financeira', 'analista', 'observacoes']) {
+          const v = raw(row, k); if (v) campos[k] = v
+        }
+        const cs = raw(row, 'carga_saldos'); if (cs) campos.carga_saldos = simNao(cs)
+        const cr = raw(row, 'coleta_razao'); if (cr) campos.coleta_razao = simNao(cr)
+
+        registros.push({ cod, campos })
       }
-      if (!novos.length) { setImportMsg(''); setErro('Nenhuma linha de cliente encontrada na planilha.'); return }
+      if (!registros.length) { setImportMsg(''); setErro('Nenhuma linha de cliente encontrada na planilha.'); return }
 
-      // Evita duplicar: ignora códigos já cadastrados.
-      const { data: existentes } = await supabase.from('clientes').select('codigo_dominio')
-      const jaTem = new Set((existentes || []).map(c => c.codigo_dominio))
-      const aInserir = novos.filter(c => !c.codigo_dominio || !jaTem.has(c.codigo_dominio))
-      const ignorados = novos.length - aInserir.length
-      if (!aInserir.length) { setImportMsg(''); setErro(`Todos os ${novos.length} clientes da planilha já estão cadastrados.`); return }
-
-      const { error } = await supabase.from('clientes').insert(aInserir)
-      if (error) { setImportMsg(''); setErro(error.message); return }
-      setImportMsg(`${aInserir.length} cliente(s) importado(s)${ignorados ? ` · ${ignorados} já existente(s) ignorado(s)` : ''}.`)
+      // Upsert por código: novos são inseridos, existentes são ATUALIZADOS
+      // (apenas com os campos preenchidos). Nada é apagado.
+      const { data: existentes } = await supabase.from('clientes').select('id, codigo_dominio')
+      const mapa = new Map((existentes || []).map(c => [c.codigo_dominio, c.id]))
+      let inseridos = 0, atualizados = 0
+      const aInserir = []
+      for (const { cod, campos } of registros) {
+        const id = cod ? mapa.get(cod) : null
+        if (id) {
+          const patch = { ...campos }
+          delete patch.codigo_dominio
+          if (Object.keys(patch).length) {
+            const { error } = await supabase.from('clientes').update(patch).eq('id', id)
+            if (error) throw error
+          }
+          atualizados++
+        } else {
+          aInserir.push({ tipo: 'Matriz', integracao_financeira: 'Não usa', ...campos })
+        }
+      }
+      if (aInserir.length) {
+        const { error } = await supabase.from('clientes').insert(aInserir)
+        if (error) throw error
+        inseridos = aInserir.length
+      }
+      setImportMsg(`${inseridos} novo(s) · ${atualizados} atualizado(s). Nada foi apagado.`)
       carregar()
     } catch (err) {
       setImportMsg(''); setErro('Erro ao importar: ' + err.message)
