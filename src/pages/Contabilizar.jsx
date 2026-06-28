@@ -1,20 +1,30 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
+import { useAuth } from '../components/AuthProvider'
 import { theme, money } from '../lib/theme'
 
 const vazio = {
   data: '', conta_debito: '', conta_credito: '', valor: '', historico: '', documento: '',
 }
 
+// Módulos de correção que viram sugestões de lançamento na fila.
+const MODULOS_SUGESTAO = ['Conciliação', 'Comparativo', 'Status']
+
 export default function Contabilizar() {
   const { empresaId, empresaNome, competencia, getCompetenciaId } = useAppData()
+  const { user } = useAuth()
   const [lista, setLista] = useState([])
   const [loading, setLoading] = useState(true)
   const [erro, setErro] = useState('')
   const [form, setForm] = useState(vazio)
   const [salvando, setSalvando] = useState(false)
   const [aberto, setAberto] = useState(false)
+
+  // Sugestões geradas a partir de correções pendentes na auditoria.
+  const [sugestoes, setSugestoes] = useState([])
+  const [tratadas, setTratadas] = useState(() => new Set()) // ids de auditoria já confirmados/descartados nesta sessão
+  const [confirmandoId, setConfirmandoId] = useState(null)
 
   // Resolve o id da competência apenas para leitura (sem criar a linha).
   async function competenciaIdLeitura() {
@@ -29,17 +39,30 @@ export default function Contabilizar() {
   async function carregar() {
     setLoading(true); setErro('')
     const compId = await competenciaIdLeitura()
-    if (!compId) { setLista([]); setLoading(false); return }
+    if (!compId) { setLista([]); setSugestoes([]); setLoading(false); return }
     const { data, error } = await supabase
       .from('lancamentos').select('*')
       .eq('competencia_id', compId).order('data', { ascending: true })
     if (error) setErro(error.message)
     else setLista(data || [])
+    await carregarSugestoes(compId)
     setLoading(false)
   }
 
+  // Busca as correções da auditoria desta competência e as transforma em sugestões.
+  async function carregarSugestoes(compId) {
+    const { data, error } = await supabase
+      .from('auditoria').select('id, modulo, item, tipo, detalhe, usuario')
+      .eq('competencia_id', compId).eq('tipo', 'Correção')
+      .in('modulo', MODULOS_SUGESTAO)
+      .order('id', { ascending: false })
+    if (error) { setSugestoes([]); return }
+    setSugestoes(data || [])
+  }
+
   useEffect(() => {
-    if (!empresaId) { setLista([]); setLoading(false); return }
+    setTratadas(new Set())
+    if (!empresaId) { setLista([]); setSugestoes([]); setLoading(false); return }
     carregar()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [empresaId, competencia])
@@ -77,6 +100,39 @@ export default function Contabilizar() {
     if (!confirm('Excluir este lançamento?')) return
     const { error } = await supabase.from('lancamentos').delete().eq('id', l.id)
     if (error) setErro(error.message); else carregar()
+  }
+
+  // Confirma uma sugestão: insere o lançamento (origem='sugestao') e a remove da lista.
+  async function confirmarSugestao(s) {
+    setConfirmandoId(s.id); setErro('')
+    try {
+      const competencia_id = await getCompetenciaId()
+      if (!competencia_id) { setErro('Selecione uma empresa no menu lateral.'); return }
+      const payload = {
+        competencia_id,
+        data: null,
+        conta_debito: null,
+        conta_credito: null,
+        valor: 0,
+        historico: s.detalhe || `${s.modulo} · ${s.item}`,
+        documento: null,
+        origem: 'sugestao',
+        usuario: user?.email || null,
+      }
+      const { error } = await supabase.from('lancamentos').insert(payload)
+      if (error) throw error
+      setTratadas(prev => new Set(prev).add(s.id))
+      await carregar()
+    } catch (err) {
+      setErro(err.message)
+    } finally {
+      setConfirmandoId(null)
+    }
+  }
+
+  // Descarta: só remove da lista localmente (não altera o banco).
+  function descartarSugestao(s) {
+    setTratadas(prev => new Set(prev).add(s.id))
   }
 
   function gerarDominio() {
@@ -127,6 +183,7 @@ export default function Contabilizar() {
   }
 
   const total = lista.reduce((s, l) => s + (Number(l.valor) || 0), 0)
+  const sugestoesAtivas = sugestoes.filter(s => !tratadas.has(s.id))
 
   return (
     <Wrapper>
@@ -135,6 +192,47 @@ export default function Contabilizar() {
       </p>
 
       {erro && <p style={{ color: theme.red, fontSize: 13, marginBottom: 14 }}>Erro: {erro}</p>}
+
+      {/* Sugestões da plataforma — geradas das correções pendentes na auditoria */}
+      {!loading && sugestoesAtivas.length > 0 && (
+        <section style={{ marginBottom: 22 }}>
+          <h2 style={{ fontSize: 15, fontWeight: 600, color: '#8FB0FF', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <i className="ti ti-robot" /> Sugestões da plataforma
+          </h2>
+          <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 12 }}>
+            Correções registradas na auditoria que ainda podem virar lançamento. Confirme para enfileirar ou descarte.
+          </p>
+          <div style={{ display: 'grid', gap: 10 }}>
+            {sugestoesAtivas.map(s => (
+              <div key={s.id} style={{
+                background: theme.card,
+                border: `0.5px solid ${theme.cb}`,
+                borderLeft: '3px solid #4A7CFF',
+                borderRadius: '0 12px 12px 0',
+                padding: '14px 16px',
+                display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 14, flexWrap: 'wrap',
+              }}>
+                <div style={{ flex: '1 1 280px', minWidth: 0 }}>
+                  <p style={{ fontSize: 11.5, color: theme.sub, textTransform: 'uppercase', letterSpacing: .3, margin: 0 }}>
+                    {s.modulo}{s.item ? ` · ${s.item}` : ''}
+                  </p>
+                  <p style={{ fontSize: 13.5, color: theme.text, margin: '5px 0 0' }}>{s.detalhe || '(sem detalhe)'}</p>
+                </div>
+                <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+                  <button className="btn" style={{ fontSize: 13 }} disabled={confirmandoId === s.id}
+                    onClick={() => confirmarSugestao(s)}>
+                    {confirmandoId === s.id ? 'Confirmando…' : <><i className="ti ti-check" /> Confirmar</>}
+                  </button>
+                  <button className="btn btn-ghost" style={{ fontSize: 13 }} disabled={confirmandoId === s.id}
+                    onClick={() => descartarSugestao(s)}>
+                    <i className="ti ti-x" /> Descartar
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, gap: 10, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', gap: 24 }}>
