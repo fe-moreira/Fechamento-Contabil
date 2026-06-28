@@ -31,32 +31,61 @@ function baixarCSV(nome, linhas) {
   URL.revokeObjectURL(url)
 }
 
+// Data pt-BR a partir de um created_at (ISO).
+function dataPtBR(iso) {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  if (isNaN(d.getTime())) return String(iso)
+  return d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+}
+
+// Catálogo de relatórios (ordem das abas/cards).
+const RELATORIOS = [
+  { id: 'balancete', nome: 'Balancete', icon: 'ti-table', desc: 'Saldos por conta (inicial, movimento e final).' },
+  { id: 'dre', nome: 'DRE (resumo)', icon: 'ti-report-money', desc: 'Demonstração de resultado simplificada por prefixo de conta.' },
+  { id: 'book', nome: 'Book de Composições', icon: 'ti-book', desc: 'Contas do balancete com saldo final diferente de zero.' },
+  { id: 'pendencias', nome: 'Relatório de Pendências', icon: 'ti-alert-triangle', desc: 'Documentos da competência ainda não recebidos.' },
+  { id: 'auditoria', nome: 'Justificativas e correções do fechamento', icon: 'ti-clipboard-check', desc: 'Consolida toda a auditoria registrada nesta competência.' },
+]
+
 export default function Relatorios() {
   const { empresaId, empresaNome, competencia } = useAppData()
   const [carregando, setCarregando] = useState(false)
   const [temComp, setTemComp] = useState(null) // null = não checado, false = sem competência
-  const [linhas, setLinhas] = useState([])
+  const [linhas, setLinhas] = useState([])      // balancete
+  const [documentos, setDocumentos] = useState([]) // competencias.documentos
+  const [auditoria, setAuditoria] = useState([])    // auditoria desta competência
   const [aba, setAba] = useState('balancete')
 
-  // Resolve a competência (READ-ONLY) e lê o balancete.
+  // Resolve a competência (READ-ONLY) e lê balancete + documentos + auditoria.
   useEffect(() => {
-    setLinhas([]); setTemComp(null)
+    setLinhas([]); setDocumentos([]); setAuditoria([]); setTemComp(null)
     if (!empresaId) return
     let vivo = true
     ;(async () => {
       setCarregando(true)
       try {
         const [mes, ano] = competencia.split('/').map(Number)
-        const { data: comp } = await supabase.from('competencias').select('id')
+        const { data: comp } = await supabase.from('competencias').select('id, documentos')
           .eq('cliente_id', empresaId).eq('ano', ano).eq('mes', mes).maybeSingle()
         if (!vivo) return
         if (!comp) { setTemComp(false); return }
         setTemComp(true)
-        const { data } = await supabase.from('balancete')
-          .select('conta, nome, saldo_inicial, debito, credito, saldo_final')
-          .eq('competencia_id', comp.id)
-          .order('conta', { ascending: true })
-        if (vivo) setLinhas(data || [])
+        setDocumentos(Array.isArray(comp.documentos) ? comp.documentos : [])
+
+        const [{ data: bal }, { data: aud }] = await Promise.all([
+          supabase.from('balancete')
+            .select('conta, nome, saldo_inicial, debito, credito, saldo_final')
+            .eq('competencia_id', comp.id)
+            .order('conta', { ascending: true }),
+          supabase.from('auditoria')
+            .select('modulo, item, tipo, detalhe, dedutibilidade, usuario, created_at')
+            .eq('competencia_id', comp.id)
+            .order('created_at', { ascending: false }),
+        ])
+        if (!vivo) return
+        setLinhas(bal || [])
+        setAuditoria(aud || [])
       } finally {
         if (vivo) setCarregando(false)
       }
@@ -87,6 +116,12 @@ export default function Relatorios() {
     .reduce((s, l) => s + (Number(l.saldo_final) || 0), 0)
   const resultado = receitas - despesas - custos
 
+  // Book de Composições: contas com saldo final != 0.
+  const book = linhas.filter(l => Math.abs(Number(l.saldo_final) || 0) >= 0.005)
+
+  // Pendências: documentos não recebidos (rec === false).
+  const pendencias = documentos.filter(d => d && d.rec === false)
+
   function exportarBalancete() {
     const dados = [
       ['Conta', 'Nome', 'Saldo inicial', 'Débito', 'Crédito', 'Saldo final'],
@@ -109,7 +144,33 @@ export default function Relatorios() {
     baixarCSV(`dre_${compSlug}.csv`, dados)
   }
 
-  const vazio = !carregando && temComp && linhas.length === 0
+  function exportarBook() {
+    const dados = [
+      ['Conta', 'Nome', 'Saldo final'],
+      ...book.map(l => [l.conta, l.nome, csvNum(l.saldo_final)]),
+    ]
+    baixarCSV(`book_composicoes_${compSlug}.csv`, dados)
+  }
+
+  function exportarPendencias() {
+    const dados = [
+      ['Documento', 'Categoria'],
+      ...pendencias.map(d => [d.name, d.cat]),
+    ]
+    baixarCSV(`pendencias_${compSlug}.csv`, dados)
+  }
+
+  function exportarAuditoria() {
+    const dados = [
+      ['Módulo', 'Item', 'Tipo', 'Detalhe', 'Dedutibilidade', 'Usuário', 'Data'],
+      ...auditoria.map(a => [a.modulo, a.item, a.tipo, a.detalhe, a.dedutibilidade, a.usuario, dataPtBR(a.created_at)]),
+    ]
+    baixarCSV(`auditoria_${compSlug}.csv`, dados)
+  }
+
+  const semBalancete = !carregando && temComp && linhas.length === 0
+  // Relatórios que dependem só do balancete.
+  const dependeBalancete = aba === 'balancete' || aba === 'dre' || aba === 'book'
 
   return (
     <Wrapper>
@@ -117,22 +178,31 @@ export default function Relatorios() {
         <b style={{ color: theme.text }}>{empresaNome}</b> · competência <b style={{ color: theme.text }}>{competencia}</b>
       </p>
 
-      {/* Abas */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 18 }}>
-        <button
-          className={aba === 'balancete' ? 'btn' : 'btn-ghost'}
-          onClick={() => setAba('balancete')}
-          style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}
-        >
-          <i className="ti ti-table" /> Balancete
-        </button>
-        <button
-          className={aba === 'dre' ? 'btn' : 'btn-ghost'}
-          onClick={() => setAba('dre')}
-          style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}
-        >
-          <i className="ti ti-report-money" /> DRE (resumo)
-        </button>
+      {/* Cards de relatório (escolha) */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(260px,1fr))', gap: 12, marginBottom: 22 }}>
+        {RELATORIOS.map(r => (
+          <button
+            key={r.id}
+            onClick={() => setAba(r.id)}
+            style={{
+              textAlign: 'left',
+              background: aba === r.id ? theme.input : theme.card,
+              border: `1px solid ${aba === r.id ? theme.accent : theme.cb}`,
+              borderRadius: 12,
+              padding: 16,
+              cursor: 'pointer',
+              display: 'flex',
+              gap: 12,
+              alignItems: 'flex-start',
+            }}
+          >
+            <i className={`ti ${r.icon}`} style={{ fontSize: 20, color: theme.accent, marginTop: 2 }} />
+            <div>
+              <div style={{ fontSize: 13.5, fontWeight: 600, color: theme.text, marginBottom: 4 }}>{r.nome}</div>
+              <div style={{ fontSize: 12, color: theme.sub, lineHeight: 1.4 }}>{r.desc}</div>
+            </div>
+          </button>
+        ))}
       </div>
 
       {carregando && <p style={{ color: theme.sub, fontSize: 13 }}>Carregando…</p>}
@@ -141,19 +211,15 @@ export default function Relatorios() {
         <Aviso icon="ti-file-import" texto="Importe o razão primeiro." />
       )}
 
-      {vazio && (
+      {/* Aviso de balancete vazio só afeta os relatórios que dependem dele. */}
+      {semBalancete && dependeBalancete && (
         <Aviso icon="ti-database-off" texto="Sem dados no balancete desta competência. Importe o razão primeiro." />
       )}
 
       {/* Balancete */}
       {!carregando && temComp && linhas.length > 0 && aba === 'balancete' && (
-        <>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
-            <button className="btn-ghost" onClick={exportarBalancete} style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-              <i className="ti ti-download" /> Exportar CSV
-            </button>
-          </div>
-          <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'hidden' }}>
+        <Secao titulo="Balancete" onExportar={exportarBalancete}>
+          <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ background: theme.input }}>
@@ -187,17 +253,12 @@ export default function Relatorios() {
               </tfoot>
             </table>
           </div>
-        </>
+        </Secao>
       )}
 
       {/* DRE */}
       {!carregando && temComp && linhas.length > 0 && aba === 'dre' && (
-        <>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
-            <button className="btn-ghost" onClick={exportarDRE} style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-              <i className="ti ti-download" /> Exportar CSV
-            </button>
-          </div>
+        <Secao titulo="DRE (resumo)" onExportar={exportarDRE}>
           <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: 22, maxWidth: 520 }}>
             <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 18 }}>DRE simplificada por prefixo de conta</p>
             <LinhaDRE label="Receitas" valor={money(receitas)} />
@@ -208,7 +269,101 @@ export default function Relatorios() {
               <span style={{ fontSize: 18, fontWeight: 700, color: resultado >= 0 ? theme.green : theme.red }}>{money(resultado)}</span>
             </div>
           </div>
-        </>
+        </Secao>
+      )}
+
+      {/* Book de Composições */}
+      {!carregando && temComp && linhas.length > 0 && aba === 'book' && (
+        <Secao titulo="Book de Composições" onExportar={book.length ? exportarBook : null}>
+          {book.length === 0 ? (
+            <Aviso icon="ti-circle-check" texto="Nenhuma conta com saldo final em aberto nesta competência." />
+          ) : (
+            <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ background: theme.input }}>
+                    <th style={th}>Conta</th>
+                    <th style={th}>Nome</th>
+                    <th style={thNum}>Saldo final</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {book.map((l, i) => (
+                    <tr key={i} style={{ borderTop: `1px solid ${theme.border}` }}>
+                      <td style={td}>{l.conta}</td>
+                      <td style={td}>{l.nome || '—'}</td>
+                      <td style={tdNum}>{money(l.saldo_final)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Secao>
+      )}
+
+      {/* Relatório de Pendências */}
+      {!carregando && temComp && aba === 'pendencias' && (
+        <Secao titulo="Relatório de Pendências" onExportar={pendencias.length ? exportarPendencias : null}>
+          {pendencias.length === 0 ? (
+            <Aviso icon="ti-circle-check" texto="Nenhum documento pendente nesta competência." />
+          ) : (
+            <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ background: theme.input }}>
+                    <th style={th}>Documento</th>
+                    <th style={th}>Categoria</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pendencias.map((d, i) => (
+                    <tr key={i} style={{ borderTop: `1px solid ${theme.border}` }}>
+                      <td style={td}>{d.name || '—'}</td>
+                      <td style={td}>{d.cat || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Secao>
+      )}
+
+      {/* Justificativas e correções (auditoria) */}
+      {!carregando && temComp && aba === 'auditoria' && (
+        <Secao titulo="Justificativas e correções do fechamento" onExportar={auditoria.length ? exportarAuditoria : null}>
+          {auditoria.length === 0 ? (
+            <Aviso icon="ti-clipboard-off" texto="Nenhuma justificativa ou correção registrada nesta competência." />
+          ) : (
+            <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'auto' }}>
+              <table style={{ width: '100%', minWidth: 820, borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ background: theme.input }}>
+                    <th style={th}>Módulo</th>
+                    <th style={th}>Item</th>
+                    <th style={th}>Tipo</th>
+                    <th style={th}>Detalhe</th>
+                    <th style={th}>Usuário</th>
+                    <th style={th}>Data</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {auditoria.map((a, i) => (
+                    <tr key={i} style={{ borderTop: `1px solid ${theme.border}` }}>
+                      <td style={td}>{a.modulo || '—'}</td>
+                      <td style={td}>{a.item || '—'}</td>
+                      <td style={td}>{a.tipo || '—'}</td>
+                      <td style={{ ...td, maxWidth: 360, whiteSpace: 'normal' }}>{a.detalhe || '—'}</td>
+                      <td style={td}>{a.usuario || '—'}</td>
+                      <td style={{ ...td, whiteSpace: 'nowrap' }}>{dataPtBR(a.created_at)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Secao>
       )}
     </Wrapper>
   )
@@ -219,11 +374,40 @@ const thNum = { ...th, textAlign: 'right' }
 const td = { padding: '9px 14px', fontSize: 12.5, color: theme.text, whiteSpace: 'nowrap', maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis' }
 const tdNum = { ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }
 
+// Cabeçalho de seção com botões Excel (CSV) e PDF (window.print).
+function Secao({ titulo, onExportar, children }) {
+  return (
+    <>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginBottom: 12 }}>
+        <h2 style={{ fontSize: 15, fontWeight: 600, margin: 0 }}>{titulo}</h2>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            className="btn-ghost"
+            onClick={() => onExportar && onExportar()}
+            disabled={!onExportar}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 8, opacity: onExportar ? 1 : .5, cursor: onExportar ? 'pointer' : 'not-allowed' }}
+          >
+            <i className="ti ti-file-spreadsheet" /> Excel (CSV)
+          </button>
+          <button
+            className="btn-ghost"
+            onClick={() => window.print()}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}
+          >
+            <i className="ti ti-file-type-pdf" /> PDF
+          </button>
+        </div>
+      </div>
+      {children}
+    </>
+  )
+}
+
 function Wrapper({ children }) {
   return (
     <div>
       <h1 style={{ fontSize: 22, fontWeight: 500, marginBottom: 4 }}>Relatórios</h1>
-      <p style={{ color: theme.sub, fontSize: 13, marginBottom: 22 }}>Relatórios da competência (a partir do balancete).</p>
+      <p style={{ color: theme.sub, fontSize: 13, marginBottom: 22 }}>Relatórios da competência (a partir do balancete e da auditoria).</p>
       {children}
     </div>
   )

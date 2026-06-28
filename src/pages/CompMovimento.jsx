@@ -1,22 +1,28 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
+import { useAuth } from '../components/AuthProvider'
 import { theme, money } from '../lib/theme'
 
 const ANO = 2026
 const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
 
+// Chave estável de uma célula (conta × mês) para o set de justificadas.
+const chaveCelula = (conta, mes) => `${conta}|${mes}`
+
 export default function CompMovimento() {
-  const { empresaId, empresaNome } = useAppData()
+  const { empresaId, empresaNome, getCompetenciaId } = useAppData()
+  const { user } = useAuth()
 
   const [carregando, setCarregando] = useState(false)
   const [comps, setComps] = useState([])        // [{ id, mes }] dos meses com balancete
   const [contas, setContas] = useState([])      // [{ conta, nome }] união de contas
   const [matriz, setMatriz] = useState({})      // { conta: { mes: saldo_final } }
   const [detalhe, setDetalhe] = useState(null)  // { conta, nome, mes, compId }
+  const [justificadas, setJustificadas] = useState(() => new Set()) // 'conta|mes' já justificadas/corrigidas localmente
 
   useEffect(() => {
-    setComps([]); setContas([]); setMatriz({}); setDetalhe(null)
+    setComps([]); setContas([]); setMatriz({}); setDetalhe(null); setJustificadas(new Set())
     if (!empresaId) return
     let vivo = true
     ;(async () => {
@@ -58,6 +64,28 @@ export default function CompMovimento() {
         setComps(compsComDados)
         setContas(listaContas)
         setMatriz(m)
+
+        // Pré-carrega justificativas/correções já registradas na auditoria deste módulo,
+        // para o contador refletir o que já foi tratado em sessões anteriores.
+        const compIds = compsComDados.map(c => c.id)
+        if (compIds.length) {
+          const { data: audits } = await supabase
+            .from('auditoria').select('item, competencia_id')
+            .in('competencia_id', compIds).eq('modulo', 'Comparativo')
+          if (!vivo) return
+          if (audits && audits.length) {
+            const mesPorComp = {}
+            for (const c of compsComDados) mesPorComp[c.id] = c.mes
+            const set = new Set()
+            for (const a of audits) {
+              // item no formato `${conta} · ${MES}/${ano}` — extrai a conta e usa o mês da competência.
+              const conta = String(a.item || '').split(' · ')[0].trim()
+              const mes = mesPorComp[a.competencia_id]
+              if (conta && mes) set.add(chaveCelula(conta, mes))
+            }
+            setJustificadas(set)
+          }
+        }
       } finally {
         if (vivo) setCarregando(false)
       }
@@ -73,6 +101,26 @@ export default function CompMovimento() {
     const media = valores.reduce((s, v) => s + v, 0) / valores.length
     if (media === 0) return valor !== 0
     return Math.abs(valor - media) / Math.abs(media) > 0.1
+  }
+
+  // Conta as células desviantes (vermelhas) ainda não justificadas/corrigidas.
+  let pendentes = 0
+  for (const { conta } of contas) {
+    const linha = matriz[conta] || {}
+    for (const c of comps) {
+      const v = linha[c.mes]
+      if (v == null) continue
+      if (desviante(conta, v) && !justificadas.has(chaveCelula(conta, c.mes))) pendentes++
+    }
+  }
+
+  // Marca uma célula como justificada/corrigida localmente (atualiza o contador na hora).
+  function marcarJustificada(conta, mes) {
+    setJustificadas(prev => {
+      const next = new Set(prev)
+      next.add(chaveCelula(conta, mes))
+      return next
+    })
   }
 
   if (!empresaId) {
@@ -107,6 +155,29 @@ export default function CompMovimento() {
 
       {!carregando && comps.length > 0 && (
         <>
+          <div style={{ marginBottom: 14 }}>
+            {pendentes > 0 ? (
+              <span style={{
+                display: 'inline-flex', alignItems: 'center', gap: 7,
+                background: 'rgba(229,72,77,0.12)', color: theme.red,
+                border: `0.5px solid ${theme.red}`, borderRadius: 999,
+                padding: '6px 13px', fontSize: 12.5, fontWeight: 600,
+              }}>
+                <i className="ti ti-alert-triangle" />
+                {pendentes} variação(ões) a justificar
+              </span>
+            ) : (
+              <span style={{
+                display: 'inline-flex', alignItems: 'center', gap: 7,
+                background: 'rgba(48,164,108,0.12)', color: theme.green,
+                border: `0.5px solid ${theme.green}`, borderRadius: 999,
+                padding: '6px 13px', fontSize: 12.5, fontWeight: 600,
+              }}>
+                <i className="ti ti-circle-check" />
+                Tudo dentro da faixa ou justificado
+              </span>
+            )}
+          </div>
           <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 14 }}>
             Valores em <b style={{ color: theme.red }}>vermelho</b> desviam mais de 10% da média da conta nos meses carregados. Clique em um valor para ver o razão da conta no mês.
           </p>
@@ -133,18 +204,21 @@ export default function CompMovimento() {
                         const v = linha[c.mes]
                         if (v == null) return <td key={c.mes} style={{ ...td, textAlign: 'right' }} />
                         const red = desviante(conta, v)
+                        const ok = red && justificadas.has(chaveCelula(conta, c.mes))
                         return (
                           <td key={c.mes} style={{ ...td, textAlign: 'right' }}>
                             <button
                               onClick={() => setDetalhe({ conta, nome, mes: c.mes, compId: c.id })}
                               style={{
+                                display: 'inline-flex', alignItems: 'center', gap: 4, justifyContent: 'flex-end',
                                 background: 'none', border: 'none', padding: 0, cursor: 'pointer',
                                 fontSize: 12.5, fontFamily: 'inherit',
                                 color: red ? theme.red : theme.text,
                                 fontWeight: red ? 700 : 400,
                               }}
-                              title="Ver razão da conta neste mês"
+                              title={ok ? 'Variação justificada — ver razão da conta neste mês' : 'Ver razão da conta neste mês'}
                             >
+                              {ok && <i className="ti ti-circle-check" style={{ color: theme.green, fontSize: 13 }} />}
                               {money(v)}
                             </button>
                           </td>
@@ -159,15 +233,50 @@ export default function CompMovimento() {
         </>
       )}
 
-      {detalhe && <ModalRazao detalhe={detalhe} onClose={() => setDetalhe(null)} />}
+      {detalhe && (
+        <ModalRazao
+          detalhe={detalhe}
+          usuario={user?.email}
+          getCompetenciaId={getCompetenciaId}
+          jaJustificada={justificadas.has(chaveCelula(detalhe.conta, detalhe.mes))}
+          onJustificada={() => marcarJustificada(detalhe.conta, detalhe.mes)}
+          onClose={() => setDetalhe(null)}
+        />
+      )}
     </Wrapper>
   )
 }
 
-function ModalRazao({ detalhe, onClose }) {
+function ModalRazao({ detalhe, usuario, getCompetenciaId, jaJustificada, onJustificada, onClose }) {
   const { conta, nome, mes, compId } = detalhe
   const [carregando, setCarregando] = useState(true)
   const [linhas, setLinhas] = useState([])
+  const [registro, setRegistro] = useState(null) // 'Justificativa' | 'Correção'
+  const [salvando, setSalvando] = useState(false)
+  const [msg, setMsg] = useState('')
+
+  async function registrar(tipo, detalheTxt) {
+    setSalvando(true)
+    try {
+      const competencia_id = await getCompetenciaId()
+      const { error } = await supabase.from('auditoria').insert({
+        competencia_id,
+        modulo: 'Comparativo',
+        item: `${conta} · ${MESES[mes - 1]}/${ANO}`,
+        tipo,
+        detalhe: detalheTxt,
+        usuario,
+      })
+      if (error) throw error
+      setMsg(`${tipo} registrada na auditoria.`)
+      setRegistro(null)
+      onJustificada()
+    } catch (e) {
+      setMsg('Erro ao registrar: ' + (e.message || e))
+    } finally {
+      setSalvando(false)
+    }
+  }
 
   useEffect(() => {
     let vivo = true
@@ -249,6 +358,57 @@ function ModalRazao({ detalhe, onClose }) {
               </tfoot>
             </table>
           )}
+        </div>
+
+        <div style={{ borderTop: `0.5px solid ${theme.cb}`, padding: '14px 22px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 12.5, minHeight: 16, color: msg ? (msg.startsWith('Erro') ? theme.red : theme.green) : theme.sub }}>
+            {msg
+              ? <><i className={`ti ${msg.startsWith('Erro') ? 'ti-alert-triangle' : 'ti-circle-check'}`} /> {msg}</>
+              : jaJustificada
+                ? <><i className="ti ti-circle-check" style={{ color: theme.green }} /> Variação já tratada na auditoria.</>
+                : 'Justifique ou corrija esta variação — fica registrada na auditoria.'}
+          </span>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn btn-ghost" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }} onClick={() => { setMsg(''); setRegistro('Justificativa') }}>
+              <i className="ti ti-flag" /> Justificar
+            </button>
+            <button className="btn" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }} onClick={() => { setMsg(''); setRegistro('Correção') }}>
+              <i className="ti ti-pencil-bolt" /> Corrigir
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {registro && (
+        <ModalRegistro
+          tipo={registro}
+          salvando={salvando}
+          conta={conta}
+          mes={mes}
+          onClose={() => setRegistro(null)}
+          onConfirmar={txt => registrar(registro, txt)}
+        />
+      )}
+    </div>
+  )
+}
+
+function ModalRegistro({ tipo, salvando, conta, mes, onClose, onConfirmar }) {
+  const [txt, setTxt] = useState('')
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 60 }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 'min(480px,96vw)', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
+        <h2 style={{ fontSize: 17, marginBottom: 4 }}>{tipo}</h2>
+        <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 14 }}>
+          Conta <b style={{ color: theme.text }}>{conta}</b> · {MESES[mes - 1]}/{ANO}. Fica registrada na auditoria com seu usuário e a data.
+        </p>
+        <textarea className="input" rows={3} value={txt} onChange={e => setTxt(e.target.value)} autoFocus
+          placeholder={tipo === 'Correção' ? 'O que foi corrigido (ex.: reclassificação, lançamento ajustado)…' : 'Por que esta variação é esperada…'} />
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
+          <button className="btn btn-ghost" onClick={onClose} disabled={salvando}>Cancelar</button>
+          <button className="btn" onClick={() => txt.trim() && onConfirmar(txt.trim())} disabled={salvando || !txt.trim()}>
+            {salvando ? 'Registrando…' : 'Registrar'}
+          </button>
         </div>
       </div>
     </div>

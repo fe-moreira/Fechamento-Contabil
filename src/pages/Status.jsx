@@ -1,61 +1,71 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
-import { theme } from '../lib/theme'
+import { useAuth } from '../components/AuthProvider'
+import { theme, money } from '../lib/theme'
 
 export default function Status() {
-  const { empresaId, empresaNome, competencia } = useAppData()
-  const [dados, setDados] = useState(null)   // { razao, naoConciliadas, lancamentos, temCompetencia }
-  const [carregando, setCarregando] = useState(false)
+  const { empresaId, empresaNome, competencia, getCompetenciaId } = useAppData()
+  const { user } = useAuth()
 
-  useEffect(() => {
-    setDados(null)
-    if (!empresaId) return
-    let vivo = true
+  const [compId, setCompId] = useState(null)
+  const [status, setStatus] = useState(null) // 'andamento' | 'fechado' | 'pendente'
+  const [dados, setDados] = useState(null)    // { temRazao, docsPendentes:[], contasAbertas:[] }
+  const [carregando, setCarregando] = useState(true)
+  const [sel, setSel] = useState(null)        // gate aberto (painel de itens)
+  const [modal, setModal] = useState(null)    // { item, tipo } modal de texto
+  const [msg, setMsg] = useState('')
+  const [salvando, setSalvando] = useState(false)
+
+  async function carregar() {
+    setSel(null); setMsg('')
+    if (!empresaId) { setCarregando(false); return }
     setCarregando(true)
-    ;(async () => {
-      try {
-        const [mes, ano] = competencia.split('/').map(Number)
-        const { data: comp } = await supabase.from('competencias').select('id')
-          .eq('cliente_id', empresaId).eq('ano', ano).eq('mes', mes).maybeSingle()
+    const [mes, ano] = competencia.split('/').map(Number)
+    const { data: comp } = await supabase.from('competencias')
+      .select('id, status, documentos')
+      .eq('cliente_id', empresaId).eq('ano', ano).eq('mes', mes).maybeSingle()
 
-        if (!comp) {
-          if (vivo) setDados({ razao: 0, naoConciliadas: 0, lancamentos: 0, temCompetencia: false })
-          return
-        }
+    if (!comp) {
+      setCompId(null); setStatus(null); setDados(null); setCarregando(false); return
+    }
+    setCompId(comp.id)
+    setStatus(comp.status || 'andamento')
 
-        const { count: razao } = await supabase.from('razao')
-          .select('id', { count: 'exact', head: true }).eq('competencia_id', comp.id)
+    const { count: razaoCount } = await supabase.from('razao')
+      .select('id', { count: 'exact', head: true }).eq('competencia_id', comp.id)
 
-        const { data: balancete } = await supabase.from('balancete')
-          .select('conta, saldo_final').eq('competencia_id', comp.id)
-        const naoConciliadas = (balancete || []).filter(b => Number(b.saldo_final) !== 0).length
+    const { data: balancete } = await supabase.from('balancete')
+      .select('conta, saldo_final').eq('competencia_id', comp.id)
 
-        const { count: lancamentos } = await supabase.from('lancamentos')
-          .select('id', { count: 'exact', head: true }).eq('competencia_id', comp.id)
+    const docs = Array.isArray(comp.documentos) ? comp.documentos : []
+    const docsPendentes = docs.filter(d => d && d.rec === false)
+    const contasAbertas = (balancete || []).filter(b => Number(b.saldo_final) !== 0)
 
-        if (vivo) setDados({
-          razao: razao || 0,
-          naoConciliadas,
-          lancamentos: lancamentos || 0,
-          temCompetencia: true,
-        })
-      } finally {
-        if (vivo) setCarregando(false)
-      }
-    })()
-    return () => { vivo = false }
-  }, [empresaId, competencia])
-
-  if (!empresaId) {
-    return (
-      <Wrapper>
-        <Aviso icon="ti-building" texto="Selecione uma empresa no menu lateral." />
-      </Wrapper>
-    )
+    setDados({
+      temRazao: (razaoCount || 0) > 0,
+      docsPendentes,
+      contasAbertas,
+    })
+    setCarregando(false)
   }
 
-  const d = dados || { razao: 0, naoConciliadas: 0, lancamentos: 0, temCompetencia: false }
+  useEffect(() => {
+    setCompId(null); setStatus(null); setDados(null); setSel(null)
+    carregar()
+  }, [empresaId, competencia]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!empresaId) {
+    return <Wrapper><Aviso icon="ti-building" texto="Selecione uma empresa no menu lateral." /></Wrapper>
+  }
+  if (carregando) {
+    return <Wrapper><p style={{ color: theme.sub, fontSize: 13 }}>Carregando…</p></Wrapper>
+  }
+  if (!compId || !dados || !dados.temRazao) {
+    return <Wrapper nome={empresaNome} comp={competencia}>
+      <Aviso icon="ti-file-import" texto="Importe o razão para começar o fechamento." />
+    </Wrapper>
+  }
 
   const gates = [
     {
@@ -63,114 +73,133 @@ export default function Status() {
       nome: 'Carga inicial / Razão',
       icon: 'ti-file-import',
       descricao: 'Razão do Domínio importado para a competência.',
-      pendencias: d.razao === 0 ? 1 : 0,
+      itens: dados.temRazao ? [] : [{ item: 'Razão não importado nesta competência', detalhe: 'Nenhum lançamento encontrado na tabela razao.' }],
+    },
+    {
+      key: 'documentos',
+      nome: 'Documentos',
+      icon: 'ti-files',
+      descricao: 'Documentos pendentes de recebimento/conferência.',
+      itens: dados.docsPendentes.map(d => ({
+        item: `Documento: ${d.name || '(sem nome)'}`,
+        detalhe: 'Documento ainda não recebido/conferido.',
+      })),
     },
     {
       key: 'conciliacao',
       nome: 'Conciliação',
       icon: 'ti-arrows-left-right',
       descricao: 'Contas do balancete com saldo final em aberto (≠ 0).',
-      pendencias: d.naoConciliadas,
+      itens: dados.contasAbertas.map(c => ({
+        item: `Conta ${c.conta} · saldo ${money(c.saldo_final)}`,
+        detalhe: `Saldo final ${money(c.saldo_final)} em aberto.`,
+      })),
     },
-    {
-      key: 'lancamentos',
-      nome: 'Lançamentos manuais',
-      icon: 'ti-pencil',
-      descricao: 'Ajustes manuais registrados na competência.',
-      pendencias: 0,
-      informativo: true,
-      valor: d.lancamentos,
-    },
-    {
-      key: 'variacoes',
-      nome: 'Variações',
-      icon: 'ti-chart-line',
-      descricao: 'Análise de variações entre competências.',
-      pendencias: 0,
-      emBreve: true,
-    },
-    {
-      key: 'banco',
-      nome: 'Banco × resultado',
-      icon: 'ti-building-bank',
-      descricao: 'Conferência do banco contra o resultado apurado.',
-      pendencias: 0,
-      emBreve: true,
-    },
-    {
-      key: 'distribuicao',
-      nome: 'Distribuição de lucros · IRRF 2026',
-      icon: 'ti-cash-banknote',
-      descricao: 'Distribuição de lucros e retenção de IRRF.',
-      pendencias: 0,
-      emBreve: true,
-    },
+    { key: 'variacoes', nome: 'Variações', icon: 'ti-chart-line', descricao: 'Análise de variações entre competências.', itens: [], emBreve: true },
+    { key: 'banco', nome: 'Banco × resultado', icon: 'ti-building-bank', descricao: 'Conferência do banco contra o resultado apurado.', itens: [], emBreve: true },
+    { key: 'distribuicao', nome: 'Distribuição de lucros · IRRF 2026', icon: 'ti-cash-banknote', descricao: 'Distribuição de lucros e retenção de IRRF.', itens: [], emBreve: true },
   ]
 
-  const totalPendencias = gates.reduce((s, g) => s + g.pendencias, 0)
+  const totalPendencias = gates.reduce((s, g) => s + g.itens.length, 0)
   const pronto = totalPendencias === 0
+  const fechado = status === 'fechado'
+
+  async function encerrar() {
+    setSalvando(true)
+    const { error } = await supabase.from('competencias').update({ status: 'fechado' }).eq('id', compId)
+    setSalvando(false)
+    if (!error) { setStatus('fechado'); setMsg('Fechamento encerrado.') }
+  }
+  async function reabrir() {
+    setSalvando(true)
+    const { error } = await supabase.from('competencias').update({ status: 'andamento' }).eq('id', compId)
+    setSalvando(false)
+    if (!error) { setStatus('andamento'); setMsg('Fechamento reaberto.') }
+  }
+
+  async function registrar(item, tipo, detalhe) {
+    const id = await getCompetenciaId()
+    await supabase.from('auditoria').insert({
+      competencia_id: id, modulo: 'Status', item, tipo, detalhe, usuario: user?.email,
+    })
+    setMsg(`${tipo} registrada na auditoria.`)
+    setModal(null)
+  }
 
   return (
-    <Wrapper>
-      <p style={{ color: theme.sub, fontSize: 13, marginBottom: 18 }}>
-        <b style={{ color: theme.text }}>{empresaNome}</b> · competência <b style={{ color: theme.text }}>{competencia}</b>
-      </p>
+    <Wrapper nome={empresaNome} comp={competencia}>
+      {msg && (
+        <p style={{ color: theme.green, fontSize: 13, marginBottom: 12 }}><i className="ti ti-circle-check" /> {msg}</p>
+      )}
 
-      {/* Cabeçalho geral */}
+      {/* Banner topo */}
       <div style={{
-        background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12,
-        padding: 22, marginBottom: 18, display: 'flex', alignItems: 'center', gap: 18,
+        background: theme.card,
+        border: `0.5px solid ${pronto ? 'rgba(48,164,108,0.4)' : 'rgba(229,72,77,0.4)'}`,
+        borderRadius: 12, padding: 22, marginBottom: 18,
+        display: 'flex', alignItems: 'center', gap: 18, flexWrap: 'wrap',
       }}>
         <div style={{
-          width: 64, height: 64, borderRadius: 14, flexShrink: 0,
+          width: 64, height: 64, borderRadius: '50%', flexShrink: 0,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           background: pronto ? 'rgba(48,164,108,0.14)' : 'rgba(229,72,77,0.14)',
           border: `0.5px solid ${pronto ? 'rgba(48,164,108,0.4)' : 'rgba(229,72,77,0.4)'}`,
         }}>
-          <i className="ti ti-traffic-lights" style={{ fontSize: 30, color: pronto ? theme.green : theme.red }} />
+          <i className={`ti ${pronto ? 'ti-check' : 'ti-alert-triangle'}`} style={{ fontSize: 32, color: pronto ? theme.green : theme.red }} />
         </div>
-        <div style={{ flex: 1 }}>
-          <p style={{ fontSize: 12.5, color: theme.sub, marginBottom: 4 }}>Total de pendências</p>
+        <div style={{ flex: 1, minWidth: 220 }}>
           {pronto ? (
-            <p style={{ fontSize: 22, fontWeight: 700, color: theme.green }}>
-              <i className="ti ti-circle-check" /> Fechamento pronto
-            </p>
+            <>
+              <p style={{ fontSize: 21, fontWeight: 700, color: theme.green, margin: 0 }}>Tudo OK — fechamento liberado</p>
+              <p style={{ fontSize: 13, color: theme.sub, margin: '4px 0 0' }}>Nenhuma pendência nos gates desta competência.</p>
+            </>
           ) : (
-            <p style={{ fontSize: 22, fontWeight: 700, color: theme.red }}>
-              {totalPendencias} pendência{totalPendencias > 1 ? 's' : ''}
-            </p>
+            <>
+              <p style={{ fontSize: 21, fontWeight: 700, color: theme.red, margin: 0 }}>
+                {totalPendencias} pendência{totalPendencias > 1 ? 's' : ''} para resolver
+              </p>
+              <p style={{ fontSize: 13, color: theme.sub, margin: '4px 0 0' }}>Resolva os gates em vermelho ou justifique cada item.</p>
+            </>
           )}
         </div>
-        <span style={{
-          fontSize: 20, fontWeight: 700, minWidth: 52, textAlign: 'center',
-          padding: '8px 14px', borderRadius: 999,
-          color: '#fff', background: pronto ? theme.green : theme.red,
-        }}>
-          {totalPendencias}
-        </span>
-      </div>
-
-      {!d.temCompetencia && (
-        <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 10, padding: '12px 14px', fontSize: 13, color: theme.sub, marginBottom: 18 }}>
-          <i className="ti ti-info-circle" style={{ color: theme.accent }} /> Importe o razão para começar o fechamento.
+        <div style={{ display: 'flex', gap: 8 }}>
+          {fechado ? (
+            <>
+              <span style={{
+                fontSize: 12, fontWeight: 600, color: theme.green, padding: '8px 12px',
+                borderRadius: 8, background: 'rgba(48,164,108,0.12)', border: `0.5px solid rgba(48,164,108,0.4)`,
+                display: 'inline-flex', alignItems: 'center', gap: 6,
+              }}>
+                <i className="ti ti-lock" /> Fechado
+              </span>
+              <button className="btn btn-ghost" disabled={salvando} onClick={reabrir}>
+                <i className="ti ti-lock-open" /> Reabrir
+              </button>
+            </>
+          ) : (
+            <button className="btn" disabled={salvando || !pronto} onClick={encerrar}
+              style={{ opacity: pronto ? 1 : 0.5, cursor: pronto ? 'pointer' : 'not-allowed' }}>
+              <i className="ti ti-lock-check" /> Encerrar fechamento
+            </button>
+          )}
         </div>
-      )}
-
-      {carregando && (
-        <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 18 }}>Carregando gates…</p>
-      )}
+      </div>
 
       {/* Gates */}
       <div style={{ display: 'grid', gap: 12 }}>
         {gates.map(g => {
-          const pend = g.pendencias > 0
+          const n = g.itens.length
+          const pend = n > 0
           const cor = pend ? theme.red : theme.green
-          const badgeTexto = g.informativo ? g.valor : g.pendencias
+          const clicavel = pend && !g.emBreve
           return (
-            <div key={g.key} style={{
-              background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12,
-              padding: '16px 18px', display: 'flex', alignItems: 'center', gap: 16,
-            }}>
+            <div key={g.key}
+              onClick={clicavel ? () => { setSel(g); setMsg('') } : undefined}
+              style={{
+                background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12,
+                padding: '16px 18px', display: 'flex', alignItems: 'center', gap: 16,
+                cursor: clicavel ? 'pointer' : 'default',
+              }}>
               <div style={{
                 width: 42, height: 42, borderRadius: 10, flexShrink: 0,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -193,48 +222,133 @@ export default function Status() {
                     </span>
                   )}
                 </p>
-                <p style={{ fontSize: 12.5, color: theme.sub }}>{g.descricao}</p>
+                <p style={{ fontSize: 12.5, color: theme.sub, margin: 0 }}>{g.descricao}</p>
               </div>
 
+              {!g.emBreve && (
+                <span style={{
+                  fontSize: 13, fontWeight: 700, minWidth: 30, textAlign: 'center',
+                  padding: '5px 12px', borderRadius: 999, color: '#fff',
+                  background: pend ? theme.red : theme.green,
+                }}>
+                  {n}
+                </span>
+              )}
+
+              {/* Farol */}
               <span style={{
-                fontSize: 13, fontWeight: 700, minWidth: 30, textAlign: 'center',
-                padding: '5px 12px', borderRadius: 999,
-                color: g.emBreve ? theme.sub : '#fff',
-                background: g.emBreve
-                  ? 'rgba(255,255,255,0.05)'
-                  : g.informativo
-                    ? theme.green
-                    : (pend ? theme.red : theme.green),
-              }}>
-                {badgeTexto}
-              </span>
+                display: 'inline-block', width: 12, height: 12, borderRadius: '50%',
+                background: g.emBreve ? theme.sub : cor, flexShrink: 0,
+              }} />
+
+              {clicavel && <i className="ti ti-chevron-right" style={{ color: theme.sub, fontSize: 18 }} />}
             </div>
           )
         })}
       </div>
+
+      {/* Painel de itens do gate selecionado */}
+      {sel && (
+        <PainelGate
+          gate={sel}
+          onClose={() => setSel(null)}
+          onJustificar={(it) => setModal({ item: it, tipo: 'Justificativa' })}
+          onCorrigir={(it) => setModal({ item: it, tipo: 'Correção' })}
+        />
+      )}
+
+      {/* Modal de texto */}
+      {modal && (
+        <ModalRegistro
+          tipo={modal.tipo}
+          alvo={modal.item.item}
+          onClose={() => setModal(null)}
+          onConfirmar={(txt) => registrar(modal.item.item, modal.tipo, txt)}
+        />
+      )}
     </Wrapper>
   )
 }
 
-function Wrapper({ children }) {
+function PainelGate({ gate, onClose, onJustificar, onCorrigir }) {
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 50 }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 'min(640px,96vw)', maxHeight: '86vh', overflow: 'auto', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+          <h2 style={{ fontSize: 17, margin: 0, display: 'flex', alignItems: 'center', gap: 9 }}>
+            <i className={`ti ${gate.icon}`} style={{ color: theme.red }} /> {gate.nome}
+          </h2>
+          <span onClick={onClose} style={{ cursor: 'pointer', color: theme.sub, fontSize: 20, lineHeight: 1 }}><i className="ti ti-x" /></span>
+        </div>
+        <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 16px' }}>
+          {gate.itens.length} pendência{gate.itens.length > 1 ? 's' : ''}. Justifique ou corrija cada item — fica registrado na auditoria.
+        </p>
+
+        <div style={{ display: 'grid', gap: 10 }}>
+          {gate.itens.map((it, i) => (
+            <div key={i} style={{ background: theme.input, borderRadius: 10, padding: 14, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+              <div style={{ flex: 1, minWidth: 200 }}>
+                <p style={{ fontSize: 13.5, fontWeight: 600, margin: 0 }}>{it.item}</p>
+                <p style={{ fontSize: 12, color: theme.sub, margin: '3px 0 0' }}>{it.detalhe}</p>
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button className="btn btn-ghost" style={{ fontSize: 13 }} onClick={() => onJustificar(it)}><i className="ti ti-flag" /> Justificar</button>
+                <button className="btn" style={{ fontSize: 13 }} onClick={() => onCorrigir(it)}><i className="ti ti-pencil-bolt" /> Corrigir</button>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 18 }}>
+          <button className="btn btn-ghost" onClick={onClose}>Fechar</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ModalRegistro({ tipo, alvo, onClose, onConfirmar }) {
+  const [txt, setTxt] = useState('')
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 60 }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 'min(480px,96vw)', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
+        <h2 style={{ fontSize: 17, marginBottom: 4 }}>{tipo}</h2>
+        <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 14 }}>
+          <b style={{ color: theme.text }}>{alvo}</b><br />
+          Fica registrada na auditoria com seu usuário e a data.
+        </p>
+        <textarea className="input" rows={3} value={txt} onChange={e => setTxt(e.target.value)} autoFocus
+          placeholder={tipo === 'Correção' ? 'O que foi corrigido…' : 'Por que esta pendência pode ser liberada…'} />
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
+          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+          <button className="btn" onClick={() => txt.trim() && onConfirmar(txt.trim())}>Registrar</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function Wrapper({ children, nome, comp }) {
   return (
     <div>
       <h1 style={{ fontSize: 22, fontWeight: 500, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 9 }}>
-        <i className="ti ti-traffic-lights" style={{ color: theme.accent }} /> Status
+        <i className="ti ti-traffic-lights" style={{ color: theme.accent }} /> Status do fechamento
       </h1>
-      <p style={{ color: theme.sub, fontSize: 13, marginBottom: 22 }}>
-        Gates de pendência da competência. Vermelho com pendências, verde ao zerar.
+      <p style={{ color: theme.sub, fontSize: 13, marginBottom: 18 }}>
+        {nome
+          ? <>Gates de pendência da competência. <b style={{ color: theme.text }}>{nome}</b> · {comp}.</>
+          : 'Gates de pendência da competência. Vermelho com pendências, verde ao zerar.'}
       </p>
       {children}
     </div>
   )
 }
 
-function Aviso({ icon, texto }) {
+function Aviso({ icon = 'ti-building', texto }) {
   return (
-    <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: '28px 24px', display: 'flex', alignItems: 'center', gap: 14, maxWidth: 560 }}>
+    <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: '28px 24px', display: 'flex', alignItems: 'center', gap: 14, maxWidth: 580 }}>
       <i className={`ti ${icon}`} style={{ fontSize: 24, color: theme.accent }} />
-      <p style={{ fontSize: 14, color: theme.text }}>{texto}</p>
+      <p style={{ fontSize: 14, color: theme.text, margin: 0 }}>{texto}</p>
     </div>
   )
 }
