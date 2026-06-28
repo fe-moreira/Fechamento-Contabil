@@ -1,37 +1,136 @@
+import { useEffect, useState } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
 import { useAuth } from './AuthProvider'
+import { supabase } from '../lib/supabase'
 import { theme } from '../lib/theme'
 
-const itens = [
-  { to: '/', label: 'Dashboard', end: true },
-  { to: '/clientes', label: 'Clientes' },
-  { to: '/fechamentos', label: 'Fechamentos' },
+const PRINCIPAL = [
+  { to: '/', end: true, icon: 'ti-layout-dashboard', label: 'Dashboard' },
+  { to: '/clientes', icon: 'ti-users', label: 'Cadastro de Clientes' },
 ]
+
+const FECHAMENTO = [
+  { to: '/fechamentos', icon: 'ti-folders', label: 'Fechamentos' },
+  { to: '/documentos', icon: 'ti-file-check', label: 'Documentos Recebidos' },
+  { to: '/razao', icon: 'ti-file-import', label: 'Importar Razão' },
+  { to: '/integracao', icon: 'ti-plug-connected', label: 'Integração' },
+  { to: '/conciliacao', icon: 'ti-checklist', label: 'Conciliação' },
+  { to: '/comparativo', icon: 'ti-arrows-diff', label: 'Comp. Movimento' },
+  { to: '/contabilizar', icon: 'ti-pencil-plus', label: 'Contabilizar' },
+  { to: '/relatorios', icon: 'ti-report', label: 'Relatórios' },
+  { to: '/status', icon: 'ti-traffic-lights', label: 'Status' },
+]
+
+const SISTEMA = [
+  { to: '/config', icon: 'ti-settings', label: 'Configurações' },
+  { to: '/ajuda', icon: 'ti-help-circle', label: 'Ajuda' },
+]
+
+// Competências do ano corrente (controle de UI; a ligação com dados vem nas próximas ondas).
+const COMPETENCIAS = Array.from({ length: 12 }, (_, i) => `${String(i + 1).padStart(2, '0')}/2026`)
+
+function Item({ to, end, icon, label, sub }) {
+  return (
+    <NavLink to={to} end={end} className={`nav-link${sub ? ' sub' : ''}`}>
+      <i className={`ti ${icon}`} />
+      <span style={{ flex: 1 }}>{label}</span>
+    </NavLink>
+  )
+}
 
 export default function Layout() {
   const { user, signOut } = useAuth()
+  const [empresas, setEmpresas] = useState([])
+  const [empresaId, setEmpresaId] = useState('')
+  const [competencia, setCompetencia] = useState('06/2026')
+  const [grupoAberto, setGrupoAberto] = useState(true)
+
+  useEffect(() => {
+    supabase.from('clientes').select('id, razao_social, codigo_dominio')
+      .order('razao_social', { ascending: true })
+      .then(({ data }) => setEmpresas(data || []))
+  }, [])
+
+  const empresaNome = empresas.find(e => e.id === empresaId)?.razao_social
+
   return (
     <div style={{ display: 'flex', minHeight: '100vh' }}>
-      <aside style={{ width: 230, background: theme.sidebar, padding: '22px 14px', display: 'flex', flexDirection: 'column' }}>
-        <div style={{ fontWeight: 700, fontSize: 16, padding: '0 8px 20px' }}>
-          Contabilidade<br /><span style={{ color: theme.accent }}>by Attentive</span>
+      {/* SIDEBAR */}
+      <aside style={{ width: 248, background: theme.sidebar, display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
+        {/* Marca */}
+        <div style={{ padding: '20px 16px 16px' }}>
+          <p style={{ margin: 0, color: '#fff', fontSize: 16, fontWeight: 600 }}>Contabilidade</p>
+          <p style={{ margin: '1px 0 0', color: '#8FB0FF', fontSize: 11, fontWeight: 500 }}>by Attentive</p>
         </div>
-        <nav style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-          {itens.map(i => (
-            <NavLink key={i.to} to={i.to} end={i.end} style={({ isActive }) => ({
-              padding: '10px 12px', borderRadius: 8, fontSize: 14,
-              color: isActive ? '#fff' : theme.sub,
-              background: isActive ? 'rgba(74,124,255,0.16)' : 'transparent',
-            })}>{i.label}</NavLink>
-          ))}
+
+        {/* Seletor de empresa */}
+        <div style={{ padding: '0 14px 6px' }}>
+          <div className="side-divider" style={{ margin: '0 0 14px' }} />
+          <div style={{ background: '#222B3D', borderRadius: 10, padding: '9px 12px', display: 'flex', alignItems: 'center', gap: 11 }}>
+            <i className="ti ti-building" style={{ color: '#8A9BBE', fontSize: 20, flexShrink: 0 }} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <p style={{ color: '#8A9BBE', fontSize: 11, margin: 0, lineHeight: 1.2 }}>Empresa</p>
+              <select className="ghost-select" value={empresaId} onChange={e => setEmpresaId(e.target.value)}>
+                <option value="">{empresas.length ? 'Selecione…' : 'Nenhum cliente ainda'}</option>
+                {empresas.map(e => (
+                  <option key={e.id} value={e.id}>{e.razao_social}</option>
+                ))}
+              </select>
+            </div>
+            <i className="ti ti-selector" style={{ color: '#8A9BBE', fontSize: 16, flexShrink: 0 }} />
+          </div>
+        </div>
+
+        {/* Navegação */}
+        <nav style={{ padding: '4px 8px', flex: 1, overflowY: 'auto' }}>
+          <p className="sec-title">Principal</p>
+          {PRINCIPAL.map(i => <Item key={i.to} {...i} />)}
+
+          <div className="side-divider" />
+          <p className="sec-title">Fechamento Contábil</p>
+          <a className="nav-link" onClick={() => setGrupoAberto(o => !o)} style={{ userSelect: 'none' }}>
+            <i className="ti ti-calendar-check" />
+            <span style={{ flex: 1 }}>Fechamento</span>
+            <i className={`ti ti-chevron-${grupoAberto ? 'down' : 'right'}`} style={{ fontSize: 15 }} />
+          </a>
+          {grupoAberto && FECHAMENTO.map(i => <Item key={i.to} {...i} sub />)}
+
+          <div className="side-divider" />
+          <p className="sec-title">Nível cliente</p>
+          <Item to="/base" icon="ti-info-circle" label="Base de Informações" />
+
+          <div className="side-divider" />
+          <p className="sec-title">Sistema</p>
+          {SISTEMA.map(i => <Item key={i.to} {...i} />)}
         </nav>
-        <div style={{ marginTop: 'auto', padding: '0 8px' }}>
-          <p style={{ color: theme.sub, fontSize: 11.5, marginBottom: 8 }}>{user?.email}</p>
+
+        {/* Usuário */}
+        <div style={{ padding: 14, borderTop: '1px solid #263044' }}>
+          <p style={{ color: '#8A9BBE', fontSize: 11.5, marginBottom: 8, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{user?.email}</p>
           <button className="btn btn-ghost" style={{ width: '100%', fontSize: 13 }} onClick={signOut}>Sair</button>
         </div>
       </aside>
-      <main style={{ flex: 1, background: theme.contentBg, padding: '28px 32px', overflow: 'auto' }}>
-        <Outlet />
+
+      {/* CONTEÚDO */}
+      <main style={{ flex: 1, background: theme.contentBg, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
+        {/* Barra superior: empresa + competência */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '16px 32px', borderBottom: `1px solid ${theme.border}` }}>
+          <div style={{ fontSize: 13, color: theme.sub, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <i className="ti ti-building" style={{ color: theme.sub }} />
+            {empresaNome || 'Nenhuma empresa selecionada'}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <i className="ti ti-calendar-event" style={{ color: theme.sub }} />
+            <span style={{ fontSize: 12.5, color: theme.sub }}>Competência</span>
+            <select className="input" style={{ width: 'auto', padding: '7px 10px' }} value={competencia} onChange={e => setCompetencia(e.target.value)}>
+              {COMPETENCIAS.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+        </div>
+
+        <div style={{ padding: '28px 32px', flex: 1 }}>
+          <Outlet />
+        </div>
       </main>
     </div>
   )
