@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
 import { useAuth } from './AuthProvider'
 import { useAppData } from '../lib/appData'
+import SeletorEmpresa from './SeletorEmpresa'
 import { theme } from '../lib/theme'
 
 const PRINCIPAL = [
@@ -37,7 +38,7 @@ function Item({ to, end, icon, label, sub }) {
 
 export default function Layout() {
   const { user, signOut } = useAuth()
-  const { empresas, empresaId, setEmpresaId, competencia, setCompetencia, competencias, empresaNome } = useAppData()
+  const { competencia, setCompetencia, competencias, empresaNome } = useAppData()
   const [grupoAberto, setGrupoAberto] = useState(true)
 
   return (
@@ -50,22 +51,10 @@ export default function Layout() {
           <p style={{ margin: '1px 0 0', color: '#8FB0FF', fontSize: 11, fontWeight: 500 }}>by Attentive</p>
         </div>
 
-        {/* Seletor de empresa */}
+        {/* Seletor de empresa (com busca por nome ou código) */}
         <div style={{ padding: '0 14px 6px' }}>
           <div className="side-divider" style={{ margin: '0 0 14px' }} />
-          <div style={{ background: '#222B3D', borderRadius: 10, padding: '9px 12px', display: 'flex', alignItems: 'center', gap: 11 }}>
-            <i className="ti ti-building" style={{ color: '#8A9BBE', fontSize: 20, flexShrink: 0 }} />
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <p style={{ color: '#8A9BBE', fontSize: 11, margin: 0, lineHeight: 1.2 }}>Empresa</p>
-              <select className="ghost-select" value={empresaId} onChange={e => setEmpresaId(e.target.value)}>
-                <option value="">{empresas.length ? 'Selecione…' : 'Nenhum cliente ainda'}</option>
-                {empresas.map(e => (
-                  <option key={e.id} value={e.id}>{e.razao_social}</option>
-                ))}
-              </select>
-            </div>
-            <i className="ti ti-selector" style={{ color: '#8A9BBE', fontSize: 16, flexShrink: 0 }} />
-          </div>
+          <SeletorEmpresa />
         </div>
 
         {/* Navegação */}
