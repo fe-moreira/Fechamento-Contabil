@@ -13,6 +13,7 @@ export function AppDataProvider({ children }) {
   const [empresas, setEmpresas] = useState([])
   const [empresaId, setEmpresaId] = useState('')
   const [competencia, setCompetencia] = useState('06/2026')
+  const [pendencias, setPendencias] = useState(null)
 
   async function carregarEmpresas() {
     const { data } = await supabase
@@ -21,6 +22,23 @@ export function AppDataProvider({ children }) {
     setEmpresas(data || [])
   }
   useEffect(() => { carregarEmpresas() }, [])
+
+  // Conta as pendências do fechamento (mesma régua da tela Status) para o badge do menu.
+  async function recalcularPendencias() {
+    if (!empresaId) { setPendencias(null); return }
+    const [mes, ano] = competencia.split('/').map(Number)
+    const { data: comp } = await supabase.from('competencias')
+      .select('id, documentos').eq('cliente_id', empresaId).eq('ano', ano).eq('mes', mes).maybeSingle()
+    if (!comp) { setPendencias(1); return } // razão ainda não importado
+    let p = 0
+    const { count } = await supabase.from('razao').select('id', { count: 'exact', head: true }).eq('competencia_id', comp.id)
+    if (!count) p += 1
+    p += (Array.isArray(comp.documentos) ? comp.documentos : []).filter(d => !d.rec).length
+    const { data: bal } = await supabase.from('balancete').select('saldo_final').eq('competencia_id', comp.id)
+    p += (bal || []).filter(b => Math.abs(Number(b.saldo_final)) > 0.01).length
+    setPendencias(p)
+  }
+  useEffect(() => { recalcularPendencias() }, [empresaId, competencia])
 
   const empresaNome = empresas.find(e => e.id === empresaId)?.razao_social || ''
 
@@ -42,6 +60,7 @@ export function AppDataProvider({ children }) {
     empresas, empresaId, setEmpresaId,
     competencia, setCompetencia, competencias: COMPETENCIAS,
     empresaNome, getCompetenciaId, carregarEmpresas,
+    pendencias, recalcularPendencias,
   }
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }

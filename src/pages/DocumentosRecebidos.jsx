@@ -15,7 +15,7 @@ const PADRAO = [
 const hojeCurto = () => new Date().toLocaleDateString('pt-BR').slice(0, 5)
 
 export default function DocumentosRecebidos() {
-  const { empresaId, empresaNome, competencia, getCompetenciaId } = useAppData()
+  const { empresaId, empresaNome, competencia, getCompetenciaId, recalcularPendencias } = useAppData()
   const [docs, setDocs] = useState([])
   const [carregando, setCarregando] = useState(true)
   const [nome, setNome] = useState('')
@@ -37,6 +37,7 @@ export default function DocumentosRecebidos() {
     setDocs(novo)
     const id = await getCompetenciaId()
     if (id) await supabase.from('competencias').update({ documentos: novo }).eq('id', id)
+    recalcularPendencias()
   }
 
   const toggle = (i) => persistir(docs.map((d, j) => j === i ? { ...d, rec: !d.rec, date: !d.rec ? hojeCurto() : '' } : d))

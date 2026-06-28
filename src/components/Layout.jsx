@@ -26,18 +26,21 @@ const SISTEMA = [
   { to: '/ajuda', icon: 'ti-help-circle', label: 'Ajuda' },
 ]
 
-function Item({ to, end, icon, label, sub }) {
+function Item({ to, end, icon, label, sub, badge }) {
   return (
     <NavLink to={to} end={end} className={`nav-link${sub ? ' sub' : ''}`}>
       <i className={`ti ${icon}`} />
       <span style={{ flex: 1 }}>{label}</span>
+      {badge != null && (
+        <span style={{ minWidth: 20, height: 18, padding: '0 6px', borderRadius: 20, fontSize: 11, fontWeight: 600, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: '#fff', background: badge > 0 ? theme.red : theme.green }}>{badge}</span>
+      )}
     </NavLink>
   )
 }
 
 export default function Layout() {
   const { user, signOut } = useAuth()
-  const { competencia, setCompetencia, competencias, empresaNome } = useAppData()
+  const { competencia, setCompetencia, competencias, empresaNome, pendencias } = useAppData()
   const [grupoAberto, setGrupoAberto] = useState(true)
 
   return (
@@ -68,7 +71,7 @@ export default function Layout() {
             <span style={{ flex: 1 }}>Fechamento</span>
             <i className={`ti ti-chevron-${grupoAberto ? 'down' : 'right'}`} style={{ fontSize: 15 }} />
           </a>
-          {grupoAberto && FECHAMENTO.map(i => <Item key={i.to} {...i} sub />)}
+          {grupoAberto && FECHAMENTO.map(i => <Item key={i.to} {...i} sub badge={i.to === '/status' ? pendencias : undefined} />)}
 
           <div className="side-divider" />
           <p className="sec-title">Nível cliente</p>
