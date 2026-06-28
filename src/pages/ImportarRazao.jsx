@@ -62,7 +62,7 @@ function autoMapear(headers) {
 }
 
 export default function ImportarRazao() {
-  const { empresaId, empresaNome, competencia, getCompetenciaId } = useAppData()
+  const { empresaId, empresaNome, competencia, getCompetenciaId, recalcularPendencias } = useAppData()
   const [headers, setHeaders] = useState([])
   const [linhas, setLinhas] = useState([])   // linhas de dados (arrays)
   const [map, setMap] = useState({})
@@ -162,6 +162,7 @@ export default function ImportarRazao() {
       const totCred = registros.reduce((s, r) => s + r.credito, 0)
       setResultado({ lancamentos: registros.length, contas: balancete.length, totDeb, totCred })
       setJaImportado(registros.length)
+      recalcularPendencias()
       setHeaders([]); setLinhas([]); setArquivo('')
     } catch (err) {
       setErro('Erro ao gravar: ' + err.message)
