@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
 import { useAuth } from './AuthProvider'
-import { supabase } from '../lib/supabase'
+import { useAppData } from '../lib/appData'
 import { theme } from '../lib/theme'
 
 const PRINCIPAL = [
@@ -26,9 +26,6 @@ const SISTEMA = [
   { to: '/ajuda', icon: 'ti-help-circle', label: 'Ajuda' },
 ]
 
-// Competências do ano corrente (controle de UI; a ligação com dados vem nas próximas ondas).
-const COMPETENCIAS = Array.from({ length: 12 }, (_, i) => `${String(i + 1).padStart(2, '0')}/2026`)
-
 function Item({ to, end, icon, label, sub }) {
   return (
     <NavLink to={to} end={end} className={`nav-link${sub ? ' sub' : ''}`}>
@@ -40,18 +37,8 @@ function Item({ to, end, icon, label, sub }) {
 
 export default function Layout() {
   const { user, signOut } = useAuth()
-  const [empresas, setEmpresas] = useState([])
-  const [empresaId, setEmpresaId] = useState('')
-  const [competencia, setCompetencia] = useState('06/2026')
+  const { empresas, empresaId, setEmpresaId, competencia, setCompetencia, competencias, empresaNome } = useAppData()
   const [grupoAberto, setGrupoAberto] = useState(true)
-
-  useEffect(() => {
-    supabase.from('clientes').select('id, razao_social, codigo_dominio')
-      .order('razao_social', { ascending: true })
-      .then(({ data }) => setEmpresas(data || []))
-  }, [])
-
-  const empresaNome = empresas.find(e => e.id === empresaId)?.razao_social
 
   return (
     <div style={{ display: 'flex', minHeight: '100vh' }}>
@@ -123,7 +110,7 @@ export default function Layout() {
             <i className="ti ti-calendar-event" style={{ color: theme.sub }} />
             <span style={{ fontSize: 12.5, color: theme.sub }}>Competência</span>
             <select className="input" style={{ width: 'auto', padding: '7px 10px' }} value={competencia} onChange={e => setCompetencia(e.target.value)}>
-              {COMPETENCIAS.map(c => <option key={c} value={c}>{c}</option>)}
+              {competencias.map(c => <option key={c} value={c}>{c}</option>)}
             </select>
           </div>
         </div>
