@@ -1,170 +1,233 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
+import { useAuth } from '../components/AuthProvider'
 import { theme, money } from '../lib/theme'
 
-// Classifica o farol da conta a partir do saldo final.
-function farolDe(saldo) {
-  const v = Number(saldo) || 0
-  if (v === 0) return { cor: theme.green, label: 'Conciliado' }
-  if (Math.abs(v) < 1000) return { cor: theme.yellow, label: 'Atenção' }
-  return { cor: theme.red, label: 'Precisa conciliar' }
+// ---- Leitura do histórico: extrai NF e entidade (cliente/fornecedor) com confiança ----
+const RUIDO = /\b(VENDA|VENDAS|COMPRA|COMPRAS|PAGTO|PAGAMENTO|RECEBIMENTO|RECEBTO|REF|REFERENTE|NOTA|FISCAL|DUPLICATA|DUPL|BOLETO|TITULO|TÍTULO|VLR|VALOR|PARCELA|PARC|CONF|S\/|A|DE|DA|DO|DOS|DAS|E|NO|NA|EM)\b/ig
+function lerHistorico(h) {
+  const s = String(h || '').trim()
+  const nfm = s.match(/\bN[ºo°]?\.?\s*F?-?[Ee]?\.?\s*[:nº]*\s*(\d{2,9})/i) || s.match(/\bNOTA\s*(?:FISCAL)?\s*N?[ºo°]?\.?\s*(\d{2,9})/i)
+  const nf = nfm ? nfm[1] : (s.match(/\b(\d{3,9})\b/)?.[1] || '')
+  const entidade = s.replace(nfm ? nfm[0] : '', ' ').replace(/\b\d+\b/g, ' ').replace(RUIDO, ' ').replace(/[.\-/]+/g, ' ').replace(/\s+/g, ' ').trim()
+  let conf = 'baixa'
+  if (entidade.length >= 4 && nf) conf = 'alta'
+  else if (entidade.length >= 4 || nf) conf = 'media'
+  return { nf, entidade: entidade || '(não identificado)', conf }
+}
+
+function tipoConta(nome) {
+  const n = (nome || '').toLowerCase()
+  if (/(icms|pis|cofins|iss|imposto|tribut|darf|das\b)/.test(n)) return 'Imposto'
+  if (/(cliente|duplicata|receber|fornecedor|pagar|estoque|mercadoria)/.test(n)) return 'Composição'
+  return 'Saldo'
+}
+const CONF = {
+  alta: { cor: theme.green, txt: 'alta' },
+  media: { cor: theme.yellow, txt: 'média' },
+  baixa: { cor: theme.red, txt: 'baixa' },
 }
 
 export default function Conciliacao() {
-  const { empresaId, empresaNome, competencia } = useAppData()
-  const [linhas, setLinhas] = useState([])
-  const [carregando, setCarregando] = useState(false)
-  const [semComp, setSemComp] = useState(false)
-  const [erro, setErro] = useState('')
-  const [hover, setHover] = useState(null)
+  const { empresaId, empresaNome, competencia, getCompetenciaId } = useAppData()
+  const { user } = useAuth()
+  const [compId, setCompId] = useState(null)
+  const [contas, setContas] = useState([])
+  const [carregando, setCarregando] = useState(true)
+  const [sel, setSel] = useState(null) // conta selecionada (detalhe)
 
   useEffect(() => {
-    setLinhas([]); setSemComp(false); setErro('')
-    if (!empresaId) return
-    let vivo = true
+    setSel(null); setContas([]); setCompId(null)
+    if (!empresaId) { setCarregando(false); return }
     setCarregando(true)
-    ;(async () => {
-      try {
-        const [mes, ano] = competencia.split('/').map(Number)
-        const { data: comp } = await supabase.from('competencias').select('id')
-          .eq('cliente_id', empresaId).eq('ano', ano).eq('mes', mes).maybeSingle()
-        if (!vivo) return
-        if (!comp) { setSemComp(true); setCarregando(false); return }
-        const { data, error } = await supabase.from('balancete')
-          .select('conta, nome, saldo_final')
-          .eq('competencia_id', comp.id)
-          .order('conta', { ascending: true })
-        if (!vivo) return
-        if (error) throw error
-        setLinhas(data || [])
-      } catch (err) {
-        if (vivo) setErro('Erro ao carregar o balancete: ' + err.message)
-      } finally {
-        if (vivo) setCarregando(false)
-      }
-    })()
-    return () => { vivo = false }
+    const [mes, ano] = competencia.split('/').map(Number)
+    supabase.from('competencias').select('id').eq('cliente_id', empresaId).eq('ano', ano).eq('mes', mes).maybeSingle()
+      .then(async ({ data: comp }) => {
+        if (!comp) { setCarregando(false); return }
+        setCompId(comp.id)
+        const { data } = await supabase.from('balancete').select('conta, nome, saldo_inicial, debito, credito, saldo_final')
+          .eq('competencia_id', comp.id).order('conta')
+        setContas((data || []).map(b => ({ ...b, tipo: tipoConta(b.nome || b.conta) })))
+        setCarregando(false)
+      })
   }, [empresaId, competencia])
 
-  if (!empresaId) {
-    return (
-      <Wrapper>
-        <Aviso icon="ti-building" texto="Selecione uma empresa no menu lateral." />
-      </Wrapper>
-    )
+  if (!empresaId) return <Wrapper><Aviso texto="Selecione uma empresa no menu lateral." /></Wrapper>
+  if (carregando) return <Wrapper><p style={{ color: theme.sub, fontSize: 13 }}>Carregando…</p></Wrapper>
+  if (!compId || contas.length === 0) return <Wrapper><Aviso icon="ti-table-off" texto="Nenhum balancete nesta competência. Importe o razão primeiro." /></Wrapper>
+
+  if (sel) return <Detalhe conta={sel} compId={compId} usuario={user?.email} getCompetenciaId={getCompetenciaId} onVoltar={() => setSel(null)} />
+
+  const farol = (c) => Math.abs(c.saldo_final) < 0.01 ? theme.green : Math.abs(c.saldo_final) < 1000 ? theme.yellow : theme.red
+
+  return (
+    <Wrapper nome={empresaNome} comp={competencia}>
+      <div style={{ display: 'flex', gap: 16, marginBottom: 14, fontSize: 12, color: theme.sub }}>
+        <span><Dot c={theme.red} /> Não conciliada</span>
+        <span><Dot c={theme.yellow} /> Sem documento</span>
+        <span><Dot c={theme.green} /> Conciliada</span>
+      </div>
+      <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'auto' }}>
+        <table style={{ width: '100%', minWidth: 760, borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ background: theme.input }}>
+              <th style={th}>Conta</th><th style={thR}>Saldo inicial</th><th style={thR}>Débito</th>
+              <th style={thR}>Crédito</th><th style={thR}>Saldo atual</th><th style={th}>Tipo</th><th style={{ ...th, textAlign: 'center' }}>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {contas.map((c, i) => (
+              <tr key={i} onClick={() => setSel(c)} style={{ borderTop: `1px solid ${theme.border}`, cursor: 'pointer' }}>
+                <td style={td}><span style={{ color: theme.sub, fontSize: 11 }}>{c.conta}</span><br />{c.nome}</td>
+                <td style={tdR}>{money(c.saldo_inicial)}</td>
+                <td style={tdR}>{money(c.debito)}</td>
+                <td style={tdR}>{money(c.credito)}</td>
+                <td style={{ ...tdR, fontWeight: 600 }}>{money(c.saldo_final)}</td>
+                <td style={td}>{c.tipo}</td>
+                <td style={{ ...td, textAlign: 'center' }}><Dot c={farol(c)} /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Wrapper>
+  )
+}
+
+function Detalhe({ conta, compId, usuario, getCompetenciaId, onVoltar }) {
+  const [lanc, setLanc] = useState([])
+  const [carregando, setCarregando] = useState(true)
+  const [modal, setModal] = useState(null) // 'just' | 'corr'
+  const [msg, setMsg] = useState('')
+
+  useEffect(() => {
+    setCarregando(true)
+    supabase.from('razao').select('data, historico, debito, credito').eq('competencia_id', compId).eq('conta', conta.conta).order('data')
+      .then(({ data }) => { setLanc((data || []).map(l => ({ ...l, leitura: lerHistorico(l.historico) }))); setCarregando(false) })
+  }, [compId, conta.conta])
+
+  const somaComp = lanc.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
+  const dif = conta.saldo_final - somaComp
+
+  async function registrar(tipo, detalhe) {
+    const id = await getCompetenciaId()
+    await supabase.from('auditoria').insert({ competencia_id: id, modulo: 'Conciliação', item: `${conta.conta} · ${conta.nome}`, tipo, detalhe, usuario })
+    setMsg(`${tipo} registrada na auditoria.`); setModal(null)
   }
-
-  const total = linhas.length
-  const conciliadas = linhas.filter(l => (Number(l.saldo_final) || 0) === 0).length
-  const pendencias = linhas.filter(l => Math.abs(Number(l.saldo_final) || 0) >= 1000).length
-  const somaSaldos = linhas.reduce((s, l) => s + (Number(l.saldo_final) || 0), 0)
-
-  const vazio = !carregando && (semComp || linhas.length === 0)
 
   return (
     <Wrapper>
-      <p style={{ color: theme.sub, fontSize: 13, marginBottom: 18 }}>
-        <b style={{ color: theme.text }}>{empresaNome}</b> · competência <b style={{ color: theme.text }}>{competencia}</b>
-      </p>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginBottom: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span onClick={onVoltar} style={{ color: '#8FB0FF', fontSize: 13, cursor: 'pointer' }}><i className="ti ti-chevron-left" /> Conciliação</span>
+          <span style={{ color: theme.sub }}>/</span>
+          <span style={{ fontSize: 13, fontWeight: 600 }}>{conta.conta} · {conta.nome}</span>
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="btn btn-ghost" style={{ fontSize: 13 }} onClick={() => setModal('just')}><i className="ti ti-flag" /> Justificar</button>
+          <button className="btn" style={{ fontSize: 13 }} onClick={() => setModal('corr')}><i className="ti ti-pencil-bolt" /> Corrigir</button>
+        </div>
+      </div>
 
-      {erro && <p style={{ color: theme.red, fontSize: 13, marginBottom: 14 }}>{erro}</p>}
+      {msg && <p style={{ color: theme.green, fontSize: 13, marginBottom: 12 }}><i className="ti ti-circle-check" /> {msg}</p>}
 
-      {carregando && (
-        <p style={{ color: theme.sub, fontSize: 13 }}><i className="ti ti-loader" /> Carregando…</p>
-      )}
+      {/* Resumo + amarração */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(150px,1fr))', gap: 12, marginBottom: 16 }}>
+        <Tile label="Saldo inicial" v={money(conta.saldo_inicial)} />
+        <Tile label="Débito" v={money(conta.debito)} cor={theme.green} />
+        <Tile label="Crédito" v={money(conta.credito)} cor={theme.red} />
+        <Tile label="Saldo atual" v={money(conta.saldo_final)} />
+        <Tile label="Diferença (amarração)" v={money(dif)} cor={Math.abs(dif) < 0.01 ? theme.green : theme.yellow} />
+      </div>
 
-      {vazio && (
-        <Aviso icon="ti-file-off" texto="Nenhum dado para esta competência. Importe o razão primeiro." />
-      )}
+      {/* Composição lida do histórico */}
+      <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'auto' }}>
+        <div style={{ padding: '12px 16px', fontSize: 12.5, color: theme.sub }}>
+          {conta.tipo === 'Composição' ? 'Composição lida do histórico (cliente/fornecedor e NF). Confiança baixa → revise em “Corrigir”.' : 'Lançamentos do razão (conta de saldo).'}
+        </div>
+        <table style={{ width: '100%', minWidth: 720, borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ background: theme.input }}>
+              <th style={th}>Data</th><th style={th}>NF</th><th style={th}>Cliente/Fornecedor (lido)</th>
+              <th style={th}>Histórico</th><th style={thR}>Débito</th><th style={thR}>Crédito</th><th style={{ ...th, textAlign: 'center' }}>Confiança</th>
+            </tr>
+          </thead>
+          <tbody>
+            {carregando ? (
+              <tr><td colSpan={7} style={{ ...td, color: theme.sub }}>Carregando…</td></tr>
+            ) : lanc.length === 0 ? (
+              <tr><td colSpan={7} style={{ ...td, color: theme.sub }}>Sem lançamentos nesta conta.</td></tr>
+            ) : lanc.map((l, i) => (
+              <tr key={i} style={{ borderTop: `1px solid ${theme.border}` }}>
+                <td style={{ ...td, whiteSpace: 'nowrap' }}>{l.data || ''}</td>
+                <td style={td}>{l.leitura.nf || '—'}</td>
+                <td style={td}>{l.leitura.entidade}</td>
+                <td style={{ ...td, maxWidth: 280, color: theme.sub }}>{l.historico}</td>
+                <td style={tdR}>{Number(l.debito) ? money(l.debito) : ''}</td>
+                <td style={tdR}>{Number(l.credito) ? money(l.credito) : ''}</td>
+                <td style={{ ...td, textAlign: 'center' }}><span style={{ color: CONF[l.leitura.conf].cor, fontSize: 11.5, fontWeight: 600 }}>{CONF[l.leitura.conf].txt}</span></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
 
-      {!carregando && !vazio && (
-        <>
-          {/* Cards de resumo */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(180px,1fr))', gap: 14, marginBottom: 18 }}>
-            <Card titulo="Total de contas" valor={total} />
-            <Card titulo="Conciliadas" valor={conciliadas} cor={theme.green} />
-            <Card titulo="Com pendência" valor={pendencias} cor={theme.red} />
-            <Card titulo="Soma dos saldos finais" valor={money(somaSaldos)} />
-          </div>
-
-          {/* Legenda do farol */}
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 18, alignItems: 'center', marginBottom: 14, fontSize: 12.5, color: theme.sub }}>
-            <span><Dot cor={theme.green} /> Conciliado (saldo final = 0)</span>
-            <span><Dot cor={theme.yellow} /> Atenção (|saldo| &lt; {money(1000)})</span>
-            <span><Dot cor={theme.red} /> Precisa conciliar (|saldo| ≥ {money(1000)})</span>
-          </div>
-
-          {/* Tabela */}
-          <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'hidden' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr style={{ background: theme.input }}>
-                  <th style={th}>Conta</th>
-                  <th style={th}>Nome</th>
-                  <th style={{ ...th, textAlign: 'right' }}>Saldo final</th>
-                  <th style={{ ...th, textAlign: 'center' }}>Farol</th>
-                </tr>
-              </thead>
-              <tbody>
-                {linhas.map((l, i) => {
-                  const f = farolDe(l.saldo_final)
-                  return (
-                    <tr key={i}
-                      onMouseEnter={() => setHover(i)}
-                      onMouseLeave={() => setHover(null)}
-                      style={{ borderTop: `1px solid ${theme.border}`, background: hover === i ? theme.input : 'transparent' }}>
-                      <td style={{ ...td, fontVariantNumeric: 'tabular-nums' }}>{l.conta}</td>
-                      <td style={td}>{l.nome || '—'}</td>
-                      <td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{money(l.saldo_final)}</td>
-                      <td style={{ ...td, textAlign: 'center' }}>
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: f.cor }}>
-                          <Dot cor={f.cor} /> {f.label}
-                        </span>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-        </>
+      {modal && (
+        <ModalRegistro tipo={modal === 'just' ? 'Justificativa' : 'Correção'} onClose={() => setModal(null)}
+          onConfirmar={txt => registrar(modal === 'just' ? 'Justificativa' : 'Correção', txt)} />
       )}
     </Wrapper>
   )
 }
 
-const th = { textAlign: 'left', padding: '10px 14px', fontSize: 11, color: theme.sub, textTransform: 'uppercase', letterSpacing: .3 }
-const td = { padding: '10px 14px', fontSize: 12.5, color: theme.text, whiteSpace: 'nowrap', maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis' }
+function ModalRegistro({ tipo, onClose, onConfirmar }) {
+  const [txt, setTxt] = useState('')
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 60 }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 'min(480px,96vw)', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
+        <h2 style={{ fontSize: 17, marginBottom: 4 }}>{tipo}</h2>
+        <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 14 }}>Fica registrada na auditoria com seu usuário e a data.</p>
+        <textarea className="input" rows={3} value={txt} onChange={e => setTxt(e.target.value)} autoFocus placeholder={tipo === 'Correção' ? 'O que foi corrigido (ex.: reclassificação, leitura do histórico)…' : 'Por que esta conta está assim…'} />
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
+          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+          <button className="btn" onClick={() => txt.trim() && onConfirmar(txt.trim())}>Registrar</button>
+        </div>
+      </div>
+    </div>
+  )
+}
 
-function Wrapper({ children }) {
+const th = { textAlign: 'left', padding: '11px 14px', fontSize: 11, color: theme.sub, textTransform: 'uppercase', letterSpacing: .3, whiteSpace: 'nowrap' }
+const thR = { ...th, textAlign: 'right' }
+const td = { padding: '11px 14px', fontSize: 12.5, color: theme.text, verticalAlign: 'top' }
+const tdR = { ...td, textAlign: 'right', whiteSpace: 'nowrap' }
+
+function Dot({ c }) { return <span style={{ display: 'inline-block', width: 11, height: 11, borderRadius: '50%', background: c }} /> }
+function Tile({ label, v, cor }) {
+  return (
+    <div style={{ background: theme.input, borderRadius: 10, padding: 14 }}>
+      <p style={{ color: theme.sub, fontSize: 10.5, textTransform: 'uppercase', letterSpacing: .4, margin: 0 }}>{label}</p>
+      <p style={{ color: cor || theme.text, fontSize: 15, fontWeight: 600, margin: '4px 0 0' }}>{v}</p>
+    </div>
+  )
+}
+function Wrapper({ children, nome, comp }) {
   return (
     <div>
-      <h1 style={{ fontSize: 22, fontWeight: 500, marginBottom: 4 }}>Conciliação</h1>
-      <p style={{ color: theme.sub, fontSize: 13, marginBottom: 22 }}>Conciliação das contas do balancete por competência, com farol verde/amarelo/vermelho.</p>
+      <h1 style={{ fontSize: 22, fontWeight: 500, marginBottom: 4 }}>Conciliação de Contas</h1>
+      <p style={{ color: theme.sub, fontSize: 13, marginBottom: 16 }}>
+        {nome ? <>Saldo inicial + movimento = saldo atual. <b style={{ color: theme.text }}>{nome}</b> · {comp}. Clique numa conta para ver a composição.</> : 'Saldo inicial + movimento = saldo atual.'}
+      </p>
       {children}
     </div>
   )
 }
-
-function Aviso({ icon, texto }) {
+function Aviso({ texto, icon = 'ti-building' }) {
   return (
-    <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: '28px 24px', display: 'flex', alignItems: 'center', gap: 14, maxWidth: 560 }}>
+    <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: '28px 24px', display: 'flex', alignItems: 'center', gap: 14, maxWidth: 580 }}>
       <i className={`ti ${icon}`} style={{ fontSize: 24, color: theme.accent }} />
       <p style={{ fontSize: 14, color: theme.text }}>{texto}</p>
     </div>
   )
-}
-
-function Card({ titulo, valor, cor }) {
-  return (
-    <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: '16px 18px' }}>
-      <p style={{ color: theme.sub, fontSize: 12, marginBottom: 6 }}>{titulo}</p>
-      <p style={{ fontSize: 22, fontWeight: 700, color: cor || theme.text }}>{valor}</p>
-    </div>
-  )
-}
-
-function Dot({ cor }) {
-  return <span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: '50%', background: cor, verticalAlign: 'middle' }} />
 }
