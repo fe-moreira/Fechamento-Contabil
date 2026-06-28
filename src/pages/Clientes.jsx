@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { theme } from '../lib/theme'
 
@@ -8,6 +8,11 @@ const vazio = {
   competencia_inicio: '', integracao_financeira: 'Não usa', analista: '', observacoes: '',
 }
 
+// Helpers da importação em lote (planilha-modelo: aba "Clientes", 15 colunas).
+const norm = (s) => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim()
+const txt = (v) => { const s = String(v ?? '').trim(); return s || null }
+const simNao = (v) => /^sim/i.test(String(v ?? '').trim())
+
 export default function Clientes() {
   const [lista, setLista] = useState([])
   const [loading, setLoading] = useState(true)
@@ -16,6 +21,8 @@ export default function Clientes() {
   const [salvando, setSalvando] = useState(false)
   const [editId, setEditId] = useState(null)
   const [aberto, setAberto] = useState(false)
+  const [importMsg, setImportMsg] = useState('')
+  const fileRef = useRef(null)
 
   async function carregar() {
     setLoading(true); setErro('')
@@ -26,6 +33,79 @@ export default function Clientes() {
     setLoading(false)
   }
   useEffect(() => { carregar() }, [])
+
+  async function importarPlanilha(e) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    e.target.value = ''
+    setErro(''); setImportMsg('Lendo planilha…')
+    try {
+      const XLSX = await import('xlsx')
+      const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' })
+      const aba = wb.SheetNames.find(n => n.toLowerCase().includes('client')) || wb.SheetNames[wb.SheetNames.length - 1]
+      const linhas = XLSX.utils.sheet_to_json(wb.Sheets[aba], { header: 1, defval: '' })
+      if (linhas.length < 2) { setImportMsg(''); setErro('A aba de clientes está vazia.'); return }
+
+      const H = linhas[0].map(norm)
+      const col = {
+        codigo_dominio: H.findIndex(h => h.includes('codigo') && h.includes('dominio')),
+        tipo: H.findIndex(h => h === 'tipo'),
+        codigo_matriz: H.findIndex(h => h.includes('codigo') && h.includes('matriz')),
+        razao_social: H.findIndex(h => h.includes('razao')),
+        nome_fantasia: H.findIndex(h => h.includes('fantasia')),
+        cnpj: H.findIndex(h => h.includes('cnpj')),
+        regime_tributario: H.findIndex(h => h.includes('regime')),
+        tipo_fechamento: H.findIndex(h => h.includes('tipo') && h.includes('fechamento')),
+        competencia_inicio: H.findIndex(h => h.includes('competencia')),
+        carga_saldos: H.findIndex(h => h.includes('carga')),
+        coleta_razao: H.findIndex(h => h.includes('coleta')),
+        sistema_financeiro: H.findIndex(h => h.includes('sistema')),
+        integracao_financeira: H.findIndex(h => h.includes('integracao')),
+        analista: H.findIndex(h => h.includes('analista')),
+        observacoes: H.findIndex(h => h.includes('observ')),
+      }
+      const g = (row, k) => (col[k] >= 0 ? row[col[k]] : '')
+
+      const novos = []
+      for (const row of linhas.slice(1)) {
+        const cod = String(g(row, 'codigo_dominio') ?? '').trim()
+        const razao = String(g(row, 'razao_social') ?? '').trim()
+        if (!cod && !razao) continue
+        const tipo = norm(g(row, 'tipo')).startsWith('fil') ? 'Filial' : 'Matriz'
+        novos.push({
+          codigo_dominio: cod || null, tipo,
+          codigo_matriz: tipo === 'Filial' ? (String(g(row, 'codigo_matriz') ?? '').trim() || null) : null,
+          razao_social: razao || null,
+          nome_fantasia: txt(g(row, 'nome_fantasia')),
+          cnpj: txt(g(row, 'cnpj')),
+          regime_tributario: txt(g(row, 'regime_tributario')),
+          tipo_fechamento: txt(g(row, 'tipo_fechamento')),
+          competencia_inicio: txt(g(row, 'competencia_inicio')),
+          carga_saldos: simNao(g(row, 'carga_saldos')),
+          coleta_razao: simNao(g(row, 'coleta_razao')),
+          sistema_financeiro: txt(g(row, 'sistema_financeiro')),
+          integracao_financeira: txt(g(row, 'integracao_financeira')) || 'Não usa',
+          analista: txt(g(row, 'analista')),
+          observacoes: txt(g(row, 'observacoes')),
+        })
+      }
+      if (!novos.length) { setImportMsg(''); setErro('Nenhuma linha de cliente encontrada na planilha.'); return }
+
+      // Evita duplicar: ignora códigos já cadastrados.
+      const { data: existentes } = await supabase.from('clientes').select('codigo_dominio')
+      const jaTem = new Set((existentes || []).map(c => c.codigo_dominio))
+      const aInserir = novos.filter(c => !c.codigo_dominio || !jaTem.has(c.codigo_dominio))
+      const ignorados = novos.length - aInserir.length
+      if (!aInserir.length) { setImportMsg(''); setErro(`Todos os ${novos.length} clientes da planilha já estão cadastrados.`); return }
+
+      const { error } = await supabase.from('clientes').insert(aInserir)
+      if (error) { setImportMsg(''); setErro(error.message); return }
+      setImportMsg(`${aInserir.length} cliente(s) importado(s)${ignorados ? ` · ${ignorados} já existente(s) ignorado(s)` : ''}.`)
+      carregar()
+    } catch (err) {
+      setImportMsg(''); setErro('Erro ao importar: ' + err.message)
+    }
+  }
 
   function abrirNovo() { setForm(vazio); setEditId(null); setAberto(true) }
   function abrirEdit(c) { setForm({ ...vazio, ...c }); setEditId(c.id); setAberto(true) }
@@ -57,9 +137,21 @@ export default function Clientes() {
           <h1 style={{ fontSize: 22 }}>Clientes</h1>
           <p style={{ color: theme.sub, fontSize: 13, marginTop: 2 }}>{lista.length} cadastrado(s)</p>
         </div>
-        <button className="btn" onClick={abrirNovo}>+ Novo cliente</button>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <a className="btn btn-ghost" href="/modelo-importacao-clientes.xlsx" download
+            style={{ fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <i className="ti ti-file-spreadsheet" /> Baixar modelo
+          </a>
+          <button className="btn btn-ghost" style={{ fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 6 }}
+            onClick={() => fileRef.current?.click()}>
+            <i className="ti ti-file-import" /> Importar planilha
+          </button>
+          <button className="btn" onClick={abrirNovo}>+ Novo cliente</button>
+          <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={importarPlanilha} />
+        </div>
       </div>
 
+      {importMsg && <p style={{ color: theme.green, fontSize: 13, marginBottom: 14 }}><i className="ti ti-circle-check" /> {importMsg}</p>}
       {erro && <p style={{ color: theme.red, fontSize: 13, marginBottom: 14 }}>Erro: {erro}</p>}
 
       <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'hidden' }}>
