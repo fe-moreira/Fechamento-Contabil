@@ -75,6 +75,24 @@ function ehPorEntidade(nome) {
   return /client|fornecedor|duplicat|adiantament|contas? a pagar|a receber/.test(n)
 }
 
+// Conta retificadora (redutora): saldo na natureza invertida é NORMAL — não destacar.
+// Padrão Domínio: nome começa com "(-)"; também depreciação/amortização/PCLD/perdas.
+function ehRedutora(nome) {
+  const n = baixaTxt(nome)
+  return /\(\s*-\s*\)|deprecia|amortiza|exaust|pcld|perdas estimad|provis[aã]o para perda|redutora/.test(n) || /^\s*\(?\s*-/.test(String(nome || ''))
+}
+
+// Natureza invertida do SALDO da conta (não redutora):
+// 'credor' = conta do Ativo (1) com saldo credor; 'devedor' = Passivo (2) com saldo devedor.
+function saldoInvertido(classifRaw, nome, saldoFinal) {
+  if (ehRedutora(nome)) return null
+  const d = String(classifRaw || '').replace(/\D/g, '')[0]
+  const s = Number(saldoFinal) || 0
+  if (d === '1' && s < -0.005) return 'credor'
+  if (d === '2' && s > 0.005) return 'devedor'
+  return null
+}
+
 
 const baixaTxt = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
 
@@ -182,12 +200,16 @@ export default function Conciliacao() {
               const sint = c.sintetica
               const peso = sint ? 700 : 400 // só as sintéticas em negrito
               const t = tipoEf(c)
+              const inv = sint ? null : saldoInvertido(c.classifRaw, c.nome, c.saldo_final)
               return (
                 <tr key={i} onClick={() => !sint && setSel(c)}
-                  style={{ borderTop: `1px solid ${theme.border}`, cursor: sint ? 'default' : 'pointer', background: sint ? theme.input : 'transparent', fontWeight: peso }}>
+                  style={{ borderTop: `1px solid ${theme.border}`, cursor: sint ? 'default' : 'pointer', background: inv ? 'rgba(229,72,77,0.08)' : sint ? theme.input : 'transparent', fontWeight: peso }}>
                   <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{c.reduzido || ''}</td>
                   <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{c.classif}</td>
-                  <td style={{ ...td, fontWeight: peso }}>{c.nome || '—'}</td>
+                  <td style={{ ...td, fontWeight: peso }}>
+                    {c.nome || '—'}
+                    {inv && <span title={`Conta do ${inv === 'credor' ? 'Ativo com saldo credor' : 'Passivo com saldo devedor'} (não é redutora) — verifique`} style={{ marginLeft: 8, background: 'rgba(229,72,77,0.18)', color: theme.red, fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 20, textTransform: 'uppercase', letterSpacing: .3 }}><i className="ti ti-alert-octagon" /> saldo {inv}</span>}
+                  </td>
                   <td style={{ ...td }}>{sint ? '' : (
                     <span onClick={e => { e.stopPropagation(); trocaTipo(c) }} title="Clique para alternar Saldo / Composição"
                       style={{ display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer', fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 20, background: t === 'saldo' ? 'rgba(245,166,35,0.15)' : 'rgba(74,124,255,0.14)', color: t === 'saldo' ? theme.yellow : theme.accent }}>
@@ -196,7 +218,7 @@ export default function Conciliacao() {
                   <td style={{ ...tdR, fontWeight: peso }}>{money(c.saldo_inicial)}</td>
                   <td style={{ ...tdR, fontWeight: peso }}>{money(c.debito)}</td>
                   <td style={{ ...tdR, fontWeight: peso }}>{money(c.credito)}</td>
-                  <td style={{ ...tdR, fontWeight: peso }}>{money(c.saldo_final)}</td>
+                  <td style={{ ...tdR, fontWeight: peso, color: inv ? theme.red : undefined }}>{money(c.saldo_final)}</td>
                   <td style={{ ...td, textAlign: 'center' }}>{sint ? '' : <Dot c={statusConta(c)} />}</td>
                 </tr>
               )
@@ -350,29 +372,37 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, getCompetenc
         <Tile label="Diferença (amarração)" v={money(dif)} cor={Math.abs(dif) < 0.01 ? theme.green : theme.yellow} />
       </div>
 
+      {/* Natureza do saldo: Ativo credor / Passivo devedor (sem ser redutora) */}
+      {(() => {
+        const inv = saldoInvertido(conta.classifRaw, conta.nome, conta.saldo_final)
+        if (!inv) return null
+        const classe = inv === 'credor' ? 'Ativo' : 'Passivo'
+        return (
+          <div style={{ background: 'rgba(229,72,77,0.10)', border: `1px solid ${theme.red}`, borderRadius: 12, display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px', marginBottom: 14 }}>
+            <i className="ti ti-alert-octagon" style={{ color: theme.red, fontSize: 18, marginTop: 1 }} />
+            <span style={{ color: theme.text, fontSize: 13 }}>Esta conta do <b>{classe}</b> está com <b>saldo {inv}</b> e não é redutora — confira os lançamentos abaixo e corrija o que estiver invertido.</span>
+          </div>
+        )
+      })()}
+
       {/* Conferência (documento → verde; confirmar + justificar → amarelo) */}
       <CardConferencia conta={conta} reg={reg} compId={compId} usuario={usuario} composicao={tipoCta !== 'saldo'} onSalvo={onSalvarConf} />
 
-      {tipoCta !== 'saldo' && (
-      <>
       {/* Impostos: baixa do mês anterior + memória de cálculo */}
       {tipoConta(conta.nome) === 'Imposto' && <ImpostoCards conta={conta} />}
 
-      {!ehPorEntidade(conta.nome) ? (
-        <ListaLancamentos lanc={lanc} carregando={carregando} contraDe={contraDe} planoMap={planoMap} onTratar={l => { setMsg(''); setAcao(l) }} />
-      ) : (
+      {(ehPorEntidade(conta.nome) && tipoCta !== 'saldo') ? (
       <>
       {/* Composição agrupada por cliente/fornecedor */}
       <p style={{ color: theme.sub, fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: .5, margin: '4px 0 10px' }}>
         O que compõe o saldo — por {lab}
       </p>
 
-      {(contaInvertida || anomalos.length > 0) && (
+      {anomalos.length > 0 && (
         <div style={{ background: 'rgba(229,72,77,0.10)', border: `1px solid ${theme.red}`, borderRadius: 12, display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px', marginBottom: 12 }}>
           <i className="ti ti-alert-octagon" style={{ color: theme.red, fontSize: 18, marginTop: 1 }} />
           <span style={{ color: theme.text, fontSize: 13 }}>
-            {contaInvertida && <><b>Saldo da conta {natAnom}</b> — conta de {lab} deveria ficar {natOk}. </>}
-            {anomalos.length > 0 && <>{anomalos.length} {lab}(s) com saldo <b>{natAnom}</b> (natureza invertida) — verifique{anomalos.length <= 4 ? `: ${anomalos.join(', ')}` : ''}.</>}
+            {anomalos.length} {lab}(s) com saldo <b>{natAnom}</b> (natureza invertida) — verifique{anomalos.length <= 4 ? `: ${anomalos.join(', ')}` : ''}.
           </span>
         </div>
       )}
@@ -470,8 +500,8 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, getCompetenc
         )
       })}
       </>
-      )}
-      </>
+      ) : (
+        <ListaLancamentos lanc={lanc} carregando={carregando} contraDe={contraDe} planoMap={planoMap} onTratar={l => { setMsg(''); setAcao(l) }} />
       )}
 
       {acao && (
