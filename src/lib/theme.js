@@ -16,3 +16,10 @@ export const theme = {
 
 export const money = (v) =>
   (Number(v) || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+
+// Saldo em convenção contábil: positivo = Devedor (D), negativo = Credor (C).
+export const moneyDC = (v) => {
+  const n = Number(v) || 0
+  if (Math.abs(n) < 0.005) return money(0)
+  return `${money(Math.abs(n))} ${n > 0 ? 'D' : 'C'}`
+}

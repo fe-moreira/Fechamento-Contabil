@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
-import { theme, money } from '../lib/theme'
+import { theme, money, moneyDC } from '../lib/theme'
 import { montarBalancete } from '../lib/balancete'
 
 const ANO = 2026
@@ -244,7 +244,7 @@ export default function CompMovimento() {
                         const v = linha[c.mes]
                         if (v == null) return <td key={c.mes} style={{ ...td, textAlign: 'right' }} />
                         if (sintetica) {
-                          return <td key={c.mes} style={{ ...td, textAlign: 'right', fontWeight: 700 }}>{money(v)}</td>
+                          return <td key={c.mes} style={{ ...td, textAlign: 'right', fontWeight: 700 }}>{moneyDC(v)}</td>
                         }
                         const red = desviante(classifRaw, v)
                         const ok = red && justificadas.has(chaveCelula(reduzido, c.mes))
@@ -262,7 +262,7 @@ export default function CompMovimento() {
                               title={ok ? 'Variação justificada — ver razão da conta neste mês' : 'Ver razão da conta neste mês'}
                             >
                               {ok && <i className="ti ti-circle-check" style={{ color: theme.green, fontSize: 13 }} />}
-                              {money(v)}
+                              {moneyDC(v)}
                             </button>
                           </td>
                         )

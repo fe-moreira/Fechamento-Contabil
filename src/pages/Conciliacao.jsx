@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
-import { theme, money } from '../lib/theme'
+import { theme, money, moneyDC } from '../lib/theme'
 import { montarBalancete, parsePlano } from '../lib/balancete'
 
 // ---- Leitura do histórico: extrai NF e entidade (cliente/fornecedor) com confiança ----
@@ -215,10 +215,10 @@ export default function Conciliacao() {
                       style={{ display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer', fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 20, background: t === 'saldo' ? 'rgba(245,166,35,0.15)' : 'rgba(74,124,255,0.14)', color: t === 'saldo' ? theme.yellow : theme.accent }}>
                       {LABEL_TIPO[t]} <i className="ti ti-switch-horizontal" style={{ fontSize: 12 }} />
                     </span>)}</td>
-                  <td style={{ ...tdR, fontWeight: peso }}>{money(c.saldo_inicial)}</td>
+                  <td style={{ ...tdR, fontWeight: peso }}>{moneyDC(c.saldo_inicial)}</td>
                   <td style={{ ...tdR, fontWeight: peso }}>{money(c.debito)}</td>
                   <td style={{ ...tdR, fontWeight: peso }}>{money(c.credito)}</td>
-                  <td style={{ ...tdR, fontWeight: peso, color: inv ? theme.red : undefined }}>{money(c.saldo_final)}</td>
+                  <td style={{ ...tdR, fontWeight: peso, color: inv ? theme.red : undefined }}>{moneyDC(c.saldo_final)}</td>
                   <td style={{ ...td, textAlign: 'center' }}>{sint ? '' : <Dot c={statusConta(c)} />}</td>
                 </tr>
               )
@@ -365,10 +365,10 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, getCompetenc
 
       {/* Resumo + amarração */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(150px,1fr))', gap: 12, marginBottom: 16 }}>
-        <Tile label="Saldo inicial" v={money(conta.saldo_inicial)} />
+        <Tile label="Saldo inicial" v={moneyDC(conta.saldo_inicial)} />
         <Tile label="Débito" v={money(conta.debito)} cor={theme.green} />
         <Tile label="Crédito" v={money(conta.credito)} cor={theme.red} />
-        <Tile label="Saldo atual" v={money(conta.saldo_final)} />
+        <Tile label="Saldo atual" v={moneyDC(conta.saldo_final)} />
         <Tile label="Diferença (amarração)" v={money(dif)} cor={Math.abs(dif) < 0.01 ? theme.green : theme.yellow} />
       </div>
 
@@ -615,7 +615,7 @@ function CardConferencia({ conta, reg, compId, usuario, composicao, onSalvo }) {
           ? 'Importe o documento suporte (ex.: relatório de aberto) e confira com o saldo. Sem documento, confirme que está certo e justifique.'
           : 'Conta de saldo (sem composição). Importe o extrato e confira com o saldo. Sem documento, confirme que está certo e justifique.'}</p>
         <div style={{ display: 'flex', gap: 28, flexWrap: 'wrap', marginBottom: 12 }}>
-          <Mini label="Saldo da conta" v={money(saldo)} />
+          <Mini label="Saldo da conta" v={moneyDC(saldo)} />
           <Mini label="Saldo do documento" v={saldoDoc === '' ? '—' : money(Number(saldoDoc))} />
           <Mini label="Diferença" v={temDoc ? money(dif) : '—'} cor={!temDoc ? theme.sub : bate ? theme.green : theme.red} />
         </div>
