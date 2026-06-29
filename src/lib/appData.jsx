@@ -1,5 +1,6 @@
-import { createContext, useContext, useEffect, useState } from 'react'
+import { createContext, useContext, useEffect, useRef, useState } from 'react'
 import { supabase } from './supabase'
+import { useAuth } from '../components/AuthProvider'
 
 // Estado compartilhado: empresa (cliente) e competência selecionadas no topo,
 // usados pelos módulos de fechamento. Resolve/cria a linha de `competencias`
@@ -41,6 +42,49 @@ export function AppDataProvider({ children }) {
   useEffect(() => { recalcularPendencias() }, [empresaId, competencia])
 
   const empresaNome = empresas.find(e => e.id === empresaId)?.razao_social || ''
+
+  // --- Timesheet: registra o tempo trabalhado por cliente enquanto a empresa está ativa ---
+  const { user } = useAuth()
+  const userRef = useRef(user); userRef.current = user
+  const track = useRef({ cliente_id: null, nome: '', start: null })
+
+  function flushTempo(finalizar) {
+    const tr = track.current
+    if (tr.cliente_id && tr.start && document.visibilityState === 'visible') {
+      const secs = Math.round((Date.now() - tr.start) / 1000)
+      if (secs >= 5) {
+        supabase.from('timesheet').insert({ usuario: userRef.current?.email || null, cliente_id: tr.cliente_id, cliente_nome: tr.nome, segundos: secs }).then(() => {})
+      }
+    }
+    tr.start = finalizar ? null : Date.now()
+  }
+
+  // Troca de empresa: fecha o tempo da anterior e inicia o da nova.
+  useEffect(() => {
+    flushTempo(true)
+    const emp = empresas.find(e => e.id === empresaId)
+    track.current = { cliente_id: empresaId || null, nome: emp?.razao_social || '', start: empresaId ? Date.now() : null }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [empresaId])
+
+  // Persiste a cada 60s, pausa quando a aba fica oculta, e fecha ao sair.
+  useEffect(() => {
+    const iv = setInterval(() => flushTempo(false), 60000)
+    const onVis = () => {
+      if (document.visibilityState === 'hidden') flushTempo(true)
+      else if (track.current.cliente_id) track.current.start = Date.now()
+    }
+    const onUnload = () => flushTempo(true)
+    document.addEventListener('visibilitychange', onVis)
+    window.addEventListener('beforeunload', onUnload)
+    return () => {
+      clearInterval(iv)
+      document.removeEventListener('visibilitychange', onVis)
+      window.removeEventListener('beforeunload', onUnload)
+      flushTempo(true)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Retorna o id da competência (cliente × mês/ano), criando-a se ainda não existir.
   async function getCompetenciaId() {
