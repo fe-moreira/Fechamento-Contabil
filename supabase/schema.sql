@@ -130,6 +130,20 @@ create table if not exists public.conciliacao_conta (
 );
 create index if not exists conciliacao_conta_comp_idx on public.conciliacao_conta(competencia_id);
 
+-- ---------- AJUSTE DE LEITURA: correção de nome/NF/histórico de um lançamento ----------
+create table if not exists public.ajuste_leitura (
+  id             uuid primary key default gen_random_uuid(),
+  competencia_id uuid references public.competencias(id) on delete cascade,
+  razao_id       uuid not null,            -- lançamento do razão ajustado
+  nf             text,                     -- número da nota corrigido
+  entidade       text,                     -- nome do cliente/fornecedor corrigido
+  historico      text,                     -- histórico corrigido (opcional)
+  usuario        text,
+  updated_at     timestamptz default now(),
+  unique (razao_id)
+);
+create index if not exists ajuste_leitura_comp_idx on public.ajuste_leitura(competencia_id);
+
 -- ============================================================
 -- updated_at automático
 -- ============================================================
@@ -158,11 +172,12 @@ alter table public.balancete       enable row level security;
 alter table public.lancamentos     enable row level security;
 alter table public.auditoria       enable row level security;
 alter table public.conciliacao_conta enable row level security;
+alter table public.ajuste_leitura   enable row level security;
 
 do $$
 declare t text;
 begin
-  foreach t in array array['clientes','competencias','cargas_cadastro','razao','balancete','lancamentos','auditoria','conciliacao_conta']
+  foreach t in array array['clientes','competencias','cargas_cadastro','razao','balancete','lancamentos','auditoria','conciliacao_conta','ajuste_leitura']
   loop
     execute format('drop policy if exists "auth_all_%1$s" on public.%1$s;', t);
     execute format(
