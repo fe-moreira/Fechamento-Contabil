@@ -166,7 +166,7 @@ function Detalhe({ conta, compId, empresaId, usuario, getCompetenciaId, onVoltar
 
   useEffect(() => {
     setCarregando(true)
-    supabase.from('razao').select('data, historico, debito, credito').eq('competencia_id', compId).eq('conta', conta.conta).order('data')
+    supabase.from('razao').select('data, contrapartida, historico, debito, credito').eq('competencia_id', compId).eq('conta', conta.conta).order('data')
       .then(({ data }) => { setLanc((data || []).map(l => ({ ...l, leitura: lerHistorico(l.historico) }))); setCarregando(false) })
   }, [compId, conta.conta])
 
@@ -194,8 +194,11 @@ function Detalhe({ conta, compId, empresaId, usuario, getCompetenciaId, onVoltar
   const lab = natCredito ? 'fornecedor' : 'cliente'
   const ov = l => natCredito ? ((Number(l.credito) || 0) - (Number(l.debito) || 0)) : ((Number(l.debito) || 0) - (Number(l.credito) || 0))
 
-  // Contrapartida de um lançamento: contas do lado oposto na mesma partida (data+histórico).
+  // Contrapartida de um lançamento: usa a informada no razão (quando preenchida);
+  // senão infere pela partida dobrada (contas do lado oposto na mesma data+histórico).
   function contraDe(l) {
+    const imp = String(l.contrapartida ?? '').trim()
+    if (imp && !/^0+([.,]0+)?$/.test(imp.replace(/\./g, ''))) return [imp]
     const part = partidas[`${l.data || ''}|${l.historico || ''}`] || []
     const ehDeb = Number(l.debito) > 0.005
     const contras = part.filter(r => (ehDeb ? Number(r.credito) > 0.005 : Number(r.debito) > 0.005) && String(r.conta) !== String(conta.conta))
