@@ -26,6 +26,14 @@ function applyMask(code, mask) {
   return out.filter(Boolean).join('.')
 }
 
+// Contrapartida: trata "0"/"0,00"/vazio como ausente (no Domínio, lançamentos com
+// contrapartida múltipla saem zerados — nesses casos a plataforma infere pela partida).
+function limpaContra(v) {
+  const s = String(v ?? '').trim()
+  if (!s || /^0+([.,]0+)?$/.test(s.replace(/\./g, ''))) return null
+  return s
+}
+
 // Converte valor pt-BR ("1.234,56") ou número para float.
 function num(v) {
   if (v == null || v === '') return 0
@@ -148,7 +156,7 @@ export default function ImportarRazao() {
         competencia_id,
         data: toISO(valorCol(l, 'data')),
         conta: contaDe(l) || null,
-        contrapartida: String(valorCol(l, 'contrapartida') ?? '').trim() || null,
+        contrapartida: limpaContra(valorCol(l, 'contrapartida')),
         historico: String(valorCol(l, 'historico') ?? '').trim() || null,
         debito: num(valorCol(l, 'debito')),
         credito: num(valorCol(l, 'credito')),
