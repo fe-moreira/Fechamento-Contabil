@@ -4,6 +4,7 @@ import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import DropZone from '../components/DropZone'
 import { theme, money } from '../lib/theme'
+import { parsePlano, applyMask } from '../lib/balancete'
 
 const hoje = () => new Date().toLocaleDateString('pt-BR')
 
@@ -288,7 +289,36 @@ function ModalCarga({ carga, historico, empresaId, usuario, onClose, onImportado
   const [linhas, setLinhas] = useState([linhaVazia()])
   const [erro, setErro] = useState('')
   const [salvando, setSalvando] = useState(false)
+  const [planoIdx, setPlanoIdx] = useState(null) // { porRed, porNum, mascara } p/ puxar nome pelo código
   const vigOk = /^\d{2}\/\d{4}$/.test(vigencia)
+
+  // Carrega o plano de contas para autopreencher nome/classificação a partir do código.
+  useEffect(() => {
+    supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'plano')
+      .order('created_at', { ascending: false }).limit(1).maybeSingle()
+      .then(({ data }) => {
+        const plano = parsePlano(data?.dados)
+        const porRed = {}, porNum = {}
+        for (const p of plano) {
+          if (p.reduzido) porRed[p.reduzido] = p
+          if (p.classif) porNum[p.classif.replace(/\D/g, '')] = p
+        }
+        setPlanoIdx({ porRed, porNum, mascara: plano.find(p => p.mascara)?.mascara || '9.9.9.999.9999' })
+      })
+  }, [empresaId])
+
+  // Acha a conta no plano pelo código digitado (reduzido ou classificação, com/sem máscara).
+  function buscaConta(v) {
+    if (!planoIdx) return null
+    const t = String(v || '').trim(); if (!t) return null
+    if (planoIdx.porRed[t]) return planoIdx.porRed[t]
+    return planoIdx.porNum[t.replace(/\D/g, '')] || null
+  }
+
+  // Colunas do modelo: qual é a de código, nome e classificação (para autopreencher).
+  const colCod = modelo.cols.find(c => /(c[oó]digo|conta)/i.test(c) && !/classific/i.test(c))
+  const colNome = modelo.cols.find(c => /nome/i.test(c))
+  const colClassif = modelo.cols.find(c => /classific/i.test(c))
 
   async function baixarModelo() {
     const XLSX = await import('xlsx')
@@ -343,7 +373,22 @@ function ModalCarga({ carga, historico, empresaId, usuario, onClose, onImportado
     } catch (err) { setErro('Erro ao salvar: ' + err.message); setSalvando(false) }
   }
 
-  const setCel = (i, col) => e => setLinhas(ls => ls.map((l, j) => j === i ? { ...l, [col]: e.target.value } : l))
+  const setCel = (i, col) => e => {
+    const v = e.target.value
+    setLinhas(ls => ls.map((l, j) => {
+      if (j !== i) return l
+      const nova = { ...l, [col]: v }
+      // Ao digitar o código, puxa nome e classificação do plano de contas.
+      if (col === colCod) {
+        const p = buscaConta(v)
+        if (p) {
+          if (colNome) nova[colNome] = p.nome
+          if (colClassif && colClassif !== colCod) nova[colClassif] = applyMask(p.classif, planoIdx?.mascara)
+        }
+      }
+      return nova
+    }))
+  }
 
   async function excluirVigencia(id) {
     if (!confirm('Excluir esta vigência da carga?')) return
@@ -377,7 +422,7 @@ function ModalCarga({ carga, historico, empresaId, usuario, onClose, onImportado
         </>
       ) : (
         <>
-          <label>2. Linhas (uma conta por linha)</label>
+          <label>2. Linhas (uma conta por linha){colCod && colNome ? ' — digite o código que o nome é puxado do plano' : ''}</label>
           <div style={{ overflowX: 'auto', border: `0.5px solid ${theme.cb}`, borderRadius: 10 }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 480 }}>
               <thead>
