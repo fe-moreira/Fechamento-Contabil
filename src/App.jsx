@@ -19,6 +19,7 @@ import Status from './pages/Status'
 import BaseInformacoes from './pages/BaseInformacoes'
 import Configuracoes from './pages/Configuracoes'
 import Ajuda from './pages/Ajuda'
+import Timesheet from './pages/Timesheet'
 
 function Protegido({ children }) {
   const { session, loading } = useAuth()
@@ -46,6 +47,7 @@ function Rotas() {
         <Route path="status" element={<Status />} />
         <Route path="base" element={<BaseInformacoes />} />
         <Route path="config" element={<Configuracoes />} />
+        <Route path="timesheet" element={<Timesheet />} />
         <Route path="ajuda" element={<Ajuda />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
