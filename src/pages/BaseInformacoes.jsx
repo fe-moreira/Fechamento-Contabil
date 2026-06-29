@@ -254,12 +254,24 @@ function ModalCarga({ carga, historico, empresaId, usuario, onClose, onImportado
       const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' })
       const dados = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' })
       if (!dados.length) { setErro('Planilha vazia.'); setSalvando(false); return }
+      // Se já existe carga nesta vigência, oferece sobrepor (substitui em vez de duplicar).
+      const mesma = (historico || []).filter(h => h.vigencia === vigencia)
+      if (mesma.length) {
+        if (!confirm(`Já existe carga para a vigência ${vigencia}. Deseja sobrepor (substituir) a carga dessa vigência?`)) { setSalvando(false); return }
+        for (const m of mesma) await supabase.from('cargas_cadastro').delete().eq('id', m.id)
+      }
       const { error } = await supabase.from('cargas_cadastro').insert({
         cliente_id: empresaId, tipo: carga.tipo, vigencia, dados, usuario, obs: file.name,
       })
       if (error) throw error
       onImportado(); onClose()
     } catch (err) { setErro('Erro ao importar: ' + err.message); setSalvando(false) }
+  }
+
+  async function excluirVigencia(id) {
+    if (!confirm('Excluir esta vigência da carga?')) return
+    await supabase.from('cargas_cadastro').delete().eq('id', id)
+    onImportado()
   }
 
   return (
@@ -278,9 +290,12 @@ function ModalCarga({ carga, historico, empresaId, usuario, onClose, onImportado
       {historico.length === 0
         ? <p style={{ color: theme.sub, fontSize: 12.5 }}>Nenhuma carga ainda.</p>
         : historico.slice().reverse().map(c => (
-          <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, padding: '9px 0', borderTop: `1px solid ${theme.border}`, fontSize: 12.5 }}>
+          <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '9px 0', borderTop: `1px solid ${theme.border}`, fontSize: 12.5 }}>
             <span style={{ color: theme.text }}><b>{c.vigencia || '—'}</b> · {Array.isArray(c.dados) ? c.dados.length : 0} linha(s)</span>
-            <span style={{ color: theme.sub }}>{c.obs || ''}</span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <span style={{ color: theme.sub, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 220 }}>{c.obs || ''}</span>
+              <i className="ti ti-trash" title="Excluir esta vigência" onClick={() => excluirVigencia(c.id)} style={{ color: theme.sub, cursor: 'pointer', flexShrink: 0 }} />
+            </span>
           </div>
         ))}
     </Modal>

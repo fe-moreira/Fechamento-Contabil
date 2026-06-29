@@ -157,6 +157,24 @@ export default function ImportarRazao() {
 
       if (!registros.length) { setErro('Nenhuma linha válida (confira o mapeamento de Conta/Débito/Crédito).'); setImportando(false); return }
 
+      // Validação: o mês dos lançamentos tem que ser o da competência selecionada.
+      const [cmes, cano] = competencia.split('/').map(Number)
+      const cont = {}
+      for (const r of registros) {
+        if (!r.data) continue
+        const [y, m] = r.data.split('-').map(Number)
+        cont[`${m}/${y}`] = (cont[`${m}/${y}`] || 0) + 1
+      }
+      const chaves = Object.keys(cont)
+      if (chaves.length) {
+        const dominante = chaves.sort((a, b) => cont[b] - cont[a])[0]
+        if (dominante !== `${cmes}/${cano}`) {
+          const [dm, dy] = dominante.split('/')
+          setErro(`Os lançamentos são de ${String(dm).padStart(2, '0')}/${dy}, mas o fechamento selecionado é ${competencia}. Selecione a competência correta no topo antes de importar.`)
+          setImportando(false); return
+        }
+      }
+
       // Reimportação: limpa o que havia desta competência e regrava (razao não tem coluna nome).
       await supabase.from('razao').delete().eq('competencia_id', competencia_id)
       const paraRazao = registros.map(({ nome, ...r }) => r)

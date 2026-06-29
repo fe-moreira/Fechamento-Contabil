@@ -13,6 +13,9 @@ export const useAppData = () => useContext(Ctx)
 
 const COMPETENCIAS = Array.from({ length: 12 }, (_, i) => `${String(i + 1).padStart(2, '0')}/2026`)
 
+// Administradores (podem excluir fechamentos com dados). Ajuste a lista conforme necessário.
+const ADMIN_EMAILS = ['fernando@attentivecontabilidade.com.br']
+
 export function AppDataProvider({ children }) {
   const [empresas, setEmpresas] = useState([])
   const [empresaId, setEmpresaId] = useState('')
@@ -112,11 +115,13 @@ export function AppDataProvider({ children }) {
     return criada.id
   }
 
+  const isAdmin = ADMIN_EMAILS.includes((user?.email || '').toLowerCase())
+
   const value = {
     empresas, empresaId, setEmpresaId,
     competencia, setCompetencia, competencias: COMPETENCIAS,
     empresaNome, getCompetenciaId, carregarEmpresas,
-    pendencias, recalcularPendencias,
+    pendencias, recalcularPendencias, isAdmin,
   }
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }
