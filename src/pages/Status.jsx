@@ -6,12 +6,16 @@ import { apurarDistribuicao } from '../lib/distribuicao'
 import { apurarBancoResultado } from '../lib/bancoResultado'
 import { apurarVariacoes } from '../lib/variacoes'
 import { theme, money } from '../lib/theme'
+import { abrePdfTimbrado } from '../lib/pdf'
+import CampoConta from '../components/CampoConta'
 
 const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
 
 export default function Status() {
-  const { empresaId, empresaNome, competencia, getCompetenciaId } = useAppData()
+  const { empresaId, empresaNome, competencia, getCompetenciaId, plano } = useAppData()
   const { user } = useAuth()
+  const planoMap = Object.fromEntries((plano || []).map(p => [String(p.cod), p]))
+  const contaInfo = c => { const p = planoMap[String(c)]; return { cod: String(c), classif: p?.classif || '', nome: p?.nome || '' } }
 
   const [compId, setCompId] = useState(null)
   const [status, setStatus] = useState(null) // 'andamento' | 'fechado' | 'pendente'
@@ -128,11 +132,16 @@ export default function Status() {
       descricao: dados.br?.temCarga
         ? 'Banco lançado direto em conta de resultado não liberada.'
         : 'Importe a amarração banco × resultado em Base de Informações.',
-      itens: (dados.br?.lancamentos || []).map(l => ({
-        item: `${l.banco} → ${l.resultado} · ${money(l.valor)}`,
-        detalhe: `${l.historico}${l.despesa ? ' — despesa: classificar dedutível/indedutível (LALUR)' : ''}`,
-        lalur: l.despesa,
-      })),
+      itens: (dados.br?.lancamentos || []).map(l => {
+        const b = contaInfo(l.banco), r = contaInfo(l.resultado)
+        return {
+          item: `${l.banco} → ${l.resultado} · ${money(l.valor)}`,
+          sub: `Banco: ${[b.classif, b.nome].filter(Boolean).join(' · ') || '—'}  →  Resultado: ${[r.classif, r.nome].filter(Boolean).join(' · ') || '—'}`,
+          detalhe: `${l.historico}${l.despesa ? ' — despesa: classificar dedutível/indedutível (LALUR)' : ''}`,
+          lalur: l.despesa,
+          partida: { data: l.data || '', valor: l.valor, banco: l.banco, resultado: l.resultado, bancoNome: b.nome, resultadoNome: r.nome, historico: l.historico, despesa: l.despesa },
+        }
+      }),
     },
     {
       key: 'distribuicao',
@@ -172,6 +181,43 @@ export default function Status() {
     })
     setMsg(`${tipo} registrada na auditoria.`)
     setModal(null)
+  }
+
+  // Corrigir banco × resultado: grava a partida de acerto (vai para o Contabilizar) + auditoria.
+  async function registrarPartida(itemTxt, L) {
+    const id = await getCompetenciaId()
+    await supabase.from('lancamentos').insert({
+      competencia_id: id, data: L.data || null,
+      conta_debito: L.conta_debito || null, conta_credito: L.conta_credito || null,
+      valor: Number(L.valor) || 0, historico: L.historico || null,
+      origem: 'correcao', usuario: user?.email,
+    })
+    await supabase.from('auditoria').insert({
+      competencia_id: id, modulo: 'Status', item: itemTxt, tipo: 'Correção',
+      detalhe: `Reclassificação banco × resultado: D ${L.conta_debito} / C ${L.conta_credito} · ${money(L.valor)}`,
+      dedutibilidade: L.dedutibilidade || null, usuario: user?.email,
+    })
+    setMsg('Correção registrada — lançamento enviado para o painel Contabilizar.')
+    setModal(null); carregar()
+  }
+
+  // Exporta os itens de um gate em Excel ou PDF (papel timbrado).
+  async function exportarGate(gate, fmt) {
+    const linhas = gate.itens.map(it => [it.item, it.sub || '', it.detalhe || ''])
+    const tituloRel = `${gate.nome} — ${empresaNome} · ${competencia}`
+    if (fmt === 'excel') {
+      const XLSX = await import('xlsx')
+      const ws = XLSX.utils.aoa_to_sheet([['Item', 'Contas', 'Detalhe'], ...linhas])
+      ws['!cols'] = [{ wch: 30 }, { wch: 50 }, { wch: 60 }]
+      const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Pendências')
+      XLSX.writeFile(wb, `${gate.key}_${competencia.replace('/', '-')}.xlsx`)
+    } else {
+      abrePdfTimbrado({
+        titulo: tituloRel, sub: `${gate.itens.length} pendência(s)`,
+        colunas: [{ nome: 'Item' }, { nome: 'Contas' }, { nome: 'Detalhe' }],
+        linhas,
+      })
+    }
   }
 
   return (
@@ -299,14 +345,15 @@ export default function Status() {
       {sel && (
         <PainelGate
           gate={sel}
+          onExportar={(fmt) => exportarGate(sel, fmt)}
           onClose={() => setSel(null)}
           onJustificar={(it) => setModal({ item: it, tipo: 'Justificativa' })}
-          onCorrigir={(it) => setModal({ item: it, tipo: 'Correção' })}
+          onCorrigir={(it) => setModal({ item: it, tipo: it.partida ? 'Partida' : 'Correção' })}
         />
       )}
 
-      {/* Modal de texto */}
-      {modal && (
+      {/* Modal de texto (justificar / corrigir simples) */}
+      {modal && modal.tipo !== 'Partida' && (
         <ModalRegistro
           tipo={modal.tipo}
           alvo={modal.item.item}
@@ -315,29 +362,47 @@ export default function Status() {
           onConfirmar={(txt, dedut) => registrar(modal.item.item, modal.tipo, txt, dedut)}
         />
       )}
+
+      {/* Corrigir banco × resultado: alterar o lançamento (partida → Contabilizar) */}
+      {modal && modal.tipo === 'Partida' && (
+        <ModalPartida
+          item={modal.item}
+          onClose={() => setModal(null)}
+          onConfirmar={(L) => registrarPartida(modal.item.item, L)}
+        />
+      )}
     </Wrapper>
   )
 }
 
-function PainelGate({ gate, onClose, onJustificar, onCorrigir }) {
+function PainelGate({ gate, onClose, onJustificar, onCorrigir, onExportar }) {
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 50 }}>
-      <div onClick={e => e.stopPropagation()} style={{ width: 'min(640px,96vw)', maxHeight: '86vh', overflow: 'auto', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 'min(680px,96vw)', maxHeight: '86vh', overflow: 'auto', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
           <h2 style={{ fontSize: 17, margin: 0, display: 'flex', alignItems: 'center', gap: 9 }}>
             <i className={`ti ${gate.icon}`} style={{ color: theme.red }} /> {gate.nome}
           </h2>
           <span onClick={onClose} style={{ cursor: 'pointer', color: theme.sub, fontSize: 20, lineHeight: 1 }}><i className="ti ti-x" /></span>
         </div>
-        <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 16px' }}>
-          {gate.itens.length} pendência{gate.itens.length > 1 ? 's' : ''}. Justifique ou corrija cada item — fica registrado na auditoria.
-        </p>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', margin: '0 0 16px' }}>
+          <p style={{ color: theme.sub, fontSize: 12.5, margin: 0 }}>
+            {gate.itens.length} pendência{gate.itens.length > 1 ? 's' : ''}. Justifique ou corrija cada item — fica registrado na auditoria.
+          </p>
+          {gate.itens.length > 0 && onExportar && (
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => onExportar('excel')}><i className="ti ti-file-spreadsheet" /> Excel</button>
+              <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => onExportar('pdf')}><i className="ti ti-file-type-pdf" /> PDF</button>
+            </div>
+          )}
+        </div>
 
         <div style={{ display: 'grid', gap: 10 }}>
           {gate.itens.map((it, i) => (
             <div key={i} style={{ background: theme.input, borderRadius: 10, padding: 14, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
               <div style={{ flex: 1, minWidth: 200 }}>
                 <p style={{ fontSize: 13.5, fontWeight: 600, margin: 0 }}>{it.item}</p>
+                {it.sub && <p style={{ fontSize: 11.5, color: theme.accent, margin: '3px 0 0' }}>{it.sub}</p>}
                 <p style={{ fontSize: 12, color: theme.sub, margin: '3px 0 0' }}>{it.detalhe}</p>
               </div>
               <div style={{ display: 'flex', gap: 8 }}>
@@ -350,6 +415,56 @@ function PainelGate({ gate, onClose, onJustificar, onCorrigir }) {
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 18 }}>
           <button className="btn btn-ghost" onClick={onClose}>Fechar</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Corrigir banco × resultado: altera o lançamento (partida de acerto) → vai para o Contabilizar.
+function ModalPartida({ item, onClose, onConfirmar }) {
+  const p = item.partida || {}
+  const ehDespesa = !!p.despesa
+  const [form, setForm] = useState({
+    data: p.data || '', valor: p.valor || 0,
+    // Sugestão: estorna o resultado e joga numa conta a definir; o banco permanece no outro lado.
+    conta_debito: ehDespesa ? '' : p.banco,
+    conta_credito: ehDespesa ? p.banco : '',
+    historico: `Reclassificação banco × resultado · ${p.historico || ''}`.trim(),
+    dedutibilidade: '',
+  })
+  const set = k => v => setForm(f => ({ ...f, [k]: v }))
+  const ok = form.conta_debito && form.conta_credito && Number(form.valor) > 0 && (!ehDespesa || form.dedutibilidade)
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 60 }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 'min(560px,96vw)', maxHeight: '90vh', overflow: 'auto', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
+        <h2 style={{ fontSize: 17, marginBottom: 4 }}>Corrigir lançamento</h2>
+        <div style={{ background: theme.input, borderRadius: 10, padding: '10px 12px', margin: '8px 0 14px', fontSize: 12.5 }}>
+          <span style={{ color: theme.text, fontWeight: 600 }}>{item.item}</span>
+          <div style={{ color: theme.sub, fontSize: 11.5, marginTop: 3 }}>{item.sub}</div>
+          <div style={{ color: theme.sub, fontFamily: 'monospace', fontSize: 11, marginTop: 3 }}>{p.historico}</div>
+        </div>
+        <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 12 }}>Informe a <b style={{ color: theme.text }}>partida de acerto</b> — ela vai para o painel <b style={{ color: theme.text }}>Contabilizar</b> e entra no arquivo do Domínio. <span style={{ color: theme.accent }}>F4</span> abre o plano de contas.</p>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <div><label>Data</label><input className="input" type="date" value={form.data} onChange={e => set('data')(e.target.value)} /></div>
+          <div><label>Valor</label><input className="input" type="number" step="0.01" value={form.valor} onChange={e => set('valor')(e.target.value)} /></div>
+          <div><label>Conta débito</label><CampoConta value={form.conta_debito} onChange={set('conta_debito')} /></div>
+          <div><label>Conta crédito</label><CampoConta value={form.conta_credito} onChange={set('conta_credito')} /></div>
+          <div style={{ gridColumn: '1 / -1' }}><label>Histórico</label><textarea className="input" rows={2} value={form.historico} onChange={e => set('historico')(e.target.value)} /></div>
+        </div>
+        {ehDespesa && (
+          <div style={{ marginTop: 12 }}>
+            <label>Classificação LALUR (despesa)</label>
+            <div style={{ display: 'flex', gap: 8 }}>
+              {['Dedutível', 'Indedutível'].map(op => (
+                <button key={op} type="button" className={form.dedutibilidade === op ? 'btn' : 'btn btn-ghost'} style={{ fontSize: 13 }} onClick={() => set('dedutibilidade')(op)}>{op}</button>
+              ))}
+            </div>
+          </div>
+        )}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
+          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+          <button className="btn" disabled={!ok} onClick={() => onConfirmar(form)}>Registrar</button>
         </div>
       </div>
     </div>
