@@ -98,13 +98,12 @@ export default function Conciliacao() {
             {contas.map((c, i) => {
               const sint = c.sintetica
               const peso = sint ? 700 : 400 // só as sintéticas em negrito
-              const indent = Math.max(0, (Number(c.grau) || 1) - 1) * 14
               return (
                 <tr key={i} onClick={() => !sint && setSel(c)}
                   style={{ borderTop: `1px solid ${theme.border}`, cursor: sint ? 'default' : 'pointer', background: sint ? theme.input : 'transparent', fontWeight: peso }}>
                   <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{c.reduzido || ''}</td>
                   <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{c.classif}</td>
-                  <td style={{ ...td, paddingLeft: 14 + indent, fontWeight: peso }}>{c.nome || '—'}</td>
+                  <td style={{ ...td, fontWeight: peso }}>{c.nome || '—'}</td>
                   <td style={{ ...tdR, fontWeight: peso }}>{money(c.saldo_inicial)}</td>
                   <td style={{ ...tdR, fontWeight: peso }}>{money(c.debito)}</td>
                   <td style={{ ...tdR, fontWeight: peso }}>{money(c.credito)}</td>

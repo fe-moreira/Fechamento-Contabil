@@ -233,14 +233,13 @@ export default function CompMovimento() {
                 </tr>
               </thead>
               <tbody>
-                {contas.map(({ reduzido, classif, classifRaw, nome, grau, sintetica }) => {
+                {contas.map(({ reduzido, classif, classifRaw, nome, sintetica }) => {
                   const linha = matriz[classifRaw] || {}
-                  const indent = Math.max(0, (Number(grau) || 1) - 1) * 14
                   return (
                     <tr key={classifRaw} style={{ borderTop: `1px solid ${theme.border}`, background: sintetica ? theme.input : 'transparent', fontWeight: sintetica ? 700 : 400 }}>
                       <td style={{ ...td, color: theme.sub, fontSize: 11 }}>{reduzido || ''}</td>
                       <td style={{ ...td, color: theme.sub, fontSize: 11 }}>{classif}</td>
-                      <td style={{ ...td, paddingLeft: 14 + indent, fontWeight: sintetica ? 700 : 400, maxWidth: 320 }}>{nome || '—'}</td>
+                      <td style={{ ...td, fontWeight: sintetica ? 700 : 400, maxWidth: 320 }}>{nome || '—'}</td>
                       {comps.map(c => {
                         const v = linha[c.mes]
                         if (v == null) return <td key={c.mes} style={{ ...td, textAlign: 'right' }} />
