@@ -27,6 +27,36 @@ const CARGAS = [
   { tipo: 'bancoresult', icon: 'ti-cash', title: 'Amarração banco × resultado', sub: 'Contas banco e resultados liberados' },
 ]
 
+// Modelo de planilha de cada carga (colunas + exemplos). Serve para baixar o template
+// e para montar o cadastro manual (uma linha por conta).
+const MODELOS = {
+  plano: {
+    cols: ['Código', 'Classificação', 'Nome', 'Tipo', 'Grau'],
+    ex: [['1', '1', 'ATIVO', 'S', '1'], ['5', '1110010001', 'CAIXA', 'A', '5']],
+    dica: 'Código (reduzido), Classificação (hierárquica), Nome, Tipo (S sintética / A analítica), Grau.',
+  },
+  depara: {
+    cols: ['Acumulador', 'Conta', 'Nome'],
+    ex: [['5949', '3.1.1.01', 'Receita de vendas'], ['1102', '4.1.1.01', 'Despesas bancárias']],
+    dica: 'Acumulador da integração → conta contábil de destino.',
+  },
+  apelidos: {
+    cols: ['Termo no histórico', 'Cliente/Fornecedor'],
+    ex: [['PAGSEG', 'PAGSEGURO INTERNET'], ['CPFL', 'CPFL ENERGIAS RENOVÁVEIS']],
+    dica: 'Termo como aparece no histórico → nome real do cliente/fornecedor.',
+  },
+  financeiro: {
+    cols: ['Data', 'Conta', 'Cliente/NF', 'Valor'],
+    ex: [['01/01/2026', '1.1.2.01', 'PAGSEGURO NF 3256', '24275.92']],
+    dica: 'Saldo de abertura/composição inicial: data, conta, cliente/NF e valor.',
+  },
+  bancoresult: {
+    cols: ['Tipo', 'Código', 'Nome'],
+    ex: [['Banco', '1.1.1.01', 'Banco Itaú c/c'], ['Banco', '1.1.1.02', 'Banco Bradesco c/c'], ['Resultado liberado', '4.1.1.01', 'Despesas bancárias / tarifas'], ['Resultado liberado', '3.2.1.01', 'Receita financeira (rendimento)']],
+    dica: 'Tipo = "Banco" (conta de banco) ou "Resultado liberado" (resultado que pode receber lançamento direto do banco).',
+  },
+}
+
 export default function BaseInformacoes() {
   const { empresaId, empresaNome, recalcularPendencias } = useAppData()
   const { user } = useAuth()
@@ -251,10 +281,33 @@ function Acoes({ onEdit, onDel }) {
 
 /* ---------- Modais ---------- */
 function ModalCarga({ carga, historico, empresaId, usuario, onClose, onImportado }) {
+  const modelo = MODELOS[carga.tipo] || { cols: ['Código', 'Nome'], ex: [], dica: '' }
+  const linhaVazia = () => Object.fromEntries(modelo.cols.map(c => [c, '']))
   const [vigencia, setVigencia] = useState('')
+  const [modo, setModo] = useState('arquivo') // 'arquivo' | 'manual'
+  const [linhas, setLinhas] = useState([linhaVazia()])
   const [erro, setErro] = useState('')
   const [salvando, setSalvando] = useState(false)
   const vigOk = /^\d{2}\/\d{4}$/.test(vigencia)
+
+  async function baixarModelo() {
+    const XLSX = await import('xlsx')
+    const ws = XLSX.utils.aoa_to_sheet([modelo.cols, ...(modelo.ex || [])])
+    ws['!cols'] = modelo.cols.map(c => ({ wch: Math.max(14, c.length + 4) }))
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Modelo')
+    XLSX.writeFile(wb, `modelo_${carga.tipo}.xlsx`)
+  }
+
+  // Sobrepõe a carga da mesma vigência (se houver) antes de inserir a nova.
+  async function sobreporSeMesma() {
+    const mesma = (historico || []).filter(h => h.vigencia === vigencia)
+    if (mesma.length) {
+      if (!confirm(`Já existe carga para a vigência ${vigencia}. Deseja sobrepor (substituir)?`)) return false
+      for (const m of mesma) await supabase.from('cargas_cadastro').delete().eq('id', m.id)
+    }
+    return true
+  }
 
   // Escolher/arrastar o arquivo já importa na hora (a vigência precisa estar preenchida antes).
   async function importarArquivo(file) {
@@ -266,12 +319,7 @@ function ModalCarga({ carga, historico, empresaId, usuario, onClose, onImportado
       const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' })
       const dados = lerPlanilha(XLSX, wb.Sheets[wb.SheetNames[0]])
       if (!dados.length) { setErro('Planilha vazia.'); setSalvando(false); return }
-      // Se já existe carga nesta vigência, oferece sobrepor (substitui em vez de duplicar).
-      const mesma = (historico || []).filter(h => h.vigencia === vigencia)
-      if (mesma.length) {
-        if (!confirm(`Já existe carga para a vigência ${vigencia}. Deseja sobrepor (substituir) a carga dessa vigência?`)) { setSalvando(false); return }
-        for (const m of mesma) await supabase.from('cargas_cadastro').delete().eq('id', m.id)
-      }
+      if (!(await sobreporSeMesma())) { setSalvando(false); return }
       const { error } = await supabase.from('cargas_cadastro').insert({
         cliente_id: empresaId, tipo: carga.tipo, vigencia, dados, usuario, obs: file.name,
       })
@@ -280,6 +328,23 @@ function ModalCarga({ carga, historico, empresaId, usuario, onClose, onImportado
     } catch (err) { setErro('Erro ao importar: ' + err.message); setSalvando(false) }
   }
 
+  async function salvarManual() {
+    if (!vigOk) { setErro('Informe a vigência (MM/AAAA) antes de salvar.'); return }
+    const dados = linhas.filter(l => Object.values(l).some(v => String(v).trim()))
+    if (!dados.length) { setErro('Preencha ao menos uma linha.'); return }
+    setErro(''); setSalvando(true)
+    try {
+      if (!(await sobreporSeMesma())) { setSalvando(false); return }
+      const { error } = await supabase.from('cargas_cadastro').insert({
+        cliente_id: empresaId, tipo: carga.tipo, vigencia, dados, usuario, obs: 'Cadastro manual',
+      })
+      if (error) throw error
+      onImportado(); onClose()
+    } catch (err) { setErro('Erro ao salvar: ' + err.message); setSalvando(false) }
+  }
+
+  const setCel = (i, col) => e => setLinhas(ls => ls.map((l, j) => j === i ? { ...l, [col]: e.target.value } : l))
+
   async function excluirVigencia(id) {
     if (!confirm('Excluir esta vigência da carga?')) return
     await supabase.from('cargas_cadastro').delete().eq('id', id)
@@ -287,16 +352,64 @@ function ModalCarga({ carga, historico, empresaId, usuario, onClose, onImportado
   }
 
   return (
-    <Modal titulo={carga.title} sub={carga.sub} onClose={onClose} largura={620}>
-      <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 14 }}>Informe a vigência e solte (ou escolha) o arquivo — a carga é importada na hora. Cada carga cria uma <b style={{ color: theme.text }}>vigência</b> e preserva o histórico (nada é sobrescrito).</p>
+    <Modal titulo={carga.title} sub={carga.sub} onClose={onClose} largura={680}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 12 }}>
+        <p style={{ color: theme.sub, fontSize: 12.5, margin: 0, flex: 1 }}>{modelo.dica || 'Importe a planilha ou cadastre manualmente.'} Cada carga cria uma <b style={{ color: theme.text }}>vigência</b> e preserva o histórico.</p>
+        <button className="btn btn-ghost" style={{ fontSize: 12.5, whiteSpace: 'nowrap' }} onClick={baixarModelo}><i className="ti ti-download" /> Baixar modelo</button>
+      </div>
+
       <div style={{ marginBottom: 12 }}>
         <label>1. Vigência (MM/AAAA)</label>
         <input className="input" style={{ maxWidth: 220 }} value={vigencia} onChange={e => setVigencia(e.target.value)} placeholder="01/2026" autoFocus />
       </div>
-      <label>2. Arquivo</label>
-      <DropZone onArquivo={importarArquivo} disabled={!vigOk || salvando}
-        hint={vigOk ? 'Arraste ou clique · .xlsx, .xls ou .csv' : 'Informe a vigência primeiro'} />
-      {salvando && <p style={{ color: theme.accent, fontSize: 12, marginTop: 8 }}><i className="ti ti-loader" /> Importando…</p>}
+
+      <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+        <button className={modo === 'arquivo' ? 'btn' : 'btn btn-ghost'} style={{ fontSize: 13 }} onClick={() => setModo('arquivo')}><i className="ti ti-cloud-upload" /> Importar planilha</button>
+        <button className={modo === 'manual' ? 'btn' : 'btn btn-ghost'} style={{ fontSize: 13 }} onClick={() => setModo('manual')}><i className="ti ti-keyboard" /> Cadastrar manual</button>
+      </div>
+
+      {modo === 'arquivo' ? (
+        <>
+          <label>2. Arquivo</label>
+          <DropZone onArquivo={importarArquivo} disabled={!vigOk || salvando}
+            hint={vigOk ? 'Arraste ou clique · .xlsx, .xls ou .csv' : 'Informe a vigência primeiro'} />
+          {salvando && <p style={{ color: theme.accent, fontSize: 12, marginTop: 8 }}><i className="ti ti-loader" /> Importando…</p>}
+        </>
+      ) : (
+        <>
+          <label>2. Linhas (uma conta por linha)</label>
+          <div style={{ overflowX: 'auto', border: `0.5px solid ${theme.cb}`, borderRadius: 10 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 480 }}>
+              <thead>
+                <tr style={{ background: theme.input }}>
+                  {modelo.cols.map(c => <th key={c} style={{ textAlign: 'left', padding: '8px 10px', fontSize: 11, color: theme.sub, textTransform: 'uppercase', letterSpacing: .3 }}>{c}</th>)}
+                  <th style={{ width: 34 }} />
+                </tr>
+              </thead>
+              <tbody>
+                {linhas.map((l, i) => (
+                  <tr key={i} style={{ borderTop: `1px solid ${theme.border}` }}>
+                    {modelo.cols.map(c => (
+                      <td key={c} style={{ padding: 4 }}>
+                        {c === 'Tipo' && carga.tipo === 'bancoresult'
+                          ? <select className="input" style={{ minWidth: 150 }} value={l[c]} onChange={setCel(i, c)}><option value="">—</option><option value="Banco">Banco</option><option value="Resultado liberado">Resultado liberado</option></select>
+                          : <input className="input" value={l[c]} onChange={setCel(i, c)} placeholder={c} />}
+                      </td>
+                    ))}
+                    <td style={{ textAlign: 'center' }}>
+                      <i className="ti ti-trash" title="Remover linha" onClick={() => setLinhas(ls => ls.filter((_, j) => j !== i).length ? ls.filter((_, j) => j !== i) : [linhaVazia()])} style={{ color: theme.sub, cursor: 'pointer' }} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 10 }}>
+            <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={() => setLinhas(ls => [...ls, linhaVazia()])}><i className="ti ti-plus" /> Adicionar linha</button>
+            <button className="btn" disabled={salvando} onClick={salvarManual}>{salvando ? 'Salvando…' : 'Salvar cadastro'}</button>
+          </div>
+        </>
+      )}
       {erro && <p style={{ color: theme.red, fontSize: 13, margin: '10px 0 0' }}>{erro}</p>}
       <p style={{ color: theme.sub, fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: .6, margin: '22px 0 10px' }}>Histórico de vigências</p>
       {historico.length === 0
