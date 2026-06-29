@@ -3,7 +3,7 @@ import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { theme, money } from '../lib/theme'
-import { montarBalancete } from '../lib/balancete'
+import { montarBalancete, parsePlano } from '../lib/balancete'
 
 // ---- Leitura do histórico: extrai NF e entidade (cliente/fornecedor) com confiança ----
 const RUIDO = /\b(VENDA|VENDAS|COMPRA|COMPRAS|PAGTO|PAGAMENTO|RECEBIMENTO|RECEBTO|REF|REFERENTE|NOTA|FISCAL|DUPLICATA|DUPL|BOLETO|TITULO|TÍTULO|VLR|VALOR|PARCELA|PARC|CONF|S\/|A|DE|DA|DO|DOS|DAS|E|NO|NA|EM)\b/ig
@@ -111,7 +111,7 @@ export default function Conciliacao() {
   if (carregando) return <Wrapper><p style={{ color: theme.sub, fontSize: 13 }}>Carregando…</p></Wrapper>
   if (!compId || contas.length === 0) return <Wrapper><Aviso icon="ti-table-off" texto="Nenhum balancete nesta competência. Importe o razão primeiro." /></Wrapper>
 
-  if (sel) return <Detalhe conta={sel} compId={compId} usuario={user?.email} getCompetenciaId={getCompetenciaId} onVoltar={() => setSel(null)} />
+  if (sel) return <Detalhe conta={sel} compId={compId} empresaId={empresaId} usuario={user?.email} getCompetenciaId={getCompetenciaId} onVoltar={() => setSel(null)} />
 
   const farol = (c) => Math.abs(c.saldo_final) < 0.01 ? theme.green : Math.abs(c.saldo_final) < 1000 ? theme.yellow : theme.red
 
@@ -156,10 +156,11 @@ export default function Conciliacao() {
   )
 }
 
-function Detalhe({ conta, compId, usuario, getCompetenciaId, onVoltar }) {
+function Detalhe({ conta, compId, empresaId, usuario, getCompetenciaId, onVoltar }) {
   const [lanc, setLanc] = useState([])
   const [carregando, setCarregando] = useState(true)
   const [acao, setAcao] = useState(null)   // lançamento clicado (justificar/corrigir)
+  const [plano, setPlano] = useState([])   // [{ cod, nome }] para os seletores de conta
   const [msg, setMsg] = useState('')
 
   useEffect(() => {
@@ -167,6 +168,12 @@ function Detalhe({ conta, compId, usuario, getCompetenciaId, onVoltar }) {
     supabase.from('razao').select('data, historico, debito, credito').eq('competencia_id', compId).eq('conta', conta.conta).order('data')
       .then(({ data }) => { setLanc((data || []).map(l => ({ ...l, leitura: lerHistorico(l.historico) }))); setCarregando(false) })
   }, [compId, conta.conta])
+
+  useEffect(() => {
+    supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'plano')
+      .order('created_at', { ascending: false }).limit(1).maybeSingle()
+      .then(({ data }) => setPlano(parsePlano(data?.dados).map(p => ({ cod: p.reduzido, nome: p.nome })).filter(p => p.cod)))
+  }, [empresaId])
 
   // Natureza pela classificação: Ativo (1) é devedora (clientes); Passivo (2) credora (fornecedores).
   const natCredito = String(conta.classifRaw || conta.classif || '').replace(/\D/g, '')[0] === '2'
@@ -213,10 +220,35 @@ function Detalhe({ conta, compId, usuario, getCompetenciaId, onVoltar }) {
   const unificados = lista.filter(x => x.unido).length
   const contaInvertida = Number(conta.saldo_final) * (natCredito ? -1 : 1) < -0.005
 
-  async function registrar(tipo, detalhe, item) {
+  // Casamento por NF: o título nasce de um lado (cliente=débito; fornecedor=crédito) e
+  // a baixa vem do outro. Para o saldo zerar, a NF da baixa tem que ser a mesma do título.
+  // Uma baixa com NF que não casa com nenhum título do mesmo cliente/fornecedor é um erro.
+  const ladoOrigem = natCredito ? 'credito' : 'debito'
+  const ladoBaixa = natCredito ? 'debito' : 'credito'
+  const baixaSemTitulo = g => {
+    const nfsTitulo = new Set(g.lancs.filter(l => Number(l[ladoOrigem]) > 0.005 && l.leitura.nf).map(l => l.leitura.nf))
+    return new Set(g.lancs.filter(l => Number(l[ladoBaixa]) > 0.005 && l.leitura.nf && !nfsTitulo.has(l.leitura.nf)))
+  }
+  const totalSemTitulo = lista.reduce((n, g) => n + baixaSemTitulo(g).size, 0)
+
+  async function registrar(tipo, payload) {
     const id = await getCompetenciaId()
-    await supabase.from('auditoria').insert({ competencia_id: id, modulo: 'Conciliação', item: item || `${conta.conta} · ${conta.nome}`, tipo, detalhe, usuario })
-    setMsg(`${tipo} registrada na auditoria.`); setAcao(null)
+    const item = `${conta.conta} · ${acao?.data || ''} · NF ${acao?.leitura.nf || '—'}`
+    await supabase.from('auditoria').insert({ competencia_id: id, modulo: 'Conciliação', item, tipo, detalhe: payload.detalhe || null, usuario })
+    let virouLancamento = false
+    if (tipo === 'Correção' && payload.lancamento && (payload.lancamento.conta_debito || payload.lancamento.conta_credito)) {
+      const L = payload.lancamento
+      await supabase.from('lancamentos').insert({
+        competencia_id: id, data: L.data || null,
+        conta_debito: L.conta_debito || null, conta_credito: L.conta_credito || null,
+        valor: Number(L.valor) || 0, historico: L.historico || null,
+        documento: acao?.leitura.nf ? `NF ${acao.leitura.nf}` : null,
+        origem: 'correcao', usuario,
+      })
+      virouLancamento = true
+    }
+    setMsg(virouLancamento ? 'Correção registrada — lançamento enviado para o painel Contabilizar.' : `${tipo} registrada na auditoria.`)
+    setAcao(null)
   }
 
   return (
@@ -259,6 +291,13 @@ function Detalhe({ conta, compId, usuario, getCompetenciaId, onVoltar }) {
         </div>
       )}
 
+      {totalSemTitulo > 0 && (
+        <div style={{ background: 'rgba(229,72,77,0.10)', border: `1px solid ${theme.red}`, borderRadius: 12, display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px', marginBottom: 12 }}>
+          <i className="ti ti-receipt-off" style={{ color: theme.red, fontSize: 18, marginTop: 1 }} />
+          <span style={{ color: theme.text, fontSize: 13 }}>{totalSemTitulo} baixa(s) com NF que não confere com nenhum título deste {lab} — para o saldo zerar, a NF do recebimento tem que ser a mesma do faturamento.</span>
+        </div>
+      )}
+
       {unificados > 0 && (
         <div style={{ background: 'rgba(74,124,255,0.10)', border: `1px solid ${theme.accent}`, borderRadius: 12, display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px', marginBottom: 12 }}>
           <i className="ti ti-arrows-join" style={{ color: theme.accent, fontSize: 18, marginTop: 1 }} />
@@ -281,9 +320,10 @@ function Detalhe({ conta, compId, usuario, getCompetenciaId, onVoltar }) {
         const grp = g.lancs
         const gt = g.total
         const unk = g.unk
+        const semTit = baixaSemTitulo(g) // baixas com NF que não casa com título
         const hasRev = grp.some(l => l.leitura.conf !== 'alta')
         const anom = gt < -0.005 // natureza invertida (cliente credor / fornecedor devedor)
-        const borda = anom ? theme.red : hasRev ? theme.yellow : theme.cb
+        const borda = (anom || semTit.size > 0) ? theme.red : hasRev ? theme.yellow : theme.cb
         return (
           <div key={gi} style={{ background: theme.card, border: `1px solid ${borda}`, borderRadius: 12, overflow: 'hidden', marginBottom: 12 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '13px 16px', background: theme.input, flexWrap: 'wrap', gap: 8 }}>
@@ -310,19 +350,22 @@ function Detalhe({ conta, compId, usuario, getCompetenciaId, onVoltar }) {
               <tbody>
                 {grp.map((l, i) => {
                   const rev = l.leitura.conf !== 'alta'
+                  const semNF = semTit.has(l)
                   return (
                     <tr key={i} onClick={() => { setMsg(''); setAcao(l) }}
-                      style={{ borderTop: `1px solid ${theme.border}`, cursor: 'pointer' }}
-                      title="Justificar ou corrigir este lançamento">
+                      style={{ borderTop: `1px solid ${theme.border}`, cursor: 'pointer', background: semNF ? 'rgba(229,72,77,0.08)' : 'transparent' }}
+                      title={semNF ? 'Baixa com NF que não confere com o título — justifique ou corrija' : 'Justificar ou corrigir este lançamento'}>
                       <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{l.data || '—'}</td>
-                      <td style={{ ...td, color: theme.sub, fontWeight: 600 }}>NF {l.leitura.nf || '—'}</td>
+                      <td style={{ ...td, color: semNF ? theme.red : theme.sub, fontWeight: 600 }}>NF {l.leitura.nf || '—'}</td>
                       <td style={{ ...td, color: theme.sub, fontFamily: 'monospace', fontSize: 11, maxWidth: 320 }}>{l.historico}</td>
                       <td style={{ ...tdR, color: theme.green }}>{Number(l.debito) ? money(l.debito) : '—'}</td>
                       <td style={{ ...tdR, color: theme.red }}>{Number(l.credito) ? money(l.credito) : '—'}</td>
                       <td style={{ ...td, textAlign: 'center' }}>
-                        {rev
-                          ? <span style={{ color: theme.yellow, fontSize: 11, fontWeight: 600 }}>revisar</span>
-                          : <span style={{ color: theme.green, fontSize: 14 }}><i className="ti ti-circle-check" /></span>}
+                        {semNF
+                          ? <span title="NF não confere com nenhum título" style={{ color: theme.red, fontSize: 10.5, fontWeight: 700 }}>NF s/ título</span>
+                          : rev
+                            ? <span style={{ color: theme.yellow, fontSize: 11, fontWeight: 600 }}>revisar</span>
+                            : <span style={{ color: theme.green, fontSize: 14 }}><i className="ti ti-circle-check" /></span>}
                       </td>
                     </tr>
                   )
@@ -334,27 +377,45 @@ function Detalhe({ conta, compId, usuario, getCompetenciaId, onVoltar }) {
       })}
 
       {acao && (
-        <ModalLancamento lanc={acao} conta={conta} lab={lab}
-          onClose={() => setAcao(null)}
-          onRegistrar={(tipo, txt) => registrar(tipo, txt, `${conta.conta} · ${acao.data || ''} · NF ${acao.leitura.nf || '—'}`)} />
+        <ModalLancamento lanc={acao} conta={conta} lab={lab} plano={plano}
+          onClose={() => setAcao(null)} onRegistrar={registrar} />
       )}
     </Wrapper>
   )
 }
 
-// Menu de ação de um lançamento: escolhe Justificar ou Corrigir e registra na auditoria.
-function ModalLancamento({ lanc, conta, lab, onClose, onRegistrar }) {
+// Menu de ação de um lançamento: Justificar (texto) ou Corrigir (já informa a partida
+// contábil de acerto, que vai para o painel Contabilizar gerar o arquivo do Domínio).
+function ModalLancamento({ lanc, conta, lab, plano, onClose, onRegistrar }) {
   const [tipo, setTipo] = useState(null) // 'Justificativa' | 'Correção'
   const [txt, setTxt] = useState('')
+  const valorLan = Number(lanc.debito) || Number(lanc.credito) || 0
   const valor = Number(lanc.debito) ? `D ${money(lanc.debito)}` : Number(lanc.credito) ? `C ${money(lanc.credito)}` : ''
+  // Sugestão de partida de acerto: a conta sendo conciliada entra como estorno do lado oposto ao original.
+  const ehDeb = Number(lanc.debito) > 0
+  const [form, setForm] = useState({
+    data: lanc.data || '', valor: valorLan,
+    conta_debito: ehDeb ? '' : conta.conta,
+    conta_credito: ehDeb ? conta.conta : '',
+    historico: `Ajuste conciliação · NF ${lanc.leitura.nf || '—'} · ${conta.nome}`,
+  })
+  const set = k => e => setForm(f => ({ ...f, [k]: e.target.value }))
+  const podeRegistrar = tipo === 'Justificativa' ? txt.trim() : (form.conta_debito && form.conta_credito && Number(form.valor) > 0)
+
+  function registrar() {
+    if (tipo === 'Justificativa') return onRegistrar('Justificativa', { detalhe: txt.trim() })
+    onRegistrar('Correção', { detalhe: txt.trim() || form.historico, lancamento: form })
+  }
+
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 60 }}>
-      <div onClick={e => e.stopPropagation()} style={{ width: 'min(520px,96vw)', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 'min(560px,96vw)', maxHeight: '90vh', overflow: 'auto', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
         <h2 style={{ fontSize: 17, marginBottom: 4 }}>{tipo || 'Tratar lançamento'}</h2>
         <div style={{ background: theme.input, borderRadius: 10, padding: '10px 12px', margin: '8px 0 14px', fontSize: 12.5 }}>
           <span style={{ color: theme.sub }}>{lanc.data || '—'} · NF {lanc.leitura.nf || '—'} · {valor}</span>
           <div style={{ color: theme.sub, fontFamily: 'monospace', fontSize: 11, marginTop: 4 }}>{lanc.historico}</div>
         </div>
+
         {!tipo ? (
           <>
             <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 12 }}>O que você quer fazer com este lançamento?</p>
@@ -363,23 +424,47 @@ function ModalLancamento({ lanc, conta, lab, onClose, onRegistrar }) {
               <button className="btn" style={{ flex: 1 }} onClick={() => setTipo('Correção')}><i className="ti ti-pencil-bolt" /> Corrigir</button>
             </div>
           </>
+        ) : tipo === 'Justificativa' ? (
+          <>
+            <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 10 }}>Fica registrada na auditoria com seu usuário e a data.</p>
+            <textarea className="input" rows={3} value={txt} onChange={e => setTxt(e.target.value)} autoFocus placeholder="Por que este lançamento está assim (variação esperada, etc.)…" />
+          </>
         ) : (
           <>
-            <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 10 }}>Fica registrado na auditoria com seu usuário e a data.</p>
-            <textarea className="input" rows={3} value={txt} onChange={e => setTxt(e.target.value)} autoFocus
-              placeholder={tipo === 'Correção' ? `O que corrigir (ex.: nome correto do ${lab}, reclassificação)…` : 'Por que este lançamento está assim…'} />
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginTop: 18 }}>
-              <button className="btn btn-ghost" onClick={() => setTipo(null)}><i className="ti ti-chevron-left" /> Voltar</button>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
-                <button className="btn" onClick={() => txt.trim() && onRegistrar(tipo, txt.trim())}>Registrar</button>
-              </div>
+            <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 12 }}>Informe a <b style={{ color: theme.text }}>partida de acerto</b>. Ela vai para o painel <b style={{ color: theme.text }}>Contabilizar</b> e entra no arquivo do Domínio. <span style={{ color: theme.accent }}>Sugestão pré-preenchida abaixo</span> — ajuste as contas.</p>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <div><label>Data</label><input className="input" type="date" value={form.data} onChange={set('data')} /></div>
+              <div><label>Valor</label><input className="input" type="number" step="0.01" value={form.valor} onChange={set('valor')} /></div>
+              <div><label>Conta débito</label><ContaSelect value={form.conta_debito} onChange={set('conta_debito')} plano={plano} /></div>
+              <div><label>Conta crédito</label><ContaSelect value={form.conta_credito} onChange={set('conta_credito')} plano={plano} /></div>
+              <div style={{ gridColumn: '1 / -1' }}><label>Histórico</label><textarea className="input" rows={2} value={form.historico} onChange={set('historico')} /></div>
+              <div style={{ gridColumn: '1 / -1' }}><label>Observação na auditoria (opcional)</label><input className="input" value={txt} onChange={e => setTxt(e.target.value)} placeholder="O que estava errado / o que foi corrigido…" /></div>
             </div>
           </>
+        )}
+
+        {tipo && (
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginTop: 18 }}>
+            <button className="btn btn-ghost" onClick={() => setTipo(null)}><i className="ti ti-chevron-left" /> Voltar</button>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+              <button className="btn" disabled={!podeRegistrar} onClick={registrar}>Registrar</button>
+            </div>
+          </div>
         )}
       </div>
     </div>
   )
+}
+
+function ContaSelect({ value, onChange, plano }) {
+  if (plano?.length) return (
+    <select className="input" value={value} onChange={onChange}>
+      <option value="">— conta —</option>
+      {plano.map(p => <option key={p.cod} value={p.cod}>{p.cod} · {p.nome}</option>)}
+    </select>
+  )
+  return <input className="input" value={value} onChange={onChange} placeholder="Código da conta" />
 }
 
 const numCell = v => { if (typeof v === 'number') return v; const s = String(v ?? '').trim(); if (/^-?[\d.]+,\d{2}$/.test(s)) return parseFloat(s.replace(/\./g, '').replace(',', '.')); const n = parseFloat(s.replace(/[^\d.-]/g, '')); return isNaN(n) ? 0 : n }

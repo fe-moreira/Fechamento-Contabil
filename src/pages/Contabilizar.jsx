@@ -57,7 +57,11 @@ export default function Contabilizar() {
     setLista(data || [])
     const { data: aud } = await supabase.from('auditoria').select('id, modulo, item, tipo, detalhe')
       .eq('competencia_id', comp.id).eq('tipo', 'Correção').in('modulo', MODULOS_SUGESTAO).order('id', { ascending: false })
-    setSugestoes(aud || [])
+    // Correções que já viraram lançamento de acerto (casadas pela NF) não reaparecem como sugestão.
+    const soNF = s => String(s ?? '').replace(/\D/g, '')
+    const docsCorrecao = new Set((data || []).filter(l => l.origem === 'correcao' && l.documento).map(l => soNF(l.documento)).filter(Boolean))
+    const nfDoItem = it => soNF((String(it || '').match(/NF\s*([\w]+)/i) || [])[1] || '')
+    setSugestoes((aud || []).filter(s => { const nf = nfDoItem(s.item); return !(nf && docsCorrecao.has(nf)) }))
     setLoading(false)
   }
 
