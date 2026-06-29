@@ -96,7 +96,7 @@ export default function CompMovimento() {
 
         if (!vivo) return
         const listaContas = Object.values(meta)
-          .sort((a, b) => String(a.classifRaw).localeCompare(String(b.classifRaw), 'pt-BR', { numeric: true }))
+          .sort((a, b) => a.classifRaw < b.classifRaw ? -1 : a.classifRaw > b.classifRaw ? 1 : 0)
 
         setComps(compsComDados)
         setContas(listaContas)
@@ -237,7 +237,7 @@ export default function CompMovimento() {
                   const linha = matriz[classifRaw] || {}
                   const indent = Math.max(0, (Number(grau) || 1) - 1) * 14
                   return (
-                    <tr key={classifRaw} style={{ borderTop: `1px solid ${theme.border}`, background: sintetica ? theme.input : 'transparent' }}>
+                    <tr key={classifRaw} style={{ borderTop: `1px solid ${theme.border}`, background: sintetica ? theme.input : 'transparent', fontWeight: sintetica ? 700 : 400 }}>
                       <td style={{ ...td, color: theme.sub, fontSize: 11 }}>{reduzido || ''}</td>
                       <td style={{ ...td, color: theme.sub, fontSize: 11 }}>{classif}</td>
                       <td style={{ ...td, paddingLeft: 14 + indent, fontWeight: sintetica ? 700 : 400, maxWidth: 320 }}>{nome || '—'}</td>
