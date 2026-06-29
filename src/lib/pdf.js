@@ -7,10 +7,26 @@ const RODAPE = 'Endereço: Av. Paulista, 1274 – Conj. 33, 13º andar - Bela Vi
 // - colunas: [{ nome, alinhar?: 'right' }]
 // - linhas: array de arrays (células já formatadas em string)
 // - totais: array de células (string) para o rodapé da tabela (opcional)
-export function abrePdfTimbrado({ titulo, sub = '', colunas, linhas, totais }) {
+// abrePdfTimbrado({ titulo, sub, colunas, linhas?, totais?, secoes? })
+// - secoes: [{ titulo, linhas, totais }] → relatório em blocos (ex.: por cliente).
+export function abrePdfTimbrado({ titulo, sub = '', colunas, linhas, totais, secoes }) {
   const esc = s => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))
+  const n = colunas.length
   const th = colunas.map(c => `<th class="${c.alinhar === 'right' ? 'r' : ''}">${esc(c.nome)}</th>`).join('')
-  const trs = linhas.map(row => `<tr>${row.map((cel, i) => `<td class="${colunas[i]?.alinhar === 'right' ? 'r' : ''}">${esc(cel)}</td>`).join('')}</tr>`).join('')
+  const tr = row => `<tr>${row.map((cel, i) => `<td class="${colunas[i]?.alinhar === 'right' ? 'r' : ''}">${esc(cel)}</td>`).join('')}</tr>`
+  const subtotalRow = (rotulo, tot) => `<tr class="sub">${tot.map((cel, i) => `<td class="${colunas[i]?.alinhar === 'right' ? 'r' : ''}">${i === 0 ? esc(rotulo) : esc(cel)}</td>`).join('')}</tr>`
+
+  let corpo
+  if (secoes) {
+    corpo = secoes.map(sec => {
+      const grp = `<tr class="grp"><td colspan="${n}">${esc(sec.titulo)}</td></tr>`
+      const ls = sec.linhas.map(tr).join('')
+      const sub = sec.totais ? subtotalRow('Subtotal', sec.totais) : ''
+      return grp + ls + sub
+    }).join('') || `<tr><td colspan="${n}">Sem lançamentos.</td></tr>`
+  } else {
+    corpo = (linhas || []).map(tr).join('') || `<tr><td colspan="${n}">Sem lançamentos.</td></tr>`
+  }
   const tfoot = totais ? `<tfoot><tr>${totais.map((cel, i) => `<td class="${colunas[i]?.alinhar === 'right' ? 'r' : ''}">${esc(cel)}</td>`).join('')}</tr></tfoot>` : ''
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(titulo)}</title>
     <style>
@@ -25,14 +41,16 @@ export function abrePdfTimbrado({ titulo, sub = '', colunas, linhas, totais }) {
       th,td { border:1px solid #ccc; padding:5px 7px; text-align:left; vertical-align:top; }
       th { background:#1b2a4a; color:#fff; }
       .r { text-align:right; white-space:nowrap; }
-      tfoot td { font-weight:bold; background:#f2f2f2; }
+      tr.grp td { background:#dfe6f3; color:#1b2a4a; font-weight:bold; font-size:11px; }
+      tr.sub td { background:#f2f2f2; font-weight:bold; }
+      tfoot td { font-weight:bold; background:#e9edf5; }
       thead { display: table-header-group; }
     </style></head>
     <body>
       <div class="hdr"><img src="${HEADER_IMG}" /></div>
       <div class="ftr">${esc(RODAPE)}</div>
       <h2>${esc(titulo)}</h2>${sub ? `<p class="sub">${esc(sub)}</p>` : ''}
-      <table><thead><tr>${th}</tr></thead><tbody>${trs || `<tr><td colspan="${colunas.length}">Sem lançamentos.</td></tr>`}</tbody>${tfoot}</table>
+      <table><thead><tr>${th}</tr></thead><tbody>${corpo}</tbody>${tfoot}</table>
       <script>window.onload=function(){setTimeout(function(){window.print()},250)}</script>
     </body></html>`
   const w = window.open('', '_blank')
