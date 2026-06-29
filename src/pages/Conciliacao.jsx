@@ -79,16 +79,33 @@ function tipoPorClassif(c) {
   return ''
 }
 
+// Tipo de conta na conciliação:
+// - 'saldo'      → não tem composição; vale o saldo final, validado por documento (extrato).
+//                  Padrão para Disponível (caixa, bancos, aplicações) = classificação 1.1.1.
+// - 'composicao' → o saldo é formado pelos lançamentos (clientes, fornecedores, impostos a pagar…).
+function tipoAuto(classifRaw) {
+  const c = String(classifRaw || '').replace(/\D/g, '')
+  return c.startsWith('111') ? 'saldo' : 'composicao'
+}
+const LABEL_TIPO = { saldo: 'Saldo', composicao: 'Composição' }
+
 export default function Conciliacao() {
   const { empresaId, empresaNome, competencia, getCompetenciaId } = useAppData()
   const { user } = useAuth()
   const [compId, setCompId] = useState(null)
   const [contas, setContas] = useState([])
+  const [conf, setConf] = useState({}) // conta -> registro conciliacao_conta
   const [carregando, setCarregando] = useState(true)
   const [sel, setSel] = useState(null) // conta selecionada (detalhe)
 
+  async function carregarConf(cid) {
+    const { data } = await supabase.from('conciliacao_conta').select('*').eq('competencia_id', cid)
+    const m = {}; for (const r of (data || [])) m[r.conta] = r
+    setConf(m)
+  }
+
   useEffect(() => {
-    setSel(null); setContas([]); setCompId(null)
+    setSel(null); setContas([]); setCompId(null); setConf({})
     if (!empresaId) { setCarregando(false); return }
     setCarregando(true)
     const [mes, ano] = competencia.split('/').map(Number)
@@ -99,34 +116,54 @@ export default function Conciliacao() {
         const { linhas } = await montarBalancete(empresaId, comp.id)
         // Conciliação trata só Ativo (1) e Passivo (2). Receita/Custos/Despesa vão no Comparativo.
         const ap = linhas.filter(l => { const d = String(l.classifRaw || l.classif).trim()[0]; return d === '1' || d === '2' })
-        setContas(ap.map(l => ({
-          ...l, conta: l.reduzido,
-          tipo: tipoPorClassif(l.classif) || tipoConta(l.nome || l.classif),
-        })))
+        setContas(ap.map(l => ({ ...l, conta: l.reduzido })))
+        await carregarConf(comp.id)
         setCarregando(false)
       })
   }, [empresaId, competencia])
+
+  const tipoEf = c => conf[c.conta]?.tipo || tipoAuto(c.classifRaw)
+
+  // Farol por tipo de conta:
+  // - Saldo: amarelo (falta documento) → verde se o extrato bate, vermelho se não bate.
+  // - Composição: verde se zerada; senão amarelo (a conferir na composição).
+  function farol(c) {
+    const reg = conf[c.conta]
+    if (tipoEf(c) === 'saldo') {
+      if (reg && reg.documento && reg.saldo_documento != null) {
+        return Math.abs(Number(c.saldo_final) - Number(reg.saldo_documento)) < 0.01 ? theme.green : theme.red
+      }
+      return theme.yellow // sem documento (justificada ou não) → amarelo
+    }
+    return Math.abs(c.saldo_final) < 0.01 ? theme.green : theme.yellow
+  }
+
+  async function trocaTipo(c) {
+    const novo = tipoEf(c) === 'saldo' ? 'composicao' : 'saldo'
+    const reg = conf[c.conta]
+    if (reg) await supabase.from('conciliacao_conta').update({ tipo: novo, usuario: user?.email }).eq('id', reg.id)
+    else await supabase.from('conciliacao_conta').insert({ competencia_id: compId, conta: c.conta, tipo: novo, usuario: user?.email })
+    carregarConf(compId)
+  }
 
   if (!empresaId) return <Wrapper><Aviso texto="Selecione uma empresa no menu lateral." /></Wrapper>
   if (carregando) return <Wrapper><p style={{ color: theme.sub, fontSize: 13 }}>Carregando…</p></Wrapper>
   if (!compId || contas.length === 0) return <Wrapper><Aviso icon="ti-table-off" texto="Nenhum balancete nesta competência. Importe o razão primeiro." /></Wrapper>
 
-  if (sel) return <Detalhe conta={sel} compId={compId} empresaId={empresaId} usuario={user?.email} getCompetenciaId={getCompetenciaId} onVoltar={() => setSel(null)} />
-
-  const farol = (c) => Math.abs(c.saldo_final) < 0.01 ? theme.green : Math.abs(c.saldo_final) < 1000 ? theme.yellow : theme.red
+  if (sel) return <Detalhe conta={sel} tipoCta={tipoEf(sel)} reg={conf[sel.conta]} compId={compId} empresaId={empresaId} usuario={user?.email} getCompetenciaId={getCompetenciaId} onSalvarConf={() => carregarConf(compId)} onVoltar={() => setSel(null)} />
 
   return (
     <Wrapper nome={empresaNome} comp={competencia}>
-      <div style={{ display: 'flex', gap: 16, marginBottom: 14, fontSize: 12, color: theme.sub }}>
-        <span><Dot c={theme.red} /> Não conciliada</span>
-        <span><Dot c={theme.yellow} /> Sem documento</span>
-        <span><Dot c={theme.green} /> Conciliada</span>
+      <div style={{ display: 'flex', gap: 16, marginBottom: 14, fontSize: 12, color: theme.sub, flexWrap: 'wrap' }}>
+        <span><Dot c={theme.red} /> Não confere</span>
+        <span><Dot c={theme.yellow} /> A conferir / sem documento</span>
+        <span><Dot c={theme.green} /> Conferida</span>
       </div>
       <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'auto' }}>
-        <table style={{ width: '100%', minWidth: 860, borderCollapse: 'collapse' }}>
+        <table style={{ width: '100%', minWidth: 960, borderCollapse: 'collapse' }}>
           <thead>
             <tr style={{ background: theme.input }}>
-              <th style={th}>Conta</th><th style={th}>Classificação</th><th style={th}>Nome da Conta</th>
+              <th style={th}>Conta</th><th style={th}>Classificação</th><th style={th}>Nome da Conta</th><th style={th}>Tipo</th>
               <th style={thR}>Saldo inicial</th><th style={thR}>Débito</th>
               <th style={thR}>Crédito</th><th style={thR}>Saldo atual</th><th style={{ ...th, textAlign: 'center' }}>Status</th>
             </tr>
@@ -135,12 +172,18 @@ export default function Conciliacao() {
             {contas.map((c, i) => {
               const sint = c.sintetica
               const peso = sint ? 700 : 400 // só as sintéticas em negrito
+              const t = tipoEf(c)
               return (
                 <tr key={i} onClick={() => !sint && setSel(c)}
                   style={{ borderTop: `1px solid ${theme.border}`, cursor: sint ? 'default' : 'pointer', background: sint ? theme.input : 'transparent', fontWeight: peso }}>
                   <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{c.reduzido || ''}</td>
                   <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{c.classif}</td>
                   <td style={{ ...td, fontWeight: peso }}>{c.nome || '—'}</td>
+                  <td style={{ ...td }}>{sint ? '' : (
+                    <span onClick={e => { e.stopPropagation(); trocaTipo(c) }} title="Clique para alternar Saldo / Composição"
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer', fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 20, background: t === 'saldo' ? 'rgba(245,166,35,0.15)' : 'rgba(74,124,255,0.14)', color: t === 'saldo' ? theme.yellow : theme.accent }}>
+                      {LABEL_TIPO[t]} <i className="ti ti-switch-horizontal" style={{ fontSize: 12 }} />
+                    </span>)}</td>
                   <td style={{ ...tdR, fontWeight: peso }}>{money(c.saldo_inicial)}</td>
                   <td style={{ ...tdR, fontWeight: peso }}>{money(c.debito)}</td>
                   <td style={{ ...tdR, fontWeight: peso }}>{money(c.credito)}</td>
@@ -156,7 +199,7 @@ export default function Conciliacao() {
   )
 }
 
-function Detalhe({ conta, compId, empresaId, usuario, getCompetenciaId, onVoltar }) {
+function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, getCompetenciaId, onSalvarConf, onVoltar }) {
   const [lanc, setLanc] = useState([])
   const [carregando, setCarregando] = useState(true)
   const [acao, setAcao] = useState(null)   // lançamento clicado (justificar/corrigir)
@@ -298,8 +341,12 @@ function Detalhe({ conta, compId, empresaId, usuario, getCompetenciaId, onVoltar
         <Tile label="Diferença (amarração)" v={money(dif)} cor={Math.abs(dif) < 0.01 ? theme.green : theme.yellow} />
       </div>
 
+      {tipoCta === 'saldo' ? (
+        <ConferenciaSaldo conta={conta} reg={reg} compId={compId} usuario={usuario} onSalvo={onSalvarConf} />
+      ) : (
+      <>
       {/* Impostos: baixa do mês anterior + memória de cálculo */}
-      {conta.tipo === 'Imposto' && <ImpostoCards conta={conta} />}
+      {tipoConta(conta.nome) === 'Imposto' && <ImpostoCards conta={conta} />}
 
       {/* Composição agrupada por cliente/fornecedor */}
       <p style={{ color: theme.sub, fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: .5, margin: '4px 0 10px' }}>
@@ -408,12 +455,96 @@ function Detalhe({ conta, compId, empresaId, usuario, getCompetenciaId, onVoltar
           </div>
         )
       })}
+      </>
+      )}
 
       {acao && (
         <ModalLancamento lanc={acao} conta={conta} lab={lab} plano={plano}
           onClose={() => setAcao(null)} onRegistrar={registrar} />
       )}
     </Wrapper>
+  )
+}
+
+// Conta de SALDO (banco/aplicação): conferência por documento (extrato).
+// Sem extrato → amarela. Com extrato que bate → verde. Não bate → vermelha.
+// Sem extrato, pode justificar; marcando "pendência do cliente" vai ao Relatório de Pendências.
+function ConferenciaSaldo({ conta, reg, compId, usuario, onSalvo }) {
+  const [doc, setDoc] = useState(reg?.documento || '')
+  const [saldoDoc, setSaldoDoc] = useState(reg?.saldo_documento != null ? String(reg.saldo_documento) : '')
+  const [just, setJust] = useState(reg?.justificativa || '')
+  const [pend, setPend] = useState(!!reg?.pendencia_cliente)
+  const [erro, setErro] = useState('')
+  const [msg, setMsg] = useState('')
+  const [salvando, setSalvando] = useState(false)
+
+  const saldo = Number(conta.saldo_final) || 0
+  const temDoc = doc && saldoDoc !== ''
+  const dif = saldo - (Number(saldoDoc) || 0)
+  const bate = temDoc && Math.abs(dif) < 0.01
+
+  async function lerArquivo(file) {
+    if (!file) return; setErro('')
+    try {
+      const XLSX = await import('xlsx')
+      const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' })
+      const arr = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' })
+      // Palpite do saldo do extrato: último valor numérico encontrado no arquivo.
+      let ultimo = null
+      for (const row of arr) for (const cel of row) { const n = numCell(cel); if (n) ultimo = n }
+      setDoc(file.name)
+      if (ultimo != null) setSaldoDoc(String(ultimo))
+    } catch (e) { setErro('Não consegui ler: ' + e.message) }
+  }
+
+  async function salvar(extra) {
+    setSalvando(true); setErro('')
+    const payload = {
+      competencia_id: compId, conta: conta.conta, tipo: 'saldo',
+      documento: doc || null, saldo_documento: saldoDoc === '' ? null : Number(saldoDoc),
+      justificativa: just || null, pendencia_cliente: pend, usuario, ...extra,
+    }
+    let error
+    if (reg) ({ error } = await supabase.from('conciliacao_conta').update(payload).eq('id', reg.id))
+    else ({ error } = await supabase.from('conciliacao_conta').insert(payload))
+    setSalvando(false)
+    if (error) { setErro(error.message); return }
+    setMsg('Conferência salva.'); onSalvo && onSalvo()
+  }
+
+  return (
+    <div>
+      <div style={{ background: theme.card, border: `1px solid ${bate ? theme.green : temDoc ? theme.red : theme.yellow}`, borderRadius: 12, padding: 16, marginBottom: 14 }}>
+        <p style={{ fontSize: 14, fontWeight: 600, margin: '0 0 4px' }}>Conferência de saldo — documento suporte</p>
+        <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 14px' }}>Esta é uma conta de <b style={{ color: theme.text }}>saldo</b> (sem composição). Importe o extrato e confira com o saldo da conta.</p>
+        <div style={{ display: 'flex', gap: 28, flexWrap: 'wrap', marginBottom: 12 }}>
+          <Mini label="Saldo da conta" v={money(saldo)} />
+          <Mini label="Saldo do documento" v={saldoDoc === '' ? '—' : money(Number(saldoDoc))} />
+          <Mini label="Diferença" v={temDoc ? money(dif) : '—'} cor={!temDoc ? theme.sub : bate ? theme.green : theme.red} />
+        </div>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+          <div><label>Extrato / documento</label><input type="file" accept=".xlsx,.xls,.csv" onChange={e => lerArquivo(e.target.files?.[0])} style={{ fontSize: 13, color: theme.sub, display: 'block' }} /></div>
+          <div><label>Saldo conforme o documento</label><input className="input" type="number" step="0.01" style={{ maxWidth: 200 }} value={saldoDoc} onChange={e => setSaldoDoc(e.target.value)} placeholder="0,00" /></div>
+          <button className="btn" disabled={salvando || !temDoc} onClick={() => salvar()}>Salvar conferência</button>
+        </div>
+        {doc && <p style={{ color: theme.sub, fontSize: 12, margin: '10px 0 0' }}><i className="ti ti-file" /> {doc}</p>}
+        {temDoc && <p style={{ color: bate ? theme.green : theme.red, fontSize: 12.5, margin: '10px 0 0', fontWeight: 500 }}>
+          <i className={`ti ${bate ? 'ti-circle-check' : 'ti-alert-triangle'}`} /> {bate ? 'Documento bate com o saldo — conta conferida.' : `Diferença de ${money(Math.abs(dif))} entre o saldo e o documento.`}
+        </p>}
+        {erro && <p style={{ color: theme.red, fontSize: 12.5, margin: '8px 0 0' }}>{erro}</p>}
+      </div>
+
+      <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: 16 }}>
+        <p style={{ fontSize: 14, fontWeight: 600, margin: '0 0 4px' }}>Sem o documento? Justifique</p>
+        <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 10px' }}>Se o extrato ainda não veio, registre o porquê. Marcando “pendência do cliente”, a conta entra no Relatório de Pendências.</p>
+        <textarea className="input" rows={2} value={just} onChange={e => setJust(e.target.value)} placeholder="Ex.: aguardando extrato do banco / cliente não enviou…" />
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '10px 0', fontSize: 13, cursor: 'pointer' }}>
+          <input type="checkbox" checked={pend} onChange={e => setPend(e.target.checked)} /> É pendência do cliente (cobrar — vai para o Relatório de Pendências)
+        </label>
+        <button className="btn btn-ghost" disabled={salvando || !just.trim()} onClick={() => salvar()}><i className="ti ti-flag" /> Salvar justificativa</button>
+        {msg && <p style={{ color: theme.green, fontSize: 12.5, margin: '10px 0 0' }}><i className="ti ti-circle-check" /> {msg}</p>}
+      </div>
+    </div>
   )
 }
 

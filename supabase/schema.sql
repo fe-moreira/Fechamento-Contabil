@@ -113,6 +113,22 @@ create table if not exists public.auditoria (
 );
 create index if not exists auditoria_comp_idx on public.auditoria(competencia_id);
 
+-- ---------- CONCILIAÇÃO: tipo da conta, documento suporte e status por conta ----------
+create table if not exists public.conciliacao_conta (
+  id                uuid primary key default gen_random_uuid(),
+  competencia_id    uuid not null references public.competencias(id) on delete cascade,
+  conta             text not null,                 -- código reduzido da conta
+  tipo              text,                          -- 'saldo' | 'composicao' (override manual; null = automático)
+  documento         text,                          -- nome do extrato/documento suporte importado
+  saldo_documento   numeric(16,2),                 -- saldo lido do documento (p/ conta de saldo)
+  justificativa     text,
+  pendencia_cliente boolean not null default false, -- vai para o Relatório de Pendências
+  usuario           text,
+  updated_at        timestamptz default now(),
+  unique (competencia_id, conta)
+);
+create index if not exists conciliacao_conta_comp_idx on public.conciliacao_conta(competencia_id);
+
 -- ============================================================
 -- updated_at automático
 -- ============================================================
@@ -140,11 +156,12 @@ alter table public.razao           enable row level security;
 alter table public.balancete       enable row level security;
 alter table public.lancamentos     enable row level security;
 alter table public.auditoria       enable row level security;
+alter table public.conciliacao_conta enable row level security;
 
 do $$
 declare t text;
 begin
-  foreach t in array array['clientes','competencias','cargas_cadastro','razao','balancete','lancamentos','auditoria']
+  foreach t in array array['clientes','competencias','cargas_cadastro','razao','balancete','lancamentos','auditoria','conciliacao_conta']
   loop
     execute format('drop policy if exists "auth_all_%1$s" on public.%1$s;', t);
     execute format(
