@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
+import { apurarDistribuicao } from '../lib/distribuicao'
 import { theme, money } from '../lib/theme'
 
 // Valor pt-BR para CSV ("1234.56" -> "1234,56").
@@ -45,6 +46,7 @@ const RELATORIOS = [
   { id: 'dre', nome: 'DRE (resumo)', icon: 'ti-report-money', desc: 'Demonstração de resultado simplificada por prefixo de conta.' },
   { id: 'book', nome: 'Book de Composições', icon: 'ti-book', desc: 'Contas do balancete com saldo final diferente de zero.' },
   { id: 'pendencias', nome: 'Relatório de Pendências', icon: 'ti-alert-triangle', desc: 'Documentos da competência ainda não recebidos.' },
+  { id: 'distribuicao', nome: 'Distribuição de lucros · IRRF 2026', icon: 'ti-cash', desc: 'Apuração por sócio: total recebido, limite e IRRF estimado.' },
   { id: 'auditoria', nome: 'Justificativas e correções do fechamento', icon: 'ti-clipboard-check', desc: 'Consolida toda a auditoria registrada nesta competência.' },
 ]
 
@@ -55,11 +57,12 @@ export default function Relatorios() {
   const [linhas, setLinhas] = useState([])      // balancete
   const [documentos, setDocumentos] = useState([]) // competencias.documentos
   const [auditoria, setAuditoria] = useState([])    // auditoria desta competência
+  const [dist, setDist] = useState(null)            // apuração de distribuição de lucros
   const [aba, setAba] = useState('balancete')
 
   // Resolve a competência (READ-ONLY) e lê balancete + documentos + auditoria.
   useEffect(() => {
-    setLinhas([]); setDocumentos([]); setAuditoria([]); setTemComp(null)
+    setLinhas([]); setDocumentos([]); setAuditoria([]); setDist(null); setTemComp(null)
     if (!empresaId) return
     let vivo = true
     ;(async () => {
@@ -86,6 +89,8 @@ export default function Relatorios() {
         if (!vivo) return
         setLinhas(bal || [])
         setAuditoria(aud || [])
+        const d = await apurarDistribuicao(empresaId, comp.id)
+        if (vivo) setDist(d)
       } finally {
         if (vivo) setCarregando(false)
       }
@@ -166,6 +171,14 @@ export default function Relatorios() {
       ...auditoria.map(a => [a.modulo, a.item, a.tipo, a.detalhe, a.dedutibilidade, a.usuario, dataPtBR(a.created_at)]),
     ]
     baixarCSV(`auditoria_${compSlug}.csv`, dados)
+  }
+
+  function exportarDistribuicao() {
+    const dados = [
+      ['Sócio', 'Identificação', 'Total recebido', 'Limite', 'Acima do limite', 'IRRF estimado'],
+      ...(dist?.socios || []).map(s => [s.nome, s.ident, csvNum(s.total), csvNum(dist.limite), s.excede ? 'Sim' : 'Não', csvNum(s.irrf)]),
+    ]
+    baixarCSV(`distribuicao_lucros_${compSlug}.csv`, dados)
   }
 
   const semBalancete = !carregando && temComp && linhas.length === 0
@@ -326,6 +339,45 @@ export default function Relatorios() {
                 </tbody>
               </table>
             </div>
+          )}
+        </Secao>
+      )}
+
+      {/* Distribuição de lucros */}
+      {!carregando && temComp && aba === 'distribuicao' && (
+        <Secao titulo="Distribuição de lucros · IRRF 2026" onExportar={dist?.socios?.length ? exportarDistribuicao : null}>
+          {!dist?.temConfig ? (
+            <Aviso icon="ti-settings" texto="Configure limite, alíquota e sócios em Base de Informações → Distribuição de lucros." />
+          ) : !dist.socios.length ? (
+            <Aviso icon="ti-users" texto="Nenhum sócio configurado. Adicione os sócios na Base de Informações." />
+          ) : (
+            <>
+              <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 12 }}>
+                Limite mensal: <b style={{ color: theme.text }}>{money(dist.limite)}</b> · Alíquota IRRF: <b style={{ color: theme.text }}>{dist.aliquota}%</b>. Estimativa para revisão humana.
+              </p>
+              <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ background: theme.input }}>
+                      <th style={th}>Sócio</th>
+                      <th style={thNum}>Total recebido</th>
+                      <th style={th}>Situação</th>
+                      <th style={thNum}>IRRF estimado</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {dist.socios.map((s, i) => (
+                      <tr key={i} style={{ borderTop: `1px solid ${theme.border}` }}>
+                        <td style={td}>{s.nome}</td>
+                        <td style={tdNum}>{money(s.total)}</td>
+                        <td style={{ ...td, color: s.excede ? theme.red : theme.green }}>{s.excede ? 'Acima do limite' : 'Dentro do limite'}</td>
+                        <td style={{ ...tdNum, color: s.excede ? theme.red : theme.sub, fontWeight: s.excede ? 700 : 400 }}>{money(s.irrf)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
         </Secao>
       )}
