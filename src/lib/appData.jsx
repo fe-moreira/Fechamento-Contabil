@@ -21,6 +21,14 @@ export function AppDataProvider({ children }) {
   const [empresaId, setEmpresaId] = useState('')
   const [competencia, setCompetencia] = useState('06/2026')
   const [pendencias, setPendencias] = useState(null)
+  // Fechamento ativo: as funções só liberam com um fechamento aberto/criado.
+  const [fechamentoAtivo, setFechamentoAtivo] = useState(false)
+  // Ao trocar de cliente, fecha a seleção — precisa escolher/abrir um fechamento de novo.
+  useEffect(() => { setFechamentoAtivo(false) }, [empresaId])
+  function abrirFechamento(mes, ano) {
+    setCompetencia(`${String(mes).padStart(2, '0')}/${ano}`)
+    setFechamentoAtivo(true)
+  }
 
   async function carregarEmpresas() {
     const { data } = await supabase
@@ -122,6 +130,7 @@ export function AppDataProvider({ children }) {
     competencia, setCompetencia, competencias: COMPETENCIAS,
     empresaNome, getCompetenciaId, carregarEmpresas,
     pendencias, recalcularPendencias, isAdmin,
+    fechamentoAtivo, setFechamentoAtivo, abrirFechamento,
   }
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }

@@ -1,9 +1,12 @@
 import { useEffect, useState } from 'react'
-import { NavLink, Link, Outlet } from 'react-router-dom'
+import { NavLink, Link, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from './AuthProvider'
 import { useAppData } from '../lib/appData'
 import SeletorEmpresa from './SeletorEmpresa'
 import { theme } from '../lib/theme'
+
+// Rotas (funções do fechamento) que só liberam com um fechamento aberto.
+const ROTAS_FECHAMENTO = new Set(['/razao', '/documentos', '/integracao', '/conciliacao', '/comparativo', '/contabilizar', '/relatorios', '/status', '/base'])
 
 const PRINCIPAL = [
   { to: '/', end: true, icon: 'ti-layout-dashboard', label: 'Dashboard' },
@@ -57,7 +60,12 @@ function TimerSessao() {
 
 export default function Layout() {
   const { user, signOut } = useAuth()
-  const { competencia, setCompetencia, competencias, empresaId, empresaNome, pendencias } = useAppData()
+  const { competencia, empresaId, empresaNome, pendencias, fechamentoAtivo } = useAppData()
+  const location = useLocation()
+  const navigate = useNavigate()
+  // Ao trocar de cliente, vai para a tela de Fechamentos para escolher/abrir um.
+  useEffect(() => { if (empresaId) navigate('/fechamentos') }, [empresaId]) // eslint-disable-line react-hooks/exhaustive-deps
+  const precisaFechamento = ROTAS_FECHAMENTO.has(location.pathname) && !fechamentoAtivo
   const [grupoAberto, setGrupoAberto] = useState(true)
   const [colapsado, setColapsado] = useState(false)
 
@@ -151,18 +159,41 @@ export default function Layout() {
             )}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <i className="ti ti-calendar-event" style={{ color: theme.sub }} />
-            <span style={{ fontSize: 12.5, color: theme.sub }}>Competência</span>
-            <select className="input" style={{ width: 'auto', padding: '7px 10px' }} value={competencia} onChange={e => setCompetencia(e.target.value)}>
-              {competencias.map(c => <option key={c} value={c}>{c}</option>)}
-            </select>
+            <i className="ti ti-calendar-event" style={{ color: fechamentoAtivo ? theme.green : theme.sub }} />
+            {fechamentoAtivo ? (
+              <>
+                <span style={{ fontSize: 12.5, color: theme.sub }}>Fechamento</span>
+                <span style={{ fontSize: 13, fontWeight: 600, color: theme.text }}>{competencia}</span>
+                <Link to="/fechamentos" className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }}><i className="ti ti-switch-horizontal" /> Trocar</Link>
+              </>
+            ) : (
+              <Link to="/fechamentos" className="btn" style={{ fontSize: 12.5, padding: '6px 12px' }}><i className="ti ti-calendar-plus" /> Abrir fechamento</Link>
+            )}
           </div>
         </div>
 
         <div style={{ padding: '28px 32px', flex: 1 }}>
-          <Outlet />
+          {precisaFechamento ? <GateFechamento empresaId={empresaId} /> : <Outlet />}
         </div>
       </main>
+    </div>
+  )
+}
+
+// Bloqueio: função do fechamento sem um fechamento aberto.
+function GateFechamento({ empresaId }) {
+  return (
+    <div style={{ background: theme.card, border: `1px solid ${theme.yellow}`, borderRadius: 14, padding: '30px 28px', maxWidth: 620, display: 'flex', alignItems: 'flex-start', gap: 16 }}>
+      <i className="ti ti-calendar-exclamation" style={{ fontSize: 28, color: theme.yellow, marginTop: 2 }} />
+      <div>
+        <p style={{ fontSize: 16, fontWeight: 600, margin: '0 0 6px' }}>Abra um fechamento para continuar</p>
+        <p style={{ color: theme.sub, fontSize: 13.5, margin: '0 0 16px', lineHeight: 1.55 }}>
+          {empresaId
+            ? 'As funções (importar razão, documentos, conciliação, relatórios…) só funcionam com um fechamento aberto. Escolha um fechamento existente ou crie um novo.'
+            : 'Selecione uma empresa no menu lateral e abra um fechamento.'}
+        </p>
+        <Link to="/fechamentos" className="btn"><i className="ti ti-calendar-plus" /> Ir para Fechamentos</Link>
+      </div>
     </div>
   )
 }
