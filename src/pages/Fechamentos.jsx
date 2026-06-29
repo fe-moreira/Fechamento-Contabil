@@ -4,21 +4,25 @@ import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
 import { theme } from '../lib/theme'
 
-const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
+const MESES = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
+const MESES_CURTO = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
+
 const ST = {
-  fechado: { txt: 'Fechado', cor: theme.green, bg: 'rgba(48,164,108,0.15)', icon: 'ti-circle-check' },
-  andamento: { txt: 'Em andamento', cor: theme.yellow, bg: 'rgba(245,166,35,0.15)', icon: 'ti-progress' },
-  pendente: { txt: 'Pendente', cor: theme.red, bg: 'rgba(229,72,77,0.15)', icon: 'ti-alert-triangle' },
+  fechado: { txt: 'Fechado', cor: theme.green, bg: 'rgba(48,164,108,0.15)', icon: 'ti-circle-check', sub: () => 'Entregue' },
+  andamento: { txt: 'Em andamento', cor: theme.yellow, bg: 'rgba(245,166,35,0.15)', icon: 'ti-progress', sub: c => `Progresso ${c.pct || 0}%` },
+  pendente: { txt: 'Atrasado', cor: theme.red, bg: 'rgba(229,72,77,0.15)', icon: 'ti-alert-triangle', sub: () => 'Em atraso' },
 }
 
 export default function Fechamentos() {
-  const { empresaId, empresaNome, setCompetencia } = useAppData()
+  const { empresaId, empresaNome, competencia, setCompetencia } = useAppData()
   const nav = useNavigate()
   const [lista, setLista] = useState([])
   const [loading, setLoading] = useState(true)
   const [fAno, setFAno] = useState('todos')
   const [fMes, setFMes] = useState('todos')
-  const [novo, setNovo] = useState(null) // { ano, mes }
+  const [novo, setNovo] = useState(null)
+
+  const [selMes, selAno] = competencia.split('/').map(Number)
 
   async function carregar() {
     setLoading(true)
@@ -29,11 +33,7 @@ export default function Fechamentos() {
   useEffect(() => { if (empresaId) carregar(); else { setLista([]); setLoading(false) } }, [empresaId])
 
   if (!empresaId) {
-    return (
-      <Wrapper>
-        <Aviso texto="Selecione uma empresa no menu lateral para ver os fechamentos." />
-      </Wrapper>
-    )
+    return <Wrapper><Aviso texto="Selecione uma empresa no menu lateral para ver os fechamentos." /></Wrapper>
   }
 
   const filtrada = lista.filter(c => (fAno === 'todos' || c.ano === +fAno) && (fMes === 'todos' || c.mes === +fMes))
@@ -44,7 +44,6 @@ export default function Fechamentos() {
     setCompetencia(`${String(c.mes).padStart(2, '0')}/${c.ano}`)
     nav('/status')
   }
-
   async function criar() {
     const { ano, mes } = novo
     const existe = lista.find(c => c.ano === +ano && c.mes === +mes)
@@ -57,31 +56,33 @@ export default function Fechamentos() {
 
   return (
     <Wrapper>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 18 }}>
-        <p style={{ color: theme.sub, fontSize: 13 }}><b style={{ color: theme.text }}>{empresaNome}</b> — escolha uma competência ou abra um novo fechamento.</p>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 18, flexWrap: 'wrap' }}>
+        <p style={{ color: theme.sub, fontSize: 13.5 }}><b style={{ color: theme.text }}>{empresaNome}</b> — escolha uma competência ou abra um novo fechamento.</p>
         <button className="btn" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }} onClick={() => setNovo({ ano: 2026, mes: 6 })}>
           <i className="ti ti-plus" /> Novo fechamento
         </button>
       </div>
 
       {/* Filtro */}
-      <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', marginBottom: 16 }}>
+      <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', marginBottom: 16 }}>
         <span style={{ color: theme.sub, fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 6 }}><i className="ti ti-calendar-event" style={{ color: theme.accent }} /> Filtrar período</span>
         <select className="input" style={selS} value={fAno} onChange={e => setFAno(e.target.value)}>
           <option value="todos">Todos os anos</option><option value="2026">2026</option><option value="2025">2025</option>
         </select>
         <select className="input" style={selS} value={fMes} onChange={e => setFMes(e.target.value)}>
           <option value="todos">Todos os meses</option>
-          {MESES.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
+          {MESES_CURTO.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
         </select>
-        <span style={{ marginLeft: 'auto', fontSize: 12.5, color: theme.sub, display: 'flex', gap: 14 }}>
-          <span style={{ color: theme.green }}>{cont.fechado} fechado(s)</span>
-          <span style={{ color: theme.yellow }}>{cont.andamento} em andamento</span>
-          <span style={{ color: theme.red }}>{cont.pendente} pendente(s)</span>
-        </span>
       </div>
 
-      {/* Lista de fechamentos */}
+      {/* Cards de resumo */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 14, marginBottom: 16 }}>
+        <ResumoCard label="Fechados" valor={cont.fechado} icon="ti-circle-check" cor={theme.green} />
+        <ResumoCard label="Em andamento" valor={cont.andamento} icon="ti-progress" cor={theme.yellow} />
+        <ResumoCard label="Atrasados" valor={cont.pendente} icon="ti-alert-triangle" cor={theme.red} />
+      </div>
+
+      {/* Lista de fechamentos (linhas) */}
       {loading ? (
         <p style={{ color: theme.sub, fontSize: 13 }}>Carregando…</p>
       ) : filtrada.length === 0 ? (
@@ -89,19 +90,30 @@ export default function Fechamentos() {
           Nenhum fechamento para este filtro. Clique em <b style={{ color: theme.text }}>Novo fechamento</b> para abrir uma competência.
         </div>
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 14 }}>
+        <div style={{ display: 'grid', gap: 12 }}>
           {filtrada.map(c => {
             const s = ST[c.status] || ST.andamento
+            const aberto = c.mes === selMes && c.ano === selAno
             return (
-              <div key={c.id} onClick={() => abrir(c)} style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: 18, cursor: 'pointer' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                  <span style={{ fontSize: 16, fontWeight: 600 }}>{MESES[c.mes - 1]}/{c.ano}</span>
-                  <span style={{ background: s.bg, color: s.cor, fontSize: 11, fontWeight: 600, padding: '3px 9px', borderRadius: 20 }}><i className={`ti ${s.icon}`} /> {s.txt}</span>
+              <div key={c.id} onClick={() => abrir(c)} style={{
+                background: theme.card, borderRadius: 12, padding: '16px 18px', cursor: 'pointer',
+                display: 'flex', alignItems: 'center', gap: 16,
+                border: aberto ? `1px solid ${theme.accent}` : `0.5px solid ${theme.cb}`,
+              }}>
+                <div style={{ width: 48, height: 48, borderRadius: 12, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: s.bg }}>
+                  <i className={`ti ${s.icon}`} style={{ fontSize: 24, color: s.cor }} />
                 </div>
-                <div style={{ height: 6, background: theme.input, borderRadius: 20, overflow: 'hidden' }}>
-                  <div style={{ width: `${c.pct || 0}%`, height: '100%', background: s.cor }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <p style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>
+                    {MESES[c.mes - 1]} {c.ano}
+                    {aberto && <span style={{ color: theme.accent, fontSize: 13, fontWeight: 500 }}> · aberto</span>}
+                  </p>
+                  <p style={{ color: theme.sub, fontSize: 13, margin: '2px 0 0' }}>{s.sub(c)}</p>
                 </div>
-                <p style={{ color: theme.sub, fontSize: 12, marginTop: 8 }}>{c.pct || 0}% concluído · abrir fechamento <i className="ti ti-chevron-right" /></p>
+                <span style={{ background: s.bg, color: s.cor, fontSize: 12, fontWeight: 600, padding: '5px 12px', borderRadius: 20, display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+                  <i className={`ti ${s.icon}`} /> {s.txt}
+                </span>
+                <i className="ti ti-chevron-right" style={{ color: theme.sub, fontSize: 20, flexShrink: 0 }} />
               </div>
             )
           })}
@@ -116,7 +128,7 @@ export default function Fechamentos() {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
               <div><label>Mês</label>
                 <select className="input" value={novo.mes} onChange={e => setNovo(n => ({ ...n, mes: +e.target.value }))}>
-                  {MESES.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
+                  {MESES_CURTO.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
                 </select>
               </div>
               <div><label>Ano</label>
@@ -138,11 +150,26 @@ export default function Fechamentos() {
 
 const selS = { width: 'auto', padding: '8px 12px' }
 
+function ResumoCard({ label, valor, icon, cor }) {
+  return (
+    <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: 18 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span style={{ color: theme.sub, fontSize: 11, textTransform: 'uppercase', letterSpacing: .5 }}>{label}</span>
+        <span style={{ background: 'rgba(74,124,255,0.15)', borderRadius: 8, width: 30, height: 30, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <i className={`ti ${icon}`} style={{ color: cor, fontSize: 16 }} />
+        </span>
+      </div>
+      <p style={{ fontSize: 30, fontWeight: 700, margin: '8px 0 2px' }}>{valor}</p>
+      <p style={{ color: theme.sub, fontSize: 12, margin: 0 }}>no período</p>
+    </div>
+  )
+}
+
 function Wrapper({ children }) {
   return (
     <div>
       <h1 style={{ fontSize: 22, fontWeight: 500, marginBottom: 4 }}>Fechamento Contábil</h1>
-      <div style={{ marginBottom: 18 }}>{children}</div>
+      {children}
     </div>
   )
 }

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
+import { apurarDistribuicao } from '../lib/distribuicao'
 import { theme, money } from '../lib/theme'
 
 export default function Status() {
@@ -46,7 +47,9 @@ export default function Status() {
       setCompId(null); setStatus(null)
     }
 
-    setDados({ temRazao, docsPendentes, contasAbertas, cargaInicialPendente })
+    const dist = await apurarDistribuicao(empresaId, comp?.id)
+
+    setDados({ temRazao, docsPendentes, contasAbertas, cargaInicialPendente, dist })
     setCarregando(false)
   }
 
@@ -102,9 +105,20 @@ export default function Status() {
         detalhe: `Saldo final ${money(c.saldo_final)} em aberto.`,
       })),
     },
-    { key: 'variacoes', nome: 'Variações', icon: 'ti-chart-line', descricao: 'Análise de variações entre competências.', itens: [], emBreve: true },
+    { key: 'variacoes', nome: 'Variações', icon: 'ti-chart-line', descricao: 'Análise de variações entre competências (Comp. Movimento).', itens: [], emBreve: true },
     { key: 'banco', nome: 'Banco × resultado', icon: 'ti-building-bank', descricao: 'Conferência do banco contra o resultado apurado.', itens: [], emBreve: true },
-    { key: 'distribuicao', nome: 'Distribuição de lucros · IRRF 2026', icon: 'ti-cash-banknote', descricao: 'Distribuição de lucros e retenção de IRRF.', itens: [], emBreve: true },
+    {
+      key: 'distribuicao',
+      nome: 'Distribuição de lucros · IRRF 2026',
+      icon: 'ti-cash',
+      descricao: dados.dist?.temConfig
+        ? 'Sócios que ultrapassaram o limite mensal (retenção de IRRF).'
+        : 'Configure limite, alíquota e sócios em Base de Informações.',
+      itens: (dados.dist?.socios || []).filter(s => s.excede).map(s => ({
+        item: `${s.nome} · recebeu ${money(s.total)}`,
+        detalhe: `Acima do limite (${money(dados.dist.limite)}). IRRF estimado ${money(s.irrf)} — ${dados.dist.aliquota}% do total recebido no mês.`,
+      })),
+    },
   ]
 
   const totalPendencias = gates.reduce((s, g) => s + g.itens.length, 0)
