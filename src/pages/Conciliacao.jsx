@@ -23,6 +23,35 @@ function tipoConta(nome) {
   if (/(cliente|duplicata|receber|fornecedor|pagar|estoque|mercadoria)/.test(n)) return 'Composição'
   return 'Saldo'
 }
+
+const baixaTxt = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+
+// Monta { código: { nome, classif } } a partir do plano de contas importado.
+function montarPlano(dados) {
+  const rows = Array.isArray(dados) ? dados : []
+  if (!rows.length) return {}
+  const keys = Object.keys(rows[0])
+  const kCod = keys.find(k => /cod|reduz/.test(baixaTxt(k))) || keys.find(k => /conta/.test(baixaTxt(k))) || keys[0]
+  const kNome = keys.find(k => /nome|descri/.test(baixaTxt(k))) || keys.find(k => k !== kCod)
+  const kClass = keys.find(k => /concilia|classif/.test(baixaTxt(k))) || keys.find(k => /tipo/.test(baixaTxt(k)))
+  const map = {}
+  for (const r of rows) {
+    const cod = String(r[kCod] ?? '').trim()
+    if (!cod) continue
+    map[cod] = { nome: String((kNome ? r[kNome] : '') ?? '').trim(), classif: String((kClass ? r[kClass] : '') ?? '').trim() }
+  }
+  return map
+}
+
+// Deriva o tipo de tratamento (Composição/Imposto/Saldo) a partir da classificação do plano.
+function tipoPorClassif(c) {
+  const n = baixaTxt(c)
+  if (!n) return ''
+  if (/imposto|icms|pis|cofins|tribut/.test(n)) return 'Imposto'
+  if (/composi/.test(n)) return 'Composição'
+  if (/saldo|banco|simples/.test(n)) return 'Saldo'
+  return ''
+}
 const CONF = {
   alta: { cor: theme.green, txt: 'alta' },
   media: { cor: theme.yellow, txt: 'média' },
@@ -46,9 +75,17 @@ export default function Conciliacao() {
       .then(async ({ data: comp }) => {
         if (!comp) { setCarregando(false); return }
         setCompId(comp.id)
+        const { data: planoCarga } = await supabase.from('cargas_cadastro').select('dados')
+          .eq('cliente_id', empresaId).eq('tipo', 'plano').order('created_at', { ascending: false }).limit(1).maybeSingle()
+        const plano = montarPlano(planoCarga?.dados)
         const { data } = await supabase.from('balancete').select('conta, nome, saldo_inicial, debito, credito, saldo_final')
           .eq('competencia_id', comp.id).order('conta')
-        setContas((data || []).map(b => ({ ...b, tipo: tipoConta(b.nome || b.conta) })))
+        setContas((data || []).map(b => {
+          const p = plano[String(b.conta).trim()] || {}
+          const nome = p.nome || b.nome || ''
+          const classif = p.classif || ''
+          return { ...b, nome, classif, tipo: tipoPorClassif(classif) || tipoConta(nome || b.conta) }
+        }))
         setCarregando(false)
       })
   }, [empresaId, competencia])
@@ -73,7 +110,7 @@ export default function Conciliacao() {
           <thead>
             <tr style={{ background: theme.input }}>
               <th style={th}>Conta</th><th style={thR}>Saldo inicial</th><th style={thR}>Débito</th>
-              <th style={thR}>Crédito</th><th style={thR}>Saldo atual</th><th style={th}>Tipo</th><th style={{ ...th, textAlign: 'center' }}>Status</th>
+              <th style={thR}>Crédito</th><th style={thR}>Saldo atual</th><th style={th}>Classificação</th><th style={{ ...th, textAlign: 'center' }}>Status</th>
             </tr>
           </thead>
           <tbody>
@@ -84,7 +121,7 @@ export default function Conciliacao() {
                 <td style={tdR}>{money(c.debito)}</td>
                 <td style={tdR}>{money(c.credito)}</td>
                 <td style={{ ...tdR, fontWeight: 600 }}>{money(c.saldo_final)}</td>
-                <td style={td}>{c.tipo}</td>
+                <td style={td}>{c.classif || c.tipo}</td>
                 <td style={{ ...td, textAlign: 'center' }}><Dot c={farol(c)} /></td>
               </tr>
             ))}
