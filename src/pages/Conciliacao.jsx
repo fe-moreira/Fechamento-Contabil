@@ -67,6 +67,14 @@ function tipoConta(nome) {
   return 'Saldo'
 }
 
+// Composição "por entidade" (cliente/fornecedor + NF): só clientes, fornecedores,
+// contas a pagar e adiantamentos. As demais contas mostram só os lançamentos do razão,
+// sem extrair nome/NF nem agrupar por entidade.
+function ehPorEntidade(nome) {
+  const n = baixaTxt(nome)
+  return /client|fornecedor|duplicat|adiantament|contas? a pagar|a receber/.test(n)
+}
+
 
 const baixaTxt = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
 
@@ -350,6 +358,10 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, getCompetenc
       {/* Impostos: baixa do mês anterior + memória de cálculo */}
       {tipoConta(conta.nome) === 'Imposto' && <ImpostoCards conta={conta} />}
 
+      {!ehPorEntidade(conta.nome) ? (
+        <ListaLancamentos lanc={lanc} carregando={carregando} contraDe={contraDe} planoMap={planoMap} onTratar={l => { setMsg(''); setAcao(l) }} />
+      ) : (
+      <>
       {/* Composição agrupada por cliente/fornecedor */}
       <p style={{ color: theme.sub, fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: .5, margin: '4px 0 10px' }}>
         O que compõe o saldo — por {lab}
@@ -459,12 +471,57 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, getCompetenc
       })}
       </>
       )}
+      </>
+      )}
 
       {acao && (
         <ModalLancamento lanc={acao} conta={conta} lab={lab} plano={plano}
           onClose={() => setAcao(null)} onRegistrar={registrar} />
       )}
     </Wrapper>
+  )
+}
+
+// Lista simples dos lançamentos de uma conta de composição que NÃO é por entidade
+// (ex.: IRRF s/ aplicação): sem nome/NF/agrupamento; cada lançamento é clicável.
+function ListaLancamentos({ lanc, carregando, contraDe, planoMap, onTratar }) {
+  return (
+    <>
+      <p style={{ color: theme.sub, fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: .5, margin: '4px 0 10px' }}>Lançamentos da conta</p>
+      <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 680 }}>
+          <thead>
+            <tr style={{ background: theme.input }}>
+              <th style={th}>Data</th><th style={th}>Histórico</th><th style={th}>Contrapartida</th>
+              <th style={thR}>Débito</th><th style={thR}>Crédito</th><th style={{ ...th, textAlign: 'center' }}>Ação</th>
+            </tr>
+          </thead>
+          <tbody>
+            {carregando ? (
+              <tr><td colSpan={6} style={{ ...td, color: theme.sub }}>Carregando…</td></tr>
+            ) : lanc.length === 0 ? (
+              <tr><td colSpan={6} style={{ ...td, color: theme.sub }}>Sem lançamentos nesta conta.</td></tr>
+            ) : lanc.map((l, i) => {
+              const contras = contraDe(l)
+              return (
+                <tr key={i} onClick={() => onTratar(l)} style={{ borderTop: `1px solid ${theme.border}`, cursor: 'pointer' }} title="Justificar ou corrigir este lançamento">
+                  <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{l.data || '—'}</td>
+                  <td style={{ ...td, color: theme.sub, fontFamily: 'monospace', fontSize: 11, maxWidth: 320 }}>{l.historico}</td>
+                  <td style={{ ...td, fontSize: 11.5, whiteSpace: 'nowrap' }} title={contras.map(c => `${c}${planoMap[c] ? ' · ' + planoMap[c] : ''}`).join('\n')}>
+                    {contras.length === 0 ? <span style={{ color: theme.sub }}>—</span>
+                      : contras.length === 1 ? <span><b>{contras[0]}</b>{planoMap[contras[0]] && <span style={{ color: theme.sub }}> · {planoMap[contras[0]]}</span>}</span>
+                      : <span><b>{contras[0]}</b><span style={{ color: theme.sub }}> +{contras.length - 1}</span></span>}
+                  </td>
+                  <td style={{ ...tdR, color: theme.green }}>{Number(l.debito) ? money(l.debito) : '—'}</td>
+                  <td style={{ ...tdR, color: theme.red }}>{Number(l.credito) ? money(l.credito) : '—'}</td>
+                  <td style={{ ...td, textAlign: 'center' }}><i className="ti ti-dots" style={{ color: theme.sub }} /></td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+    </>
   )
 }
 
