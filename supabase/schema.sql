@@ -121,6 +121,7 @@ create table if not exists public.conciliacao_conta (
   tipo              text,                          -- 'saldo' | 'composicao' (override manual; null = automático)
   documento         text,                          -- nome do extrato/documento suporte importado
   saldo_documento   numeric(16,2),                 -- saldo lido do documento (p/ conta de saldo)
+  conciliada        boolean not null default false, -- confirmada manualmente ("está certo")
   justificativa     text,
   pendencia_cliente boolean not null default false, -- vai para o Relatório de Pendências
   usuario           text,
