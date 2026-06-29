@@ -161,6 +161,7 @@ function Detalhe({ conta, compId, empresaId, usuario, getCompetenciaId, onVoltar
   const [carregando, setCarregando] = useState(true)
   const [acao, setAcao] = useState(null)   // lançamento clicado (justificar/corrigir)
   const [plano, setPlano] = useState([])   // [{ cod, nome }] para os seletores de conta
+  const [partidas, setPartidas] = useState({}) // chave (data|histórico) -> lançamentos da partida (p/ contrapartida)
   const [msg, setMsg] = useState('')
 
   useEffect(() => {
@@ -169,16 +170,37 @@ function Detalhe({ conta, compId, empresaId, usuario, getCompetenciaId, onVoltar
       .then(({ data }) => { setLanc((data || []).map(l => ({ ...l, leitura: lerHistorico(l.historico) }))); setCarregando(false) })
   }, [compId, conta.conta])
 
+  // Razão inteiro da competência, indexado por partida (mesma data + histórico),
+  // para descobrir a contrapartida (a(s) conta(s) do lado oposto de cada lançamento).
+  useEffect(() => {
+    supabase.from('razao').select('data, conta, historico, debito, credito').eq('competencia_id', compId)
+      .then(({ data }) => {
+        const idx = {}
+        for (const r of (data || [])) { const k = `${r.data || ''}|${r.historico || ''}`; (idx[k] = idx[k] || []).push(r) }
+        setPartidas(idx)
+      })
+  }, [compId])
+
   useEffect(() => {
     supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'plano')
       .order('created_at', { ascending: false }).limit(1).maybeSingle()
       .then(({ data }) => setPlano(parsePlano(data?.dados).map(p => ({ cod: p.reduzido, nome: p.nome })).filter(p => p.cod)))
   }, [empresaId])
 
+  const planoMap = Object.fromEntries(plano.map(p => [p.cod, p.nome]))
+
   // Natureza pela classificação: Ativo (1) é devedora (clientes); Passivo (2) credora (fornecedores).
   const natCredito = String(conta.classifRaw || conta.classif || '').replace(/\D/g, '')[0] === '2'
   const lab = natCredito ? 'fornecedor' : 'cliente'
   const ov = l => natCredito ? ((Number(l.credito) || 0) - (Number(l.debito) || 0)) : ((Number(l.debito) || 0) - (Number(l.credito) || 0))
+
+  // Contrapartida de um lançamento: contas do lado oposto na mesma partida (data+histórico).
+  function contraDe(l) {
+    const part = partidas[`${l.data || ''}|${l.historico || ''}`] || []
+    const ehDeb = Number(l.debito) > 0.005
+    const contras = part.filter(r => (ehDeb ? Number(r.credito) > 0.005 : Number(r.debito) > 0.005) && String(r.conta) !== String(conta.conta))
+    return [...new Set(contras.map(r => String(r.conta)))]
+  }
 
   const somaComp = lanc.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
   const dif = conta.saldo_final - somaComp
@@ -340,10 +362,11 @@ function Detalhe({ conta, compId, empresaId, usuario, getCompetenciaId, onVoltar
                 Unificado de: {g.variacoes.join(' · ')}
               </div>
             )}
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }}>
               <thead>
                 <tr style={{ borderTop: `1px solid ${theme.border}` }}>
-                  <th style={th}>Data</th><th style={th}>NF</th><th style={th}>Histórico</th>
+                  <th style={th}>Data</th><th style={th}>NF</th><th style={th}>Histórico</th><th style={th}>Contrapartida</th>
                   <th style={thR}>Débito</th><th style={thR}>Crédito</th><th style={{ ...th, textAlign: 'center' }}>Conf.</th>
                 </tr>
               </thead>
@@ -351,13 +374,19 @@ function Detalhe({ conta, compId, empresaId, usuario, getCompetenciaId, onVoltar
                 {grp.map((l, i) => {
                   const rev = l.leitura.conf !== 'alta'
                   const semNF = semTit.has(l)
+                  const contras = contraDe(l)
                   return (
                     <tr key={i} onClick={() => { setMsg(''); setAcao(l) }}
                       style={{ borderTop: `1px solid ${theme.border}`, cursor: 'pointer', background: semNF ? 'rgba(229,72,77,0.08)' : 'transparent' }}
                       title={semNF ? 'Baixa com NF que não confere com o título — justifique ou corrija' : 'Justificar ou corrigir este lançamento'}>
                       <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{l.data || '—'}</td>
                       <td style={{ ...td, color: semNF ? theme.red : theme.sub, fontWeight: 600 }}>NF {l.leitura.nf || '—'}</td>
-                      <td style={{ ...td, color: theme.sub, fontFamily: 'monospace', fontSize: 11, maxWidth: 320 }}>{l.historico}</td>
+                      <td style={{ ...td, color: theme.sub, fontFamily: 'monospace', fontSize: 11, maxWidth: 280 }}>{l.historico}</td>
+                      <td style={{ ...td, fontSize: 11.5, whiteSpace: 'nowrap' }} title={contras.map(c => `${c}${planoMap[c] ? ' · ' + planoMap[c] : ''}`).join('\n')}>
+                        {contras.length === 0 ? <span style={{ color: theme.sub }}>—</span>
+                          : contras.length === 1 ? <span><b>{contras[0]}</b>{planoMap[contras[0]] && <span style={{ color: theme.sub }}> · {planoMap[contras[0]]}</span>}</span>
+                          : <span><b>{contras[0]}</b><span style={{ color: theme.sub }}> +{contras.length - 1}</span></span>}
+                      </td>
                       <td style={{ ...tdR, color: theme.green }}>{Number(l.debito) ? money(l.debito) : '—'}</td>
                       <td style={{ ...tdR, color: theme.red }}>{Number(l.credito) ? money(l.credito) : '—'}</td>
                       <td style={{ ...td, textAlign: 'center' }}>
@@ -372,6 +401,7 @@ function Detalhe({ conta, compId, empresaId, usuario, getCompetenciaId, onVoltar
                 })}
               </tbody>
             </table>
+            </div>
           </div>
         )
       })}
