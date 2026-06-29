@@ -4,6 +4,7 @@ import { useAppData } from '../lib/appData'
 import { apurarDistribuicao } from '../lib/distribuicao'
 import { apurarBancoResultado } from '../lib/bancoResultado'
 import { apurarVariacoes } from '../lib/variacoes'
+import { parsePlano } from '../lib/balancete'
 import { theme, money } from '../lib/theme'
 
 const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
@@ -64,6 +65,7 @@ export default function Relatorios() {
   const [temComp, setTemComp] = useState(null) // null = não checado, false = sem competência
   const [linhas, setLinhas] = useState([])      // balancete
   const [documentos, setDocumentos] = useState([]) // competencias.documentos
+  const [concPend, setConcPend] = useState([])     // contas de conciliação marcadas como pendência do cliente
   const [auditoria, setAuditoria] = useState([])    // auditoria desta competência
   const [dist, setDist] = useState(null)            // apuração de distribuição de lucros
   const [br, setBr] = useState(null)                // apuração banco × resultado
@@ -72,7 +74,7 @@ export default function Relatorios() {
 
   // Resolve a competência (READ-ONLY) e lê balancete + documentos + auditoria.
   useEffect(() => {
-    setLinhas([]); setDocumentos([]); setAuditoria([]); setDist(null); setBr(null); setComparativo(null); setTemComp(null)
+    setLinhas([]); setDocumentos([]); setConcPend([]); setAuditoria([]); setDist(null); setBr(null); setComparativo(null); setTemComp(null)
     if (!empresaId) return
     let vivo = true
     ;(async () => {
@@ -99,6 +101,15 @@ export default function Relatorios() {
         if (!vivo) return
         setLinhas(bal || [])
         setAuditoria(aud || [])
+
+        // Pendências de conciliação (contas de saldo marcadas como "pendência do cliente").
+        const [{ data: cc }, { data: planoCarga }] = await Promise.all([
+          supabase.from('conciliacao_conta').select('conta, justificativa').eq('competencia_id', comp.id).eq('pendencia_cliente', true),
+          supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'plano').order('created_at', { ascending: false }).limit(1).maybeSingle(),
+        ])
+        if (!vivo) return
+        const nomePorCod = Object.fromEntries(parsePlano(planoCarga?.dados).map(p => [p.reduzido, p.nome]))
+        setConcPend((cc || []).map(r => ({ conta: r.conta, nome: nomePorCod[r.conta] || '', justificativa: r.justificativa || '' })))
         const d = await apurarDistribuicao(empresaId, comp.id)
         if (vivo) setDist(d)
         const b = await apurarBancoResultado(empresaId, comp.id)
@@ -182,8 +193,9 @@ export default function Relatorios() {
 
   function exportarPendencias() {
     const dados = [
-      ['Documento', 'Categoria'],
-      ...pendencias.map(d => [d.name, d.cat]),
+      ['Pendência', 'Origem / Categoria'],
+      ...pendencias.map(d => [d.name, d.cat || 'Documento']),
+      ...concPend.map(c => [`Conciliação · ${c.conta}${c.nome ? ' · ' + c.nome : ''}${c.justificativa ? ' — ' + c.justificativa : ''}`, 'Conciliação (saldo sem extrato)']),
     ]
     baixarCSV(`pendencias_${compSlug}.csv`, dados)
   }
@@ -450,23 +462,29 @@ export default function Relatorios() {
 
       {/* Relatório de Pendências */}
       {!carregando && temComp && aba === 'pendencias' && (
-        <Secao titulo="Relatório de Pendências" onExportar={pendencias.length ? exportarPendencias : null}>
-          {pendencias.length === 0 ? (
-            <Aviso icon="ti-circle-check" texto="Nenhum documento pendente nesta competência." />
+        <Secao titulo="Relatório de Pendências" onExportar={(pendencias.length || concPend.length) ? exportarPendencias : null}>
+          {pendencias.length === 0 && concPend.length === 0 ? (
+            <Aviso icon="ti-circle-check" texto="Nenhuma pendência nesta competência." />
           ) : (
             <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead>
                   <tr style={{ background: theme.input }}>
-                    <th style={th}>Documento</th>
-                    <th style={th}>Categoria</th>
+                    <th style={th}>Pendência</th>
+                    <th style={th}>Origem / Categoria</th>
                   </tr>
                 </thead>
                 <tbody>
                   {pendencias.map((d, i) => (
-                    <tr key={i} style={{ borderTop: `1px solid ${theme.border}` }}>
+                    <tr key={`doc${i}`} style={{ borderTop: `1px solid ${theme.border}` }}>
                       <td style={td}>{d.name || '—'}</td>
-                      <td style={td}>{d.cat || '—'}</td>
+                      <td style={td}>{d.cat || 'Documento'}</td>
+                    </tr>
+                  ))}
+                  {concPend.map((c, i) => (
+                    <tr key={`conc${i}`} style={{ borderTop: `1px solid ${theme.border}` }}>
+                      <td style={td}>Conciliação · {c.conta}{c.nome ? ` · ${c.nome}` : ''}{c.justificativa ? ` — ${c.justificativa}` : ''}</td>
+                      <td style={td}>Conciliação (saldo sem extrato)</td>
                     </tr>
                   ))}
                 </tbody>
