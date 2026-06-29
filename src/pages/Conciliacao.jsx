@@ -82,6 +82,36 @@ function ehRedutora(nome) {
   return /\(\s*-\s*\)|deprecia|amortiza|exaust|pcld|perdas estimad|provis[aã]o para perda|redutora/.test(n) || /^\s*\(?\s*-/.test(String(nome || ''))
 }
 
+// Composição em aberto: remove o que se concilia (zera) e mostra só o que compõe o saldo.
+// 1) NFs cujo débito e crédito se anulam (saldo ~0) saem inteiras.
+// 2) entre o que sobra, débitos e créditos de mesmo valor se cancelam em pares.
+// usarNF=false (contas sem entidade) → pareia só por valor.
+function comporSaldo(lancs, usarNF = true) {
+  let restantes = []
+  if (usarNF) {
+    const porNF = {}, livres = []
+    for (const l of lancs) { const nf = l.leitura?.nf; if (nf) (porNF[nf] = porNF[nf] || []).push(l); else livres.push(l) }
+    restantes = [...livres]
+    for (const nf in porNF) {
+      const grp = porNF[nf]
+      const saldo = grp.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
+      if (Math.abs(saldo) >= 0.005) restantes.push(...grp) // NF em aberto → mantém
+    }
+  } else {
+    restantes = [...lancs]
+  }
+  // Pareia débito × crédito de mesmo valor (estornos, baixas) e cancela.
+  const cres = restantes.filter(l => Number(l.credito) > 0.005)
+  const usados = new Set()
+  for (const d of restantes) {
+    if (!(Number(d.debito) > 0.005)) continue
+    const vd = Number(d.debito)
+    const par = cres.find(c => !usados.has(c) && Math.abs(Number(c.credito) - vd) < 0.005)
+    if (par) { usados.add(par); usados.add(d) }
+  }
+  return restantes.filter(l => !usados.has(l))
+}
+
 // Natureza invertida do SALDO da conta (não redutora):
 // 'credor' = conta do Ativo (1) com saldo credor; 'devedor' = Passivo (2) com saldo devedor.
 function saldoInvertido(classifRaw, nome, saldoFinal) {
@@ -301,13 +331,20 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, getCompetenc
   const lista = clusters.map(cl => {
     const membros = cl.membros.slice().sort((a, b) => b.length - a.length)
     const lancs = cl.membros.flatMap(m => grupos[m])
-    return { nome: membros[0], variacoes: membros, lancs, total: lancs.reduce((s, l) => s + ov(l), 0), unido: membros.length > 1, unk: false }
+    return { nome: membros[0], variacoes: membros, lancs, emAberto: comporSaldo(lancs, true), total: lancs.reduce((s, l) => s + ov(l), 0), unido: membros.length > 1, unk: false }
   })
   if (grupos['(não identificado)']) {
     const lancs = grupos['(não identificado)']
-    lista.push({ nome: '(não identificado)', variacoes: [], lancs, total: lancs.reduce((s, l) => s + ov(l), 0), unido: false, unk: true })
+    lista.push({ nome: '(não identificado)', variacoes: [], lancs, emAberto: comporSaldo(lancs, true), total: lancs.reduce((s, l) => s + ov(l), 0), unido: false, unk: true })
   }
   lista.sort((a, b) => (a.unk ? 1 : 0) - (b.unk ? 1 : 0) || a.nome.localeCompare(b.nome, 'pt-BR'))
+  const algoEmAberto = lista.some(g => g.emAberto.length > 0)
+
+  // Para os relatórios: o que está em aberto (compõe o saldo) e o que zerou (conciliado).
+  const ehEntidade = ehPorEntidade(conta.nome) && tipoCta !== 'saldo'
+  const emAbertoTodos = ehEntidade ? lista.flatMap(g => g.emAberto) : comporSaldo(lanc, false)
+  const setAberto = new Set(emAbertoTodos)
+  const zerados = lanc.filter(l => !setAberto.has(l) && (Number(l.debito) || Number(l.credito)))
 
   const revs = lanc.filter(l => Math.abs(ov(l)) >= 0.005 && l.leitura.conf !== 'alta').length
 
@@ -388,6 +425,10 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, getCompetenc
       {/* Conferência (documento → verde; confirmar + justificar → amarelo) */}
       <CardConferencia conta={conta} reg={reg} compId={compId} usuario={usuario} composicao={tipoCta !== 'saldo'} onSalvo={onSalvarConf} />
 
+      {tipoCta !== 'saldo' && (
+        <RelatoriosComposicao conta={conta} emAberto={emAbertoTodos} zerados={zerados} contraDe={contraDe} />
+      )}
+
       {/* Impostos: baixa do mês anterior + memória de cálculo */}
       {tipoConta(conta.nome) === 'Imposto' && <ImpostoCards conta={conta} />}
 
@@ -432,8 +473,14 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, getCompetenc
         <p style={{ color: theme.sub, fontSize: 13 }}>Carregando…</p>
       ) : lista.length === 0 ? (
         <Aviso icon="ti-inbox" texto="Sem lançamentos nesta conta." />
+      ) : !algoEmAberto ? (
+        <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: '20px 22px', display: 'flex', alignItems: 'center', gap: 14 }}>
+          <i className="ti ti-circle-check" style={{ fontSize: 22, color: theme.green }} />
+          <p style={{ fontSize: 13.5, color: theme.text, margin: 0 }}>Nada em aberto — débitos e créditos se conciliaram (saldo zerado). Anexe o relatório de {natCredito ? 'contas a pagar' : 'contas a receber'} ou justifique no card acima.</p>
+        </div>
       ) : lista.map((g, gi) => {
-        const grp = g.lancs
+        const grp = g.emAberto
+        if (grp.length === 0) return null // cliente/fornecedor conciliado (zerou) — não compõe o saldo
         const gt = g.total
         const unk = g.unk
         const semTit = baixaSemTitulo(g) // baixas com NF que não casa com título
@@ -501,7 +548,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, getCompetenc
       })}
       </>
       ) : (
-        <ListaLancamentos lanc={lanc} carregando={carregando} contraDe={contraDe} planoMap={planoMap} onTratar={l => { setMsg(''); setAcao(l) }} />
+        <ListaLancamentos lanc={emAbertoTodos} carregando={carregando} contraDe={contraDe} planoMap={planoMap} onTratar={l => { setMsg(''); setAcao(l) }} />
       )}
 
       {acao && (
@@ -641,6 +688,58 @@ function CardConferencia({ conta, reg, compId, usuario, composicao, onSalvo }) {
         <button className="btn" disabled={salvando} onClick={salvar}><i className="ti ti-device-floppy" /> Salvar conferência</button>
         {msg && <p style={{ color: theme.green, fontSize: 12.5, margin: '10px 0 0' }}><i className="ti ti-circle-check" /> {msg}</p>}
         {erro && <p style={{ color: theme.red, fontSize: 12.5, margin: '10px 0 0' }}>{erro}</p>}
+      </div>
+    </div>
+  )
+}
+
+// Relatórios da composição (em aberto / conciliados) em Excel ou PDF.
+function RelatoriosComposicao({ conta, emAberto, zerados, contraDe }) {
+  const cols = ['Data', 'NF', 'Histórico', 'Contrapartida', 'Débito', 'Crédito']
+  const linha = l => [l.data || '', l.leitura?.nf || '', l.historico || '', contraDe(l).join(', '), Number(l.debito) || 0, Number(l.credito) || 0]
+  const titulo = sub => `Conciliação · ${conta.conta} · ${conta.nome} — ${sub}`
+
+  async function excel(linhas, sub) {
+    const XLSX = await import('xlsx')
+    const aoa = [cols, ...linhas.map(linha)]
+    const ws = XLSX.utils.aoa_to_sheet(aoa)
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, sub.slice(0, 28))
+    XLSX.writeFile(wb, `conciliacao_${conta.conta}_${sub.replace(/\s+/g, '-').toLowerCase()}.xlsx`)
+  }
+
+  function pdf(linhas, sub) {
+    const esc = s => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))
+    const totDeb = linhas.reduce((s, l) => s + (Number(l.debito) || 0), 0)
+    const totCred = linhas.reduce((s, l) => s + (Number(l.credito) || 0), 0)
+    const trs = linhas.map(l => `<tr><td>${esc(l.data)}</td><td>${esc(l.leitura?.nf || '')}</td><td>${esc(l.historico)}</td><td>${esc(contraDe(l).join(', '))}</td><td class="r">${Number(l.debito) ? money(l.debito) : ''}</td><td class="r">${Number(l.credito) ? money(l.credito) : ''}</td></tr>`).join('')
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(titulo(sub))}</title>
+      <style>body{font-family:Arial,Helvetica,sans-serif;color:#111;padding:24px}h2{font-size:16px;margin:0 0 4px}p{color:#555;font-size:12px;margin:0 0 16px}
+      table{width:100%;border-collapse:collapse;font-size:11px}th,td{border:1px solid #ccc;padding:6px 8px;text-align:left}th{background:#f0f0f0}.r{text-align:right;white-space:nowrap}tfoot td{font-weight:bold;background:#f7f7f7}</style></head>
+      <body><h2>${esc(titulo(sub))}</h2><p>${linhas.length} lançamento(s)</p>
+      <table><thead><tr>${cols.map(c => `<th class="${c === 'Débito' || c === 'Crédito' ? 'r' : ''}">${c}</th>`).join('')}</tr></thead>
+      <tbody>${trs || '<tr><td colspan="6">Sem lançamentos.</td></tr>'}</tbody>
+      <tfoot><tr><td colspan="4">Totais</td><td class="r">${money(totDeb)}</td><td class="r">${money(totCred)}</td></tr></tfoot></table>
+      <script>window.onload=function(){window.print()}</script></body></html>`
+    const w = window.open('', '_blank')
+    if (!w) { alert('Permita pop-ups para gerar o PDF.'); return }
+    w.document.write(html); w.document.close()
+  }
+
+  const Grupo = ({ rotulo, linhas, icon, cor }) => (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+      <span style={{ fontSize: 12.5, color: theme.text, minWidth: 150 }}><i className={`ti ${icon}`} style={{ color: cor, marginRight: 6 }} />{rotulo} <span style={{ color: theme.sub }}>({linhas.length})</span></span>
+      <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} disabled={!linhas.length} onClick={() => excel(linhas, rotulo)}><i className="ti ti-file-spreadsheet" /> Excel</button>
+      <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} disabled={!linhas.length} onClick={() => pdf(linhas, rotulo)}><i className="ti ti-file-type-pdf" /> PDF</button>
+    </div>
+  )
+
+  return (
+    <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: 16, marginBottom: 16 }}>
+      <p style={{ fontSize: 14, fontWeight: 600, margin: '0 0 12px' }}><i className="ti ti-report" style={{ color: theme.accent, marginRight: 6 }} />Relatórios da composição</p>
+      <div style={{ display: 'grid', gap: 10 }}>
+        <Grupo rotulo="Composição atual (em aberto)" linhas={emAberto} icon="ti-folder-open" cor={theme.accent} />
+        <Grupo rotulo="Conciliados (o que zerou)" linhas={zerados} icon="ti-circle-check" cor={theme.green} />
       </div>
     </div>
   )
