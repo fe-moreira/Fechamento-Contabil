@@ -7,11 +7,30 @@ import { montarBalancete } from '../lib/balancete'
 
 // ---- Leitura do histórico: extrai NF e entidade (cliente/fornecedor) com confiança ----
 const RUIDO = /\b(VENDA|VENDAS|COMPRA|COMPRAS|PAGTO|PAGAMENTO|RECEBIMENTO|RECEBTO|REF|REFERENTE|NOTA|FISCAL|DUPLICATA|DUPL|BOLETO|TITULO|TÍTULO|VLR|VALOR|PARCELA|PARC|CONF|S\/|A|DE|DA|DO|DOS|DAS|E|NO|NA|EM)\b/ig
+// Remove o sufixo societário (S.A, LTDA, EIRELI, ME, EPP) e o que vier depois.
+const tiraSufixo = e => e.replace(/\s+(S[./]?\s?A\.?|LTDA\.?|EIRELI|EPP|ME)\b.*$/i, '').replace(/\s+/g, ' ').trim()
+
 function lerHistorico(h) {
   const s = String(h || '').trim()
-  const nfm = s.match(/\bN[ºo°]?\.?\s*F?-?[Ee]?\.?\s*[:nº]*\s*(\d{2,9})/i) || s.match(/\bNOTA\s*(?:FISCAL)?\s*N?[ºo°]?\.?\s*(\d{2,9})/i)
+  const nfm = s.match(/\bNF\.?\s*(?:N[ºo°.]*\s*)?(\d{2,9})/i) || s.match(/\bNOTA\s*(?:FISCAL)?\s*N?[ºo°.]*\s*(\d{2,9})/i) || s.match(/\bN[ºo°]\.?\s*(\d{2,9})/i)
   const nf = nfm ? nfm[1] : (s.match(/\b(\d{3,9})\b/)?.[1] || '')
-  const entidade = s.replace(nfm ? nfm[0] : '', ' ').replace(/\b\d+\b/g, ' ').replace(RUIDO, ' ').replace(/[.\-/]+/g, ' ').replace(/\s+/g, ' ').trim()
+
+  // O nome do cliente/fornecedor vem antes do bloco fiscal (CF./NF/NOTA/RPS).
+  const corpo = s.split(/\s(?:CF\b|NF\b|NOTA\s+FISCAL|RPS\b)/i)[0].trim()
+  let entidade = ''
+  const mRec = corpo.match(/\b(?:RECEBIMENTO|RECEBTO|PAGAMENTO|PAGTO)\s+(?:A\s+|DE\s+|AO\s+)?(.+)$/i)
+  if (mRec) {
+    // "VALOR REF. RECEBIMENTO <NOME> NF ..."
+    entidade = tiraSufixo(mRec[1].trim())
+  } else if (/\s[-–]\s/.test(corpo)) {
+    // "... - ACUM. N - <NOME> CF. NF. ..." → último segmento entre travessões
+    const segs = corpo.split(/\s[-–]\s/).map(x => x.trim()).filter(Boolean)
+    entidade = tiraSufixo(segs[segs.length - 1])
+  }
+  // Fallback: heurística antiga de remoção de ruído.
+  if (!entidade || entidade.length < 3) {
+    entidade = s.replace(nfm ? nfm[0] : '', ' ').replace(/\b\d+\b/g, ' ').replace(RUIDO, ' ').replace(/[.\-/]+/g, ' ').replace(/\s+/g, ' ').trim()
+  }
   let conf = 'baixa'
   if (entidade.length >= 4 && nf) conf = 'alta'
   else if (entidade.length >= 4 || nf) conf = 'media'
