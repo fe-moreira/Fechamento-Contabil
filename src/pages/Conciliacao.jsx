@@ -61,9 +61,9 @@ export default function Conciliacao() {
         setCompId(comp.id)
         const { linhas } = await montarBalancete(empresaId, comp.id)
         // Conciliação trata só Ativo (1) e Passivo (2). Receita/Custos/Despesa vão no Comparativo.
-        const ap = linhas.filter(l => { const d = String(l.classif).trim()[0]; return d === '1' || d === '2' })
+        const ap = linhas.filter(l => { const d = String(l.classifRaw || l.classif).trim()[0]; return d === '1' || d === '2' })
         setContas(ap.map(l => ({
-          ...l, conta: l.classif,
+          ...l, conta: l.reduzido,
           tipo: tipoPorClassif(l.classif) || tipoConta(l.nome || l.classif),
         })))
         setCarregando(false)
