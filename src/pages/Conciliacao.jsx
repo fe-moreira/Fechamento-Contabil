@@ -61,6 +61,20 @@ function lerHistorico(h) {
   return { nf, entidade: entidade || '', ident, conf }
 }
 
+// Aplica um ajuste de leitura (correção manual de NF/nome/histórico) sobre o lançamento.
+function aplicarAjuste(l, aj) {
+  let historico = l.historico
+  let leitura = lerHistorico(historico)
+  if (aj) {
+    if (aj.historico) { historico = aj.historico; leitura = lerHistorico(historico) }
+    if (aj.nf) leitura = { ...leitura, nf: String(aj.nf).trim() }
+    if (aj.entidade) leitura = { ...leitura, entidade: String(aj.entidade).trim(), ident: true }
+    const ent = (leitura.entidade || '')
+    leitura = { ...leitura, ajustado: true, conf: (leitura.ident && ent.length >= 4 && leitura.nf) ? 'alta' : (leitura.ident && ent.length >= 4) ? 'media' : leitura.conf }
+  }
+  return { ...l, historico, leitura }
+}
+
 function tipoConta(nome) {
   const n = (nome || '').toLowerCase()
   if (/(icms|pis|cofins|iss|imposto|tribut|darf|das\b)/.test(n)) return 'Imposto'
@@ -270,11 +284,17 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, getCompetenc
   const [partidas, setPartidas] = useState({}) // chave (data|histórico) -> lançamentos da partida (p/ contrapartida)
   const [msg, setMsg] = useState('')
 
-  useEffect(() => {
+  async function carregarLanc() {
     setCarregando(true)
-    supabase.from('razao').select('data, contrapartida, historico, debito, credito').eq('competencia_id', compId).eq('conta', conta.conta).order('data')
-      .then(({ data }) => { setLanc((data || []).map(l => ({ ...l, leitura: lerHistorico(l.historico) }))); setCarregando(false) })
-  }, [compId, conta.conta])
+    const [{ data: rz }, { data: aj }] = await Promise.all([
+      supabase.from('razao').select('id, data, contrapartida, historico, debito, credito').eq('competencia_id', compId).eq('conta', conta.conta).order('data'),
+      supabase.from('ajuste_leitura').select('razao_id, nf, entidade, historico').eq('competencia_id', compId),
+    ])
+    const ajById = {}; for (const a of (aj || [])) ajById[a.razao_id] = a
+    setLanc((rz || []).map(l => aplicarAjuste(l, ajById[l.id])))
+    setCarregando(false)
+  }
+  useEffect(() => { carregarLanc() }, [compId, conta.conta]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Razão inteiro da competência, indexado por partida (mesma data + histórico),
   // para descobrir a contrapartida (a(s) conta(s) do lado oposto de cada lançamento).
@@ -389,8 +409,19 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, getCompetenc
       })
       virouLancamento = true
     }
-    setMsg(virouLancamento ? 'Correção registrada — lançamento enviado para o painel Contabilizar.' : `${tipo} registrada na auditoria.`)
+    // Ajuste de leitura (nome/NF/histórico) — ajuda o sistema a cruzar; reaplicado sempre.
+    let ajustouLeitura = false
+    const aj = payload.ajuste
+    if (aj && acao?.id && (aj.nf || aj.entidade || aj.historico)) {
+      await supabase.from('ajuste_leitura').upsert({
+        competencia_id: id, razao_id: acao.id,
+        nf: aj.nf || null, entidade: aj.entidade || null, historico: aj.historico || null, usuario,
+      }, { onConflict: 'razao_id' })
+      ajustouLeitura = true
+    }
+    setMsg(ajustouLeitura ? 'Leitura ajustada — o sistema vai recruzar.' : virouLancamento ? 'Correção registrada — lançamento enviado para o painel Contabilizar.' : `${tipo} registrada na auditoria.`)
     setAcao(null)
+    if (ajustouLeitura) carregarLanc()
   }
 
   return (
@@ -766,12 +797,22 @@ function ModalLancamento({ lanc, conta, lab, plano, onClose, onRegistrar }) {
     conta_credito: ehDeb ? conta.conta : '',
     historico: `Ajuste conciliação · NF ${lanc.leitura.nf || '—'} · ${conta.nome}`,
   })
+  // Ajuste de leitura (ajuda o sistema a cruzar): nome do cliente/fornecedor, NF e histórico.
+  const [ajuste, setAjuste] = useState({ entidade: lanc.leitura.entidade || '', nf: lanc.leitura.nf || '', historico: lanc.historico || '' })
   const set = k => e => setForm(f => ({ ...f, [k]: e.target.value }))
-  const podeRegistrar = tipo === 'Justificativa' ? txt.trim() : (form.conta_debito && form.conta_credito && Number(form.valor) > 0)
+  const setAj = k => e => setAjuste(a => ({ ...a, [k]: e.target.value }))
+
+  const ajusteMudou = ajuste.entidade.trim() !== (lanc.leitura.entidade || '') || ajuste.nf.trim() !== (lanc.leitura.nf || '') || ajuste.historico.trim() !== (lanc.historico || '')
+  const partidaOk = form.conta_debito && form.conta_credito && Number(form.valor) > 0
+  const podeRegistrar = tipo === 'Justificativa' ? txt.trim() : (ajusteMudou || partidaOk || txt.trim())
 
   function registrar() {
     if (tipo === 'Justificativa') return onRegistrar('Justificativa', { detalhe: txt.trim() })
-    onRegistrar('Correção', { detalhe: txt.trim() || form.historico, lancamento: form })
+    onRegistrar('Correção', {
+      detalhe: txt.trim() || (ajusteMudou ? 'Ajuste de leitura' : form.historico),
+      ajuste: ajusteMudou ? { entidade: ajuste.entidade.trim(), nf: ajuste.nf.trim(), historico: ajuste.historico.trim() } : null,
+      lancamento: partidaOk ? form : null,
+    })
   }
 
   return (
@@ -798,15 +839,26 @@ function ModalLancamento({ lanc, conta, lab, plano, onClose, onRegistrar }) {
           </>
         ) : (
           <>
-            <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 12 }}>Informe a <b style={{ color: theme.text }}>partida de acerto</b>. Ela vai para o painel <b style={{ color: theme.text }}>Contabilizar</b> e entra no arquivo do Domínio. <span style={{ color: theme.accent }}>Sugestão pré-preenchida abaixo</span> — ajuste as contas.</p>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-              <div><label>Data</label><input className="input" type="date" value={form.data} onChange={set('data')} /></div>
-              <div><label>Valor</label><input className="input" type="number" step="0.01" value={form.valor} onChange={set('valor')} /></div>
-              <div><label>Conta débito</label><ContaSelect value={form.conta_debito} onChange={set('conta_debito')} plano={plano} /></div>
-              <div><label>Conta crédito</label><ContaSelect value={form.conta_credito} onChange={set('conta_credito')} plano={plano} /></div>
-              <div style={{ gridColumn: '1 / -1' }}><label>Histórico</label><textarea className="input" rows={2} value={form.historico} onChange={set('historico')} /></div>
-              <div style={{ gridColumn: '1 / -1' }}><label>Observação na auditoria (opcional)</label><input className="input" value={txt} onChange={e => setTxt(e.target.value)} placeholder="O que estava errado / o que foi corrigido…" /></div>
+            <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 10 }}><i className="ti ti-wand" style={{ color: theme.accent, marginRight: 6 }} /><b style={{ color: theme.text }}>Ajustar leitura</b> — arrume o que ajuda o sistema a cruzar (nome, NF, histórico). Fica salvo e é reaplicado.</p>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 8 }}>
+              <div style={{ gridColumn: '1 / -1' }}><label>Nome do {lab}</label><input className="input" value={ajuste.entidade} onChange={setAj('entidade')} placeholder={`Nome correto do ${lab}`} /></div>
+              <div><label>Número da NF</label><input className="input" value={ajuste.nf} onChange={setAj('nf')} placeholder="Nº da nota" /></div>
+              <div />
+              <div style={{ gridColumn: '1 / -1' }}><label>Histórico</label><textarea className="input" rows={2} value={ajuste.historico} onChange={setAj('historico')} /></div>
             </div>
+
+            <details style={{ marginTop: 10 }}>
+              <summary style={{ cursor: 'pointer', fontSize: 12.5, color: theme.accent }}>Lançar partida de acerto (opcional) — vai para o Contabilizar</summary>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 10 }}>
+                <div><label>Data</label><input className="input" type="date" value={form.data} onChange={set('data')} /></div>
+                <div><label>Valor</label><input className="input" type="number" step="0.01" value={form.valor} onChange={set('valor')} /></div>
+                <div><label>Conta débito</label><ContaSelect value={form.conta_debito} onChange={set('conta_debito')} plano={plano} /></div>
+                <div><label>Conta crédito</label><ContaSelect value={form.conta_credito} onChange={set('conta_credito')} plano={plano} /></div>
+                <div style={{ gridColumn: '1 / -1' }}><label>Histórico da partida</label><textarea className="input" rows={2} value={form.historico} onChange={set('historico')} /></div>
+              </div>
+            </details>
+
+            <div style={{ marginTop: 12 }}><label>Observação na auditoria (opcional)</label><input className="input" value={txt} onChange={e => setTxt(e.target.value)} placeholder="O que estava errado / o que foi corrigido…" /></div>
           </>
         )}
 
