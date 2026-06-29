@@ -29,47 +29,66 @@ export function parsePlano(dados) {
   return out
 }
 
+// Forma canônica do código: separa por não-dígitos e tira zeros à esquerda de cada
+// segmento. Assim "1.1.001", "1-1-1" e "1.1.1" casam entre si ao consultar o plano.
+const canon = c => String(c ?? '').split(/[^0-9]+/).filter(Boolean).map(s => String(parseInt(s, 10))).join('.')
+
 // Balancete hierárquico (sintéticas + analíticas) de uma competência.
-// Estrutura vem do plano; os saldos somam o razão (balancete das folhas) por prefixo da classificação.
+// Parte dos MOVIMENTOS (razão/balancete): cada conta movimentada é uma analítica
+// (folha) e as sintéticas são os totais agregados por prefixo da classificação.
+// O plano de contas só enriquece nome e código reduzido (não decide o que aparece),
+// de modo que toda conta com movimento entra — analíticas e sintéticas.
 export async function montarBalancete(empresaId, compId) {
   const { data: planoCarga } = await supabase.from('cargas_cadastro').select('dados')
     .eq('cliente_id', empresaId).eq('tipo', 'plano').order('created_at', { ascending: false }).limit(1).maybeSingle()
   const plano = parsePlano(planoCarga?.dados)
+  // Índice do plano por classificação (exata e canônica) para preencher nome/reduzido/grau.
+  const planoIdx = {}
+  for (const p of plano) {
+    if (!planoIdx[p.classif]) planoIdx[p.classif] = p
+    const cc = canon(p.classif)
+    if (cc && !planoIdx['#' + cc]) planoIdx['#' + cc] = p
+  }
+  const lookup = classif => planoIdx[classif] || planoIdx['#' + canon(classif)] || null
+
   const { data: bal } = await supabase.from('balancete')
     .select('conta, nome, debito, credito, saldo_inicial').eq('competencia_id', compId)
   const movs = bal || []
+
+  const map = {}
+  const ensure = classif => map[classif] || (map[classif] = {
+    reduzido: '', classif, nome: '', grau: classif.split('.').length,
+    folha: false, debito: 0, credito: 0, saldo_inicial: 0,
+  })
+  for (const mv of movs) {
+    const c = String(mv.conta || '').trim(); if (!c) continue
+    const deb = Number(mv.debito) || 0, cre = Number(mv.credito) || 0, ini = Number(mv.saldo_inicial) || 0
+    const folha = ensure(c)
+    folha.folha = true
+    folha.debito += deb; folha.credito += cre; folha.saldo_inicial += ini
+    if (mv.nome && !folha.nome) folha.nome = mv.nome
+    const segs = c.split('.')
+    for (let i = 1; i < segs.length; i++) {
+      const e = ensure(segs.slice(0, i).join('.'))
+      e.debito += deb; e.credito += cre; e.saldo_inicial += ini
+    }
+  }
+  // Enriquecer com o plano (nome e código reduzido), sem alterar quem é folha/sintética.
+  for (const e of Object.values(map)) {
+    const p = lookup(e.classif)
+    if (p) {
+      if (p.reduzido) e.reduzido = p.reduzido
+      if (p.nome) e.nome = p.nome
+      if (p.grau) e.grau = p.grau
+    }
+  }
   const comMov = l => Math.abs(l.debito) > 0.005 || Math.abs(l.credito) > 0.005 || Math.abs(l.saldo_inicial) > 0.005
   const ordena = (a, b) => String(a.classif).localeCompare(String(b.classif), 'pt-BR', { numeric: true })
-
-  if (plano.length) {
-    const linhas = plano.map(p => {
-      let deb = 0, cre = 0, ini = 0
-      for (const m of movs) {
-        const c = String(m.conta || '')
-        if (c === p.classif || c.startsWith(p.classif + '.')) {
-          deb += Number(m.debito) || 0; cre += Number(m.credito) || 0; ini += Number(m.saldo_inicial) || 0
-        }
-      }
-      return { reduzido: p.reduzido, classif: p.classif, nome: p.nome, grau: p.grau, sintetica: p.sintetica, saldo_inicial: ini, debito: deb, credito: cre, saldo_final: ini + deb - cre }
-    }).filter(comMov).sort(ordena)
-    return { temPlano: true, linhas }
-  }
-
-  // Fallback sem plano: deriva as sintéticas a partir das folhas (sem reduzido/nome das sintéticas).
-  const map = {}
-  function acc(classif, folha, nome, deb, cre, ini) {
-    const e = map[classif] || (map[classif] = { reduzido: '', classif, nome: '', grau: classif.split('.').length, sintetica: !folha, debito: 0, credito: 0, saldo_inicial: 0 })
-    e.debito += deb; e.credito += cre; e.saldo_inicial += ini
-    if (folha && nome && !e.nome) e.nome = nome
-    if (folha) e.sintetica = false
-  }
-  for (const m of movs) {
-    const c = String(m.conta || ''); if (!c) continue
-    const deb = Number(m.debito) || 0, cre = Number(m.credito) || 0, ini = Number(m.saldo_inicial) || 0
-    acc(c, true, m.nome, deb, cre, ini)
-    const segs = c.split('.')
-    for (let i = 1; i < segs.length; i++) acc(segs.slice(0, i).join('.'), false, '', deb, cre, ini)
-  }
-  const linhas = Object.values(map).map(e => ({ ...e, saldo_final: e.saldo_inicial + e.debito - e.credito })).filter(comMov).sort(ordena)
-  return { temPlano: false, linhas }
+  const linhas = Object.values(map).map(e => ({
+    reduzido: e.reduzido, classif: e.classif, nome: e.nome, grau: e.grau,
+    sintetica: !e.folha,
+    saldo_inicial: e.saldo_inicial, debito: e.debito, credito: e.credito,
+    saldo_final: e.saldo_inicial + e.debito - e.credito,
+  })).filter(comMov).sort(ordena)
+  return { temPlano: plano.length > 0, linhas }
 }
