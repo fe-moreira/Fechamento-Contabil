@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
+import DropZone from '../components/DropZone'
 import { theme } from '../lib/theme'
 import { money } from '../lib/theme'
 
@@ -88,8 +89,7 @@ export default function ImportarRazao() {
     return () => { vivo = false }
   }, [empresaId, competencia])
 
-  function aoEscolherArquivo(e) {
-    const file = e.target.files?.[0]
+  function aoEscolherArquivo(file) {
     if (!file) return
     setErro(''); setResultado(''); setArquivo(file.name)
     const reader = new FileReader()
@@ -195,9 +195,8 @@ export default function ImportarRazao() {
 
       {/* Upload */}
       <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: 22, marginBottom: 18 }}>
-        <label style={{ fontSize: 13, color: theme.text, marginBottom: 10 }}>Arquivo do razão (Excel do Domínio — .xlsx, .xls ou .csv)</label>
-        <input type="file" accept=".xlsx,.xls,.csv" onChange={aoEscolherArquivo}
-          style={{ display: 'block', marginTop: 8, fontSize: 13, color: theme.sub }} />
+        <label style={{ fontSize: 13, color: theme.text, marginBottom: 10, display: 'block' }}>Arquivo do razão (Excel do Domínio — .xlsx, .xls ou .csv)</label>
+        <DropZone onArquivo={aoEscolherArquivo} hint="Arraste o razão aqui ou clique · .xlsx, .xls ou .csv" />
         {arquivo && <p style={{ fontSize: 12.5, color: theme.sub, marginTop: 10 }}><i className="ti ti-file-spreadsheet" /> {arquivo} — {linhas.length} linha(s) detectada(s)</p>}
       </div>
 

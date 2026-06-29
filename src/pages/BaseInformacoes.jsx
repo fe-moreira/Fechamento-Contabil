@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
+import DropZone from '../components/DropZone'
 import { theme, money } from '../lib/theme'
 
 const hoje = () => new Date().toLocaleDateString('pt-BR')
@@ -243,11 +244,10 @@ function ModalCarga({ carga, historico, empresaId, usuario, onClose, onImportado
   const [salvando, setSalvando] = useState(false)
   const vigOk = /^\d{2}\/\d{4}$/.test(vigencia)
 
-  // Escolher o arquivo já importa na hora (a vigência precisa estar preenchida antes).
-  async function aoEscolher(e) {
-    const file = e.target.files?.[0]
+  // Escolher/arrastar o arquivo já importa na hora (a vigência precisa estar preenchida antes).
+  async function importarArquivo(file) {
     if (!file) return
-    if (!vigOk) { setErro('Informe a vigência (MM/AAAA) antes de escolher o arquivo.'); e.target.value = ''; return }
+    if (!vigOk) { setErro('Informe a vigência (MM/AAAA) antes de escolher o arquivo.'); return }
     setErro(''); setSalvando(true)
     try {
       const XLSX = await import('xlsx')
@@ -264,20 +264,15 @@ function ModalCarga({ carga, historico, empresaId, usuario, onClose, onImportado
 
   return (
     <Modal titulo={carga.title} sub={carga.sub} onClose={onClose} largura={620}>
-      <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 14 }}>Informe a vigência e escolha o arquivo — a carga é importada na hora. Cada carga cria uma <b style={{ color: theme.text }}>vigência</b> e preserva o histórico (nada é sobrescrito).</p>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 8 }}>
-        <div>
-          <label>1. Vigência (MM/AAAA)</label>
-          <input className="input" value={vigencia} onChange={e => setVigencia(e.target.value)} placeholder="01/2026" autoFocus />
-        </div>
-        <div>
-          <label>2. Arquivo (.xlsx, .xls, .csv)</label>
-          <input type="file" accept=".xlsx,.xls,.csv" onChange={aoEscolher} disabled={!vigOk || salvando}
-            style={{ fontSize: 13, color: theme.sub, marginTop: 6, opacity: vigOk ? 1 : .5 }} />
-          {!vigOk && <p style={{ color: theme.sub, fontSize: 11.5, marginTop: 6 }}>Informe a vigência para liberar o arquivo.</p>}
-          {salvando && <p style={{ color: theme.accent, fontSize: 12, marginTop: 6 }}><i className="ti ti-loader" /> Importando…</p>}
-        </div>
+      <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 14 }}>Informe a vigência e solte (ou escolha) o arquivo — a carga é importada na hora. Cada carga cria uma <b style={{ color: theme.text }}>vigência</b> e preserva o histórico (nada é sobrescrito).</p>
+      <div style={{ marginBottom: 12 }}>
+        <label>1. Vigência (MM/AAAA)</label>
+        <input className="input" style={{ maxWidth: 220 }} value={vigencia} onChange={e => setVigencia(e.target.value)} placeholder="01/2026" autoFocus />
       </div>
+      <label>2. Arquivo</label>
+      <DropZone onArquivo={importarArquivo} disabled={!vigOk || salvando}
+        hint={vigOk ? 'Arraste ou clique · .xlsx, .xls ou .csv' : 'Informe a vigência primeiro'} />
+      {salvando && <p style={{ color: theme.accent, fontSize: 12, marginTop: 8 }}><i className="ti ti-loader" /> Importando…</p>}
       {erro && <p style={{ color: theme.red, fontSize: 13, margin: '10px 0 0' }}>{erro}</p>}
       <p style={{ color: theme.sub, fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: .6, margin: '22px 0 10px' }}>Histórico de vigências</p>
       {historico.length === 0
@@ -374,8 +369,7 @@ function ModalCargaInicial({ vigencia, onClose, onConcluir }) {
   const [erro, setErro] = useState('')
   const [salvando, setSalvando] = useState(false)
 
-  async function aoEscolher(e) {
-    const file = e.target.files?.[0]
+  async function aoEscolher(file) {
     if (!file) return
     setErro('')
     try {
@@ -392,7 +386,7 @@ function ModalCargaInicial({ vigencia, onClose, onConcluir }) {
       <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 14, lineHeight: 1.55 }}>
         Suba a planilha com o saldo de abertura por conta (e, nas contas de composição, os itens iniciais por cliente/NF). Isso vira o saldo inicial do primeiro fechamento.
       </p>
-      <input type="file" accept=".xlsx,.xls,.csv" onChange={aoEscolher} style={{ fontSize: 13, color: theme.sub }} />
+      <DropZone onArquivo={aoEscolher} hint="Arraste o arquivo aqui ou clique · .xlsx, .xls ou .csv" />
       {preview && <p style={{ color: theme.sub, fontSize: 12.5, marginTop: 10 }}><i className="ti ti-file-spreadsheet" /> {preview.nome} — {preview.dados.length} linha(s)</p>}
       {erro && <p style={{ color: theme.red, fontSize: 13, marginTop: 10 }}>{erro}</p>}
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
