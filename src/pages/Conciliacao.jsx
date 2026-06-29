@@ -167,6 +167,14 @@ function Detalhe({ conta, compId, usuario, getCompetenciaId, onVoltar }) {
   ordem.sort((a, b) => (a === '(não identificado)' ? 1 : 0) - (b === '(não identificado)' ? 1 : 0) || a.localeCompare(b, 'pt-BR'))
   const revs = lanc.filter(l => Math.abs(ov(l)) >= 0.005 && l.leitura.conf !== 'alta').length
 
+  // Anomalia de natureza: conta de cliente (Ativo) deve ficar devedora; fornecedor (Passivo) credora.
+  // Um grupo com total na natureza invertida (ov < 0) é estranho e precisa ser verificado.
+  const natAnom = natCredito ? 'devedor' : 'credor'   // saldo que é ANÔMALO nesta conta
+  const natOk = natCredito ? 'credora' : 'devedora'   // natureza esperada da conta
+  const totalGrupo = k => grupos[k].reduce((s, l) => s + ov(l), 0)
+  const anomalos = ordem.filter(k => totalGrupo(k) < -0.005)
+  const contaInvertida = Number(conta.saldo_final) * (natCredito ? -1 : 1) < -0.005
+
   async function registrar(tipo, detalhe, item) {
     const id = await getCompetenciaId()
     await supabase.from('auditoria').insert({ competencia_id: id, modulo: 'Conciliação', item: item || `${conta.conta} · ${conta.nome}`, tipo, detalhe, usuario })
@@ -206,6 +214,16 @@ function Detalhe({ conta, compId, usuario, getCompetenciaId, onVoltar }) {
         O que compõe o saldo — por {lab}
       </p>
 
+      {(contaInvertida || anomalos.length > 0) && (
+        <div style={{ background: 'rgba(229,72,77,0.10)', border: `1px solid ${theme.red}`, borderRadius: 12, display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px', marginBottom: 12 }}>
+          <i className="ti ti-alert-octagon" style={{ color: theme.red, fontSize: 18, marginTop: 1 }} />
+          <span style={{ color: theme.text, fontSize: 13 }}>
+            {contaInvertida && <><b>Saldo da conta {natAnom}</b> — conta de {lab} deveria ficar {natOk}. </>}
+            {anomalos.length > 0 && <>{anomalos.length} {lab}(s) com saldo <b>{natAnom}</b> (natureza invertida) — verifique{anomalos.length <= 4 ? `: ${anomalos.join(', ')}` : ''}.</>}
+          </span>
+        </div>
+      )}
+
       {revs > 0 && (
         <div style={{ background: 'rgba(245,166,35,0.10)', border: `1px solid ${theme.yellow}`, borderRadius: 12, display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', marginBottom: 12 }}>
           <i className="ti ti-alert-triangle" style={{ color: theme.yellow, fontSize: 18 }} />
@@ -222,11 +240,16 @@ function Detalhe({ conta, compId, usuario, getCompetenciaId, onVoltar }) {
         const gt = grp.reduce((s, l) => s + ov(l), 0)
         const unk = k === '(não identificado)'
         const hasRev = grp.some(l => l.leitura.conf !== 'alta')
+        const anom = gt < -0.005 // natureza invertida (cliente credor / fornecedor devedor)
+        const borda = anom ? theme.red : hasRev ? theme.yellow : theme.cb
         return (
-          <div key={gi} style={{ background: theme.card, border: `1px solid ${hasRev ? theme.yellow : theme.cb}`, borderRadius: 12, overflow: 'hidden', marginBottom: 12 }}>
+          <div key={gi} style={{ background: theme.card, border: `1px solid ${borda}`, borderRadius: 12, overflow: 'hidden', marginBottom: 12 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '13px 16px', background: theme.input }}>
-              <span style={{ color: unk ? theme.yellow : theme.text, fontSize: 14, fontWeight: 600, fontStyle: unk ? 'italic' : 'normal' }}>{k}</span>
-              <span style={{ color: theme.text, fontSize: 14, fontWeight: 600 }}>{money(gt)}</span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ color: unk ? theme.yellow : theme.text, fontSize: 14, fontWeight: 600, fontStyle: unk ? 'italic' : 'normal' }}>{k}</span>
+                {anom && <span style={{ background: 'rgba(229,72,77,0.18)', color: theme.red, fontSize: 10.5, fontWeight: 700, padding: '2px 8px', borderRadius: 20, textTransform: 'uppercase', letterSpacing: .3 }}><i className="ti ti-alert-octagon" /> saldo {natAnom}</span>}
+              </span>
+              <span style={{ color: anom ? theme.red : theme.text, fontSize: 14, fontWeight: 600 }}>{money(gt)}</span>
             </div>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
