@@ -239,46 +239,46 @@ function Acoes({ onEdit, onDel }) {
 /* ---------- Modais ---------- */
 function ModalCarga({ carga, historico, empresaId, usuario, onClose, onImportado }) {
   const [vigencia, setVigencia] = useState('')
-  const [preview, setPreview] = useState(null)
   const [erro, setErro] = useState('')
   const [salvando, setSalvando] = useState(false)
+  const vigOk = /^\d{2}\/\d{4}$/.test(vigencia)
 
+  // Escolher o arquivo já importa na hora (a vigência precisa estar preenchida antes).
   async function aoEscolher(e) {
     const file = e.target.files?.[0]
     if (!file) return
-    setErro('')
+    if (!vigOk) { setErro('Informe a vigência (MM/AAAA) antes de escolher o arquivo.'); e.target.value = ''; return }
+    setErro(''); setSalvando(true)
     try {
       const XLSX = await import('xlsx')
       const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' })
-      const ws = wb.Sheets[wb.SheetNames[0]]
-      const dados = XLSX.utils.sheet_to_json(ws, { defval: '' })
-      if (!dados.length) { setErro('Planilha vazia.'); return }
-      setPreview({ nome: file.name, dados })
-    } catch (err) { setErro('Não consegui ler: ' + err.message) }
-  }
-
-  async function importar() {
-    if (!/^\d{2}\/\d{4}$/.test(vigencia)) { setErro('Informe a vigência no formato MM/AAAA.'); return }
-    if (!preview) { setErro('Escolha um arquivo.'); return }
-    setSalvando(true); setErro('')
-    const { error } = await supabase.from('cargas_cadastro').insert({
-      cliente_id: empresaId, tipo: carga.tipo, vigencia, dados: preview.dados, usuario, obs: preview.nome,
-    })
-    setSalvando(false)
-    if (error) { setErro(error.message); return }
-    onImportado(); onClose()
+      const dados = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' })
+      if (!dados.length) { setErro('Planilha vazia.'); setSalvando(false); return }
+      const { error } = await supabase.from('cargas_cadastro').insert({
+        cliente_id: empresaId, tipo: carga.tipo, vigencia, dados, usuario, obs: file.name,
+      })
+      if (error) throw error
+      onImportado(); onClose()
+    } catch (err) { setErro('Erro ao importar: ' + err.message); setSalvando(false) }
   }
 
   return (
     <Modal titulo={carga.title} sub={carga.sub} onClose={onClose} largura={620}>
-      <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 14 }}>Cada carga cria uma <b style={{ color: theme.text }}>vigência</b> e preserva o histórico (nada é sobrescrito).</p>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
-        <div><label>Vigência (MM/AAAA)</label><input className="input" value={vigencia} onChange={e => setVigencia(e.target.value)} placeholder="01/2026" /></div>
-        <div><label>Arquivo (.xlsx, .xls, .csv)</label><input type="file" accept=".xlsx,.xls,.csv" onChange={aoEscolher} style={{ fontSize: 13, color: theme.sub, marginTop: 6 }} /></div>
+      <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 14 }}>Informe a vigência e escolha o arquivo — a carga é importada na hora. Cada carga cria uma <b style={{ color: theme.text }}>vigência</b> e preserva o histórico (nada é sobrescrito).</p>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 8 }}>
+        <div>
+          <label>1. Vigência (MM/AAAA)</label>
+          <input className="input" value={vigencia} onChange={e => setVigencia(e.target.value)} placeholder="01/2026" autoFocus />
+        </div>
+        <div>
+          <label>2. Arquivo (.xlsx, .xls, .csv)</label>
+          <input type="file" accept=".xlsx,.xls,.csv" onChange={aoEscolher} disabled={!vigOk || salvando}
+            style={{ fontSize: 13, color: theme.sub, marginTop: 6, opacity: vigOk ? 1 : .5 }} />
+          {!vigOk && <p style={{ color: theme.sub, fontSize: 11.5, marginTop: 6 }}>Informe a vigência para liberar o arquivo.</p>}
+          {salvando && <p style={{ color: theme.accent, fontSize: 12, marginTop: 6 }}><i className="ti ti-loader" /> Importando…</p>}
+        </div>
       </div>
-      {preview && <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 12 }}><i className="ti ti-file-spreadsheet" /> {preview.nome} — {preview.dados.length} linha(s)</p>}
-      {erro && <p style={{ color: theme.red, fontSize: 13, marginBottom: 12 }}>{erro}</p>}
-      <button className="btn" disabled={salvando} onClick={importar}><i className="ti ti-cloud-upload" /> {salvando ? 'Importando…' : 'Importar carga'}</button>
+      {erro && <p style={{ color: theme.red, fontSize: 13, margin: '10px 0 0' }}>{erro}</p>}
       <p style={{ color: theme.sub, fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: .6, margin: '22px 0 10px' }}>Histórico de vigências</p>
       {historico.length === 0
         ? <p style={{ color: theme.sub, fontSize: 12.5 }}>Nenhuma carga ainda.</p>
