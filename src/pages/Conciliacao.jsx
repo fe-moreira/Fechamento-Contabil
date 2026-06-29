@@ -159,8 +159,7 @@ export default function Conciliacao() {
 function Detalhe({ conta, compId, usuario, getCompetenciaId, onVoltar }) {
   const [lanc, setLanc] = useState([])
   const [carregando, setCarregando] = useState(true)
-  const [modal, setModal] = useState(null) // 'just' | 'corr'
-  const [corr, setCorr] = useState(null)   // lançamento de leitura incerta a corrigir
+  const [acao, setAcao] = useState(null)   // lançamento clicado (justificar/corrigir)
   const [msg, setMsg] = useState('')
 
   useEffect(() => {
@@ -217,7 +216,7 @@ function Detalhe({ conta, compId, usuario, getCompetenciaId, onVoltar }) {
   async function registrar(tipo, detalhe, item) {
     const id = await getCompetenciaId()
     await supabase.from('auditoria').insert({ competencia_id: id, modulo: 'Conciliação', item: item || `${conta.conta} · ${conta.nome}`, tipo, detalhe, usuario })
-    setMsg(`${tipo} registrada na auditoria.`); setModal(null); setCorr(null)
+    setMsg(`${tipo} registrada na auditoria.`); setAcao(null)
   }
 
   return (
@@ -228,10 +227,7 @@ function Detalhe({ conta, compId, usuario, getCompetenciaId, onVoltar }) {
           <span style={{ color: theme.sub }}>/</span>
           <span style={{ fontSize: 13, fontWeight: 600 }}>{conta.conta} · {conta.nome}</span>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn btn-ghost" style={{ fontSize: 13 }} onClick={() => setModal('just')}><i className="ti ti-flag" /> Justificar</button>
-          <button className="btn" style={{ fontSize: 13 }} onClick={() => setModal('corr')}><i className="ti ti-pencil-bolt" /> Corrigir</button>
-        </div>
+        <span style={{ color: theme.sub, fontSize: 12 }}><i className="ti ti-click" /> Clique num lançamento para justificar ou corrigir.</span>
       </div>
 
       {msg && <p style={{ color: theme.green, fontSize: 13, marginBottom: 12 }}><i className="ti ti-circle-check" /> {msg}</p>}
@@ -315,7 +311,9 @@ function Detalhe({ conta, compId, usuario, getCompetenciaId, onVoltar }) {
                 {grp.map((l, i) => {
                   const rev = l.leitura.conf !== 'alta'
                   return (
-                    <tr key={i} style={{ borderTop: `1px solid ${theme.border}` }}>
+                    <tr key={i} onClick={() => { setMsg(''); setAcao(l) }}
+                      style={{ borderTop: `1px solid ${theme.border}`, cursor: 'pointer' }}
+                      title="Justificar ou corrigir este lançamento">
                       <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{l.data || '—'}</td>
                       <td style={{ ...td, color: theme.sub, fontWeight: 600 }}>NF {l.leitura.nf || '—'}</td>
                       <td style={{ ...td, color: theme.sub, fontFamily: 'monospace', fontSize: 11, maxWidth: 320 }}>{l.historico}</td>
@@ -323,7 +321,7 @@ function Detalhe({ conta, compId, usuario, getCompetenciaId, onVoltar }) {
                       <td style={{ ...tdR, color: theme.red }}>{Number(l.credito) ? money(l.credito) : '—'}</td>
                       <td style={{ ...td, textAlign: 'center' }}>
                         {rev
-                          ? <span onClick={() => { setMsg(''); setCorr(l) }} style={{ background: 'rgba(245,166,35,0.18)', color: theme.yellow, fontSize: 11, fontWeight: 600, padding: '3px 9px', borderRadius: 20, cursor: 'pointer' }}>corrigir</span>
+                          ? <span style={{ color: theme.yellow, fontSize: 11, fontWeight: 600 }}>revisar</span>
                           : <span style={{ color: theme.green, fontSize: 14 }}><i className="ti ti-circle-check" /></span>}
                       </td>
                     </tr>
@@ -335,20 +333,52 @@ function Detalhe({ conta, compId, usuario, getCompetenciaId, onVoltar }) {
         )
       })}
 
-      {modal && (
-        <ModalRegistro tipo={modal === 'just' ? 'Justificativa' : 'Correção'} onClose={() => setModal(null)}
-          onConfirmar={txt => registrar(modal === 'just' ? 'Justificativa' : 'Correção', txt)} />
-      )}
-
-      {corr && (
-        <ModalRegistro tipo="Correção"
-          titulo={`Corrigir leitura — ${lab}`}
-          sub={`${corr.data || ''} · NF ${corr.leitura.nf || '—'} · ${corr.historico}`}
-          placeholder={`Nome correto do ${lab} (e o que ajustar)…`}
-          onClose={() => setCorr(null)}
-          onConfirmar={txt => registrar('Correção', `Leitura: ${txt}`, `${conta.conta} · ${corr.data || ''} · NF ${corr.leitura.nf || '—'}`)} />
+      {acao && (
+        <ModalLancamento lanc={acao} conta={conta} lab={lab}
+          onClose={() => setAcao(null)}
+          onRegistrar={(tipo, txt) => registrar(tipo, txt, `${conta.conta} · ${acao.data || ''} · NF ${acao.leitura.nf || '—'}`)} />
       )}
     </Wrapper>
+  )
+}
+
+// Menu de ação de um lançamento: escolhe Justificar ou Corrigir e registra na auditoria.
+function ModalLancamento({ lanc, conta, lab, onClose, onRegistrar }) {
+  const [tipo, setTipo] = useState(null) // 'Justificativa' | 'Correção'
+  const [txt, setTxt] = useState('')
+  const valor = Number(lanc.debito) ? `D ${money(lanc.debito)}` : Number(lanc.credito) ? `C ${money(lanc.credito)}` : ''
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 60 }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 'min(520px,96vw)', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
+        <h2 style={{ fontSize: 17, marginBottom: 4 }}>{tipo || 'Tratar lançamento'}</h2>
+        <div style={{ background: theme.input, borderRadius: 10, padding: '10px 12px', margin: '8px 0 14px', fontSize: 12.5 }}>
+          <span style={{ color: theme.sub }}>{lanc.data || '—'} · NF {lanc.leitura.nf || '—'} · {valor}</span>
+          <div style={{ color: theme.sub, fontFamily: 'monospace', fontSize: 11, marginTop: 4 }}>{lanc.historico}</div>
+        </div>
+        {!tipo ? (
+          <>
+            <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 12 }}>O que você quer fazer com este lançamento?</p>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button className="btn btn-ghost" style={{ flex: 1 }} onClick={() => setTipo('Justificativa')}><i className="ti ti-flag" /> Justificar</button>
+              <button className="btn" style={{ flex: 1 }} onClick={() => setTipo('Correção')}><i className="ti ti-pencil-bolt" /> Corrigir</button>
+            </div>
+          </>
+        ) : (
+          <>
+            <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 10 }}>Fica registrado na auditoria com seu usuário e a data.</p>
+            <textarea className="input" rows={3} value={txt} onChange={e => setTxt(e.target.value)} autoFocus
+              placeholder={tipo === 'Correção' ? `O que corrigir (ex.: nome correto do ${lab}, reclassificação)…` : 'Por que este lançamento está assim…'} />
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginTop: 18 }}>
+              <button className="btn btn-ghost" onClick={() => setTipo(null)}><i className="ti ti-chevron-left" /> Voltar</button>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+                <button className="btn" onClick={() => txt.trim() && onRegistrar(tipo, txt.trim())}>Registrar</button>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
   )
 }
 
@@ -418,24 +448,7 @@ function ImpostoCards({ conta }) {
   )
 }
 
-function ModalRegistro({ tipo, titulo, sub, placeholder, onClose, onConfirmar }) {
-  const [txt, setTxt] = useState('')
-  return (
-    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 60 }}>
-      <div onClick={e => e.stopPropagation()} style={{ width: 'min(480px,96vw)', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
-        <h2 style={{ fontSize: 17, marginBottom: 4 }}>{titulo || tipo}</h2>
-        <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 14 }}>{sub || 'Fica registrada na auditoria com seu usuário e a data.'}</p>
-        <textarea className="input" rows={3} value={txt} onChange={e => setTxt(e.target.value)} autoFocus placeholder={placeholder || (tipo === 'Correção' ? 'O que foi corrigido (ex.: reclassificação, leitura do histórico)…' : 'Por que esta conta está assim…')} />
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
-          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
-          <button className="btn" onClick={() => txt.trim() && onConfirmar(txt.trim())}>Registrar</button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-const th = { textAlign: 'left', padding: '11px 14px', fontSize: 11, color: theme.sub, textTransform: 'uppercase', letterSpacing: .3, whiteSpace: 'nowrap' }
+const th ={ textAlign: 'left', padding: '11px 14px', fontSize: 11, color: theme.sub, textTransform: 'uppercase', letterSpacing: .3, whiteSpace: 'nowrap' }
 const thR = { ...th, textAlign: 'right' }
 const td = { padding: '11px 14px', fontSize: 12.5, color: theme.text, verticalAlign: 'top' }
 const tdR = { ...td, textAlign: 'right', whiteSpace: 'nowrap' }
