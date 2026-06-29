@@ -14,7 +14,7 @@ const ST = {
 }
 
 export default function Fechamentos() {
-  const { empresaId, empresaNome, competencia, setCompetencia } = useAppData()
+  const { empresaId, empresaNome, competencia, setCompetencia, isAdmin, recalcularPendencias } = useAppData()
   const nav = useNavigate()
   const [lista, setLista] = useState([])
   const [loading, setLoading] = useState(true)
@@ -26,7 +26,7 @@ export default function Fechamentos() {
 
   async function carregar() {
     setLoading(true)
-    const { data } = await supabase.from('competencias').select('id, ano, mes, status, pct')
+    const { data } = await supabase.from('competencias').select('id, ano, mes, status, pct, documentos')
       .eq('cliente_id', empresaId).order('ano', { ascending: false }).order('mes', { ascending: false })
     setLista(data || []); setLoading(false)
   }
@@ -49,9 +49,33 @@ export default function Fechamentos() {
     const existe = lista.find(c => c.ano === +ano && c.mes === +mes)
     if (existe) { setNovo(null); abrir(existe); return }
     const { data, error } = await supabase.from('competencias')
-      .insert({ cliente_id: empresaId, ano: +ano, mes: +mes, status: 'andamento' }).select('id, ano, mes, status, pct').single()
+      .insert({ cliente_id: empresaId, ano: +ano, mes: +mes, status: 'andamento' }).select('id, ano, mes, status, pct, documentos').single()
     setNovo(null)
     if (!error && data) { await carregar(); abrir(data) }
+  }
+
+  async function excluir(c, e) {
+    e.stopPropagation()
+    const [{ count: nRaz }, { count: nLanc }, { count: nAud }] = await Promise.all([
+      supabase.from('razao').select('id', { count: 'exact', head: true }).eq('competencia_id', c.id),
+      supabase.from('lancamentos').select('id', { count: 'exact', head: true }).eq('competencia_id', c.id),
+      supabase.from('auditoria').select('id', { count: 'exact', head: true }).eq('competencia_id', c.id),
+    ])
+    const docsRecebidos = Array.isArray(c.documentos) ? c.documentos.filter(d => d?.rec).length : 0
+    const temDados = (nRaz || 0) + (nLanc || 0) + (nAud || 0) + docsRecebidos > 0 || c.status === 'fechado'
+    if (temDados && !isAdmin) {
+      alert('Este fechamento já tem dados (razão, lançamentos, documentos ou está fechado). Apenas um administrador pode excluí-lo.')
+      return
+    }
+    const aviso = temDados
+      ? `Excluir ${MESES[c.mes - 1]}/${c.ano}? Este fechamento TEM DADOS — vai apagar razão, balancete, lançamentos e auditoria desta competência. Tem certeza?`
+      : `Excluir o fechamento vazio de ${MESES[c.mes - 1]}/${c.ano}?`
+    if (!confirm(aviso)) return
+    for (const t of ['razao', 'balancete', 'lancamentos', 'auditoria']) {
+      await supabase.from(t).delete().eq('competencia_id', c.id)
+    }
+    await supabase.from('competencias').delete().eq('id', c.id)
+    await carregar(); recalcularPendencias?.()
   }
 
   return (
@@ -113,6 +137,8 @@ export default function Fechamentos() {
                 <span style={{ background: s.bg, color: s.cor, fontSize: 12, fontWeight: 600, padding: '5px 12px', borderRadius: 20, display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
                   <i className={`ti ${s.icon}`} /> {s.txt}
                 </span>
+                <i className="ti ti-trash" title="Excluir fechamento" onClick={e => excluir(c, e)}
+                  style={{ color: theme.sub, fontSize: 17, flexShrink: 0, cursor: 'pointer' }} />
                 <i className="ti ti-chevron-right" style={{ color: theme.sub, fontSize: 20, flexShrink: 0 }} />
               </div>
             )
