@@ -10,6 +10,36 @@ const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'O
 // Chave estável de uma célula (conta × mês) para o set de justificadas.
 const chaveCelula = (conta, mes) => `${conta}|${mes}`
 
+// Tokens significativos do histórico (para detectar recorrência nos meses anteriores).
+const STOP = new Set(['VENDA', 'VENDAS', 'COMPRA', 'COMPRAS', 'PAGTO', 'PAGAMENTO', 'RECEB', 'RECEBIMENTO', 'NOTA', 'FISCAL', 'VALOR', 'REFERENTE', 'REF', 'DUPLICATA', 'PARCELA', 'CONTA'])
+function tokens(h) {
+  return String(h || '').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Z0-9 ]/g, ' ')
+    .split(/\s+/).filter(w => w.length >= 4 && !STOP.has(w) && !/^\d+$/.test(w))
+}
+
+// Aponta o(s) lançamento(s) provável(is) culpado(s) da variação, com motivo.
+function analisarCulpados(linhas, historicosAnteriores) {
+  const vals = linhas.map(l => (Number(l.debito) || 0) + (Number(l.credito) || 0))
+  const positivos = vals.filter(v => v > 0)
+  const maxV = positivos.length ? Math.max(...positivos) : 0
+  const ord = [...positivos].sort((a, b) => a - b)
+  const mediana = ord.length ? ord[Math.floor(ord.length / 2)] : 0
+  const tokensAnt = new Set()
+  for (const h of historicosAnteriores) for (const t of tokens(h)) tokensAnt.add(t)
+
+  return linhas.map((l, i) => {
+    const v = vals[i]
+    const h = (l.historico || '').toUpperCase()
+    const motivos = []
+    if (v > 0 && v === maxV && mediana > 0 && v >= mediana * 3) motivos.push('valor fora do padrão mensal desta conta')
+    const palavras = h.replace(/[^A-ZÀ-Ú ]/g, ' ').split(/\s+/).filter(Boolean)
+    if (h.includes('?') || /\b(DIVERSOS?|DIVERSA|AVULS[OA]|OUTR[OA]S?|GERAL|V[AÁ]RIOS)\b/.test(h) || palavras.length <= 1) motivos.push('histórico genérico')
+    const ht = tokens(l.historico)
+    if (ht.length && tokensAnt.size && !ht.some(t => tokensAnt.has(t))) motivos.push('não recorre nos meses anteriores')
+    return { ...l, suspeito: motivos.length > 0, motivo: motivos.join(' · ') }
+  })
+}
+
 export default function CompMovimento() {
   const { empresaId, empresaNome, getCompetenciaId } = useAppData()
   const { user } = useAuth()
@@ -236,6 +266,7 @@ export default function CompMovimento() {
       {detalhe && (
         <ModalRazao
           detalhe={detalhe}
+          compsAnteriores={comps.filter(c => c.mes < detalhe.mes).map(c => c.id)}
           usuario={user?.email}
           getCompetenciaId={getCompetenciaId}
           jaJustificada={justificadas.has(chaveCelula(detalhe.conta, detalhe.mes))}
@@ -247,7 +278,7 @@ export default function CompMovimento() {
   )
 }
 
-function ModalRazao({ detalhe, usuario, getCompetenciaId, jaJustificada, onJustificada, onClose }) {
+function ModalRazao({ detalhe, compsAnteriores, usuario, getCompetenciaId, jaJustificada, onJustificada, onClose }) {
   const { conta, nome, mes, compId } = detalhe
   const [carregando, setCarregando] = useState(true)
   const [linhas, setLinhas] = useState([])
@@ -286,16 +317,23 @@ function ModalRazao({ detalhe, usuario, getCompetenciaId, jaJustificada, onJusti
         .from('razao').select('data, conta, historico, debito, credito')
         .eq('competencia_id', compId).eq('conta', conta)
         .order('data', { ascending: true })
+      let anteriores = []
+      if (compsAnteriores && compsAnteriores.length) {
+        const { data: ant } = await supabase.from('razao').select('historico')
+          .in('competencia_id', compsAnteriores).eq('conta', conta)
+        anteriores = (ant || []).map(r => r.historico)
+      }
       if (!vivo) return
-      setLinhas(data || [])
+      setLinhas(analisarCulpados(data || [], anteriores))
       setCarregando(false)
     })()
     return () => { vivo = false }
-  }, [compId, conta])
+  }, [compId, conta]) // eslint-disable-line react-hooks/exhaustive-deps
 
   let saldo = 0
   const totDeb = linhas.reduce((s, l) => s + (Number(l.debito) || 0), 0)
   const totCred = linhas.reduce((s, l) => s + (Number(l.credito) || 0), 0)
+  const suspeitos = linhas.filter(l => l.suspeito)
 
   return (
     <div
@@ -318,6 +356,15 @@ function ModalRazao({ detalhe, usuario, getCompetenciaId, jaJustificada, onJusti
           </button>
         </div>
 
+        {!carregando && suspeitos.length > 0 && (
+          <div style={{ margin: '14px 22px 0', background: 'rgba(245,166,35,0.10)', border: '1px solid rgba(245,166,35,0.4)', borderRadius: 10, padding: '12px 14px' }}>
+            <p style={{ color: theme.yellow, fontSize: 13, fontWeight: 600, margin: 0 }}>
+              <i className="ti ti-alert-triangle" /> {suspeitos.length} lançamento(s) provável(is) culpado(s) desta variação
+            </p>
+            <p style={{ color: theme.sub, fontSize: 12, margin: '4px 0 0' }}>Destacados abaixo. Use “Corrigir” para reclassificar, ou “Justificar” se a variação é esperada.</p>
+          </div>
+        )}
+
         <div style={{ overflow: 'auto', padding: '0 0 4px' }}>
           {carregando ? (
             <p style={{ color: theme.sub, fontSize: 13, padding: '18px 22px' }}><i className="ti ti-loader" /> Carregando…</p>
@@ -338,9 +385,13 @@ function ModalRazao({ detalhe, usuario, getCompetenciaId, jaJustificada, onJusti
                 {linhas.map((l, i) => {
                   saldo += (Number(l.debito) || 0) - (Number(l.credito) || 0)
                   return (
-                    <tr key={i} style={{ borderTop: `1px solid ${theme.border}` }}>
+                    <tr key={i} style={{ borderTop: `1px solid ${theme.border}`, background: l.suspeito ? 'rgba(245,166,35,0.07)' : undefined }}>
                       <td style={{ ...td, whiteSpace: 'nowrap' }}>{l.data || ''}</td>
-                      <td style={{ ...td, maxWidth: 360 }}>{l.historico || ''}</td>
+                      <td style={{ ...td, maxWidth: 380, whiteSpace: 'normal' }}>
+                        {l.suspeito && <i className="ti ti-alert-triangle" style={{ color: theme.yellow, marginRight: 6 }} title="Provável culpado" />}
+                        {l.historico || ''}
+                        {l.suspeito && <div style={{ color: theme.yellow, fontSize: 11, marginTop: 2 }}>provável culpado — {l.motivo}</div>}
+                      </td>
                       <td style={{ ...td, textAlign: 'right' }}>{Number(l.debito) ? money(l.debito) : ''}</td>
                       <td style={{ ...td, textAlign: 'right' }}>{Number(l.credito) ? money(l.credito) : ''}</td>
                       <td style={{ ...td, textAlign: 'right', color: saldo < 0 ? theme.red : theme.text }}>{money(saldo)}</td>
