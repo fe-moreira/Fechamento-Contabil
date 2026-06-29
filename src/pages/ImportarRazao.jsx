@@ -6,13 +6,25 @@ import { theme } from '../lib/theme'
 import { money } from '../lib/theme'
 
 const ALVOS = [
-  { key: 'data', label: 'Data', dicas: ['data'] },
-  { key: 'conta', label: 'Conta', dicas: ['conta', 'cód conta', 'codigo conta', 'reduzido'] },
-  { key: 'contrapartida', label: 'Contrapartida', dicas: ['contrapartida', 'contra partida', 'c.partida', 'cont. partida'] },
-  { key: 'historico', label: 'Histórico', dicas: ['histor', 'complemento', 'descri'] },
-  { key: 'debito', label: 'Débito', dicas: ['débito', 'debito', 'valor débito', 'vlr deb'] },
-  { key: 'credito', label: 'Crédito', dicas: ['crédito', 'credito', 'valor crédito', 'vlr cred'] },
+  { key: 'data', label: 'Data', dicas: ['data', 'datalan'] },
+  { key: 'conta', label: 'Conta', dicas: ['conta', 'clasc', 'cód conta', 'codigo conta', 'reduzido'] },
+  { key: 'nome', label: 'Nome da conta', dicas: ['nomec', 'nome da conta', 'nome conta'] },
+  { key: 'contrapartida', label: 'Contrapartida', dicas: ['contrapartida', 'contra partida', 'c.partida', 'cont. partida', 'contrap'] },
+  { key: 'historico', label: 'Histórico', dicas: ['histor', 'complemento'] },
+  { key: 'debito', label: 'Débito', dicas: ['débito', 'debito', 'valdeb', 'valor débito', 'vlr deb'] },
+  { key: 'credito', label: 'Crédito', dicas: ['crédito', 'credito', 'valcre', 'valor crédito', 'vlr cred'] },
 ]
+
+// Aplica a máscara do Domínio (ex.: "9.9.9.999.9999") a um código sem pontos.
+function applyMask(code, mask) {
+  const c = String(code ?? '').replace(/\D/g, '')
+  if (!c) return ''
+  if (!mask) return c
+  const lens = String(mask).split('.').map(s => s.length)
+  let i = 0; const out = []
+  for (const L of lens) { out.push(c.slice(i, i + L)); i += L }
+  return out.filter(Boolean).join('.')
+}
 
 // Converte valor pt-BR ("1.234,56") ou número para float.
 function num(v) {
@@ -54,7 +66,8 @@ function autoMapear(headers) {
   for (const alvo of ALVOS) {
     const idx = headers.findIndex(h => {
       const hl = String(h || '').toLowerCase()
-      if (alvo.key === 'conta') return hl.includes('conta') && !hl.includes('contra')
+      if (alvo.key === 'conta') return hl === 'clasc' || (hl.includes('conta') && !hl.includes('contra') && !hl.includes('nome'))
+      if (alvo.key === 'nome') return hl === 'nomec' || hl.includes('nome da conta') || hl.includes('nome conta')
       return alvo.dicas.some(d => hl.includes(d))
     })
     map[alvo.key] = idx >= 0 ? String(idx) : ''
@@ -72,6 +85,7 @@ export default function ImportarRazao() {
   const [importando, setImportando] = useState(false)
   const [resultado, setResultado] = useState(null)
   const [jaImportado, setJaImportado] = useState(null)
+  const [mascaraIdx, setMascaraIdx] = useState(-1)
 
   // Mostra se já há razão importado para a competência atual.
   useEffect(() => {
@@ -103,7 +117,8 @@ export default function ImportarRazao() {
         const hIdx = acharCabecalho(linhasBrutas)
         const hs = linhasBrutas[hIdx].map(c => String(c || '').trim())
         const dados = linhasBrutas.slice(hIdx + 1).filter(r => r.some(c => c !== '' && c != null))
-        setHeaders(hs); setLinhas(dados); setMap(autoMapear(hs)); setResultado(null)
+        const mi = hs.findIndex(h => h.toLowerCase() === 'mascara')
+        setHeaders(hs); setLinhas(dados); setMap(autoMapear(hs)); setMascaraIdx(mi); setResultado(null)
       } catch (err) {
         setErro('Não consegui ler o arquivo: ' + err.message)
       }
@@ -116,6 +131,13 @@ export default function ImportarRazao() {
     return idx === '' || idx == null ? '' : linha[Number(idx)]
   }
 
+  // Código da conta já com a máscara aplicada (quando o arquivo trouxer a coluna "mascara").
+  function contaDe(linha) {
+    let conta = String(valorCol(linha, 'conta') ?? '').trim()
+    if (mascaraIdx >= 0 && /^\d+$/.test(conta)) conta = applyMask(conta, linha[mascaraIdx])
+    return conta
+  }
+
   async function importar() {
     setErro(''); setImportando(true); setResultado(null)
     try {
@@ -125,30 +147,33 @@ export default function ImportarRazao() {
       const registros = linhas.map(l => ({
         competencia_id,
         data: toISO(valorCol(l, 'data')),
-        conta: String(valorCol(l, 'conta') ?? '').trim() || null,
+        conta: contaDe(l) || null,
         contrapartida: String(valorCol(l, 'contrapartida') ?? '').trim() || null,
         historico: String(valorCol(l, 'historico') ?? '').trim() || null,
         debito: num(valorCol(l, 'debito')),
         credito: num(valorCol(l, 'credito')),
+        nome: String(valorCol(l, 'nome') ?? '').trim() || null,   // só para o balancete
       })).filter(r => r.conta && (r.debito || r.credito))
 
       if (!registros.length) { setErro('Nenhuma linha válida (confira o mapeamento de Conta/Débito/Crédito).'); setImportando(false); return }
 
-      // Reimportação: limpa o que havia desta competência e regrava.
+      // Reimportação: limpa o que havia desta competência e regrava (razao não tem coluna nome).
       await supabase.from('razao').delete().eq('competencia_id', competencia_id)
-      for (let i = 0; i < registros.length; i += 500) {
-        const { error } = await supabase.from('razao').insert(registros.slice(i, i + 500))
+      const paraRazao = registros.map(({ nome, ...r }) => r)
+      for (let i = 0; i < paraRazao.length; i += 500) {
+        const { error } = await supabase.from('razao').insert(paraRazao.slice(i, i + 500))
         if (error) throw error
       }
 
-      // Balancete derivado: agrupa por conta (saldo final = débito − crédito).
+      // Balancete derivado: agrupa por conta (saldo final = débito − crédito), com o nome lido do razão.
       const porConta = {}
       for (const r of registros) {
-        const c = porConta[r.conta] || (porConta[r.conta] = { conta: r.conta, debito: 0, credito: 0 })
+        const c = porConta[r.conta] || (porConta[r.conta] = { conta: r.conta, nome: r.nome || null, debito: 0, credito: 0 })
+        if (!c.nome && r.nome) c.nome = r.nome
         c.debito += r.debito; c.credito += r.credito
       }
       const balancete = Object.values(porConta).map(c => ({
-        competencia_id, conta: c.conta, nome: null,
+        competencia_id, conta: c.conta, nome: c.nome || null,
         saldo_inicial: 0, debito: c.debito, credito: c.credito,
         saldo_final: c.debito - c.credito,
       }))
@@ -234,7 +259,10 @@ export default function ImportarRazao() {
                   <tr key={i} style={{ borderTop: `1px solid ${theme.border}` }}>
                     {ALVOS.map(a => {
                       const v = valorCol(l, a.key)
-                      const txt = a.key === 'debito' || a.key === 'credito' ? (num(v) ? money(num(v)) : '') : (a.key === 'data' ? (toISO(v) || '') : String(v ?? ''))
+                      const txt = a.key === 'conta' ? contaDe(l)
+                        : (a.key === 'debito' || a.key === 'credito') ? (num(v) ? money(num(v)) : '')
+                          : a.key === 'data' ? (toISO(v) || '')
+                            : String(v ?? '')
                       return <td key={a.key} style={td}>{txt}</td>
                     })}
                   </tr>
