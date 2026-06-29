@@ -83,14 +83,19 @@ function ehRedutora(nome) {
   return /\(\s*-\s*\)|deprecia|amortiza|exaust|pcld|perdas estimad|provis[aã]o para perda|redutora/.test(n) || /^\s*\(?\s*-/.test(String(nome || ''))
 }
 
+// Chave da NF ignorando zeros à esquerda e não-dígitos: "05602823" e "5602823" casam.
+const nfKey = nf => String(nf ?? '').replace(/\D/g, '').replace(/^0+/, '')
+
 // Baixa (conciliação) por NÚMERO DA NOTA + cliente: um débito e um crédito só se
-// conciliam (zeram) quando têm a MESMA NF e o cliente bate (nome aproximado). Valor
-// igual com NF diferente NÃO zera (ex.: faturou NF 3256 e recebeu NF 3249 do mesmo
-// cliente — são títulos distintos). Retorna o Set dos lançamentos baixados.
+// conciliam (zeram) quando têm a MESMA NF (ignorando zeros à esquerda) e o cliente bate
+// (nome aproximado). Valor igual com NF diferente NÃO zera (ex.: faturou NF 3256 e
+// recebeu NF 3249 — títulos distintos). Retorna { baixados, aproximadas } onde
+// aproximadas são as NFs que só casaram após ignorar zeros (para alertar e confirmar).
 function baixadosPorNF(lancs) {
   const porNF = {}
-  for (const l of lancs) { const nf = l.leitura?.nf; if (nf) (porNF[nf] = porNF[nf] || []).push(l) }
+  for (const l of lancs) { const nf = nfKey(l.leitura?.nf); if (nf) (porNF[nf] = porNF[nf] || []).push(l) }
   const baixados = new Set()
+  const aproximadas = []
   for (const nf in porNF) {
     const grp = porNF[nf]
     const temD = grp.some(l => Number(l.debito) > 0.005)
@@ -103,8 +108,10 @@ function baixadosPorNF(lancs) {
     for (let i = 1; i < nomes.length; i++) if (!mesmoCliente(tokensNome(nomes[0]), tokensNome(nomes[i]))) { mesmoCli = false; break }
     if (!mesmoCli) continue
     for (const l of grp) baixados.add(l)
+    const strs = [...new Set(grp.map(l => String(l.leitura?.nf ?? '').trim()).filter(Boolean))]
+    if (strs.length > 1) aproximadas.push(strs.join(' = ')) // NFs diferentes em texto, iguais ignorando zeros
   }
-  return baixados
+  return { baixados, aproximadas }
 }
 
 // Natureza invertida do SALDO da conta (não redutora):
@@ -309,7 +316,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, getCompetenc
 
   // Conciliação por NF + cliente: tira do "em aberto" o que já se baixou (mesma NF, cliente bate).
   const ehEntidadeConta = ehPorEntidade(conta.nome) && tipoCta !== 'saldo'
-  const baixados = ehEntidadeConta ? baixadosPorNF(lanc) : new Set()
+  const { baixados, aproximadas } = ehEntidadeConta ? baixadosPorNF(lanc) : { baixados: new Set(), aproximadas: [] }
 
   // Agrupa só o que está EM ABERTO (não baixado) por nome; incerto cai em "(não identificado)".
   const grupos = {}, nomes = []
@@ -361,8 +368,8 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, getCompetenc
   const ladoOrigem = natCredito ? 'credito' : 'debito'
   const ladoBaixa = natCredito ? 'debito' : 'credito'
   const baixaSemTitulo = g => {
-    const nfsTitulo = new Set(g.lancs.filter(l => Number(l[ladoOrigem]) > 0.005 && l.leitura.nf).map(l => l.leitura.nf))
-    return new Set(g.lancs.filter(l => Number(l[ladoBaixa]) > 0.005 && l.leitura.nf && !nfsTitulo.has(l.leitura.nf)))
+    const nfsTitulo = new Set(g.lancs.filter(l => Number(l[ladoOrigem]) > 0.005 && l.leitura.nf).map(l => nfKey(l.leitura.nf)))
+    return new Set(g.lancs.filter(l => Number(l[ladoBaixa]) > 0.005 && l.leitura.nf && !nfsTitulo.has(nfKey(l.leitura.nf))))
   }
   const totalSemTitulo = lista.reduce((n, g) => n + baixaSemTitulo(g).size, 0)
 
@@ -451,6 +458,13 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, getCompetenc
         <div style={{ background: 'rgba(229,72,77,0.10)', border: `1px solid ${theme.red}`, borderRadius: 12, display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px', marginBottom: 12 }}>
           <i className="ti ti-receipt-off" style={{ color: theme.red, fontSize: 18, marginTop: 1 }} />
           <span style={{ color: theme.text, fontSize: 13 }}>{totalSemTitulo} baixa(s) com NF que não confere com nenhum título deste {lab} — para o saldo zerar, a NF do recebimento tem que ser a mesma do faturamento.</span>
+        </div>
+      )}
+
+      {aproximadas.length > 0 && (
+        <div style={{ background: 'rgba(74,124,255,0.10)', border: `1px solid ${theme.accent}`, borderRadius: 12, display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px', marginBottom: 12 }}>
+          <i className="ti ti-discount-check" style={{ color: theme.accent, fontSize: 18, marginTop: 1 }} />
+          <span style={{ color: theme.text, fontSize: 13 }}>{aproximadas.length} baixa(s) conciliada(s) por <b>NF aproximada</b> (mesmo número ignorando zeros à esquerda) — confirme: {aproximadas.slice(0, 4).join('; ')}. Veja no relatório “Conciliados”.</span>
         </div>
       )}
 
