@@ -7,6 +7,18 @@ import { theme, money } from '../lib/theme'
 
 const hoje = () => new Date().toLocaleDateString('pt-BR')
 
+// Lê a 1ª planilha detectando a linha de cabeçalho (a 1ª com >=3 células de texto não vazias).
+// Necessário p/ exports do Domínio (ex.: plano de contas com cabeçalho na 5ª linha).
+function lerPlanilha(XLSX, ws) {
+  const matriz = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
+  let hdr = 0
+  for (let i = 0; i < Math.min(matriz.length, 30); i++) {
+    const txt = (matriz[i] || []).filter(c => String(c ?? '').trim().length > 0)
+    if (txt.length >= 3) { hdr = i; break }
+  }
+  return XLSX.utils.sheet_to_json(ws, { range: hdr, defval: '' })
+}
+
 const CARGAS = [
   { tipo: 'plano', icon: 'ti-list-numbers', title: 'Plano de contas', sub: 'Com tipo de conciliação' },
   { tipo: 'depara', icon: 'ti-arrows-transfer-down', title: 'De/Para integrações', sub: 'Acumulador → conta' },
@@ -252,7 +264,7 @@ function ModalCarga({ carga, historico, empresaId, usuario, onClose, onImportado
     try {
       const XLSX = await import('xlsx')
       const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' })
-      const dados = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' })
+      const dados = lerPlanilha(XLSX, wb.Sheets[wb.SheetNames[0]])
       if (!dados.length) { setErro('Planilha vazia.'); setSalvando(false); return }
       // Se já existe carga nesta vigência, oferece sobrepor (substitui em vez de duplicar).
       const mesma = (historico || []).filter(h => h.vigencia === vigencia)
@@ -390,7 +402,7 @@ function ModalCargaInicial({ vigencia, onClose, onConcluir }) {
     try {
       const XLSX = await import('xlsx')
       const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' })
-      const dados = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' })
+      const dados = lerPlanilha(XLSX, wb.Sheets[wb.SheetNames[0]])
       if (!dados.length) { setErro('Planilha vazia.'); return }
       setPreview({ nome: file.name, dados })
     } catch (err) { setErro('Não consegui ler: ' + err.message) }
