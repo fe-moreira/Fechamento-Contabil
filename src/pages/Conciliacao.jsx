@@ -83,34 +83,28 @@ function ehRedutora(nome) {
   return /\(\s*-\s*\)|deprecia|amortiza|exaust|pcld|perdas estimad|provis[aã]o para perda|redutora/.test(n) || /^\s*\(?\s*-/.test(String(nome || ''))
 }
 
-// Composição em aberto: remove o que se concilia (zera) e mostra só o que compõe o saldo.
-// 1) NFs cujo débito e crédito se anulam (saldo ~0) saem inteiras.
-// 2) entre o que sobra, débitos e créditos de mesmo valor se cancelam em pares.
-// usarNF=false (contas sem entidade) → pareia só por valor.
-function comporSaldo(lancs, usarNF = true) {
-  let restantes = []
-  if (usarNF) {
-    const porNF = {}, livres = []
-    for (const l of lancs) { const nf = l.leitura?.nf; if (nf) (porNF[nf] = porNF[nf] || []).push(l); else livres.push(l) }
-    restantes = [...livres]
-    for (const nf in porNF) {
-      const grp = porNF[nf]
-      const saldo = grp.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
-      if (Math.abs(saldo) >= 0.005) restantes.push(...grp) // NF em aberto → mantém
-    }
-  } else {
-    restantes = [...lancs]
+// Baixa (conciliação) por NÚMERO DA NOTA + cliente: um débito e um crédito só se
+// conciliam (zeram) quando têm a MESMA NF e o cliente bate (nome aproximado). Valor
+// igual com NF diferente NÃO zera (ex.: faturou NF 3256 e recebeu NF 3249 do mesmo
+// cliente — são títulos distintos). Retorna o Set dos lançamentos baixados.
+function baixadosPorNF(lancs) {
+  const porNF = {}
+  for (const l of lancs) { const nf = l.leitura?.nf; if (nf) (porNF[nf] = porNF[nf] || []).push(l) }
+  const baixados = new Set()
+  for (const nf in porNF) {
+    const grp = porNF[nf]
+    const temD = grp.some(l => Number(l.debito) > 0.005)
+    const temC = grp.some(l => Number(l.credito) > 0.005)
+    if (!temD || !temC) continue // precisa de débito e crédito na mesma NF
+    if (Math.abs(grp.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)) >= 0.005) continue // não zera
+    // Cliente tem que bater (nome aproximado) entre os lançamentos da NF.
+    const nomes = [...new Set(grp.map(l => (l.leitura?.ident && l.leitura.entidade) ? l.leitura.entidade : null).filter(Boolean))]
+    let mesmoCli = true
+    for (let i = 1; i < nomes.length; i++) if (!mesmoCliente(tokensNome(nomes[0]), tokensNome(nomes[i]))) { mesmoCli = false; break }
+    if (!mesmoCli) continue
+    for (const l of grp) baixados.add(l)
   }
-  // Pareia débito × crédito de mesmo valor (estornos, baixas) e cancela.
-  const cres = restantes.filter(l => Number(l.credito) > 0.005)
-  const usados = new Set()
-  for (const d of restantes) {
-    if (!(Number(d.debito) > 0.005)) continue
-    const vd = Number(d.debito)
-    const par = cres.find(c => !usados.has(c) && Math.abs(Number(c.credito) - vd) < 0.005)
-    if (par) { usados.add(par); usados.add(d) }
-  }
-  return restantes.filter(l => !usados.has(l))
+  return baixados
 }
 
 // Natureza invertida do SALDO da conta (não redutora):
@@ -313,9 +307,14 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, getCompetenc
   const somaComp = lanc.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
   const dif = conta.saldo_final - somaComp
 
-  // Agrupa por nome exato; leitura incerta cai em "(não identificado)".
+  // Conciliação por NF + cliente: tira do "em aberto" o que já se baixou (mesma NF, cliente bate).
+  const ehEntidadeConta = ehPorEntidade(conta.nome) && tipoCta !== 'saldo'
+  const baixados = ehEntidadeConta ? baixadosPorNF(lanc) : new Set()
+
+  // Agrupa só o que está EM ABERTO (não baixado) por nome; incerto cai em "(não identificado)".
   const grupos = {}, nomes = []
   for (const l of lanc) {
+    if (baixados.has(l)) continue
     if (Math.abs(ov(l)) < 0.005) continue
     const key = l.leitura.ident && l.leitura.entidade ? l.leitura.entidade : '(não identificado)'
     if (!grupos[key]) { grupos[key] = []; nomes.push(key) }
@@ -332,20 +331,19 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, getCompetenc
   const lista = clusters.map(cl => {
     const membros = cl.membros.slice().sort((a, b) => b.length - a.length)
     const lancs = cl.membros.flatMap(m => grupos[m])
-    return { nome: membros[0], variacoes: membros, lancs, emAberto: comporSaldo(lancs, true), total: lancs.reduce((s, l) => s + ov(l), 0), unido: membros.length > 1, unk: false }
+    return { nome: membros[0], variacoes: membros, lancs, total: lancs.reduce((s, l) => s + ov(l), 0), unido: membros.length > 1, unk: false }
   })
   if (grupos['(não identificado)']) {
     const lancs = grupos['(não identificado)']
-    lista.push({ nome: '(não identificado)', variacoes: [], lancs, emAberto: comporSaldo(lancs, true), total: lancs.reduce((s, l) => s + ov(l), 0), unido: false, unk: true })
+    lista.push({ nome: '(não identificado)', variacoes: [], lancs, total: lancs.reduce((s, l) => s + ov(l), 0), unido: false, unk: true })
   }
   lista.sort((a, b) => (a.unk ? 1 : 0) - (b.unk ? 1 : 0) || a.nome.localeCompare(b.nome, 'pt-BR'))
-  const algoEmAberto = lista.some(g => g.emAberto.length > 0)
+  const algoEmAberto = lista.length > 0
 
-  // Para os relatórios: o que está em aberto (compõe o saldo) e o que zerou (conciliado).
-  const ehEntidade = ehPorEntidade(conta.nome) && tipoCta !== 'saldo'
-  const emAbertoTodos = ehEntidade ? lista.flatMap(g => g.emAberto) : comporSaldo(lanc, false)
-  const setAberto = new Set(emAbertoTodos)
-  const zerados = lanc.filter(l => !setAberto.has(l) && (Number(l.debito) || Number(l.credito)))
+  // Para os relatórios: o que está em aberto (compõe o saldo) e o que zerou (baixado por NF).
+  const ehEntidade = ehEntidadeConta
+  const emAbertoTodos = ehEntidade ? lista.flatMap(g => g.lancs) : lanc.filter(l => Math.abs(ov(l)) >= 0.005)
+  const zerados = [...baixados]
 
   const revs = lanc.filter(l => Math.abs(ov(l)) >= 0.005 && l.leitura.conf !== 'alta').length
 
@@ -472,16 +470,15 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, getCompetenc
 
       {carregando ? (
         <p style={{ color: theme.sub, fontSize: 13 }}>Carregando…</p>
-      ) : lista.length === 0 ? (
+      ) : lanc.length === 0 ? (
         <Aviso icon="ti-inbox" texto="Sem lançamentos nesta conta." />
       ) : !algoEmAberto ? (
         <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: '20px 22px', display: 'flex', alignItems: 'center', gap: 14 }}>
           <i className="ti ti-circle-check" style={{ fontSize: 22, color: theme.green }} />
-          <p style={{ fontSize: 13.5, color: theme.text, margin: 0 }}>Nada em aberto — débitos e créditos se conciliaram (saldo zerado). Anexe o relatório de {natCredito ? 'contas a pagar' : 'contas a receber'} ou justifique no card acima.</p>
+          <p style={{ fontSize: 13.5, color: theme.text, margin: 0 }}>Nada em aberto — débitos e créditos se conciliaram por NF (saldo zerado). Anexe o relatório de {natCredito ? 'contas a pagar' : 'contas a receber'} ou justifique no card acima.</p>
         </div>
       ) : lista.map((g, gi) => {
-        const grp = g.emAberto
-        if (grp.length === 0) return null // cliente/fornecedor conciliado (zerou) — não compõe o saldo
+        const grp = g.lancs
         const gt = g.total
         const unk = g.unk
         const semTit = baixaSemTitulo(g) // baixas com NF que não casa com título
