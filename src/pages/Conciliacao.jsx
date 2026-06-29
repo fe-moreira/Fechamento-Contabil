@@ -10,6 +10,27 @@ const RUIDO = /\b(VENDA|VENDAS|COMPRA|COMPRAS|PAGTO|PAGAMENTO|RECEBIMENTO|RECEBT
 // Remove o sufixo societário (S.A, LTDA, EIRELI, ME, EPP) e o que vier depois.
 const tiraSufixo = e => e.replace(/\s+(S[./]?\s?A\.?|LTDA\.?|EIRELI|EPP|ME)\b.*$/i, '').replace(/\s+/g, ' ').trim()
 
+// ---- Unificação de nomes parecidos (mesmo cliente/fornecedor escrito de formas diferentes) ----
+// Palavras genéricas de razão social: não distinguem uma empresa de outra, então são ignoradas
+// na comparação (senão "...DE FORCA E LUZ" casaria empresas distintas).
+const GENERICAS = new Set(['COMPANHIA', 'CIA', 'DISTRIBUIDORA', 'DISTRIBUIDOR', 'ENERGIA', 'ENERGIAS', 'ELETRICA', 'ELETRICAS', 'FORCA', 'LUZ', 'COMERCIO', 'COMERCIAL', 'INDUSTRIA', 'INDUSTRIAL', 'SERVICO', 'SERVICOS', 'BRASIL', 'NACIONAL', 'GRUPO', 'HOLDING', 'PARTICIPACOES', 'EMPREENDIMENTOS', 'TRANSPORTE', 'TRANSPORTES', 'LOGISTICA', 'SOLUCOES', 'TECNOLOGIA', 'SISTEMAS', 'ASSOCIACAO', 'INSTITUTO', 'FUNDACAO', 'BANCO', 'SUPERMERCADO', 'SUPERMERCADOS', 'ALIMENTOS', 'DO', 'DA', 'DE', 'DOS', 'DAS', 'E', 'EM'])
+const normNome = s => String(s || '').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim()
+// Tokens distintivos de um nome (>=3 letras, sem genéricas). Se sobrar vazio, usa todos.
+function tokensNome(nome) {
+  const todos = normNome(nome).split(' ').filter(Boolean)
+  const dist = todos.filter(t => t.length >= 3 && !GENERICAS.has(t))
+  return dist.length ? dist : todos
+}
+// Dois nomes são o mesmo cliente se um conjunto de tokens é subconjunto do outro,
+// ou a interseção cobre a maioria do menor e há um token forte (>=4 letras) em comum.
+function mesmoCliente(a, b) {
+  const inter = a.filter(t => b.includes(t))
+  if (!inter.length) return false
+  const menor = Math.min(a.length, b.length)
+  if (inter.length === menor) return true
+  return inter.length / menor >= 0.6 && inter.some(t => t.length >= 4)
+}
+
 function lerHistorico(h) {
   const s = String(h || '').trim()
   const nfm = s.match(/\bNF\.?\s*(?:N[ºo°.]*\s*)?(\d{2,9})/i) || s.match(/\bNOTA\s*(?:FISCAL)?\s*N?[ºo°.]*\s*(\d{2,9})/i) || s.match(/\bN[ºo°]\.?\s*(\d{2,9})/i)
@@ -156,23 +177,41 @@ function Detalhe({ conta, compId, usuario, getCompetenciaId, onVoltar }) {
   const somaComp = lanc.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
   const dif = conta.saldo_final - somaComp
 
-  // Agrupa por cliente/fornecedor; leitura incerta cai em "(não identificado)".
-  const grupos = {}, ordem = []
+  // Agrupa por nome exato; leitura incerta cai em "(não identificado)".
+  const grupos = {}, nomes = []
   for (const l of lanc) {
     if (Math.abs(ov(l)) < 0.005) continue
     const key = l.leitura.ident && l.leitura.entidade ? l.leitura.entidade : '(não identificado)'
-    if (!grupos[key]) { grupos[key] = []; ordem.push(key) }
+    if (!grupos[key]) { grupos[key] = []; nomes.push(key) }
     grupos[key].push(l)
   }
-  ordem.sort((a, b) => (a === '(não identificado)' ? 1 : 0) - (b === '(não identificado)' ? 1 : 0) || a.localeCompare(b, 'pt-BR'))
+  // Unifica nomes parecidos (mesmo cliente escrito de formas diferentes) em um cluster.
+  const idents = nomes.filter(k => k !== '(não identificado)')
+  const tk = Object.fromEntries(idents.map(k => [k, tokensNome(k)]))
+  const clusters = []
+  for (const k of idents) {
+    const alvo = clusters.find(cl => cl.membros.some(m => mesmoCliente(tk[k], tk[m])))
+    if (alvo) alvo.membros.push(k); else clusters.push({ membros: [k] })
+  }
+  const lista = clusters.map(cl => {
+    const membros = cl.membros.slice().sort((a, b) => b.length - a.length)
+    const lancs = cl.membros.flatMap(m => grupos[m])
+    return { nome: membros[0], variacoes: membros, lancs, total: lancs.reduce((s, l) => s + ov(l), 0), unido: membros.length > 1, unk: false }
+  })
+  if (grupos['(não identificado)']) {
+    const lancs = grupos['(não identificado)']
+    lista.push({ nome: '(não identificado)', variacoes: [], lancs, total: lancs.reduce((s, l) => s + ov(l), 0), unido: false, unk: true })
+  }
+  lista.sort((a, b) => (a.unk ? 1 : 0) - (b.unk ? 1 : 0) || a.nome.localeCompare(b.nome, 'pt-BR'))
+
   const revs = lanc.filter(l => Math.abs(ov(l)) >= 0.005 && l.leitura.conf !== 'alta').length
 
   // Anomalia de natureza: conta de cliente (Ativo) deve ficar devedora; fornecedor (Passivo) credora.
-  // Um grupo com total na natureza invertida (ov < 0) é estranho e precisa ser verificado.
+  // Um grupo com total na natureza invertida (total < 0) é estranho e precisa ser verificado.
   const natAnom = natCredito ? 'devedor' : 'credor'   // saldo que é ANÔMALO nesta conta
   const natOk = natCredito ? 'credora' : 'devedora'   // natureza esperada da conta
-  const totalGrupo = k => grupos[k].reduce((s, l) => s + ov(l), 0)
-  const anomalos = ordem.filter(k => totalGrupo(k) < -0.005)
+  const anomalos = lista.filter(x => x.total < -0.005).map(x => x.nome)
+  const unificados = lista.filter(x => x.unido).length
   const contaInvertida = Number(conta.saldo_final) * (natCredito ? -1 : 1) < -0.005
 
   async function registrar(tipo, detalhe, item) {
@@ -224,6 +263,13 @@ function Detalhe({ conta, compId, usuario, getCompetenciaId, onVoltar }) {
         </div>
       )}
 
+      {unificados > 0 && (
+        <div style={{ background: 'rgba(74,124,255,0.10)', border: `1px solid ${theme.accent}`, borderRadius: 12, display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px', marginBottom: 12 }}>
+          <i className="ti ti-arrows-join" style={{ color: theme.accent, fontSize: 18, marginTop: 1 }} />
+          <span style={{ color: theme.text, fontSize: 13 }}>{unificados} {lab}(s) com nomes parecidos foram <b>unificados</b> — confira se é mesmo o mesmo {lab} (veja “nomes unidos” em cada card).</span>
+        </div>
+      )}
+
       {revs > 0 && (
         <div style={{ background: 'rgba(245,166,35,0.10)', border: `1px solid ${theme.yellow}`, borderRadius: 12, display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', marginBottom: 12 }}>
           <i className="ti ti-alert-triangle" style={{ color: theme.yellow, fontSize: 18 }} />
@@ -233,24 +279,31 @@ function Detalhe({ conta, compId, usuario, getCompetenciaId, onVoltar }) {
 
       {carregando ? (
         <p style={{ color: theme.sub, fontSize: 13 }}>Carregando…</p>
-      ) : ordem.length === 0 ? (
+      ) : lista.length === 0 ? (
         <Aviso icon="ti-inbox" texto="Sem lançamentos nesta conta." />
-      ) : ordem.map((k, gi) => {
-        const grp = grupos[k]
-        const gt = grp.reduce((s, l) => s + ov(l), 0)
-        const unk = k === '(não identificado)'
+      ) : lista.map((g, gi) => {
+        const grp = g.lancs
+        const gt = g.total
+        const unk = g.unk
         const hasRev = grp.some(l => l.leitura.conf !== 'alta')
         const anom = gt < -0.005 // natureza invertida (cliente credor / fornecedor devedor)
         const borda = anom ? theme.red : hasRev ? theme.yellow : theme.cb
         return (
           <div key={gi} style={{ background: theme.card, border: `1px solid ${borda}`, borderRadius: 12, overflow: 'hidden', marginBottom: 12 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '13px 16px', background: theme.input }}>
-              <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ color: unk ? theme.yellow : theme.text, fontSize: 14, fontWeight: 600, fontStyle: unk ? 'italic' : 'normal' }}>{k}</span>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '13px 16px', background: theme.input, flexWrap: 'wrap', gap: 8 }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <span style={{ color: unk ? theme.yellow : theme.text, fontSize: 14, fontWeight: 600, fontStyle: unk ? 'italic' : 'normal' }}>{g.nome}</span>
+                {g.unido && <span title={`Nomes unidos: ${g.variacoes.join(' · ')}`} style={{ background: 'rgba(74,124,255,0.18)', color: theme.accent, fontSize: 10.5, fontWeight: 700, padding: '2px 8px', borderRadius: 20, textTransform: 'uppercase', letterSpacing: .3, cursor: 'help' }}><i className="ti ti-arrows-join" /> {g.variacoes.length} nomes unidos</span>}
                 {anom && <span style={{ background: 'rgba(229,72,77,0.18)', color: theme.red, fontSize: 10.5, fontWeight: 700, padding: '2px 8px', borderRadius: 20, textTransform: 'uppercase', letterSpacing: .3 }}><i className="ti ti-alert-octagon" /> saldo {natAnom}</span>}
               </span>
               <span style={{ color: anom ? theme.red : theme.text, fontSize: 14, fontWeight: 600 }}>{money(gt)}</span>
             </div>
+            {g.unido && (
+              <div style={{ padding: '8px 16px', borderTop: `1px solid ${theme.border}`, background: 'rgba(74,124,255,0.05)', fontSize: 11.5, color: theme.sub }}>
+                <i className="ti ti-arrows-join" style={{ color: theme.accent, marginRight: 6 }} />
+                Unificado de: {g.variacoes.join(' · ')}
+              </div>
+            )}
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ borderTop: `1px solid ${theme.border}` }}>
