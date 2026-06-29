@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { theme, money } from '../lib/theme'
+import { montarBalancete } from '../lib/balancete'
 
 const ANO = 2026
 const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
@@ -46,8 +47,8 @@ export default function CompMovimento() {
 
   const [carregando, setCarregando] = useState(false)
   const [comps, setComps] = useState([])        // [{ id, mes }] dos meses com balancete
-  const [contas, setContas] = useState([])      // [{ conta, nome }] união de contas
-  const [matriz, setMatriz] = useState({})      // { conta: { mes: saldo_final } }
+  const [contas, setContas] = useState([])      // [{ reduzido, classif, nome, grau, sintetica }] união (sint. + analít.)
+  const [matriz, setMatriz] = useState({})      // { classif: { mes: saldo_final } }
   const [detalhe, setDetalhe] = useState(null)  // { conta, nome, mes, compId }
   const [justificadas, setJustificadas] = useState(() => new Set()) // 'conta|mes' já justificadas/corrigidas localmente
 
@@ -67,32 +68,34 @@ export default function CompMovimento() {
         if (!competencias || !competencias.length) { setCarregando(false); return }
 
         const compsComDados = []
-        const nomesPorConta = {}
-        const m = {}
+        const meta = {}   // classif → { reduzido, classif, nome, grau, sintetica }
+        const m = {}      // classif → { mes: saldo_final }
 
         for (const c of competencias) {
-          const { data: bal } = await supabase
-            .from('balancete').select('conta, nome, saldo_final')
-            .eq('competencia_id', c.id)
+          const { linhas } = await montarBalancete(empresaId, c.id)
           if (!vivo) return
-          if (!bal || !bal.length) continue
+          // Comparativo trata só contas de resultado: Receita (3), Custos (4) e Despesas (5).
+          const res = linhas.filter(l => { const d = String(l.classif).trim()[0]; return d === '3' || d === '4' || d === '5' })
+          if (!res.length) continue
 
           compsComDados.push({ id: c.id, mes: c.mes })
-          for (const b of bal) {
-            if (!b.conta) continue
-            // Comparativo de movimento trata só Receita (3), Custos (4) e Despesas (5).
-            const d = String(b.conta).trim()[0]
-            if (d !== '3' && d !== '4' && d !== '5') continue
-            if (!m[b.conta]) m[b.conta] = {}
-            m[b.conta][c.mes] = Number(b.saldo_final) || 0
-            if (b.nome && !nomesPorConta[b.conta]) nomesPorConta[b.conta] = b.nome
+          for (const l of res) {
+            if (!meta[l.classif]) {
+              meta[l.classif] = { reduzido: l.reduzido, classif: l.classif, nome: l.nome, grau: l.grau, sintetica: l.sintetica }
+            } else {
+              if (!meta[l.classif].nome && l.nome) meta[l.classif].nome = l.nome
+              if (!meta[l.classif].reduzido && l.reduzido) meta[l.classif].reduzido = l.reduzido
+              // analítica (folha) em qualquer mês → conta é clicável (não sintética).
+              meta[l.classif].sintetica = meta[l.classif].sintetica && l.sintetica
+            }
+            if (!m[l.classif]) m[l.classif] = {}
+            m[l.classif][c.mes] = l.saldo_final
           }
         }
 
         if (!vivo) return
-        const listaContas = Object.keys(m)
-          .sort((a, b) => a.localeCompare(b, 'pt-BR', { numeric: true }))
-          .map(conta => ({ conta, nome: nomesPorConta[conta] || '' }))
+        const listaContas = Object.values(meta)
+          .sort((a, b) => String(a.classif).localeCompare(String(b.classif), 'pt-BR', { numeric: true }))
 
         setComps(compsComDados)
         setContas(listaContas)
@@ -137,13 +140,15 @@ export default function CompMovimento() {
   }
 
   // Conta as células desviantes (vermelhas) ainda não justificadas/corrigidas.
+  // Só nas analíticas — as sintéticas são totais (não se justificam diretamente).
   let pendentes = 0
-  for (const { conta } of contas) {
-    const linha = matriz[conta] || {}
+  for (const { classif, sintetica } of contas) {
+    if (sintetica) continue
+    const linha = matriz[classif] || {}
     for (const c of comps) {
       const v = linha[c.mes]
       if (v == null) continue
-      if (desviante(conta, v) && !justificadas.has(chaveCelula(conta, c.mes))) pendentes++
+      if (desviante(classif, v) && !justificadas.has(chaveCelula(classif, c.mes))) pendentes++
     }
   }
 
@@ -218,30 +223,35 @@ export default function CompMovimento() {
             <table style={{ borderCollapse: 'collapse', width: '100%' }}>
               <thead>
                 <tr style={{ background: theme.input }}>
-                  <th style={{ ...th, position: 'sticky', left: 0, background: theme.input, minWidth: 220 }}>Conta</th>
+                  <th style={{ ...th, minWidth: 70 }}>Conta</th>
+                  <th style={{ ...th, minWidth: 110 }}>Classificação</th>
+                  <th style={{ ...th, minWidth: 220 }}>Nome da Conta</th>
                   {comps.map(c => (
                     <th key={c.mes} style={{ ...th, textAlign: 'right' }}>{MESES[c.mes - 1]}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {contas.map(({ conta, nome }) => {
-                  const linha = matriz[conta] || {}
+                {contas.map(({ reduzido, classif, nome, grau, sintetica }) => {
+                  const linha = matriz[classif] || {}
+                  const indent = Math.max(0, (Number(grau) || 1) - 1) * 14
                   return (
-                    <tr key={conta} style={{ borderTop: `1px solid ${theme.border}` }}>
-                      <td style={{ ...td, position: 'sticky', left: 0, background: theme.card, maxWidth: 260 }}>
-                        <span style={{ color: theme.text }}>{conta}</span>
-                        {nome && <span style={{ color: theme.sub }}> · {nome}</span>}
-                      </td>
+                    <tr key={classif} style={{ borderTop: `1px solid ${theme.border}`, background: sintetica ? theme.input : 'transparent' }}>
+                      <td style={{ ...td, color: theme.sub, fontSize: 11 }}>{reduzido || ''}</td>
+                      <td style={{ ...td, color: theme.sub, fontSize: 11 }}>{classif}</td>
+                      <td style={{ ...td, paddingLeft: 14 + indent, fontWeight: sintetica ? 700 : 400, maxWidth: 320 }}>{nome || '—'}</td>
                       {comps.map(c => {
                         const v = linha[c.mes]
                         if (v == null) return <td key={c.mes} style={{ ...td, textAlign: 'right' }} />
-                        const red = desviante(conta, v)
-                        const ok = red && justificadas.has(chaveCelula(conta, c.mes))
+                        if (sintetica) {
+                          return <td key={c.mes} style={{ ...td, textAlign: 'right', fontWeight: 700 }}>{money(v)}</td>
+                        }
+                        const red = desviante(classif, v)
+                        const ok = red && justificadas.has(chaveCelula(classif, c.mes))
                         return (
                           <td key={c.mes} style={{ ...td, textAlign: 'right' }}>
                             <button
-                              onClick={() => setDetalhe({ conta, nome, mes: c.mes, compId: c.id })}
+                              onClick={() => setDetalhe({ conta: classif, nome, mes: c.mes, compId: c.id })}
                               style={{
                                 display: 'inline-flex', alignItems: 'center', gap: 4, justifyContent: 'flex-end',
                                 background: 'none', border: 'none', padding: 0, cursor: 'pointer',
