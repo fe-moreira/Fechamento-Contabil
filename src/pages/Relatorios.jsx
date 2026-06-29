@@ -3,7 +3,10 @@ import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
 import { apurarDistribuicao } from '../lib/distribuicao'
 import { apurarBancoResultado } from '../lib/bancoResultado'
+import { apurarVariacoes } from '../lib/variacoes'
 import { theme, money } from '../lib/theme'
+
+const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
 
 // Valor pt-BR para CSV ("1234.56" -> "1234,56").
 function csvNum(v) {
@@ -47,8 +50,10 @@ const RELATORIOS = [
   { id: 'dre', nome: 'DRE (resumo)', icon: 'ti-report-money', desc: 'Demonstração de resultado simplificada por prefixo de conta.' },
   { id: 'book', nome: 'Book de Composições', icon: 'ti-book', desc: 'Contas do balancete com saldo final diferente de zero.' },
   { id: 'balanco', nome: 'Balanço Patrimonial', icon: 'ti-scale', desc: 'Ativo e Passivo + Patrimônio Líquido por conta (saldo final).' },
+  { id: 'comparativo', nome: 'Comparativo de Movimento', icon: 'ti-arrows-diff', desc: 'Saldo de cada conta ao longo dos meses do ano.' },
   { id: 'pendencias', nome: 'Relatório de Pendências', icon: 'ti-alert-triangle', desc: 'Documentos da competência ainda não recebidos.' },
   { id: 'bancoresult', nome: 'Banco × Resultado', icon: 'ti-building-bank', desc: 'Lançamentos de banco direto em conta de resultado não liberada.' },
+  { id: 'indedutiveis', nome: 'Despesas indedutíveis (LALUR)', icon: 'ti-receipt', desc: 'Despesas classificadas como indedutíveis nas justificativas.' },
   { id: 'distribuicao', nome: 'Distribuição de lucros · IRRF 2026', icon: 'ti-cash', desc: 'Apuração por sócio: total recebido, limite e IRRF estimado.' },
   { id: 'auditoria', nome: 'Justificativas e correções do fechamento', icon: 'ti-clipboard-check', desc: 'Consolida toda a auditoria registrada nesta competência.' },
 ]
@@ -62,11 +67,12 @@ export default function Relatorios() {
   const [auditoria, setAuditoria] = useState([])    // auditoria desta competência
   const [dist, setDist] = useState(null)            // apuração de distribuição de lucros
   const [br, setBr] = useState(null)                // apuração banco × resultado
+  const [comparativo, setComparativo] = useState(null) // matriz conta × mês do ano
   const [aba, setAba] = useState('balancete')
 
   // Resolve a competência (READ-ONLY) e lê balancete + documentos + auditoria.
   useEffect(() => {
-    setLinhas([]); setDocumentos([]); setAuditoria([]); setDist(null); setBr(null); setTemComp(null)
+    setLinhas([]); setDocumentos([]); setAuditoria([]); setDist(null); setBr(null); setComparativo(null); setTemComp(null)
     if (!empresaId) return
     let vivo = true
     ;(async () => {
@@ -97,6 +103,8 @@ export default function Relatorios() {
         if (vivo) setDist(d)
         const b = await apurarBancoResultado(empresaId, comp.id)
         if (vivo) setBr(b)
+        const cmp = await apurarVariacoes(empresaId)
+        if (vivo) setComparativo(cmp)
       } finally {
         if (vivo) setCarregando(false)
       }
@@ -135,6 +143,9 @@ export default function Relatorios() {
   const passivo = linhas.filter(l => String(l.conta || '').startsWith('2'))
   const totAtivo = ativo.reduce((s, l) => s + (Number(l.saldo_final) || 0), 0)
   const totPassivo = passivo.reduce((s, l) => s + (Number(l.saldo_final) || 0), 0)
+
+  // Despesas indedutíveis (LALUR): justificativas com dedutibilidade indedutível.
+  const indedutiveis = auditoria.filter(a => String(a.dedutibilidade || '').toLowerCase().startsWith('indedut'))
 
   // Pendências: documentos não recebidos (rec === false).
   const pendencias = documentos.filter(d => d && d.rec === false)
@@ -212,6 +223,25 @@ export default function Relatorios() {
       ['', '', 'TOTAL PASSIVO + PL', csvNum(totPassivo)],
     ]
     baixarCSV(`balanco_${compSlug}.csv`, dados)
+  }
+
+  function exportarComparativo() {
+    const meses = comparativo?.meses || []
+    const dados = [
+      ['Conta', 'Nome', ...meses.map(m => MESES[m - 1])],
+      ...(comparativo?.contas || []).map(c => [c.conta, c.nome, ...meses.map(m => {
+        const v = comparativo.matriz[c.conta]?.[m]; return v == null ? '' : csvNum(v)
+      })]),
+    ]
+    baixarCSV('comparativo_2026.csv', dados)
+  }
+
+  function exportarIndedutiveis() {
+    const dados = [
+      ['Item', 'Detalhe', 'Usuário', 'Data'],
+      ...indedutiveis.map(a => [a.item, a.detalhe, a.usuario, dataPtBR(a.created_at)]),
+    ]
+    baixarCSV(`indedutiveis_lalur_${compSlug}.csv`, dados)
   }
 
   const semBalancete = !carregando && temComp && linhas.length === 0
@@ -355,6 +385,66 @@ export default function Relatorios() {
             <GrupoBalanco titulo="Ativo" contas={ativo} total={totAtivo} />
             <GrupoBalanco titulo="Passivo + Patrimônio Líquido" contas={passivo} total={totPassivo} />
           </div>
+        </Secao>
+      )}
+
+      {/* Comparativo de Movimento */}
+      {!carregando && temComp && aba === 'comparativo' && (
+        <Secao titulo="Comparativo de Movimento" onExportar={comparativo?.contas?.length ? exportarComparativo : null}>
+          {!comparativo?.contas?.length ? (
+            <Aviso icon="ti-database-off" texto="Importe o razão em ao menos uma competência para comparar." />
+          ) : (
+            <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 640 }}>
+                <thead>
+                  <tr style={{ background: theme.input }}>
+                    <th style={{ ...th, position: 'sticky', left: 0, background: theme.input }}>Conta</th>
+                    {comparativo.meses.map(m => <th key={m} style={thNum}>{MESES[m - 1]}</th>)}
+                  </tr>
+                </thead>
+                <tbody>
+                  {comparativo.contas.map(({ conta, nome }) => (
+                    <tr key={conta} style={{ borderTop: `1px solid ${theme.border}` }}>
+                      <td style={{ ...td, position: 'sticky', left: 0, background: theme.card }}><span style={{ color: theme.sub, fontSize: 11 }}>{conta}</span> {nome}</td>
+                      {comparativo.meses.map(m => {
+                        const v = comparativo.matriz[conta]?.[m]
+                        return <td key={m} style={tdNum}>{v == null ? '' : money(v)}</td>
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Secao>
+      )}
+
+      {/* Despesas indedutíveis (LALUR) */}
+      {!carregando && temComp && aba === 'indedutiveis' && (
+        <Secao titulo="Despesas indedutíveis (LALUR)" onExportar={indedutiveis.length ? exportarIndedutiveis : null}>
+          {indedutiveis.length === 0 ? (
+            <Aviso icon="ti-receipt" texto="Nenhuma despesa classificada como indedutível. Classifique no Status → Banco × resultado (justificar despesa)." />
+          ) : (
+            <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ background: theme.input }}>
+                    <th style={th}>Item</th><th style={th}>Detalhe</th><th style={th}>Usuário</th><th style={th}>Data</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {indedutiveis.map((a, i) => (
+                    <tr key={i} style={{ borderTop: `1px solid ${theme.border}` }}>
+                      <td style={td}>{a.item || '—'}</td>
+                      <td style={{ ...td, maxWidth: 320, whiteSpace: 'normal' }}>{a.detalhe || '—'}</td>
+                      <td style={td}>{a.usuario || '—'}</td>
+                      <td style={{ ...td, whiteSpace: 'nowrap' }}>{dataPtBR(a.created_at)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </Secao>
       )}
 
