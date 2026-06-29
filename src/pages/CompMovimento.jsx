@@ -68,34 +68,35 @@ export default function CompMovimento() {
         if (!competencias || !competencias.length) { setCarregando(false); return }
 
         const compsComDados = []
-        const meta = {}   // classif → { reduzido, classif, nome, grau, sintetica }
-        const m = {}      // classif → { mes: saldo_final }
+        const meta = {}   // classifRaw → { reduzido, classif, classifRaw, nome, grau, sintetica }
+        const m = {}      // classifRaw → { mes: saldo_final }
 
         for (const c of competencias) {
           const { linhas } = await montarBalancete(empresaId, c.id)
           if (!vivo) return
           // Comparativo trata só contas de resultado: Receita (3), Custos (4) e Despesas (5).
-          const res = linhas.filter(l => { const d = String(l.classif).trim()[0]; return d === '3' || d === '4' || d === '5' })
+          const res = linhas.filter(l => { const d = String(l.classifRaw || l.classif).trim()[0]; return d === '3' || d === '4' || d === '5' })
           if (!res.length) continue
 
           compsComDados.push({ id: c.id, mes: c.mes })
           for (const l of res) {
-            if (!meta[l.classif]) {
-              meta[l.classif] = { reduzido: l.reduzido, classif: l.classif, nome: l.nome, grau: l.grau, sintetica: l.sintetica }
+            const key = l.classifRaw || l.classif
+            if (!meta[key]) {
+              meta[key] = { reduzido: l.reduzido, classif: l.classif, classifRaw: key, nome: l.nome, grau: l.grau, sintetica: l.sintetica }
             } else {
-              if (!meta[l.classif].nome && l.nome) meta[l.classif].nome = l.nome
-              if (!meta[l.classif].reduzido && l.reduzido) meta[l.classif].reduzido = l.reduzido
+              if (!meta[key].nome && l.nome) meta[key].nome = l.nome
+              if (!meta[key].reduzido && l.reduzido) meta[key].reduzido = l.reduzido
               // analítica (folha) em qualquer mês → conta é clicável (não sintética).
-              meta[l.classif].sintetica = meta[l.classif].sintetica && l.sintetica
+              meta[key].sintetica = meta[key].sintetica && l.sintetica
             }
-            if (!m[l.classif]) m[l.classif] = {}
-            m[l.classif][c.mes] = l.saldo_final
+            if (!m[key]) m[key] = {}
+            m[key][c.mes] = l.saldo_final
           }
         }
 
         if (!vivo) return
         const listaContas = Object.values(meta)
-          .sort((a, b) => String(a.classif).localeCompare(String(b.classif), 'pt-BR', { numeric: true }))
+          .sort((a, b) => String(a.classifRaw).localeCompare(String(b.classifRaw), 'pt-BR', { numeric: true }))
 
         setComps(compsComDados)
         setContas(listaContas)
@@ -142,13 +143,13 @@ export default function CompMovimento() {
   // Conta as células desviantes (vermelhas) ainda não justificadas/corrigidas.
   // Só nas analíticas — as sintéticas são totais (não se justificam diretamente).
   let pendentes = 0
-  for (const { classif, sintetica } of contas) {
+  for (const { reduzido, classifRaw, sintetica } of contas) {
     if (sintetica) continue
-    const linha = matriz[classif] || {}
+    const linha = matriz[classifRaw] || {}
     for (const c of comps) {
       const v = linha[c.mes]
       if (v == null) continue
-      if (desviante(classif, v) && !justificadas.has(chaveCelula(classif, c.mes))) pendentes++
+      if (desviante(classifRaw, v) && !justificadas.has(chaveCelula(reduzido, c.mes))) pendentes++
     }
   }
 
@@ -232,11 +233,11 @@ export default function CompMovimento() {
                 </tr>
               </thead>
               <tbody>
-                {contas.map(({ reduzido, classif, nome, grau, sintetica }) => {
-                  const linha = matriz[classif] || {}
+                {contas.map(({ reduzido, classif, classifRaw, nome, grau, sintetica }) => {
+                  const linha = matriz[classifRaw] || {}
                   const indent = Math.max(0, (Number(grau) || 1) - 1) * 14
                   return (
-                    <tr key={classif} style={{ borderTop: `1px solid ${theme.border}`, background: sintetica ? theme.input : 'transparent' }}>
+                    <tr key={classifRaw} style={{ borderTop: `1px solid ${theme.border}`, background: sintetica ? theme.input : 'transparent' }}>
                       <td style={{ ...td, color: theme.sub, fontSize: 11 }}>{reduzido || ''}</td>
                       <td style={{ ...td, color: theme.sub, fontSize: 11 }}>{classif}</td>
                       <td style={{ ...td, paddingLeft: 14 + indent, fontWeight: sintetica ? 700 : 400, maxWidth: 320 }}>{nome || '—'}</td>
@@ -246,12 +247,12 @@ export default function CompMovimento() {
                         if (sintetica) {
                           return <td key={c.mes} style={{ ...td, textAlign: 'right', fontWeight: 700 }}>{money(v)}</td>
                         }
-                        const red = desviante(classif, v)
-                        const ok = red && justificadas.has(chaveCelula(classif, c.mes))
+                        const red = desviante(classifRaw, v)
+                        const ok = red && justificadas.has(chaveCelula(reduzido, c.mes))
                         return (
                           <td key={c.mes} style={{ ...td, textAlign: 'right' }}>
                             <button
-                              onClick={() => setDetalhe({ conta: classif, nome, mes: c.mes, compId: c.id })}
+                              onClick={() => setDetalhe({ conta: reduzido, classif, nome, mes: c.mes, compId: c.id })}
                               style={{
                                 display: 'inline-flex', alignItems: 'center', gap: 4, justifyContent: 'flex-end',
                                 background: 'none', border: 'none', padding: 0, cursor: 'pointer',
