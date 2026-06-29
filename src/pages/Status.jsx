@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { apurarDistribuicao } from '../lib/distribuicao'
+import { apurarBancoResultado } from '../lib/bancoResultado'
 import { theme, money } from '../lib/theme'
 
 export default function Status() {
@@ -48,8 +49,9 @@ export default function Status() {
     }
 
     const dist = await apurarDistribuicao(empresaId, comp?.id)
+    const br = await apurarBancoResultado(empresaId, comp?.id)
 
-    setDados({ temRazao, docsPendentes, contasAbertas, cargaInicialPendente, dist })
+    setDados({ temRazao, docsPendentes, contasAbertas, cargaInicialPendente, dist, br })
     setCarregando(false)
   }
 
@@ -106,7 +108,18 @@ export default function Status() {
       })),
     },
     { key: 'variacoes', nome: 'Variações', icon: 'ti-chart-line', descricao: 'Análise de variações entre competências (Comp. Movimento).', itens: [], emBreve: true },
-    { key: 'banco', nome: 'Banco × resultado', icon: 'ti-building-bank', descricao: 'Conferência do banco contra o resultado apurado.', itens: [], emBreve: true },
+    {
+      key: 'banco',
+      nome: 'Lançamentos banco × resultado',
+      icon: 'ti-building-bank',
+      descricao: dados.br?.temCarga
+        ? 'Banco lançado direto em conta de resultado não liberada.'
+        : 'Importe a amarração banco × resultado em Base de Informações.',
+      itens: (dados.br?.lancamentos || []).map(l => ({
+        item: `${l.banco} → ${l.resultado} · ${money(l.valor)}`,
+        detalhe: `${l.historico}${l.despesa ? ' — despesa: classificar dedutível/indedutível (LALUR)' : ''}`,
+      })),
+    },
     {
       key: 'distribuicao',
       nome: 'Distribuição de lucros · IRRF 2026',

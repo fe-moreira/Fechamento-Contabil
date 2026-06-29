@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useRef, useState } from 'react'
 import { supabase } from './supabase'
 import { useAuth } from '../components/AuthProvider'
 import { apurarDistribuicao } from './distribuicao'
+import { apurarBancoResultado } from './bancoResultado'
 
 // Estado compartilhado: empresa (cliente) e competência selecionadas no topo,
 // usados pelos módulos de fechamento. Resolve/cria a linha de `competencias`
@@ -43,6 +44,8 @@ export function AppDataProvider({ children }) {
     p += (bal || []).filter(b => Math.abs(Number(b.saldo_final)) > 0.01).length
     const dist = await apurarDistribuicao(empresaId, comp.id)
     p += (dist.socios || []).filter(s => s.excede).length
+    const br = await apurarBancoResultado(empresaId, comp.id)
+    p += (br.lancamentos || []).length
     setPendencias(p)
   }
   useEffect(() => { recalcularPendencias() }, [empresaId, competencia])

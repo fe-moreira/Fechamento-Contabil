@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
 import { apurarDistribuicao } from '../lib/distribuicao'
+import { apurarBancoResultado } from '../lib/bancoResultado'
 import { theme, money } from '../lib/theme'
 
 // Valor pt-BR para CSV ("1234.56" -> "1234,56").
@@ -47,6 +48,7 @@ const RELATORIOS = [
   { id: 'book', nome: 'Book de Composições', icon: 'ti-book', desc: 'Contas do balancete com saldo final diferente de zero.' },
   { id: 'balanco', nome: 'Balanço Patrimonial', icon: 'ti-scale', desc: 'Ativo e Passivo + Patrimônio Líquido por conta (saldo final).' },
   { id: 'pendencias', nome: 'Relatório de Pendências', icon: 'ti-alert-triangle', desc: 'Documentos da competência ainda não recebidos.' },
+  { id: 'bancoresult', nome: 'Banco × Resultado', icon: 'ti-building-bank', desc: 'Lançamentos de banco direto em conta de resultado não liberada.' },
   { id: 'distribuicao', nome: 'Distribuição de lucros · IRRF 2026', icon: 'ti-cash', desc: 'Apuração por sócio: total recebido, limite e IRRF estimado.' },
   { id: 'auditoria', nome: 'Justificativas e correções do fechamento', icon: 'ti-clipboard-check', desc: 'Consolida toda a auditoria registrada nesta competência.' },
 ]
@@ -59,11 +61,12 @@ export default function Relatorios() {
   const [documentos, setDocumentos] = useState([]) // competencias.documentos
   const [auditoria, setAuditoria] = useState([])    // auditoria desta competência
   const [dist, setDist] = useState(null)            // apuração de distribuição de lucros
+  const [br, setBr] = useState(null)                // apuração banco × resultado
   const [aba, setAba] = useState('balancete')
 
   // Resolve a competência (READ-ONLY) e lê balancete + documentos + auditoria.
   useEffect(() => {
-    setLinhas([]); setDocumentos([]); setAuditoria([]); setDist(null); setTemComp(null)
+    setLinhas([]); setDocumentos([]); setAuditoria([]); setDist(null); setBr(null); setTemComp(null)
     if (!empresaId) return
     let vivo = true
     ;(async () => {
@@ -92,6 +95,8 @@ export default function Relatorios() {
         setAuditoria(aud || [])
         const d = await apurarDistribuicao(empresaId, comp.id)
         if (vivo) setDist(d)
+        const b = await apurarBancoResultado(empresaId, comp.id)
+        if (vivo) setBr(b)
       } finally {
         if (vivo) setCarregando(false)
       }
@@ -178,6 +183,16 @@ export default function Relatorios() {
       ...auditoria.map(a => [a.modulo, a.item, a.tipo, a.detalhe, a.dedutibilidade, a.usuario, dataPtBR(a.created_at)]),
     ]
     baixarCSV(`auditoria_${compSlug}.csv`, dados)
+  }
+
+  function exportarBancoResult() {
+    const dados = [
+      ['Data', 'Banco', 'Conta resultado', 'Valor', 'Despesa (LALUR)', 'Histórico'],
+      ...(br?.lancamentos || []).map(l => [
+        l.data ? l.data.split('-').reverse().join('/') : '', l.banco, l.resultado, csvNum(l.valor), l.despesa ? 'Sim' : 'Não', l.historico,
+      ]),
+    ]
+    baixarCSV(`banco_x_resultado_${compSlug}.csv`, dados)
   }
 
   function exportarDistribuicao() {
@@ -362,6 +377,40 @@ export default function Relatorios() {
                     <tr key={i} style={{ borderTop: `1px solid ${theme.border}` }}>
                       <td style={td}>{d.name || '—'}</td>
                       <td style={td}>{d.cat || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Secao>
+      )}
+
+      {/* Banco × Resultado */}
+      {!carregando && temComp && aba === 'bancoresult' && (
+        <Secao titulo="Banco × Resultado" onExportar={br?.lancamentos?.length ? exportarBancoResult : null}>
+          {!br?.temCarga ? (
+            <Aviso icon="ti-settings" texto="Importe a amarração banco × resultado em Base de Informações." />
+          ) : br.lancamentos.length === 0 ? (
+            <Aviso icon="ti-circle-check" texto="Nenhum lançamento de banco direto em resultado não liberado." />
+          ) : (
+            <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'auto' }}>
+              <table style={{ width: '100%', minWidth: 700, borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ background: theme.input }}>
+                    <th style={th}>Data</th><th style={th}>Banco</th><th style={th}>Conta resultado</th>
+                    <th style={thNum}>Valor</th><th style={th}>LALUR</th><th style={th}>Histórico</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {br.lancamentos.map((l, i) => (
+                    <tr key={i} style={{ borderTop: `1px solid ${theme.border}` }}>
+                      <td style={{ ...td, whiteSpace: 'nowrap' }}>{l.data ? l.data.split('-').reverse().join('/') : ''}</td>
+                      <td style={td}>{l.banco}</td>
+                      <td style={td}>{l.resultado}</td>
+                      <td style={tdNum}>{money(l.valor)}</td>
+                      <td style={td}>{l.despesa ? <span style={{ color: theme.yellow }}>despesa</span> : '—'}</td>
+                      <td style={{ ...td, maxWidth: 280, whiteSpace: 'normal' }}>{l.historico}</td>
                     </tr>
                   ))}
                 </tbody>
