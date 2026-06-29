@@ -3,6 +3,7 @@ import { supabase } from './supabase'
 import { useAuth } from '../components/AuthProvider'
 import { apurarDistribuicao } from './distribuicao'
 import { apurarBancoResultado } from './bancoResultado'
+import { apurarVariacoes } from './variacoes'
 
 // Estado compartilhado: empresa (cliente) e competência selecionadas no topo,
 // usados pelos módulos de fechamento. Resolve/cria a linha de `competencias`
@@ -46,6 +47,8 @@ export function AppDataProvider({ children }) {
     p += (dist.socios || []).filter(s => s.excede).length
     const br = await apurarBancoResultado(empresaId, comp.id)
     p += (br.lancamentos || []).length
+    const variacoes = await apurarVariacoes(empresaId)
+    p += (variacoes.itens || []).length
     setPendencias(p)
   }
   useEffect(() => { recalcularPendencias() }, [empresaId, competencia])

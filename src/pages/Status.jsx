@@ -4,7 +4,10 @@ import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { apurarDistribuicao } from '../lib/distribuicao'
 import { apurarBancoResultado } from '../lib/bancoResultado'
+import { apurarVariacoes } from '../lib/variacoes'
 import { theme, money } from '../lib/theme'
+
+const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
 
 export default function Status() {
   const { empresaId, empresaNome, competencia, getCompetenciaId } = useAppData()
@@ -50,8 +53,9 @@ export default function Status() {
 
     const dist = await apurarDistribuicao(empresaId, comp?.id)
     const br = await apurarBancoResultado(empresaId, comp?.id)
+    const variacoes = await apurarVariacoes(empresaId)
 
-    setDados({ temRazao, docsPendentes, contasAbertas, cargaInicialPendente, dist, br })
+    setDados({ temRazao, docsPendentes, contasAbertas, cargaInicialPendente, dist, br, variacoes })
     setCarregando(false)
   }
 
@@ -107,7 +111,16 @@ export default function Status() {
         detalhe: `Saldo final ${money(c.saldo_final)} em aberto.`,
       })),
     },
-    { key: 'variacoes', nome: 'Variações', icon: 'ti-chart-line', descricao: 'Análise de variações entre competências (Comp. Movimento).', itens: [], emBreve: true },
+    {
+      key: 'variacoes',
+      nome: 'Variações sem justificativa',
+      icon: 'ti-arrows-diff',
+      descricao: 'Contas com variação acima de 10% da média ainda não justificadas (Comp. Movimento).',
+      itens: (dados.variacoes?.itens || []).map(v => ({
+        item: `${v.conta}${v.nome ? ' · ' + v.nome : ''} · ${MESES[v.mes - 1]} · ${money(v.valor)}`,
+        detalhe: 'Variação acima de 10% da média do ano. Justifique ou corrija no Comp. Movimento.',
+      })),
+    },
     {
       key: 'banco',
       nome: 'Lançamentos banco × resultado',
@@ -118,6 +131,7 @@ export default function Status() {
       itens: (dados.br?.lancamentos || []).map(l => ({
         item: `${l.banco} → ${l.resultado} · ${money(l.valor)}`,
         detalhe: `${l.historico}${l.despesa ? ' — despesa: classificar dedutível/indedutível (LALUR)' : ''}`,
+        lalur: l.despesa,
       })),
     },
     {
@@ -151,10 +165,10 @@ export default function Status() {
     if (!error) { setStatus('andamento'); setMsg('Fechamento reaberto.') }
   }
 
-  async function registrar(item, tipo, detalhe) {
+  async function registrar(item, tipo, detalhe, dedutibilidade) {
     const id = await getCompetenciaId()
     await supabase.from('auditoria').insert({
-      competencia_id: id, modulo: 'Status', item, tipo, detalhe, usuario: user?.email,
+      competencia_id: id, modulo: 'Status', item, tipo, detalhe, dedutibilidade: dedutibilidade || null, usuario: user?.email,
     })
     setMsg(`${tipo} registrada na auditoria.`)
     setModal(null)
@@ -296,8 +310,9 @@ export default function Status() {
         <ModalRegistro
           tipo={modal.tipo}
           alvo={modal.item.item}
+          lalur={modal.item.lalur}
           onClose={() => setModal(null)}
-          onConfirmar={(txt) => registrar(modal.item.item, modal.tipo, txt)}
+          onConfirmar={(txt, dedut) => registrar(modal.item.item, modal.tipo, txt, dedut)}
         />
       )}
     </Wrapper>
@@ -341,8 +356,9 @@ function PainelGate({ gate, onClose, onJustificar, onCorrigir }) {
   )
 }
 
-function ModalRegistro({ tipo, alvo, onClose, onConfirmar }) {
+function ModalRegistro({ tipo, alvo, lalur, onClose, onConfirmar }) {
   const [txt, setTxt] = useState('')
+  const [dedut, setDedut] = useState('')
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 60 }}>
       <div onClick={e => e.stopPropagation()} style={{ width: 'min(480px,96vw)', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
@@ -351,11 +367,21 @@ function ModalRegistro({ tipo, alvo, onClose, onConfirmar }) {
           <b style={{ color: theme.text }}>{alvo}</b><br />
           Fica registrada na auditoria com seu usuário e a data.
         </p>
+        {lalur && (
+          <div style={{ marginBottom: 14 }}>
+            <label>Classificação LALUR (despesa)</label>
+            <div style={{ display: 'flex', gap: 8 }}>
+              {['Dedutível', 'Indedutível'].map(op => (
+                <button key={op} type="button" className={dedut === op ? 'btn' : 'btn btn-ghost'} style={{ fontSize: 13 }} onClick={() => setDedut(op)}>{op}</button>
+              ))}
+            </div>
+          </div>
+        )}
         <textarea className="input" rows={3} value={txt} onChange={e => setTxt(e.target.value)} autoFocus
           placeholder={tipo === 'Correção' ? 'O que foi corrigido…' : 'Por que esta pendência pode ser liberada…'} />
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
           <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
-          <button className="btn" onClick={() => txt.trim() && onConfirmar(txt.trim())}>Registrar</button>
+          <button className="btn" onClick={() => txt.trim() && (!lalur || dedut) && onConfirmar(txt.trim(), dedut || null)}>Registrar</button>
         </div>
       </div>
     </div>
