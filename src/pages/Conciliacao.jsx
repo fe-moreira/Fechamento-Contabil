@@ -26,6 +26,10 @@ function tipoConta(nome) {
 
 const baixaTxt = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
 
+// Forma canônica do código: separa por qualquer não-dígito e tira zeros à esquerda de
+// cada segmento. Assim "01.01.001", "1-1-1" e "1.1.1" casam entre si.
+const canon = c => String(c ?? '').split(/[^0-9]+/).filter(Boolean).map(s => String(parseInt(s, 10))).join('.')
+
 // Monta { código: { nome, classif } } a partir do plano de contas importado.
 function montarPlano(dados) {
   const rows = Array.isArray(dados) ? dados : []
@@ -38,7 +42,10 @@ function montarPlano(dados) {
   for (const r of rows) {
     const cod = String(r[kCod] ?? '').trim()
     if (!cod) continue
-    map[cod] = { nome: String((kNome ? r[kNome] : '') ?? '').trim(), classif: String((kClass ? r[kClass] : '') ?? '').trim() }
+    const val = { nome: String((kNome ? r[kNome] : '') ?? '').trim(), classif: String((kClass ? r[kClass] : '') ?? '').trim() }
+    map[cod] = val
+    const cn = canon(cod)
+    if (cn && !map[cn]) map[cn] = val
   }
   return map
 }
@@ -81,7 +88,7 @@ export default function Conciliacao() {
         const { data } = await supabase.from('balancete').select('conta, nome, saldo_inicial, debito, credito, saldo_final')
           .eq('competencia_id', comp.id).order('conta')
         setContas((data || []).map(b => {
-          const p = plano[String(b.conta).trim()] || {}
+          const p = plano[String(b.conta).trim()] || plano[canon(b.conta)] || {}
           const nome = p.nome || b.nome || ''
           const classif = p.classif || ''
           return { ...b, nome, classif, tipo: tipoPorClassif(classif) || tipoConta(nome || b.conta) }
