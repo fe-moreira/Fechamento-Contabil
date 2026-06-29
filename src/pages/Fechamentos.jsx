@@ -14,7 +14,7 @@ const ST = {
 }
 
 export default function Fechamentos() {
-  const { empresaId, empresaNome, competencia, setCompetencia, isAdmin, recalcularPendencias } = useAppData()
+  const { empresaId, empresaNome, competencia, setCompetencia, abrirFechamento, isAdmin, recalcularPendencias } = useAppData()
   const nav = useNavigate()
   const [lista, setLista] = useState([])
   const [loading, setLoading] = useState(true)
@@ -41,7 +41,7 @@ export default function Fechamentos() {
   filtrada.forEach(c => { cont[c.status] = (cont[c.status] || 0) + 1 })
 
   function abrir(c) {
-    setCompetencia(`${String(c.mes).padStart(2, '0')}/${c.ano}`)
+    abrirFechamento(c.mes, c.ano) // marca o fechamento como ativo (libera as funções)
     nav('/status')
   }
   async function criar() {
