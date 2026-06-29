@@ -82,6 +82,28 @@ function tipoConta(nome) {
   return 'Saldo'
 }
 
+// Agrupa lançamentos por cliente/fornecedor (unificando nomes parecidos) → blocos p/ relatório.
+function agruparPorCliente(lancs) {
+  const grupos = {}, nomes = []
+  for (const l of lancs) {
+    const k = l.leitura?.ident && l.leitura.entidade ? l.leitura.entidade : '(não identificado)'
+    if (!grupos[k]) { grupos[k] = []; nomes.push(k) }
+    grupos[k].push(l)
+  }
+  const idents = nomes.filter(k => k !== '(não identificado)')
+  const tk = Object.fromEntries(idents.map(k => [k, tokensNome(k)]))
+  const clusters = []
+  for (const k of idents) {
+    const alvo = clusters.find(cl => cl.some(m => mesmoCliente(tk[k], tk[m])))
+    if (alvo) alvo.push(k); else clusters.push([k])
+  }
+  if (grupos['(não identificado)']) clusters.push(['(não identificado)'])
+  return clusters.map(membros => {
+    const cliente = membros.slice().sort((a, b) => b.length - a.length)[0]
+    return { cliente, lancs: membros.flatMap(m => grupos[m]) }
+  }).sort((a, b) => (a.cliente === '(não identificado)' ? 1 : 0) - (b.cliente === '(não identificado)' ? 1 : 0) || a.cliente.localeCompare(b.cliente, 'pt-BR'))
+}
+
 // Composição "por entidade" (cliente/fornecedor + NF): só clientes, fornecedores,
 // contas a pagar e adiantamentos. As demais contas mostram só os lançamentos do razão,
 // sem extrair nome/NF nem agrupar por entidade.
@@ -333,6 +355,17 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, getCompetenc
 
   const somaComp = lanc.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
   const dif = conta.saldo_final - somaComp
+
+  // Resíduo da NF do lançamento (D - C de todos os lançamentos da mesma NF) — usado para
+  // tratar a diferença como desconto/juros quando NF e cliente batem mas o valor não.
+  function residuoNF(l) {
+    const k = nfKey(l?.leitura?.nf)
+    if (!k) return 0
+    const mesmos = lanc.filter(x => nfKey(x.leitura?.nf) === k)
+    const temD = mesmos.some(x => Number(x.debito) > 0.005), temC = mesmos.some(x => Number(x.credito) > 0.005)
+    if (!temD || !temC) return 0 // só faz sentido quando a NF tem os dois lados
+    return mesmos.reduce((s, x) => s + (Number(x.debito) || 0) - (Number(x.credito) || 0), 0)
+  }
 
   // Conciliação por NF + cliente: tira do "em aberto" o que já se baixou (mesma NF, cliente bate).
   const ehEntidadeConta = ehPorEntidade(conta.nome) && tipoCta !== 'saldo'
@@ -595,7 +628,8 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, getCompetenc
       )}
 
       {acao && (
-        <ModalLancamento lanc={acao} conta={conta} lab={lab} plano={plano}
+        <ModalLancamento lanc={acao} conta={conta} lab={lab} plano={plano} natCredito={natCredito}
+          residuo={ehEntidadeConta ? residuoNF(acao) : 0}
           onClose={() => setAcao(null)} onRegistrar={registrar} />
       )}
     </Wrapper>
@@ -739,27 +773,43 @@ function CardConferencia({ conta, reg, compId, usuario, composicao, onSalvo }) {
 // Relatórios da composição (em aberto / conciliados) em Excel ou PDF.
 function RelatoriosComposicao({ conta, emAberto, zerados, contraDe }) {
   const cols = ['Data', 'NF', 'Histórico', 'Contrapartida', 'Débito', 'Crédito']
-  const linha = l => [l.data || '', l.leitura?.nf || '', l.historico || '', contraDe(l).join(', '), Number(l.debito) || 0, Number(l.credito) || 0]
+  const linhaArr = l => [l.data || '', l.leitura?.nf || '', l.historico || '', contraDe(l).join(', '), Number(l.debito) || 0, Number(l.credito) || 0]
+  const linhaTxt = l => [l.data || '', l.leitura?.nf || '', l.historico || '', contraDe(l).join(', '), Number(l.debito) ? money(l.debito) : '', Number(l.credito) ? money(l.credito) : '']
   const titulo = sub => `Conciliação · ${conta.conta} · ${conta.nome} — ${sub}`
+  const somaDeb = ls => ls.reduce((s, l) => s + (Number(l.debito) || 0), 0)
+  const somaCred = ls => ls.reduce((s, l) => s + (Number(l.credito) || 0), 0)
 
+  // Em blocos por cliente/fornecedor.
   async function excel(linhas, sub) {
     const XLSX = await import('xlsx')
-    const aoa = [cols, ...linhas.map(linha)]
+    const blocos = agruparPorCliente(linhas)
+    const aoa = [[titulo(sub)], [], cols]
+    for (const b of blocos) {
+      aoa.push([b.cliente])
+      for (const l of b.lancs) aoa.push(linhaArr(l))
+      aoa.push(['', '', '', 'Subtotal', somaDeb(b.lancs), somaCred(b.lancs)])
+      aoa.push([])
+    }
+    aoa.push(['', '', '', 'TOTAL GERAL', somaDeb(linhas), somaCred(linhas)])
     const ws = XLSX.utils.aoa_to_sheet(aoa)
+    ws['!cols'] = [{ wch: 12 }, { wch: 12 }, { wch: 60 }, { wch: 28 }, { wch: 14 }, { wch: 14 }]
     const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, ws, sub.slice(0, 28))
     XLSX.writeFile(wb, `conciliacao_${conta.conta}_${sub.replace(/\s+/g, '-').toLowerCase()}.xlsx`)
   }
 
   function pdf(linhas, sub) {
-    const totDeb = linhas.reduce((s, l) => s + (Number(l.debito) || 0), 0)
-    const totCred = linhas.reduce((s, l) => s + (Number(l.credito) || 0), 0)
+    const blocos = agruparPorCliente(linhas)
     abrePdfTimbrado({
       titulo: titulo(sub),
-      sub: `${linhas.length} lançamento(s)`,
+      sub: `${blocos.length} ${blocos.length === 1 ? 'cliente/fornecedor' : 'clientes/fornecedores'} · ${linhas.length} lançamento(s)`,
       colunas: [{ nome: 'Data' }, { nome: 'NF' }, { nome: 'Histórico' }, { nome: 'Contrapartida' }, { nome: 'Débito', alinhar: 'right' }, { nome: 'Crédito', alinhar: 'right' }],
-      linhas: linhas.map(l => [l.data || '', l.leitura?.nf || '', l.historico || '', contraDe(l).join(', '), Number(l.debito) ? money(l.debito) : '', Number(l.credito) ? money(l.credito) : '']),
-      totais: ['Totais', '', '', '', money(totDeb), money(totCred)],
+      secoes: blocos.map(b => ({
+        titulo: b.cliente,
+        linhas: b.lancs.map(linhaTxt),
+        totais: ['Subtotal', '', '', '', money(somaDeb(b.lancs)), money(somaCred(b.lancs))],
+      })),
+      totais: ['TOTAL GERAL', '', '', '', money(somaDeb(linhas)), money(somaCred(linhas))],
     })
   }
 
@@ -784,7 +834,7 @@ function RelatoriosComposicao({ conta, emAberto, zerados, contraDe }) {
 
 // Menu de ação de um lançamento: Justificar (texto) ou Corrigir (já informa a partida
 // contábil de acerto, que vai para o painel Contabilizar gerar o arquivo do Domínio).
-function ModalLancamento({ lanc, conta, lab, plano, onClose, onRegistrar }) {
+function ModalLancamento({ lanc, conta, lab, plano, natCredito, residuo = 0, onClose, onRegistrar }) {
   const [tipo, setTipo] = useState(null) // 'Justificativa' | 'Correção'
   const [txt, setTxt] = useState('')
   const valorLan = Number(lanc.debito) || Number(lanc.credito) || 0
@@ -801,6 +851,24 @@ function ModalLancamento({ lanc, conta, lab, plano, onClose, onRegistrar }) {
   const [ajuste, setAjuste] = useState({ entidade: lanc.leitura.entidade || '', nf: lanc.leitura.nf || '', historico: lanc.historico || '' })
   const set = k => e => setForm(f => ({ ...f, [k]: e.target.value }))
   const setAj = k => e => setAjuste(a => ({ ...a, [k]: e.target.value }))
+
+  // Diferença da NF tratada como Desconto financeiro ou Juros — pré-preenche a partida de acerto.
+  const baixa = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+  const achaConta = re => (plano || []).find(p => re.test(baixa(p.nome)))?.cod || ''
+  const temResiduo = Math.abs(Number(residuo) || 0) >= 0.005
+  function tratarDiferenca(kind) {
+    const v = Math.abs(Number(residuo) || 0)
+    const contraConta = kind === 'juros' ? achaConta(/juros|encargo|multa/) : achaConta(/desconto/)
+    // resíduo > 0: a conta (cliente/fornecedor) ainda está devedora → credita a conta para zerar.
+    const creditaConta = residuo > 0
+    setForm(f => ({
+      ...f, valor: v,
+      conta_credito: creditaConta ? conta.conta : contraConta,
+      conta_debito: creditaConta ? contraConta : conta.conta,
+      historico: `${kind === 'juros' ? 'Juros' : 'Desconto financeiro'} · NF ${lanc.leitura.nf || '—'} · ${conta.nome}`,
+    }))
+    setTipo('Correção')
+  }
 
   const ajusteMudou = ajuste.entidade.trim() !== (lanc.leitura.entidade || '') || ajuste.nf.trim() !== (lanc.leitura.nf || '') || ajuste.historico.trim() !== (lanc.historico || '')
   const partidaOk = form.conta_debito && form.conta_credito && Number(form.valor) > 0
@@ -826,6 +894,15 @@ function ModalLancamento({ lanc, conta, lab, plano, onClose, onRegistrar }) {
 
         {!tipo ? (
           <>
+            {temResiduo && (
+              <div style={{ background: 'rgba(245,166,35,0.10)', border: `1px solid ${theme.yellow}`, borderRadius: 10, padding: '10px 12px', marginBottom: 14 }}>
+                <p style={{ fontSize: 12.5, color: theme.text, margin: '0 0 8px' }}><b>Diferença na NF: {money(Math.abs(residuo))}</b> — a NF casa, mas o valor não fecha. Tratar a diferença como:</p>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button className="btn btn-ghost" style={{ flex: 1, fontSize: 13 }} onClick={() => tratarDiferenca('desconto')}><i className="ti ti-discount" /> Desconto financeiro</button>
+                  <button className="btn btn-ghost" style={{ flex: 1, fontSize: 13 }} onClick={() => tratarDiferenca('juros')}><i className="ti ti-percentage" /> Juros / encargos</button>
+                </div>
+              </div>
+            )}
             <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 12 }}>O que você quer fazer com este lançamento?</p>
             <div style={{ display: 'flex', gap: 10 }}>
               <button className="btn btn-ghost" style={{ flex: 1 }} onClick={() => setTipo('Justificativa')}><i className="ti ti-flag" /> Justificar</button>
@@ -847,16 +924,20 @@ function ModalLancamento({ lanc, conta, lab, plano, onClose, onRegistrar }) {
               <div style={{ gridColumn: '1 / -1' }}><label>Histórico</label><textarea className="input" rows={2} value={ajuste.historico} onChange={setAj('historico')} /></div>
             </div>
 
-            <details style={{ marginTop: 10 }}>
-              <summary style={{ cursor: 'pointer', fontSize: 12.5, color: theme.accent }}>Lançar partida de acerto (opcional) — vai para o Contabilizar</summary>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 10 }}>
+            <div style={{ borderTop: `1px solid ${theme.border}`, paddingTop: 12, marginTop: 6 }}>
+              <p style={{ fontSize: 12.5, color: theme.sub, margin: '0 0 8px' }}>Partida de acerto (opcional) — vai para o Contabilizar. Atalhos:</p>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+                <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={() => tratarDiferenca('desconto')}><i className="ti ti-discount" /> Desconto financeiro</button>
+                <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={() => tratarDiferenca('juros')}><i className="ti ti-percentage" /> Juros / encargos</button>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                 <div><label>Data</label><input className="input" type="date" value={form.data} onChange={set('data')} /></div>
                 <div><label>Valor</label><input className="input" type="number" step="0.01" value={form.valor} onChange={set('valor')} /></div>
                 <div><label>Conta débito</label><ContaSelect value={form.conta_debito} onChange={set('conta_debito')} plano={plano} /></div>
                 <div><label>Conta crédito</label><ContaSelect value={form.conta_credito} onChange={set('conta_credito')} plano={plano} /></div>
                 <div style={{ gridColumn: '1 / -1' }}><label>Histórico da partida</label><textarea className="input" rows={2} value={form.historico} onChange={set('historico')} /></div>
               </div>
-            </details>
+            </div>
 
             <div style={{ marginTop: 12 }}><label>Observação na auditoria (opcional)</label><input className="input" value={txt} onChange={e => setTxt(e.target.value)} placeholder="O que estava errado / o que foi corrigido…" /></div>
           </>
