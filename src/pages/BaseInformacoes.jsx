@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import DropZone from '../components/DropZone'
+import CampoConta from '../components/CampoConta'
 import { theme, money } from '../lib/theme'
 import { parsePlano, applyMask } from '../lib/balancete'
 
@@ -412,12 +413,11 @@ function ModalCarga({ carga, historico, empresaId, usuario, onClose, onImportado
   }
   function novaVigencia() { setVigencia(''); setLinhas([linhaVazia()]); setModo('manual'); setMsgOk(''); setErro('') }
 
-  const setCel = (i, col) => e => {
-    const v = e.target.value
+  function setCelV(i, col, v) {
     setLinhas(ls => ls.map((l, j) => {
       if (j !== i) return l
       const nova = { ...l, [col]: v }
-      // Ao digitar o código, puxa nome e classificação do plano de contas.
+      // Ao informar o código, puxa nome e classificação do plano de contas.
       if (col === colCod) {
         const p = buscaConta(v)
         if (p) {
@@ -428,6 +428,7 @@ function ModalCarga({ carga, historico, empresaId, usuario, onClose, onImportado
       return nova
     }))
   }
+  const setCel = (i, col) => e => setCelV(i, col, e.target.value)
 
   async function excluirVigencia(id) {
     if (!confirm('Excluir esta vigência da carga?')) return
@@ -492,7 +493,9 @@ function ModalCarga({ carga, historico, empresaId, usuario, onClose, onImportado
                       <td key={c} style={{ padding: 4 }}>
                         {c === 'Tipo' && carga.tipo === 'bancoresult'
                           ? <select className="input" style={{ minWidth: 150 }} value={l[c]} onChange={setCel(i, c)}><option value="">—</option><option value="Banco">Banco</option><option value="Resultado liberado">Resultado liberado</option></select>
-                          : <input className="input" value={l[c]} onChange={setCel(i, c)} placeholder={c} />}
+                          : c === colCod
+                            ? <CampoConta value={l[c]} onChange={v => setCelV(i, c, v)} onPick={p => setCelV(i, c, p.cod)} placeholder={`${c} (F4)`} style={{ minWidth: 160 }} />
+                            : <input className="input" value={l[c]} onChange={setCel(i, c)} placeholder={c} />}
                       </td>
                     ))}
                     <td style={{ textAlign: 'center' }}>

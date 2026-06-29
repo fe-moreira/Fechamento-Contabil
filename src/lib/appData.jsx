@@ -4,6 +4,7 @@ import { useAuth } from '../components/AuthProvider'
 import { apurarDistribuicao } from './distribuicao'
 import { apurarBancoResultado } from './bancoResultado'
 import { apurarVariacoes } from './variacoes'
+import { parsePlano, applyMask } from './balancete'
 
 // Estado compartilhado: empresa (cliente) e competência selecionadas no topo,
 // usados pelos módulos de fechamento. Resolve/cria a linha de `competencias`
@@ -29,6 +30,18 @@ export function AppDataProvider({ children }) {
     setCompetencia(`${String(mes).padStart(2, '0')}/${ano}`)
     setFechamentoAtivo(true)
   }
+
+  // Plano de contas do cliente (para o seletor de conta com F4).
+  const [plano, setPlano] = useState([])
+  useEffect(() => {
+    if (!empresaId) { setPlano([]); return }
+    supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'plano')
+      .order('created_at', { ascending: false }).limit(1).maybeSingle()
+      .then(({ data }) => {
+        const mask = parsePlano(data?.dados).find(p => p.mascara)?.mascara || '9.9.9.999.9999'
+        setPlano(parsePlano(data?.dados).map(p => ({ cod: p.reduzido, nome: p.nome, classif: applyMask(p.classif, mask), sintetica: p.sintetica })).filter(p => p.cod))
+      })
+  }, [empresaId])
 
   async function carregarEmpresas() {
     const { data } = await supabase
@@ -131,6 +144,7 @@ export function AppDataProvider({ children }) {
     empresaNome, getCompetenciaId, carregarEmpresas,
     pendencias, recalcularPendencias, isAdmin,
     fechamentoAtivo, setFechamentoAtivo, abrirFechamento,
+    plano,
   }
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }

@@ -5,6 +5,7 @@ import { useAuth } from '../components/AuthProvider'
 import { theme, money, moneyDC } from '../lib/theme'
 import { montarBalancete, parsePlano } from '../lib/balancete'
 import { abrePdfTimbrado } from '../lib/pdf'
+import CampoConta from '../components/CampoConta'
 
 // ---- Leitura do histórico: extrai NF e entidade (cliente/fornecedor) com confiança ----
 const RUIDO = /\b(VENDA|VENDAS|COMPRA|COMPRAS|PAGTO|PAGAMENTO|RECEBIMENTO|RECEBTO|REF|REFERENTE|NOTA|FISCAL|DUPLICATA|DUPL|BOLETO|TITULO|TÍTULO|VLR|VALOR|PARCELA|PARC|CONF|S\/|A|DE|DA|DO|DOS|DAS|E|NO|NA|EM)\b/ig
@@ -933,8 +934,8 @@ function ModalLancamento({ lanc, conta, lab, plano, natCredito, residuo = 0, onC
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                 <div><label>Data</label><input className="input" type="date" value={form.data} onChange={set('data')} /></div>
                 <div><label>Valor</label><input className="input" type="number" step="0.01" value={form.valor} onChange={set('valor')} /></div>
-                <div><label>Conta débito</label><ContaSelect value={form.conta_debito} onChange={set('conta_debito')} plano={plano} /></div>
-                <div><label>Conta crédito</label><ContaSelect value={form.conta_credito} onChange={set('conta_credito')} plano={plano} /></div>
+                <div><label>Conta débito</label><CampoConta value={form.conta_debito} onChange={v => setForm(f => ({ ...f, conta_debito: v }))} /></div>
+                <div><label>Conta crédito</label><CampoConta value={form.conta_credito} onChange={v => setForm(f => ({ ...f, conta_credito: v }))} /></div>
                 <div style={{ gridColumn: '1 / -1' }}><label>Histórico da partida</label><textarea className="input" rows={2} value={form.historico} onChange={set('historico')} /></div>
               </div>
             </div>

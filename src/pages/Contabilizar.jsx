@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { theme, money } from '../lib/theme'
+import CampoConta from '../components/CampoConta'
 
 const vazio = { data: '', conta_debito: '', conta_credito: '', valor: '', historico: '', documento: '' }
 const MODULOS_SUGESTAO = ['Conciliação', 'Comparativo', 'Status']
@@ -244,8 +245,8 @@ export default function Contabilizar() {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
               <Campo label="Data"><input className="input" type="date" value={form.data} onChange={set('data')} required /></Campo>
               <Campo label="Valor"><input className="input" type="number" step="0.01" value={form.valor} onChange={set('valor')} required /></Campo>
-              <Campo label="Conta débito"><ContaInput value={form.conta_debito} onChange={set('conta_debito')} plano={plano} /></Campo>
-              <Campo label="Conta crédito"><ContaInput value={form.conta_credito} onChange={set('conta_credito')} plano={plano} /></Campo>
+              <Campo label="Conta débito"><CampoConta value={form.conta_debito} onChange={v => setForm(f => ({ ...f, conta_debito: v }))} /></Campo>
+              <Campo label="Conta crédito"><CampoConta value={form.conta_credito} onChange={v => setForm(f => ({ ...f, conta_credito: v }))} /></Campo>
               <Campo label="Histórico" full><textarea className="input" rows={2} value={form.historico} onChange={set('historico')} /></Campo>
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
