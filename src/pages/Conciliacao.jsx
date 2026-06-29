@@ -4,6 +4,7 @@ import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { theme, money, moneyDC } from '../lib/theme'
 import { montarBalancete, parsePlano } from '../lib/balancete'
+import { abrePdfTimbrado } from '../lib/pdf'
 
 // ---- Leitura do histórico: extrai NF e entidade (cliente/fornecedor) com confiança ----
 const RUIDO = /\b(VENDA|VENDAS|COMPRA|COMPRAS|PAGTO|PAGAMENTO|RECEBIMENTO|RECEBTO|REF|REFERENTE|NOTA|FISCAL|DUPLICATA|DUPL|BOLETO|TITULO|TÍTULO|VLR|VALOR|PARCELA|PARC|CONF|S\/|A|DE|DA|DO|DOS|DAS|E|NO|NA|EM)\b/ig
@@ -709,21 +710,15 @@ function RelatoriosComposicao({ conta, emAberto, zerados, contraDe }) {
   }
 
   function pdf(linhas, sub) {
-    const esc = s => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))
     const totDeb = linhas.reduce((s, l) => s + (Number(l.debito) || 0), 0)
     const totCred = linhas.reduce((s, l) => s + (Number(l.credito) || 0), 0)
-    const trs = linhas.map(l => `<tr><td>${esc(l.data)}</td><td>${esc(l.leitura?.nf || '')}</td><td>${esc(l.historico)}</td><td>${esc(contraDe(l).join(', '))}</td><td class="r">${Number(l.debito) ? money(l.debito) : ''}</td><td class="r">${Number(l.credito) ? money(l.credito) : ''}</td></tr>`).join('')
-    const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(titulo(sub))}</title>
-      <style>body{font-family:Arial,Helvetica,sans-serif;color:#111;padding:24px}h2{font-size:16px;margin:0 0 4px}p{color:#555;font-size:12px;margin:0 0 16px}
-      table{width:100%;border-collapse:collapse;font-size:11px}th,td{border:1px solid #ccc;padding:6px 8px;text-align:left}th{background:#f0f0f0}.r{text-align:right;white-space:nowrap}tfoot td{font-weight:bold;background:#f7f7f7}</style></head>
-      <body><h2>${esc(titulo(sub))}</h2><p>${linhas.length} lançamento(s)</p>
-      <table><thead><tr>${cols.map(c => `<th class="${c === 'Débito' || c === 'Crédito' ? 'r' : ''}">${c}</th>`).join('')}</tr></thead>
-      <tbody>${trs || '<tr><td colspan="6">Sem lançamentos.</td></tr>'}</tbody>
-      <tfoot><tr><td colspan="4">Totais</td><td class="r">${money(totDeb)}</td><td class="r">${money(totCred)}</td></tr></tfoot></table>
-      <script>window.onload=function(){window.print()}</script></body></html>`
-    const w = window.open('', '_blank')
-    if (!w) { alert('Permita pop-ups para gerar o PDF.'); return }
-    w.document.write(html); w.document.close()
+    abrePdfTimbrado({
+      titulo: titulo(sub),
+      sub: `${linhas.length} lançamento(s)`,
+      colunas: [{ nome: 'Data' }, { nome: 'NF' }, { nome: 'Histórico' }, { nome: 'Contrapartida' }, { nome: 'Débito', alinhar: 'right' }, { nome: 'Crédito', alinhar: 'right' }],
+      linhas: linhas.map(l => [l.data || '', l.leitura?.nf || '', l.historico || '', contraDe(l).join(', '), Number(l.debito) ? money(l.debito) : '', Number(l.credito) ? money(l.credito) : '']),
+      totais: ['Totais', '', '', '', money(totDeb), money(totCred)],
+    })
   }
 
   const Grupo = ({ rotulo, linhas, icon, cor }) => (
