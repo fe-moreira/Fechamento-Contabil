@@ -58,6 +58,20 @@ const MODELOS = {
   },
 }
 
+// Extrai { codigo, nome, tipo, classif } de uma linha salva (qualquer formato de coluna).
+const normK = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+function extrairConta(obj) {
+  const keys = Object.keys(obj || {})
+  const acha = re => keys.find(k => re.test(normK(k)))
+  const kCod = keys.find(k => /(codigo|conta)/.test(normK(k)) && !/classif/.test(normK(k))) || acha(/^cod/)
+  return {
+    codigo: String(obj[kCod] ?? '').trim(),
+    nome: String(obj[acha(/nome|descri/)] ?? '').trim(),
+    tipo: String(obj[acha(/tipo/)] ?? '').trim(),
+    classif: String(obj[acha(/classific/)] ?? '').trim(),
+  }
+}
+
 export default function BaseInformacoes() {
   const { empresaId, empresaNome, recalcularPendencias } = useAppData()
   const { user } = useAuth()
@@ -290,7 +304,15 @@ function ModalCarga({ carga, historico, empresaId, usuario, onClose, onImportado
   const [erro, setErro] = useState('')
   const [salvando, setSalvando] = useState(false)
   const [planoIdx, setPlanoIdx] = useState(null) // { porRed, porNum, mascara } p/ puxar nome pelo código
+  const [hist, setHist] = useState(historico || []) // cargas (vigências) já salvas — recarrega ao salvar
+  const [msgOk, setMsgOk] = useState('')
   const vigOk = /^\d{2}\/\d{4}$/.test(vigencia)
+
+  async function recarregar() {
+    const { data } = await supabase.from('cargas_cadastro').select('id, vigencia, dados, usuario, obs, created_at')
+      .eq('cliente_id', empresaId).eq('tipo', carga.tipo).order('created_at', { ascending: true })
+    setHist(data || [])
+  }
 
   // Carrega o plano de contas para autopreencher nome/classificação a partir do código.
   useEffect(() => {
@@ -331,7 +353,7 @@ function ModalCarga({ carga, historico, empresaId, usuario, onClose, onImportado
 
   // Sobrepõe a carga da mesma vigência (se houver) antes de inserir a nova.
   async function sobreporSeMesma() {
-    const mesma = (historico || []).filter(h => h.vigencia === vigencia)
+    const mesma = (hist || []).filter(h => h.vigencia === vigencia)
     if (mesma.length) {
       if (!confirm(`Já existe carga para a vigência ${vigencia}. Deseja sobrepor (substituir)?`)) return false
       for (const m of mesma) await supabase.from('cargas_cadastro').delete().eq('id', m.id)
@@ -354,7 +376,7 @@ function ModalCarga({ carga, historico, empresaId, usuario, onClose, onImportado
         cliente_id: empresaId, tipo: carga.tipo, vigencia, dados, usuario, obs: file.name,
       })
       if (error) throw error
-      onImportado(); onClose()
+      await recarregar(); onImportado(); setSalvando(false); setMsgOk(`Importado · vigência ${vigencia}.`)
     } catch (err) { setErro('Erro ao importar: ' + err.message); setSalvando(false) }
   }
 
@@ -369,9 +391,26 @@ function ModalCarga({ carga, historico, empresaId, usuario, onClose, onImportado
         cliente_id: empresaId, tipo: carga.tipo, vigencia, dados, usuario, obs: 'Cadastro manual',
       })
       if (error) throw error
-      onImportado(); onClose()
+      await recarregar(); onImportado(); setSalvando(false); setMsgOk(`Salvo · vigência ${vigencia} (${dados.length} conta(s)).`)
     } catch (err) { setErro('Erro ao salvar: ' + err.message); setSalvando(false) }
   }
+
+  // Carrega as linhas de uma vigência no editor manual (para editar e salvar de novo).
+  function editarVigencia(c) {
+    setVigencia(c.vigencia || '')
+    setModo('manual'); setMsgOk(''); setErro('')
+    const colTipo = modelo.cols.find(k => /tipo/i.test(k))
+    const ls = (Array.isArray(c.dados) ? c.dados : []).map(o => {
+      const ec = extrairConta(o); const row = linhaVazia()
+      if (colCod) row[colCod] = ec.codigo
+      if (colNome) row[colNome] = ec.nome
+      if (colTipo) row[colTipo] = ec.tipo
+      if (colClassif) row[colClassif] = ec.classif
+      return row
+    })
+    setLinhas(ls.length ? ls : [linhaVazia()])
+  }
+  function novaVigencia() { setVigencia(''); setLinhas([linhaVazia()]); setModo('manual'); setMsgOk(''); setErro('') }
 
   const setCel = (i, col) => e => {
     const v = e.target.value
@@ -393,8 +432,23 @@ function ModalCarga({ carga, historico, empresaId, usuario, onClose, onImportado
   async function excluirVigencia(id) {
     if (!confirm('Excluir esta vigência da carga?')) return
     await supabase.from('cargas_cadastro').delete().eq('id', id)
-    onImportado()
+    await recarregar(); onImportado()
   }
+
+  // Carga mais recente → "Contas já cadastradas".
+  const cargaRecente = hist.length ? hist[hist.length - 1] : null
+  const contasCad = cargaRecente ? (Array.isArray(cargaRecente.dados) ? cargaRecente.dados : []).map(extrairConta).filter(c => c.codigo || c.nome) : []
+  const ehBR = carga.tipo === 'bancoresult'
+  const bancosCad = contasCad.filter(c => normK(c.tipo).includes('banco'))
+  const resultCad = contasCad.filter(c => /result|liber/.test(normK(c.tipo)))
+  const credito = cargaRecente ? `${(cargaRecente.usuario || '').split('@')[0] || '—'} · ${new Date(cargaRecente.created_at).toLocaleDateString('pt-BR')}` : ''
+  const LinhaConta = ({ c }) => (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '8px 0', borderTop: `1px solid ${theme.border}`, fontSize: 13 }}>
+      <span style={{ color: theme.text }}><span style={{ color: theme.sub }}>{c.codigo}</span>{c.codigo && c.nome ? ' · ' : ''}{c.nome}</span>
+      <span style={{ color: theme.sub, fontSize: 12, whiteSpace: 'nowrap' }}>{credito}</span>
+    </div>
+  )
+  const SubTit = ({ children }) => <p style={{ color: theme.sub, fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: .4, margin: '14px 0 2px' }}>{children}</p>
 
   return (
     <Modal titulo={carga.title} sub={carga.sub} onClose={onClose} largura={680}>
@@ -456,18 +510,42 @@ function ModalCarga({ carga, historico, empresaId, usuario, onClose, onImportado
         </>
       )}
       {erro && <p style={{ color: theme.red, fontSize: 13, margin: '10px 0 0' }}>{erro}</p>}
-      <p style={{ color: theme.sub, fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: .6, margin: '22px 0 10px' }}>Histórico de vigências</p>
-      {historico.length === 0
+      {msgOk && <p style={{ color: theme.green, fontSize: 13, margin: '10px 0 0' }}><i className="ti ti-circle-check" /> {msgOk}</p>}
+
+      {/* Histórico de vigências */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '22px 0 6px' }}>
+        <p style={{ color: theme.sub, fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: .6, margin: 0 }}>Histórico de vigências</p>
+        <button className="btn btn-ghost" style={{ fontSize: 12, padding: '4px 10px' }} onClick={novaVigencia}><i className="ti ti-plus" /> Nova vigência</button>
+      </div>
+      {hist.length === 0
         ? <p style={{ color: theme.sub, fontSize: 12.5 }}>Nenhuma carga ainda.</p>
-        : historico.slice().reverse().map(c => (
+        : hist.slice().reverse().map(c => (
           <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '9px 0', borderTop: `1px solid ${theme.border}`, fontSize: 12.5 }}>
-            <span style={{ color: theme.text }}><b>{c.vigencia || '—'}</b> · {Array.isArray(c.dados) ? c.dados.length : 0} linha(s)</span>
+            <span style={{ color: theme.text }}>Vigência <b>{c.vigencia || '—'}</b> · {Array.isArray(c.dados) ? c.dados.length : 0} conta(s) <span style={{ color: theme.sub }}>· {c.obs || ''}</span></span>
             <span style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <span style={{ color: theme.sub, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 220 }}>{c.obs || ''}</span>
+              <span style={{ color: theme.sub, whiteSpace: 'nowrap' }}>{(c.usuario || '').split('@')[0]} · {new Date(c.created_at).toLocaleDateString('pt-BR')}</span>
+              <i className="ti ti-pencil" title="Editar esta vigência" onClick={() => editarVigencia(c)} style={{ color: theme.accent, cursor: 'pointer', flexShrink: 0 }} />
               <i className="ti ti-trash" title="Excluir esta vigência" onClick={() => excluirVigencia(c.id)} style={{ color: theme.sub, cursor: 'pointer', flexShrink: 0 }} />
             </span>
           </div>
         ))}
+
+      {/* Contas já cadastradas (carga mais recente) */}
+      {contasCad.length > 0 && (
+        <div style={{ marginTop: 18 }}>
+          <p style={{ fontSize: 15, fontWeight: 600, margin: '0 0 4px' }}>Contas já cadastradas</p>
+          {ehBR ? (
+            <>
+              <SubTit>Contas de banco</SubTit>
+              {bancosCad.length ? bancosCad.map((c, i) => <LinhaConta key={'b' + i} c={c} />) : <p style={{ color: theme.sub, fontSize: 12.5 }}>—</p>}
+              <SubTit>Resultados liberados (lançamento direto do banco)</SubTit>
+              {resultCad.length ? resultCad.map((c, i) => <LinhaConta key={'r' + i} c={c} />) : <p style={{ color: theme.sub, fontSize: 12.5 }}>—</p>}
+            </>
+          ) : (
+            contasCad.map((c, i) => <LinhaConta key={i} c={c} />)
+          )}
+        </div>
+      )}
     </Modal>
   )
 }
