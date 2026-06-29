@@ -97,17 +97,18 @@ export default function Conciliacao() {
           <tbody>
             {contas.map((c, i) => {
               const sint = c.sintetica
+              const peso = sint ? 700 : 400 // só as sintéticas em negrito
               const indent = Math.max(0, (Number(c.grau) || 1) - 1) * 14
               return (
                 <tr key={i} onClick={() => !sint && setSel(c)}
-                  style={{ borderTop: `1px solid ${theme.border}`, cursor: sint ? 'default' : 'pointer', background: sint ? theme.input : 'transparent' }}>
+                  style={{ borderTop: `1px solid ${theme.border}`, cursor: sint ? 'default' : 'pointer', background: sint ? theme.input : 'transparent', fontWeight: peso }}>
                   <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{c.reduzido || ''}</td>
                   <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{c.classif}</td>
-                  <td style={{ ...td, paddingLeft: 14 + indent, fontWeight: sint ? 700 : 400 }}>{c.nome || '—'}</td>
-                  <td style={tdR}>{money(c.saldo_inicial)}</td>
-                  <td style={tdR}>{money(c.debito)}</td>
-                  <td style={tdR}>{money(c.credito)}</td>
-                  <td style={{ ...tdR, fontWeight: 600 }}>{money(c.saldo_final)}</td>
+                  <td style={{ ...td, paddingLeft: 14 + indent, fontWeight: peso }}>{c.nome || '—'}</td>
+                  <td style={{ ...tdR, fontWeight: peso }}>{money(c.saldo_inicial)}</td>
+                  <td style={{ ...tdR, fontWeight: peso }}>{money(c.debito)}</td>
+                  <td style={{ ...tdR, fontWeight: peso }}>{money(c.credito)}</td>
+                  <td style={{ ...tdR, fontWeight: peso }}>{money(c.saldo_final)}</td>
                   <td style={{ ...td, textAlign: 'center' }}>{sint ? '' : <Dot c={farol(c)} />}</td>
                 </tr>
               )

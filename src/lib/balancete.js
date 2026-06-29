@@ -110,7 +110,10 @@ export async function montarBalancete(empresaId, compId) {
   }
 
   const comMov = l => Math.abs(l.debito) > 0.005 || Math.abs(l.credito) > 0.005 || Math.abs(l.saldo_inicial) > 0.005
-  const ordena = (a, b) => String(a.classif).localeCompare(String(b.classif), 'pt-BR', { numeric: true })
+  // Ordem de balancete = ordem da árvore: comparação lexicográfica da classificação.
+  // Como a máscara tem tamanhos fixos por nível, o prefixo (sintética) vem sempre antes
+  // dos seus filhos — diferente da ordem numérica, que misturaria os níveis.
+  const ordena = (a, b) => a.classifRaw < b.classifRaw ? -1 : a.classifRaw > b.classifRaw ? 1 : 0
   const grauDe = classif => temPlano ? Math.max(1, cortes.filter(c => c <= classif.length).length) : classif.split('.').length
 
   const linhas = Object.values(map).map(e => ({
@@ -122,6 +125,6 @@ export async function montarBalancete(empresaId, compId) {
     sintetica: !e.folha,
     saldo_inicial: e.saldo_inicial, debito: e.debito, credito: e.credito,
     saldo_final: e.saldo_inicial + e.debito - e.credito,
-  })).filter(comMov).sort((a, b) => ordena({ classif: a.classifRaw }, { classif: b.classifRaw }))
+  })).filter(comMov).sort(ordena)
   return { temPlano, linhas }
 }
