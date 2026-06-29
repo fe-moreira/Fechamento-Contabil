@@ -21,32 +21,32 @@ export default function Status() {
     setSel(null); setMsg('')
     if (!empresaId) { setCarregando(false); return }
     setCarregando(true)
+
+    const { data: cli } = await supabase.from('clientes')
+      .select('carga_saldos, carga_inicial_feita').eq('id', empresaId).maybeSingle()
+    const cargaInicialPendente = !!(cli?.carga_saldos && !cli?.carga_inicial_feita)
+
     const [mes, ano] = competencia.split('/').map(Number)
     const { data: comp } = await supabase.from('competencias')
       .select('id, status, documentos')
       .eq('cliente_id', empresaId).eq('ano', ano).eq('mes', mes).maybeSingle()
 
-    if (!comp) {
-      setCompId(null); setStatus(null); setDados(null); setCarregando(false); return
+    let temRazao = false, docsPendentes = [], contasAbertas = []
+    if (comp) {
+      setCompId(comp.id); setStatus(comp.status || 'andamento')
+      const { count: razaoCount } = await supabase.from('razao')
+        .select('id', { count: 'exact', head: true }).eq('competencia_id', comp.id)
+      const { data: balancete } = await supabase.from('balancete')
+        .select('conta, saldo_final').eq('competencia_id', comp.id)
+      const docs = Array.isArray(comp.documentos) ? comp.documentos : []
+      temRazao = (razaoCount || 0) > 0
+      docsPendentes = docs.filter(d => d && d.rec === false)
+      contasAbertas = (balancete || []).filter(b => Number(b.saldo_final) !== 0)
+    } else {
+      setCompId(null); setStatus(null)
     }
-    setCompId(comp.id)
-    setStatus(comp.status || 'andamento')
 
-    const { count: razaoCount } = await supabase.from('razao')
-      .select('id', { count: 'exact', head: true }).eq('competencia_id', comp.id)
-
-    const { data: balancete } = await supabase.from('balancete')
-      .select('conta, saldo_final').eq('competencia_id', comp.id)
-
-    const docs = Array.isArray(comp.documentos) ? comp.documentos : []
-    const docsPendentes = docs.filter(d => d && d.rec === false)
-    const contasAbertas = (balancete || []).filter(b => Number(b.saldo_final) !== 0)
-
-    setDados({
-      temRazao: (razaoCount || 0) > 0,
-      docsPendentes,
-      contasAbertas,
-    })
+    setDados({ temRazao, docsPendentes, contasAbertas, cargaInicialPendente })
     setCarregando(false)
   }
 
@@ -61,16 +61,23 @@ export default function Status() {
   if (carregando) {
     return <Wrapper><p style={{ color: theme.sub, fontSize: 13 }}>Carregando…</p></Wrapper>
   }
-  if (!compId || !dados || !dados.temRazao) {
-    return <Wrapper nome={empresaNome} comp={competencia}>
-      <Aviso icon="ti-file-import" texto="Importe o razão para começar o fechamento." />
-    </Wrapper>
+  if (!dados) {
+    return <Wrapper nome={empresaNome} comp={competencia}><p style={{ color: theme.sub, fontSize: 13 }}>Carregando…</p></Wrapper>
   }
 
   const gates = [
     {
+      key: 'cargainicial',
+      nome: 'Carga inicial de saldos',
+      icon: 'ti-cloud-upload',
+      descricao: 'Saldo de abertura lançado (empresas que não são novas).',
+      itens: dados.cargaInicialPendente
+        ? [{ item: 'Carga inicial de saldos pendente', detalhe: 'Lance o saldo de abertura em Base de Informações → Período de início (ou marque a empresa como nova).' }]
+        : [],
+    },
+    {
       key: 'razao',
-      nome: 'Carga inicial / Razão',
+      nome: 'Razão importado',
       icon: 'ti-file-import',
       descricao: 'Razão do Domínio importado para a competência.',
       itens: dados.temRazao ? [] : [{ item: 'Razão não importado nesta competência', detalhe: 'Nenhum lançamento encontrado na tabela razao.' }],

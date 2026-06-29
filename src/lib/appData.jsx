@@ -27,11 +27,14 @@ export function AppDataProvider({ children }) {
   // Conta as pendências do fechamento (mesma régua da tela Status) para o badge do menu.
   async function recalcularPendencias() {
     if (!empresaId) { setPendencias(null); return }
+    let p = 0
+    // Carga inicial: se a empresa tem saldo inicial e ainda não lançou, é pendência.
+    const { data: cli } = await supabase.from('clientes').select('carga_saldos, carga_inicial_feita').eq('id', empresaId).maybeSingle()
+    if (cli?.carga_saldos && !cli?.carga_inicial_feita) p += 1
     const [mes, ano] = competencia.split('/').map(Number)
     const { data: comp } = await supabase.from('competencias')
       .select('id, documentos').eq('cliente_id', empresaId).eq('ano', ano).eq('mes', mes).maybeSingle()
-    if (!comp) { setPendencias(1); return } // razão ainda não importado
-    let p = 0
+    if (!comp) { setPendencias(p + 1); return } // razão ainda não importado
     const { count } = await supabase.from('razao').select('id', { count: 'exact', head: true }).eq('competencia_id', comp.id)
     if (!count) p += 1
     p += (Array.isArray(comp.documentos) ? comp.documentos : []).filter(d => !d.rec).length

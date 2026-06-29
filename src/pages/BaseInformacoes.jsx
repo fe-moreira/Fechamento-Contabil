@@ -15,13 +15,15 @@ const CARGAS = [
 ]
 
 export default function BaseInformacoes() {
-  const { empresaId, empresaNome } = useAppData()
+  const { empresaId, empresaNome, recalcularPendencias } = useAppData()
   const { user } = useAuth()
 
   const [particularidades, setParticularidades] = useState([])
   const [contatos, setContatos] = useState([])
   const [cargas, setCargas] = useState({})
   const [periodo, setPeriodo] = useState('')
+  const [cargaSaldos, setCargaSaldos] = useState(false)   // empresa tem saldo inicial (não é nova)
+  const [cargaFeita, setCargaFeita] = useState(false)     // carga inicial já lançada
   const [dist, setDist] = useState(null)   // linha de dist_lucros_config
   const [modal, setModal] = useState(null)
 
@@ -39,14 +41,16 @@ export default function BaseInformacoes() {
     setDist(data || null)
   }
   useEffect(() => {
-    setParticularidades([]); setContatos([]); setCargas({}); setPeriodo(''); setDist(null)
+    setParticularidades([]); setContatos([]); setCargas({}); setPeriodo(''); setDist(null); setCargaSaldos(false); setCargaFeita(false)
     if (!empresaId) return
     carregarCargas(); carregarDist()
-    supabase.from('clientes').select('particularidades, contatos, competencia_inicio').eq('id', empresaId).single()
+    supabase.from('clientes').select('particularidades, contatos, competencia_inicio, carga_saldos, carga_inicial_feita').eq('id', empresaId).single()
       .then(({ data }) => {
         setParticularidades(data?.particularidades || [])
         setContatos(data?.contatos || [])
         setPeriodo(data?.competencia_inicio || '')
+        setCargaSaldos(!!data?.carga_saldos)
+        setCargaFeita(!!data?.carga_inicial_feita)
       })
   }, [empresaId])
 
@@ -76,8 +80,20 @@ export default function BaseInformacoes() {
     const novo = contatos.filter((_, j) => j !== idx)
     setContatos(novo); persistirCliente('contatos', novo)
   }
-  function salvarPeriodo(v) {
-    setPeriodo(v); persistirCliente('competencia_inicio', v); setModal(null)
+  function salvarPeriodo(v, nova) {
+    setPeriodo(v); setCargaSaldos(!nova)
+    supabase.from('clientes').update({ competencia_inicio: v, carga_saldos: !nova }).eq('id', empresaId).then(() => recalcularPendencias?.())
+    setModal(null)
+  }
+  function abrirCargaInicial(v) {
+    setPeriodo(v); setCargaSaldos(true)
+    supabase.from('clientes').update({ competencia_inicio: v, carga_saldos: true }).eq('id', empresaId).then(() => {})
+    setModal({ tipo: 'cargaInicial', vigencia: v })
+  }
+  async function concluirCargaInicial(vigencia, dados, nome) {
+    await supabase.from('cargas_cadastro').insert({ cliente_id: empresaId, tipo: 'financeiro', vigencia, dados, usuario: user?.email, obs: 'Carga inicial de saldos · ' + nome })
+    await supabase.from('clientes').update({ carga_inicial_feita: true }).eq('id', empresaId)
+    setCargaFeita(true); carregarCargas(); recalcularPendencias?.(); setModal(null)
   }
   async function salvarDist(cfg) {
     if (dist) await supabase.from('dist_lucros_config').update(cfg).eq('id', dist.id)
@@ -134,8 +150,12 @@ export default function BaseInformacoes() {
         <CargaCard {...CARGAS[1]} ultima={cargas.depara?.at(-1)} onClick={() => setModal({ tipo: 'carga', carga: CARGAS[1] })} />
         <CargaCard {...CARGAS[2]} ultima={cargas.apelidos?.at(-1)} onClick={() => setModal({ tipo: 'carga', carga: CARGAS[2] })} />
         <SimplesCard icon="ti-file-description" title="Modelos de relatório" sub="Balancete, DRE, DFC" onClick={() => setModal({ tipo: 'modelos' })} />
-        <SimplesCard icon="ti-calendar-event" title="Período de início" sub="Trava o passado"
-          badge={periodo ? { txt: `início ${periodo}`, cor: theme.green, bg: 'rgba(48,164,108,0.15)' } : { txt: 'carga pendente', cor: theme.yellow, bg: 'rgba(245,166,35,0.15)' }}
+        <SimplesCard icon="ti-calendar-event" title="Período de início" sub={periodo ? `${periodo} · trava o passado` : 'Trava o passado'}
+          badge={!periodo
+            ? { txt: 'definir', cor: theme.yellow, bg: 'rgba(245,166,35,0.15)' }
+            : (cargaSaldos && !cargaFeita)
+              ? { txt: 'carga pendente', cor: theme.yellow, bg: 'rgba(245,166,35,0.15)' }
+              : { txt: `início ${periodo}`, cor: theme.green, bg: 'rgba(48,164,108,0.15)' }}
           onClick={() => setModal({ tipo: 'periodo' })} />
         <CargaCard {...CARGAS[3]} ultima={cargas.financeiro?.at(-1)} onClick={() => setModal({ tipo: 'carga', carga: CARGAS[3] })} />
         <CargaCard {...CARGAS[4]} ultima={cargas.bancoresult?.at(-1)} onClick={() => setModal({ tipo: 'carga', carga: CARGAS[4] })} />
@@ -157,7 +177,11 @@ export default function BaseInformacoes() {
         <ModalContato valorInicial={modal.valor} onClose={() => setModal(null)} onSalvar={c => { salvarContato(c, modal.idx); setModal(null) }} />
       )}
       {modal?.tipo === 'periodo' && (
-        <ModalPeriodo valorInicial={periodo} onClose={() => setModal(null)} onSalvar={salvarPeriodo} />
+        <ModalPeriodo valorInicial={periodo} cargaSaldos={cargaSaldos} cargaFeita={cargaFeita}
+          onClose={() => setModal(null)} onSalvar={salvarPeriodo} onFazerCarga={abrirCargaInicial} />
+      )}
+      {modal?.tipo === 'cargaInicial' && (
+        <ModalCargaInicial vigencia={modal.vigencia} onClose={() => setModal(null)} onConcluir={concluirCargaInicial} />
       )}
       {modal?.tipo === 'dist' && (
         <ModalDist inicial={dist} onClose={() => setModal(null)} onSalvar={salvarDist} />
@@ -294,15 +318,89 @@ function ModalContato({ valorInicial, onClose, onSalvar }) {
   )
 }
 
-function ModalPeriodo({ valorInicial, onClose, onSalvar }) {
+function mesAnterior(p) {
+  const m = String(p || '').match(/^(\d{2})\/(\d{4})$/)
+  if (!m) return '—'
+  let mes = +m[1], ano = +m[2]
+  mes -= 1; if (mes === 0) { mes = 12; ano -= 1 }
+  return `${String(mes).padStart(2, '0')}/${ano}`
+}
+
+function ModalPeriodo({ valorInicial, cargaSaldos, cargaFeita, onClose, onSalvar, onFazerCarga }) {
   const [v, setV] = useState(valorInicial || '')
+  const [nova, setNova] = useState(valorInicial ? !cargaSaldos : false)
   const [erro, setErro] = useState('')
+  const ok = /^\d{2}\/\d{4}$/.test(v)
+  const valida = () => ok ? true : (setErro('Use o formato MM/AAAA.'), false)
+
   return (
-    <Modal titulo="Período de início" sub="Competência que trava o passado." onClose={onClose}>
+    <Modal titulo={`Período de início${ok ? ' — ' + v : ''}`} onClose={onClose} largura={560}>
       <label>Competência de início (MM/AAAA)</label>
       <input className="input" value={v} onChange={e => setV(e.target.value)} placeholder="04/2026" autoFocus />
+      <p style={{ color: theme.sub, fontSize: 12.5, margin: '10px 0 0', lineHeight: 1.55 }}>
+        A partir desta competência o passado fica travado. O mês anterior ({mesAnterior(v)}) é o saldo de abertura.
+      </p>
+
+      <label style={{ display: 'flex', alignItems: 'center', gap: 9, margin: '16px 0 0', cursor: 'pointer', color: theme.text, fontSize: 13 }}>
+        <input type="checkbox" checked={nova} onChange={e => setNova(e.target.checked)} />
+        Empresa nova — não tem saldo inicial
+      </label>
+
+      {!nova && (
+        <div style={{ background: theme.input, border: `1px solid ${cargaFeita ? 'rgba(48,164,108,0.45)' : 'rgba(245,166,35,0.45)'}`, borderRadius: 10, padding: 16, marginTop: 14 }}>
+          <p style={{ color: theme.text, fontSize: 14, fontWeight: 600, margin: 0 }}>Carga inicial de saldos e composições</p>
+          <p style={{ color: theme.sub, fontSize: 12.5, margin: '6px 0 0', lineHeight: 1.55 }}>
+            Lance o saldo de abertura de cada conta e, nas contas de composição, os itens iniciais (por cliente/NF).
+            Pode fazer agora ou depois — mas o primeiro fechamento só encerra com a carga concluída.
+          </p>
+          <p style={{ color: cargaFeita ? theme.green : theme.yellow, fontSize: 13, fontWeight: 600, margin: '10px 0 0' }}>
+            <i className={`ti ${cargaFeita ? 'ti-circle-check' : 'ti-alert-triangle'}`} /> {cargaFeita ? 'Carga inicial concluída.' : 'Carga inicial pendente.'}
+          </p>
+        </div>
+      )}
+
       {erro && <p style={{ color: theme.red, fontSize: 12.5, marginTop: 8 }}>{erro}</p>}
-      <Rodape onClose={onClose} onSalvar={() => /^\d{2}\/\d{4}$/.test(v) ? onSalvar(v) : setErro('Use o formato MM/AAAA.')} />
+
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
+        <button className="btn btn-ghost" onClick={() => valida() && onSalvar(v, nova)}>{nova ? 'Salvar' : 'Depois'}</button>
+        {!nova && <button className="btn" onClick={() => valida() && onFazerCarga(v)}><i className="ti ti-cloud-upload" /> Fazer agora</button>}
+      </div>
+    </Modal>
+  )
+}
+
+function ModalCargaInicial({ vigencia, onClose, onConcluir }) {
+  const [preview, setPreview] = useState(null)
+  const [erro, setErro] = useState('')
+  const [salvando, setSalvando] = useState(false)
+
+  async function aoEscolher(e) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setErro('')
+    try {
+      const XLSX = await import('xlsx')
+      const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' })
+      const dados = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' })
+      if (!dados.length) { setErro('Planilha vazia.'); return }
+      setPreview({ nome: file.name, dados })
+    } catch (err) { setErro('Não consegui ler: ' + err.message) }
+  }
+
+  return (
+    <Modal titulo="Carga inicial de saldos" sub={`Saldo de abertura — vigência ${vigencia}`} onClose={onClose} largura={560}>
+      <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 14, lineHeight: 1.55 }}>
+        Suba a planilha com o saldo de abertura por conta (e, nas contas de composição, os itens iniciais por cliente/NF). Isso vira o saldo inicial do primeiro fechamento.
+      </p>
+      <input type="file" accept=".xlsx,.xls,.csv" onChange={aoEscolher} style={{ fontSize: 13, color: theme.sub }} />
+      {preview && <p style={{ color: theme.sub, fontSize: 12.5, marginTop: 10 }}><i className="ti ti-file-spreadsheet" /> {preview.nome} — {preview.dados.length} linha(s)</p>}
+      {erro && <p style={{ color: theme.red, fontSize: 13, marginTop: 10 }}>{erro}</p>}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
+        <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+        <button className="btn" disabled={!preview || salvando} onClick={async () => { setSalvando(true); await onConcluir(vigencia, preview.dados, preview.nome) }}>
+          <i className="ti ti-cloud-upload" /> {salvando ? 'Concluindo…' : 'Concluir carga inicial'}
+        </button>
+      </div>
     </Modal>
   )
 }
