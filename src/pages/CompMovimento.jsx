@@ -80,6 +80,9 @@ export default function CompMovimento() {
           compsComDados.push({ id: c.id, mes: c.mes })
           for (const b of bal) {
             if (!b.conta) continue
+            // Comparativo de movimento trata só Receita (3), Custos (4) e Despesas (5).
+            const d = String(b.conta).trim()[0]
+            if (d !== '3' && d !== '4' && d !== '5') continue
             if (!m[b.conta]) m[b.conta] = {}
             m[b.conta][c.mes] = Number(b.saldo_final) || 0
             if (b.nome && !nomesPorConta[b.conta]) nomesPorConta[b.conta] = b.nome
@@ -209,7 +212,7 @@ export default function CompMovimento() {
             )}
           </div>
           <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 14 }}>
-            Valores em <b style={{ color: theme.red }}>vermelho</b> desviam mais de 10% da média da conta nos meses carregados. Clique em um valor para ver o razão da conta no mês.
+            Contas de resultado (Receita, Custos e Despesas). Valores em <b style={{ color: theme.red }}>vermelho</b> desviam mais de 10% da média da conta nos meses carregados. Clique em um valor para ver o razão da conta no mês.
           </p>
           <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'auto', maxWidth: '100%' }}>
             <table style={{ borderCollapse: 'collapse', width: '100%' }}>

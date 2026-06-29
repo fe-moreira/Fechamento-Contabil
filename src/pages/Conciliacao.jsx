@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { theme, money } from '../lib/theme'
+import { montarBalancete } from '../lib/balancete'
 
 // ---- Leitura do histórico: extrai NF e entidade (cliente/fornecedor) com confiança ----
 const RUIDO = /\b(VENDA|VENDAS|COMPRA|COMPRAS|PAGTO|PAGAMENTO|RECEBIMENTO|RECEBTO|REF|REFERENTE|NOTA|FISCAL|DUPLICATA|DUPL|BOLETO|TITULO|TÍTULO|VLR|VALOR|PARCELA|PARC|CONF|S\/|A|DE|DA|DO|DOS|DAS|E|NO|NA|EM)\b/ig
@@ -25,30 +26,6 @@ function tipoConta(nome) {
 }
 
 const baixaTxt = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
-
-// Forma canônica do código: separa por qualquer não-dígito e tira zeros à esquerda de
-// cada segmento. Assim "01.01.001", "1-1-1" e "1.1.1" casam entre si.
-const canon = c => String(c ?? '').split(/[^0-9]+/).filter(Boolean).map(s => String(parseInt(s, 10))).join('.')
-
-// Monta { código: { nome, classif } } a partir do plano de contas importado.
-function montarPlano(dados) {
-  const rows = Array.isArray(dados) ? dados : []
-  if (!rows.length) return {}
-  const keys = Object.keys(rows[0])
-  const kCod = keys.find(k => /cod|reduz/.test(baixaTxt(k))) || keys.find(k => /conta/.test(baixaTxt(k))) || keys[0]
-  const kNome = keys.find(k => /nome|descri/.test(baixaTxt(k))) || keys.find(k => k !== kCod)
-  const kClass = keys.find(k => /concilia|classif/.test(baixaTxt(k))) || keys.find(k => /tipo/.test(baixaTxt(k)))
-  const map = {}
-  for (const r of rows) {
-    const cod = String(r[kCod] ?? '').trim()
-    if (!cod) continue
-    const val = { nome: String((kNome ? r[kNome] : '') ?? '').trim(), classif: String((kClass ? r[kClass] : '') ?? '').trim() }
-    map[cod] = val
-    const cn = canon(cod)
-    if (cn && !map[cn]) map[cn] = val
-  }
-  return map
-}
 
 // Deriva o tipo de tratamento (Composição/Imposto/Saldo) a partir da classificação do plano.
 function tipoPorClassif(c) {
@@ -82,17 +59,13 @@ export default function Conciliacao() {
       .then(async ({ data: comp }) => {
         if (!comp) { setCarregando(false); return }
         setCompId(comp.id)
-        const { data: planoCarga } = await supabase.from('cargas_cadastro').select('dados')
-          .eq('cliente_id', empresaId).eq('tipo', 'plano').order('created_at', { ascending: false }).limit(1).maybeSingle()
-        const plano = montarPlano(planoCarga?.dados)
-        const { data } = await supabase.from('balancete').select('conta, nome, saldo_inicial, debito, credito, saldo_final')
-          .eq('competencia_id', comp.id).order('conta')
-        setContas((data || []).map(b => {
-          const p = plano[String(b.conta).trim()] || plano[canon(b.conta)] || {}
-          const nome = p.nome || b.nome || ''
-          const classif = p.classif || ''
-          return { ...b, nome, classif, tipo: tipoPorClassif(classif) || tipoConta(nome || b.conta) }
-        }))
+        const { linhas } = await montarBalancete(empresaId, comp.id)
+        // Conciliação trata só Ativo (1) e Passivo (2). Receita/Custos/Despesa vão no Comparativo.
+        const ap = linhas.filter(l => { const d = String(l.classif).trim()[0]; return d === '1' || d === '2' })
+        setContas(ap.map(l => ({
+          ...l, conta: l.classif,
+          tipo: tipoPorClassif(l.classif) || tipoConta(l.nome || l.classif),
+        })))
         setCarregando(false)
       })
   }, [empresaId, competencia])
@@ -113,25 +86,32 @@ export default function Conciliacao() {
         <span><Dot c={theme.green} /> Conciliada</span>
       </div>
       <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'auto' }}>
-        <table style={{ width: '100%', minWidth: 760, borderCollapse: 'collapse' }}>
+        <table style={{ width: '100%', minWidth: 860, borderCollapse: 'collapse' }}>
           <thead>
             <tr style={{ background: theme.input }}>
-              <th style={th}>Conta</th><th style={thR}>Saldo inicial</th><th style={thR}>Débito</th>
-              <th style={thR}>Crédito</th><th style={thR}>Saldo atual</th><th style={th}>Classificação</th><th style={{ ...th, textAlign: 'center' }}>Status</th>
+              <th style={th}>Conta</th><th style={th}>Classificação</th><th style={th}>Nome da Conta</th>
+              <th style={thR}>Saldo inicial</th><th style={thR}>Débito</th>
+              <th style={thR}>Crédito</th><th style={thR}>Saldo atual</th><th style={{ ...th, textAlign: 'center' }}>Status</th>
             </tr>
           </thead>
           <tbody>
-            {contas.map((c, i) => (
-              <tr key={i} onClick={() => setSel(c)} style={{ borderTop: `1px solid ${theme.border}`, cursor: 'pointer' }}>
-                <td style={td}><span style={{ color: theme.sub, fontSize: 11 }}>{c.conta}</span><br />{c.nome}</td>
-                <td style={tdR}>{money(c.saldo_inicial)}</td>
-                <td style={tdR}>{money(c.debito)}</td>
-                <td style={tdR}>{money(c.credito)}</td>
-                <td style={{ ...tdR, fontWeight: 600 }}>{money(c.saldo_final)}</td>
-                <td style={td}>{c.classif || c.tipo}</td>
-                <td style={{ ...td, textAlign: 'center' }}><Dot c={farol(c)} /></td>
-              </tr>
-            ))}
+            {contas.map((c, i) => {
+              const sint = c.sintetica
+              const indent = Math.max(0, (Number(c.grau) || 1) - 1) * 14
+              return (
+                <tr key={i} onClick={() => !sint && setSel(c)}
+                  style={{ borderTop: `1px solid ${theme.border}`, cursor: sint ? 'default' : 'pointer', background: sint ? theme.input : 'transparent' }}>
+                  <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{c.reduzido || ''}</td>
+                  <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{c.classif}</td>
+                  <td style={{ ...td, paddingLeft: 14 + indent, fontWeight: sint ? 700 : 400 }}>{c.nome || '—'}</td>
+                  <td style={tdR}>{money(c.saldo_inicial)}</td>
+                  <td style={tdR}>{money(c.debito)}</td>
+                  <td style={tdR}>{money(c.credito)}</td>
+                  <td style={{ ...tdR, fontWeight: 600 }}>{money(c.saldo_final)}</td>
+                  <td style={{ ...td, textAlign: 'center' }}>{sint ? '' : <Dot c={farol(c)} />}</td>
+                </tr>
+              )
+            })}
           </tbody>
         </table>
       </div>
@@ -330,7 +310,7 @@ function Wrapper({ children, nome, comp }) {
     <div>
       <h1 style={{ fontSize: 22, fontWeight: 500, marginBottom: 4 }}>Conciliação de Contas</h1>
       <p style={{ color: theme.sub, fontSize: 13, marginBottom: 16 }}>
-        {nome ? <>Saldo inicial + movimento = saldo atual. <b style={{ color: theme.text }}>{nome}</b> · {comp}. Clique numa conta para ver a composição.</> : 'Saldo inicial + movimento = saldo atual.'}
+        {nome ? <>Estrutura de balancete (Ativo e Passivo) com contas sintéticas e analíticas. <b style={{ color: theme.text }}>{nome}</b> · {comp}. Clique numa conta analítica para ver a composição.</> : 'Estrutura de balancete (Ativo e Passivo).'}
       </p>
       {children}
     </div>
