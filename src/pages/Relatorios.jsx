@@ -45,6 +45,7 @@ const RELATORIOS = [
   { id: 'balancete', nome: 'Balancete', icon: 'ti-table', desc: 'Saldos por conta (inicial, movimento e final).' },
   { id: 'dre', nome: 'DRE (resumo)', icon: 'ti-report-money', desc: 'Demonstração de resultado simplificada por prefixo de conta.' },
   { id: 'book', nome: 'Book de Composições', icon: 'ti-book', desc: 'Contas do balancete com saldo final diferente de zero.' },
+  { id: 'balanco', nome: 'Balanço Patrimonial', icon: 'ti-scale', desc: 'Ativo e Passivo + Patrimônio Líquido por conta (saldo final).' },
   { id: 'pendencias', nome: 'Relatório de Pendências', icon: 'ti-alert-triangle', desc: 'Documentos da competência ainda não recebidos.' },
   { id: 'distribuicao', nome: 'Distribuição de lucros · IRRF 2026', icon: 'ti-cash', desc: 'Apuração por sócio: total recebido, limite e IRRF estimado.' },
   { id: 'auditoria', nome: 'Justificativas e correções do fechamento', icon: 'ti-clipboard-check', desc: 'Consolida toda a auditoria registrada nesta competência.' },
@@ -124,6 +125,12 @@ export default function Relatorios() {
   // Book de Composições: contas com saldo final != 0.
   const book = linhas.filter(l => Math.abs(Number(l.saldo_final) || 0) >= 0.005)
 
+  // Balanço: Ativo (prefixo 1) × Passivo + PL (prefixo 2).
+  const ativo = linhas.filter(l => String(l.conta || '').startsWith('1'))
+  const passivo = linhas.filter(l => String(l.conta || '').startsWith('2'))
+  const totAtivo = ativo.reduce((s, l) => s + (Number(l.saldo_final) || 0), 0)
+  const totPassivo = passivo.reduce((s, l) => s + (Number(l.saldo_final) || 0), 0)
+
   // Pendências: documentos não recebidos (rec === false).
   const pendencias = documentos.filter(d => d && d.rec === false)
 
@@ -181,9 +188,20 @@ export default function Relatorios() {
     baixarCSV(`distribuicao_lucros_${compSlug}.csv`, dados)
   }
 
+  function exportarBalanco() {
+    const dados = [
+      ['Grupo', 'Conta', 'Nome', 'Saldo final'],
+      ...ativo.map(l => ['Ativo', l.conta, l.nome, csvNum(l.saldo_final)]),
+      ['', '', 'TOTAL ATIVO', csvNum(totAtivo)],
+      ...passivo.map(l => ['Passivo + PL', l.conta, l.nome, csvNum(l.saldo_final)]),
+      ['', '', 'TOTAL PASSIVO + PL', csvNum(totPassivo)],
+    ]
+    baixarCSV(`balanco_${compSlug}.csv`, dados)
+  }
+
   const semBalancete = !carregando && temComp && linhas.length === 0
   // Relatórios que dependem só do balancete.
-  const dependeBalancete = aba === 'balancete' || aba === 'dre' || aba === 'book'
+  const dependeBalancete = aba === 'balancete' || aba === 'dre' || aba === 'book' || aba === 'balanco'
 
   return (
     <Wrapper>
@@ -312,6 +330,16 @@ export default function Relatorios() {
               </table>
             </div>
           )}
+        </Secao>
+      )}
+
+      {/* Balanço Patrimonial */}
+      {!carregando && temComp && linhas.length > 0 && aba === 'balanco' && (
+        <Secao titulo="Balanço Patrimonial" onExportar={exportarBalanco}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 14 }}>
+            <GrupoBalanco titulo="Ativo" contas={ativo} total={totAtivo} />
+            <GrupoBalanco titulo="Passivo + Patrimônio Líquido" contas={passivo} total={totPassivo} />
+          </div>
         </Secao>
       )}
 
@@ -479,6 +507,34 @@ function LinhaDRE({ label, valor }) {
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0' }}>
       <span style={{ fontSize: 13.5, color: theme.sub }}>{label}</span>
       <span style={{ fontSize: 14, color: theme.text, fontVariantNumeric: 'tabular-nums' }}>{valor}</span>
+    </div>
+  )
+}
+
+function GrupoBalanco({ titulo, contas, total }) {
+  return (
+    <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'hidden' }}>
+      <p style={{ fontSize: 14, fontWeight: 600, padding: '14px 16px', margin: 0, borderBottom: `1px solid ${theme.border}` }}>{titulo}</p>
+      {contas.length === 0 ? (
+        <p style={{ color: theme.sub, fontSize: 12.5, padding: 16 }}>Sem contas neste grupo.</p>
+      ) : (
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <tbody>
+            {contas.map((l, i) => (
+              <tr key={i} style={{ borderTop: i ? `1px solid ${theme.border}` : 'none' }}>
+                <td style={td}><span style={{ color: theme.sub, fontSize: 11 }}>{l.conta}</span> {l.nome || ''}</td>
+                <td style={tdNum}>{money(l.saldo_final)}</td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot>
+            <tr style={{ borderTop: `1px solid ${theme.border}`, background: theme.input }}>
+              <td style={{ ...td, fontWeight: 700 }}>Total</td>
+              <td style={{ ...tdNum, fontWeight: 700 }}>{money(total)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      )}
     </div>
   )
 }

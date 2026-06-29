@@ -141,6 +141,9 @@ function Detalhe({ conta, compId, usuario, getCompetenciaId, onVoltar }) {
         <Tile label="Diferença (amarração)" v={money(dif)} cor={Math.abs(dif) < 0.01 ? theme.green : theme.yellow} />
       </div>
 
+      {/* Impostos: baixa do mês anterior + memória de cálculo */}
+      {conta.tipo === 'Imposto' && <ImpostoCards conta={conta} />}
+
       {/* Composição lida do histórico */}
       <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'auto' }}>
         <div style={{ padding: '12px 16px', fontSize: 12.5, color: theme.sub }}>
@@ -178,6 +181,72 @@ function Detalhe({ conta, compId, usuario, getCompetenciaId, onVoltar }) {
           onConfirmar={txt => registrar(modal === 'just' ? 'Justificativa' : 'Correção', txt)} />
       )}
     </Wrapper>
+  )
+}
+
+const numCell = v => { if (typeof v === 'number') return v; const s = String(v ?? '').trim(); if (/^-?[\d.]+,\d{2}$/.test(s)) return parseFloat(s.replace(/\./g, '').replace(',', '.')); const n = parseFloat(s.replace(/[^\d.-]/g, '')); return isNaN(n) ? 0 : n }
+function Mini({ label, v, cor }) {
+  return <div><p style={{ color: theme.sub, fontSize: 10.5, textTransform: 'uppercase', margin: 0 }}>{label}</p><p style={{ color: cor || theme.text, fontSize: 15, fontWeight: 600, margin: '2px 0 0' }}>{v}</p></div>
+}
+
+function ImpostoCards({ conta }) {
+  const [mem, setMem] = useState(null)
+  const [erro, setErro] = useState('')
+  const baixaAnterior = Number(conta.saldo_inicial) || 0
+  const recolhido = Number(conta.debito) || 0
+  const baixaDif = baixaAnterior - recolhido
+  const baixaOk = Math.abs(baixaDif) < 0.01
+  const aRecolher = Number(conta.saldo_final) || 0
+
+  async function aoEscolher(e) {
+    const f = e.target.files?.[0]; if (!f) return; setErro('')
+    try {
+      const XLSX = await import('xlsx')
+      const wb = XLSX.read(await f.arrayBuffer(), { type: 'array' })
+      const arr = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' })
+      let tot = 0
+      for (const r of arr) for (const c of r) { const n = numCell(c); if (n) { tot += n; break } }
+      setMem({ nome: f.name, total: tot })
+    } catch (err) { setErro('Não consegui ler: ' + err.message) }
+  }
+
+  const memDif = mem ? mem.total - aRecolher : 0
+  const memOk = mem && Math.abs(memDif) < 0.01
+
+  return (
+    <div style={{ display: 'grid', gap: 12, marginBottom: 16 }}>
+      <div style={{ background: theme.card, border: `1px solid ${baixaOk ? 'rgba(48,164,108,0.4)' : 'rgba(229,72,77,0.4)'}`, borderRadius: 12, padding: 16 }}>
+        <p style={{ fontSize: 14, fontWeight: 600, margin: '0 0 10px' }}>Baixa do imposto do mês anterior</p>
+        <div style={{ display: 'flex', gap: 28, flexWrap: 'wrap' }}>
+          <Mini label="Saldo anterior (a recolher)" v={money(baixaAnterior)} />
+          <Mini label="Recolhido no mês (débito)" v={money(recolhido)} />
+          <Mini label="Diferença" v={money(baixaDif)} cor={baixaOk ? theme.green : theme.red} />
+        </div>
+        <p style={{ fontSize: 12.5, color: baixaOk ? theme.green : theme.red, margin: '10px 0 0' }}>
+          <i className={`ti ${baixaOk ? 'ti-circle-check' : 'ti-alert-triangle'}`} /> {baixaOk ? 'Baixa conferida — o imposto do mês anterior foi recolhido e zerou.' : 'Divergência na baixa — justifique ou corrija (gera D imposto / C banco).'}
+        </p>
+      </div>
+
+      <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: 16 }}>
+        <p style={{ fontSize: 14, fontWeight: 600, margin: '0 0 6px' }}>Memória de cálculo</p>
+        <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 10px' }}>Importe a memória e compare com o balancete (imposto a recolher: {money(aRecolher)}).</p>
+        <input type="file" accept=".xlsx,.xls,.csv" onChange={aoEscolher} style={{ fontSize: 13, color: theme.sub }} />
+        {erro && <p style={{ color: theme.red, fontSize: 12.5, marginTop: 8 }}>{erro}</p>}
+        {mem && (
+          <div style={{ marginTop: 12 }}>
+            <p style={{ color: theme.sub, fontSize: 12, margin: '0 0 8px' }}><i className="ti ti-file-spreadsheet" /> {mem.nome}</p>
+            <div style={{ display: 'flex', gap: 28, flexWrap: 'wrap' }}>
+              <Mini label="Memória" v={money(mem.total)} />
+              <Mini label="Balancete" v={money(aRecolher)} />
+              <Mini label="Diferença" v={money(memDif)} cor={memOk ? theme.green : theme.yellow} />
+            </div>
+            {memOk
+              ? <p style={{ color: theme.green, fontSize: 12.5, margin: '10px 0 0' }}><i className="ti ti-circle-check" /> Memória bate com o balancete.</p>
+              : <p style={{ color: theme.yellow, fontSize: 12.5, margin: '10px 0 0' }}><i className="ti ti-alert-triangle" /> Divergência: houve recolhimento no mês? houve PER/DCOMP? Justifique ou corrija acima.</p>}
+          </div>
+        )}
+      </div>
+    </div>
   )
 }
 
