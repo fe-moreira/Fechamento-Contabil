@@ -17,24 +17,26 @@ function lerHistorico(h) {
 
   // O nome do cliente/fornecedor vem antes do bloco fiscal (CF./NF/NOTA/RPS).
   const corpo = s.split(/\s(?:CF\b|NF\b|NOTA\s+FISCAL|RPS\b)/i)[0].trim()
-  let entidade = ''
+  let entidade = '', ident = false
   const mRec = corpo.match(/\b(?:RECEBIMENTO|RECEBTO|PAGAMENTO|PAGTO)\s+(?:A\s+|DE\s+|AO\s+)?(.+)$/i)
   if (mRec) {
     // "VALOR REF. RECEBIMENTO <NOME> NF ..."
-    entidade = tiraSufixo(mRec[1].trim())
+    entidade = tiraSufixo(mRec[1].trim()); ident = true
   } else if (/\s[-–]\s/.test(corpo)) {
     // "... - ACUM. N - <NOME> CF. NF. ..." → último segmento entre travessões
     const segs = corpo.split(/\s[-–]\s/).map(x => x.trim()).filter(Boolean)
-    entidade = tiraSufixo(segs[segs.length - 1])
+    entidade = tiraSufixo(segs[segs.length - 1]); ident = true
   }
-  // Fallback: heurística antiga de remoção de ruído.
+  // Fallback: heurística antiga de remoção de ruído (leitura incerta).
   if (!entidade || entidade.length < 3) {
     entidade = s.replace(nfm ? nfm[0] : '', ' ').replace(/\b\d+\b/g, ' ').replace(RUIDO, ' ').replace(/[.\-/]+/g, ' ').replace(/\s+/g, ' ').trim()
+    ident = false
   }
+  // Confiança: alta = nome confiável + NF; média = nome confiável sem NF; baixa = leitura incerta.
   let conf = 'baixa'
-  if (entidade.length >= 4 && nf) conf = 'alta'
-  else if (entidade.length >= 4 || nf) conf = 'media'
-  return { nf, entidade: entidade || '(não identificado)', conf }
+  if (ident && entidade.length >= 4 && nf) conf = 'alta'
+  else if (ident && entidade.length >= 4) conf = 'media'
+  return { nf, entidade: entidade || '', ident, conf }
 }
 
 function tipoConta(nome) {
@@ -54,11 +56,6 @@ function tipoPorClassif(c) {
   if (/composi/.test(n)) return 'Composição'
   if (/saldo|banco|simples/.test(n)) return 'Saldo'
   return ''
-}
-const CONF = {
-  alta: { cor: theme.green, txt: 'alta' },
-  media: { cor: theme.yellow, txt: 'média' },
-  baixa: { cor: theme.red, txt: 'baixa' },
 }
 
 export default function Conciliacao() {
@@ -142,6 +139,7 @@ function Detalhe({ conta, compId, usuario, getCompetenciaId, onVoltar }) {
   const [lanc, setLanc] = useState([])
   const [carregando, setCarregando] = useState(true)
   const [modal, setModal] = useState(null) // 'just' | 'corr'
+  const [corr, setCorr] = useState(null)   // lançamento de leitura incerta a corrigir
   const [msg, setMsg] = useState('')
 
   useEffect(() => {
@@ -150,13 +148,29 @@ function Detalhe({ conta, compId, usuario, getCompetenciaId, onVoltar }) {
       .then(({ data }) => { setLanc((data || []).map(l => ({ ...l, leitura: lerHistorico(l.historico) }))); setCarregando(false) })
   }, [compId, conta.conta])
 
+  // Natureza pela classificação: Ativo (1) é devedora (clientes); Passivo (2) credora (fornecedores).
+  const natCredito = String(conta.classifRaw || conta.classif || '').replace(/\D/g, '')[0] === '2'
+  const lab = natCredito ? 'fornecedor' : 'cliente'
+  const ov = l => natCredito ? ((Number(l.credito) || 0) - (Number(l.debito) || 0)) : ((Number(l.debito) || 0) - (Number(l.credito) || 0))
+
   const somaComp = lanc.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
   const dif = conta.saldo_final - somaComp
 
-  async function registrar(tipo, detalhe) {
+  // Agrupa por cliente/fornecedor; leitura incerta cai em "(não identificado)".
+  const grupos = {}, ordem = []
+  for (const l of lanc) {
+    if (Math.abs(ov(l)) < 0.005) continue
+    const key = l.leitura.ident && l.leitura.entidade ? l.leitura.entidade : '(não identificado)'
+    if (!grupos[key]) { grupos[key] = []; ordem.push(key) }
+    grupos[key].push(l)
+  }
+  ordem.sort((a, b) => (a === '(não identificado)' ? 1 : 0) - (b === '(não identificado)' ? 1 : 0) || a.localeCompare(b, 'pt-BR'))
+  const revs = lanc.filter(l => Math.abs(ov(l)) >= 0.005 && l.leitura.conf !== 'alta').length
+
+  async function registrar(tipo, detalhe, item) {
     const id = await getCompetenciaId()
-    await supabase.from('auditoria').insert({ competencia_id: id, modulo: 'Conciliação', item: `${conta.conta} · ${conta.nome}`, tipo, detalhe, usuario })
-    setMsg(`${tipo} registrada na auditoria.`); setModal(null)
+    await supabase.from('auditoria').insert({ competencia_id: id, modulo: 'Conciliação', item: item || `${conta.conta} · ${conta.nome}`, tipo, detalhe, usuario })
+    setMsg(`${tipo} registrada na auditoria.`); setModal(null); setCorr(null)
   }
 
   return (
@@ -187,41 +201,76 @@ function Detalhe({ conta, compId, usuario, getCompetenciaId, onVoltar }) {
       {/* Impostos: baixa do mês anterior + memória de cálculo */}
       {conta.tipo === 'Imposto' && <ImpostoCards conta={conta} />}
 
-      {/* Composição lida do histórico */}
-      <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'auto' }}>
-        <div style={{ padding: '12px 16px', fontSize: 12.5, color: theme.sub }}>
-          {conta.tipo === 'Composição' ? 'Composição lida do histórico (cliente/fornecedor e NF). Confiança baixa → revise em “Corrigir”.' : 'Lançamentos do razão (conta de saldo).'}
+      {/* Composição agrupada por cliente/fornecedor */}
+      <p style={{ color: theme.sub, fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: .5, margin: '4px 0 10px' }}>
+        O que compõe o saldo — por {lab}
+      </p>
+
+      {revs > 0 && (
+        <div style={{ background: 'rgba(245,166,35,0.10)', border: `1px solid ${theme.yellow}`, borderRadius: 12, display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', marginBottom: 12 }}>
+          <i className="ti ti-alert-triangle" style={{ color: theme.yellow, fontSize: 18 }} />
+          <span style={{ color: theme.text, fontSize: 13 }}>{revs} lançamento(s) com leitura incerta — corrija o {lab} para o sistema aprender.</span>
         </div>
-        <table style={{ width: '100%', minWidth: 720, borderCollapse: 'collapse' }}>
-          <thead>
-            <tr style={{ background: theme.input }}>
-              <th style={th}>Data</th><th style={th}>NF</th><th style={th}>Cliente/Fornecedor (lido)</th>
-              <th style={th}>Histórico</th><th style={thR}>Débito</th><th style={thR}>Crédito</th><th style={{ ...th, textAlign: 'center' }}>Confiança</th>
-            </tr>
-          </thead>
-          <tbody>
-            {carregando ? (
-              <tr><td colSpan={7} style={{ ...td, color: theme.sub }}>Carregando…</td></tr>
-            ) : lanc.length === 0 ? (
-              <tr><td colSpan={7} style={{ ...td, color: theme.sub }}>Sem lançamentos nesta conta.</td></tr>
-            ) : lanc.map((l, i) => (
-              <tr key={i} style={{ borderTop: `1px solid ${theme.border}` }}>
-                <td style={{ ...td, whiteSpace: 'nowrap' }}>{l.data || ''}</td>
-                <td style={td}>{l.leitura.nf || '—'}</td>
-                <td style={td}>{l.leitura.entidade}</td>
-                <td style={{ ...td, maxWidth: 280, color: theme.sub }}>{l.historico}</td>
-                <td style={tdR}>{Number(l.debito) ? money(l.debito) : ''}</td>
-                <td style={tdR}>{Number(l.credito) ? money(l.credito) : ''}</td>
-                <td style={{ ...td, textAlign: 'center' }}><span style={{ color: CONF[l.leitura.conf].cor, fontSize: 11.5, fontWeight: 600 }}>{CONF[l.leitura.conf].txt}</span></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      )}
+
+      {carregando ? (
+        <p style={{ color: theme.sub, fontSize: 13 }}>Carregando…</p>
+      ) : ordem.length === 0 ? (
+        <Aviso icon="ti-inbox" texto="Sem lançamentos nesta conta." />
+      ) : ordem.map((k, gi) => {
+        const grp = grupos[k]
+        const gt = grp.reduce((s, l) => s + ov(l), 0)
+        const unk = k === '(não identificado)'
+        const hasRev = grp.some(l => l.leitura.conf !== 'alta')
+        return (
+          <div key={gi} style={{ background: theme.card, border: `1px solid ${hasRev ? theme.yellow : theme.cb}`, borderRadius: 12, overflow: 'hidden', marginBottom: 12 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '13px 16px', background: theme.input }}>
+              <span style={{ color: unk ? theme.yellow : theme.text, fontSize: 14, fontWeight: 600, fontStyle: unk ? 'italic' : 'normal' }}>{k}</span>
+              <span style={{ color: theme.text, fontSize: 14, fontWeight: 600 }}>{money(gt)}</span>
+            </div>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ borderTop: `1px solid ${theme.border}` }}>
+                  <th style={th}>Data</th><th style={th}>NF</th><th style={th}>Histórico</th>
+                  <th style={thR}>Débito</th><th style={thR}>Crédito</th><th style={{ ...th, textAlign: 'center' }}>Conf.</th>
+                </tr>
+              </thead>
+              <tbody>
+                {grp.map((l, i) => {
+                  const rev = l.leitura.conf !== 'alta'
+                  return (
+                    <tr key={i} style={{ borderTop: `1px solid ${theme.border}` }}>
+                      <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{l.data || '—'}</td>
+                      <td style={{ ...td, color: theme.sub, fontWeight: 600 }}>NF {l.leitura.nf || '—'}</td>
+                      <td style={{ ...td, color: theme.sub, fontFamily: 'monospace', fontSize: 11, maxWidth: 320 }}>{l.historico}</td>
+                      <td style={{ ...tdR, color: theme.green }}>{Number(l.debito) ? money(l.debito) : '—'}</td>
+                      <td style={{ ...tdR, color: theme.red }}>{Number(l.credito) ? money(l.credito) : '—'}</td>
+                      <td style={{ ...td, textAlign: 'center' }}>
+                        {rev
+                          ? <span onClick={() => { setMsg(''); setCorr(l) }} style={{ background: 'rgba(245,166,35,0.18)', color: theme.yellow, fontSize: 11, fontWeight: 600, padding: '3px 9px', borderRadius: 20, cursor: 'pointer' }}>corrigir</span>
+                          : <span style={{ color: theme.green, fontSize: 14 }}><i className="ti ti-circle-check" /></span>}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )
+      })}
 
       {modal && (
         <ModalRegistro tipo={modal === 'just' ? 'Justificativa' : 'Correção'} onClose={() => setModal(null)}
           onConfirmar={txt => registrar(modal === 'just' ? 'Justificativa' : 'Correção', txt)} />
+      )}
+
+      {corr && (
+        <ModalRegistro tipo="Correção"
+          titulo={`Corrigir leitura — ${lab}`}
+          sub={`${corr.data || ''} · NF ${corr.leitura.nf || '—'} · ${corr.historico}`}
+          placeholder={`Nome correto do ${lab} (e o que ajustar)…`}
+          onClose={() => setCorr(null)}
+          onConfirmar={txt => registrar('Correção', `Leitura: ${txt}`, `${conta.conta} · ${corr.data || ''} · NF ${corr.leitura.nf || '—'}`)} />
       )}
     </Wrapper>
   )
@@ -293,14 +342,14 @@ function ImpostoCards({ conta }) {
   )
 }
 
-function ModalRegistro({ tipo, onClose, onConfirmar }) {
+function ModalRegistro({ tipo, titulo, sub, placeholder, onClose, onConfirmar }) {
   const [txt, setTxt] = useState('')
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 60 }}>
       <div onClick={e => e.stopPropagation()} style={{ width: 'min(480px,96vw)', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
-        <h2 style={{ fontSize: 17, marginBottom: 4 }}>{tipo}</h2>
-        <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 14 }}>Fica registrada na auditoria com seu usuário e a data.</p>
-        <textarea className="input" rows={3} value={txt} onChange={e => setTxt(e.target.value)} autoFocus placeholder={tipo === 'Correção' ? 'O que foi corrigido (ex.: reclassificação, leitura do histórico)…' : 'Por que esta conta está assim…'} />
+        <h2 style={{ fontSize: 17, marginBottom: 4 }}>{titulo || tipo}</h2>
+        <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 14 }}>{sub || 'Fica registrada na auditoria com seu usuário e a data.'}</p>
+        <textarea className="input" rows={3} value={txt} onChange={e => setTxt(e.target.value)} autoFocus placeholder={placeholder || (tipo === 'Correção' ? 'O que foi corrigido (ex.: reclassificação, leitura do histórico)…' : 'Por que esta conta está assim…')} />
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
           <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
           <button className="btn" onClick={() => txt.trim() && onConfirmar(txt.trim())}>Registrar</button>
