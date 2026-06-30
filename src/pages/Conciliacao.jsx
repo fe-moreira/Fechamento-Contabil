@@ -5,6 +5,7 @@ import { useAuth } from '../components/AuthProvider'
 import { theme, money, moneyDC } from '../lib/theme'
 import { montarBalancete, parsePlano, composicaoAbertura } from '../lib/balancete'
 import { abrePdfTimbrado } from '../lib/pdf'
+import { gerarExcelTimbrado } from '../lib/excel'
 import CampoConta from '../components/CampoConta'
 
 // ---- Leitura do histórico: extrai NF e entidade (cliente/fornecedor) com confiança ----
@@ -782,23 +783,25 @@ function RelatoriosComposicao({ conta, emAberto, zerados, contraDe }) {
   const somaDeb = ls => ls.reduce((s, l) => s + (Number(l.debito) || 0), 0)
   const somaCred = ls => ls.reduce((s, l) => s + (Number(l.credito) || 0), 0)
 
-  // Em blocos por cliente/fornecedor.
+  // Em blocos por cliente/fornecedor, no papel timbrado da Attentive.
   async function excel(linhas, sub) {
-    const XLSX = await import('xlsx')
     const blocos = agruparPorCliente(linhas)
-    const aoa = [[titulo(sub)], [], cols]
-    for (const b of blocos) {
-      aoa.push([b.cliente])
-      for (const l of b.lancs) aoa.push(linhaArr(l))
-      aoa.push(['', '', '', 'Subtotal', somaDeb(b.lancs), somaCred(b.lancs)])
-      aoa.push([])
-    }
-    aoa.push(['', '', '', 'TOTAL GERAL', somaDeb(linhas), somaCred(linhas)])
-    const ws = XLSX.utils.aoa_to_sheet(aoa)
-    ws['!cols'] = [{ wch: 12 }, { wch: 12 }, { wch: 60 }, { wch: 28 }, { wch: 14 }, { wch: 14 }]
-    const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, ws, sub.slice(0, 28))
-    XLSX.writeFile(wb, `conciliacao_${conta.conta}_${sub.replace(/\s+/g, '-').toLowerCase()}.xlsx`)
+    await gerarExcelTimbrado({
+      titulo: titulo(sub),
+      sub: `${blocos.length} ${blocos.length === 1 ? 'cliente/fornecedor' : 'clientes/fornecedores'} · ${linhas.length} lançamento(s)`,
+      colunas: [
+        { nome: 'Data', largura: 12 }, { nome: 'NF', largura: 12 }, { nome: 'Histórico', largura: 60, wrap: true },
+        { nome: 'Contrapartida', largura: 26 }, { nome: 'Débito', alinhar: 'right', moeda: true }, { nome: 'Crédito', alinhar: 'right', moeda: true },
+      ],
+      secoes: blocos.map(b => ({
+        titulo: b.cliente,
+        linhas: b.lancs.map(linhaArr),
+        totais: ['', '', '', 'Subtotal', somaDeb(b.lancs), somaCred(b.lancs)],
+      })),
+      totais: ['', '', '', 'TOTAL GERAL', somaDeb(linhas), somaCred(linhas)],
+      arquivo: `conciliacao_${conta.conta}_${sub.replace(/\s+/g, '-').toLowerCase()}.xlsx`,
+      aba: sub,
+    })
   }
 
   function pdf(linhas, sub) {

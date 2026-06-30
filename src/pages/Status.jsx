@@ -7,6 +7,7 @@ import { apurarBancoResultado } from '../lib/bancoResultado'
 import { apurarVariacoes } from '../lib/variacoes'
 import { theme, money } from '../lib/theme'
 import { abrePdfTimbrado } from '../lib/pdf'
+import { gerarExcelTimbrado } from '../lib/excel'
 import CampoConta from '../components/CampoConta'
 
 const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
@@ -206,11 +207,11 @@ export default function Status() {
     const linhas = gate.itens.map(it => [it.item, it.sub || '', it.detalhe || ''])
     const tituloRel = `${gate.nome} — ${empresaNome} · ${competencia}`
     if (fmt === 'excel') {
-      const XLSX = await import('xlsx')
-      const ws = XLSX.utils.aoa_to_sheet([['Item', 'Contas', 'Detalhe'], ...linhas])
-      ws['!cols'] = [{ wch: 30 }, { wch: 50 }, { wch: 60 }]
-      const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Pendências')
-      XLSX.writeFile(wb, `${gate.key}_${competencia.replace('/', '-')}.xlsx`)
+      await gerarExcelTimbrado({
+        titulo: tituloRel, sub: `${gate.itens.length} pendência(s)`,
+        colunas: [{ nome: 'Item', largura: 30 }, { nome: 'Contas', largura: 50 }, { nome: 'Detalhe', largura: 60, wrap: true }],
+        linhas, totais: null, arquivo: `${gate.key}_${competencia.replace('/', '-')}.xlsx`, aba: 'Pendências',
+      })
     } else {
       abrePdfTimbrado({
         titulo: tituloRel, sub: `${gate.itens.length} pendência(s)`,
