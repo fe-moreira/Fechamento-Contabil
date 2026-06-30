@@ -77,6 +77,32 @@ function saldoSinalAb(valor, dc) {
   return n
 }
 
+// Normaliza um valor de competência para "MM/AAAA". Aceita "MM/AAAA", "M/AAAA",
+// ISO "AAAA-MM(-DD)", "MM-AAAA" e o número de série de data do Excel (ex.: 46174 → 06/2026,
+// que é como uma célula de data vem da planilha). Retorna '' quando não reconhece.
+export function normalizaCompetencia(v) {
+  if (v == null) return ''
+  const s = String(v).trim()
+  if (!s) return ''
+  let m = s.match(/^(\d{1,2})\/(\d{4})$/)
+  if (m) return `${String(+m[1]).padStart(2, '0')}/${m[2]}`
+  m = s.match(/^(\d{4})[-/.](\d{1,2})(?:[-/.]\d{1,2})?$/)        // ISO AAAA-MM(-DD)
+  if (m) return `${String(+m[2]).padStart(2, '0')}/${m[1]}`
+  m = s.match(/^(\d{1,2})[-.](\d{4})$/)                          // MM-AAAA / MM.AAAA
+  if (m) return `${String(+m[1]).padStart(2, '0')}/${m[2]}`
+  const noAno = y => y >= 2000 && y <= 2099
+  if (/^\d+(\.\d+)?$/.test(s)) {                                 // série de data do Excel
+    const serial = Math.floor(parseFloat(s))
+    if (serial > 59 && serial < 80000) {
+      const d = new Date(Date.UTC(1899, 11, 30) + serial * 86400000)
+      if (noAno(d.getUTCFullYear())) return `${String(d.getUTCMonth() + 1).padStart(2, '0')}/${d.getUTCFullYear()}`
+    }
+  }
+  const d = new Date(s)                                          // data textual reconhecível
+  if (!isNaN(d.getTime()) && noAno(d.getFullYear())) return `${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`
+  return ''
+}
+
 // Carga inicial mais recente do cliente (saldos de abertura + composições de abertura).
 export async function carregarCargaInicial(empresaId) {
   const { data } = await supabase.from('cargas_cadastro').select('dados, vigencia, created_at')
@@ -95,7 +121,7 @@ export async function ehCompetenciaInicial(empresaId, compId) {
     supabase.from('competencias').select('ano, mes').eq('id', compId).maybeSingle(),
     supabase.from('clientes').select('competencia_inicio').eq('id', empresaId).maybeSingle(),
   ])
-  const m = String(cli?.competencia_inicio || '').match(/^(\d{2})\/(\d{4})$/)
+  const m = normalizaCompetencia(cli?.competencia_inicio).match(/^(\d{2})\/(\d{4})$/)
   if (!comp || !m) return false
   return comp.mes === +m[1] && comp.ano === +m[2]
 }

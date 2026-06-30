@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { theme } from '../lib/theme'
+import { normalizaCompetencia } from '../lib/balancete'
 
 const vazio = {
   codigo_dominio: '', tipo: 'Matriz', codigo_matriz: '', razao_social: '',
@@ -79,9 +80,11 @@ export default function Clientes() {
         const tipoRaw = raw(row, 'tipo')
         if (tipoRaw) campos.tipo = tipoRaw.toLowerCase().startsWith('fil') ? 'Filial' : 'Matriz'
         const cm = raw(row, 'codigo_matriz'); if (cm) campos.codigo_matriz = cm
-        for (const k of ['nome_fantasia', 'cnpj', 'regime_tributario', 'tipo_fechamento', 'competencia_inicio', 'sistema_financeiro', 'integracao_financeira', 'analista', 'observacoes']) {
+        for (const k of ['nome_fantasia', 'cnpj', 'regime_tributario', 'tipo_fechamento', 'sistema_financeiro', 'integracao_financeira', 'analista', 'observacoes']) {
           const v = raw(row, k); if (v) campos[k] = v
         }
+        // Competência de início: célula de data vem como número de série do Excel → normaliza p/ MM/AAAA.
+        const ci = normalizaCompetencia(raw(row, 'competencia_inicio')); if (ci) campos.competencia_inicio = ci
         const cs = raw(row, 'carga_saldos'); if (cs) campos.carga_saldos = simNao(cs)
         const cr = raw(row, 'coleta_razao'); if (cr) campos.coleta_razao = simNao(cr)
 
@@ -128,6 +131,7 @@ export default function Clientes() {
     e.preventDefault(); setSalvando(true); setErro('')
     const payload = { ...form }
     if (payload.tipo === 'Matriz') payload.codigo_matriz = null
+    if (payload.competencia_inicio) payload.competencia_inicio = normalizaCompetencia(payload.competencia_inicio) || payload.competencia_inicio
     let res
     if (editId) res = await supabase.from('clientes').update(payload).eq('id', editId)
     else res = await supabase.from('clientes').insert(payload)

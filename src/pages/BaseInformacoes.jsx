@@ -5,7 +5,7 @@ import { useAuth } from '../components/AuthProvider'
 import DropZone from '../components/DropZone'
 import CampoConta from '../components/CampoConta'
 import { theme, money } from '../lib/theme'
-import { parsePlano, applyMask } from '../lib/balancete'
+import { parsePlano, applyMask, normalizaCompetencia } from '../lib/balancete'
 
 const hoje = () => new Date().toLocaleDateString('pt-BR')
 
@@ -631,15 +631,16 @@ function ModalPeriodo({ valorInicial, cargaSaldos, cargaFeita, onClose, onSalvar
   const [v, setV] = useState(valorInicial || '')
   const [nova, setNova] = useState(valorInicial ? !cargaSaldos : false)
   const [erro, setErro] = useState('')
-  const ok = /^\d{2}\/\d{4}$/.test(v)
+  const vNorm = normalizaCompetencia(v)            // aceita data/serial e normaliza p/ MM/AAAA
+  const ok = /^\d{2}\/\d{4}$/.test(vNorm)
   const valida = () => ok ? true : (setErro('Use o formato MM/AAAA.'), false)
 
   return (
-    <Modal titulo={`Período de início${ok ? ' — ' + v : ''}`} onClose={onClose} largura={560}>
+    <Modal titulo={`Período de início${ok ? ' — ' + vNorm : ''}`} onClose={onClose} largura={560}>
       <label>Competência de início (MM/AAAA)</label>
       <input className="input" value={v} onChange={e => setV(e.target.value)} placeholder="04/2026" autoFocus />
       <p style={{ color: theme.sub, fontSize: 12.5, margin: '10px 0 0', lineHeight: 1.55 }}>
-        A partir desta competência o passado fica travado. O mês anterior ({mesAnterior(v)}) é o saldo de abertura.
+        A partir desta competência o passado fica travado. O mês anterior ({mesAnterior(vNorm)}) é o saldo de abertura.
       </p>
 
       <label style={{ display: 'flex', alignItems: 'center', gap: 9, margin: '16px 0 0', cursor: 'pointer', color: theme.text, fontSize: 13 }}>
@@ -663,8 +664,8 @@ function ModalPeriodo({ valorInicial, cargaSaldos, cargaFeita, onClose, onSalvar
       {erro && <p style={{ color: theme.red, fontSize: 12.5, marginTop: 8 }}>{erro}</p>}
 
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
-        <button className="btn btn-ghost" onClick={() => valida() && onSalvar(v, nova)}>{nova ? 'Salvar' : 'Depois'}</button>
-        {!nova && <button className="btn" onClick={() => valida() && onFazerCarga(v)}><i className="ti ti-cloud-upload" /> Fazer agora</button>}
+        <button className="btn btn-ghost" onClick={() => valida() && onSalvar(vNorm, nova)}>{nova ? 'Salvar' : 'Depois'}</button>
+        {!nova && <button className="btn" onClick={() => valida() && onFazerCarga(vNorm)}><i className="ti ti-cloud-upload" /> Fazer agora</button>}
       </div>
     </Modal>
   )
