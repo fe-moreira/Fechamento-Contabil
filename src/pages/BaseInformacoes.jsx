@@ -286,7 +286,7 @@ export default function BaseInformacoes() {
         <ModalDist inicial={dist} onClose={() => setModal(null)} onSalvar={salvarDist} />
       )}
       {modal?.tipo === 'modelos' && (
-        <ModalSimples titulo="Modelos de relatório" texto="Os modelos do escritório (Balancete, DRE, DFC, Balanço) já são gerados na tela de Relatórios a partir do balancete da competência, com exportação para Excel/CSV. A personalização de modelos por cliente entra em breve." onClose={() => setModal(null)} />
+        <ModalSimples titulo="Modelos de relatório" texto="Os modelos do escritório (Balancete, DRE, DFC, Balanço) já são gerados na tela de Relatórios a partir do balancete da competência, com exportação para Excel (.xlsx) no papel timbrado da Attentive. A personalização de modelos por cliente entra em breve." onClose={() => setModal(null)} />
       )}
     </Wrapper>
   )

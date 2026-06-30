@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
 import { theme } from '../lib/theme'
+import { gerarExcelTimbrado } from '../lib/excel'
 
 const fmt = (s) => {
   s = Math.round(s || 0)
@@ -44,13 +45,20 @@ export default function Timesheet() {
   const total = linhas.reduce((s, l) => s + l.segundos, 0)
 
   function exportar() {
-    const linhasCsv = [['Cliente', 'Tempo', 'Segundos', 'Registros'],
-      ...linhas.map(l => [l.nome, fmt(l.segundos), l.segundos, l.registros])]
-    const csv = '﻿' + linhasCsv.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(';')).join('\r\n')
-    const a = document.createElement('a')
-    a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }))
-    a.download = `timesheet_${modo === 'cliente' ? 'cliente' : 'geral'}_${mes || 'todos'}.csv`
-    a.click(); URL.revokeObjectURL(a.href)
+    gerarExcelTimbrado({
+      titulo: 'Tempo por cliente (Timesheet)',
+      sub: `${modo === 'cliente' ? (empresaNome || 'Empresa selecionada') : 'Todos os clientes'} · ${rotuloMes(mes)}`,
+      colunas: [
+        { nome: 'Cliente', largura: 44 },
+        { nome: 'Tempo total', alinhar: 'right', largura: 18 },
+        { nome: 'Segundos', alinhar: 'right', largura: 14 },
+        { nome: 'Registros', alinhar: 'right', largura: 14 },
+      ],
+      linhas: linhas.map(l => [l.nome, fmt(l.segundos), l.segundos, l.registros]),
+      totais: ['Total geral', fmt(total), total, linhas.reduce((s, l) => s + l.registros, 0)],
+      arquivo: `timesheet_${modo === 'cliente' ? 'cliente' : 'geral'}_${mes || 'todos'}.xlsx`,
+      aba: 'Timesheet',
+    })
   }
 
   return (
@@ -61,7 +69,7 @@ export default function Timesheet() {
           <p style={{ color: theme.sub, fontSize: 13 }}>Tempo trabalhado na plataforma, registrado automaticamente enquanto a empresa está ativa.</p>
         </div>
         <button className="btn" onClick={exportar} disabled={!linhas.length} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-          <i className="ti ti-file-spreadsheet" /> Exportar CSV
+          <i className="ti ti-file-spreadsheet" /> Exportar Excel
         </button>
       </div>
 

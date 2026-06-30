@@ -4,6 +4,7 @@ import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { theme, money } from '../lib/theme'
 import CampoConta from '../components/CampoConta'
+import { gerarExcelTimbrado } from '../lib/excel'
 
 const vazio = { data: '', conta_debito: '', conta_credito: '', valor: '', historico: '', documento: '' }
 const MODULOS_SUGESTAO = ['Conciliação', 'Comparativo', 'Status']
@@ -121,13 +122,25 @@ export default function Contabilizar() {
   }
 
   function relatorioLancamentos() {
-    const hdr = ['Data', 'Conta débito', 'Conta crédito', 'Valor', 'Histórico', 'Origem']
-    const linhas = [hdr.map(csv).join(';')]
-    lista.forEach(l => linhas.push([
-      l.data ? l.data.split('-').reverse().join('/') : '', l.conta_debito || '', l.conta_credito || '',
-      (Number(l.valor) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 }), l.historico || '', l.origem || '',
-    ].map(csv).join(';')))
-    baixar('﻿' + linhas.join('\r\n'), `lancamentos_${competencia.replace('/', '-')}.csv`)
+    gerarExcelTimbrado({
+      titulo: 'Relatório de lançamentos',
+      sub: `${empresaNome} · competência ${competencia}`,
+      colunas: [
+        { nome: 'Data', largura: 14 },
+        { nome: 'Conta débito', largura: 18 },
+        { nome: 'Conta crédito', largura: 18 },
+        { nome: 'Valor', alinhar: 'right', moeda: true },
+        { nome: 'Histórico', largura: 50, wrap: true },
+        { nome: 'Origem', largura: 18 },
+      ],
+      linhas: lista.map(l => [
+        l.data ? l.data.split('-').reverse().join('/') : '', l.conta_debito || '', l.conta_credito || '',
+        Number(l.valor) || 0, l.historico || '', l.origem || '',
+      ]),
+      totais: ['', '', 'TOTAL', lista.reduce((s, l) => s + (Number(l.valor) || 0), 0), '', ''],
+      arquivo: `lancamentos_${competencia.replace('/', '-')}.xlsx`,
+      aba: 'Lançamentos',
+    })
   }
 
   if (!empresaId) {

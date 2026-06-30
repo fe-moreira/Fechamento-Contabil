@@ -5,37 +5,10 @@ import { apurarDistribuicao } from '../lib/distribuicao'
 import { apurarBancoResultado } from '../lib/bancoResultado'
 import { apurarVariacoes } from '../lib/variacoes'
 import { parsePlano } from '../lib/balancete'
+import { gerarExcelTimbrado } from '../lib/excel'
 import { theme, money } from '../lib/theme'
 
 const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
-
-// Valor pt-BR para CSV ("1234.56" -> "1234,56").
-function csvNum(v) {
-  return (Number(v) || 0).toFixed(2).replace('.', ',')
-}
-
-// Escapa um campo de CSV (separador ';').
-function csvCampo(v) {
-  const s = String(v ?? '')
-  if (s.includes(';') || s.includes('"') || s.includes('\n')) {
-    return '"' + s.replace(/"/g, '""') + '"'
-  }
-  return s
-}
-
-// Gera e baixa um CSV (separador ';', BOM, decimais pt-BR) via Blob + <a> temporário.
-function baixarCSV(nome, linhas) {
-  const conteudo = '﻿' + linhas.map(l => l.map(csvCampo).join(';')).join('\r\n')
-  const blob = new Blob([conteudo], { type: 'text/csv;charset=utf-8;' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = nome
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  URL.revokeObjectURL(url)
-}
 
 // Data pt-BR a partir de um created_at (ISO).
 function dataPtBR(iso) {
@@ -161,99 +134,159 @@ export default function Relatorios() {
   // Pendências: documentos não recebidos (rec === false).
   const pendencias = documentos.filter(d => d && d.rec === false)
 
+  // Subtítulo padrão e atalho para gerar a planilha timbrada da Attentive.
+  const subRel = `${empresaNome} · competência ${competencia}`
+  const num = v => Number(v) || 0
+  const xls = (titulo, colunas, args) => gerarExcelTimbrado({ titulo, sub: subRel, colunas, ...args })
+
   function exportarBalancete() {
-    const dados = [
-      ['Conta', 'Nome', 'Saldo inicial', 'Débito', 'Crédito', 'Saldo final'],
-      ...linhas.map(l => [
-        l.conta, l.nome, csvNum(l.saldo_inicial), csvNum(l.debito), csvNum(l.credito), csvNum(l.saldo_final),
-      ]),
-      ['', 'TOTAIS', '', csvNum(totDeb), csvNum(totCred), ''],
-    ]
-    baixarCSV(`balancete_${compSlug}.csv`, dados)
+    xls('Balancete', [
+      { nome: 'Conta', largura: 14 },
+      { nome: 'Nome', largura: 40 },
+      { nome: 'Saldo inicial', alinhar: 'right', moeda: true },
+      { nome: 'Débito', alinhar: 'right', moeda: true },
+      { nome: 'Crédito', alinhar: 'right', moeda: true },
+      { nome: 'Saldo final', alinhar: 'right', moeda: true },
+    ], {
+      linhas: linhas.map(l => [l.conta, l.nome, num(l.saldo_inicial), num(l.debito), num(l.credito), num(l.saldo_final)]),
+      totais: ['', 'TOTAIS', '', num(totDeb), num(totCred), ''],
+      arquivo: `balancete_${compSlug}.xlsx`,
+      aba: 'Balancete',
+    })
   }
 
   function exportarDRE() {
-    const dados = [
-      ['Grupo', 'Valor'],
-      ['Receitas', csvNum(receitas)],
-      ['(-) Despesas', csvNum(despesas)],
-      ['(-) Custos/Outras', csvNum(custos)],
-      ['Resultado', csvNum(resultado)],
-    ]
-    baixarCSV(`dre_${compSlug}.csv`, dados)
+    xls('DRE (resumo)', [
+      { nome: 'Grupo', largura: 32 },
+      { nome: 'Valor', alinhar: 'right', moeda: true },
+    ], {
+      linhas: [
+        ['Receitas', num(receitas)],
+        ['(-) Despesas', num(despesas)],
+        ['(-) Custos/Outras', num(custos)],
+      ],
+      totais: ['Resultado', num(resultado)],
+      arquivo: `dre_${compSlug}.xlsx`,
+      aba: 'DRE',
+    })
   }
 
   function exportarBook() {
-    const dados = [
-      ['Conta', 'Nome', 'Saldo final'],
-      ...book.map(l => [l.conta, l.nome, csvNum(l.saldo_final)]),
-    ]
-    baixarCSV(`book_composicoes_${compSlug}.csv`, dados)
+    xls('Book de Composições', [
+      { nome: 'Conta', largura: 14 },
+      { nome: 'Nome', largura: 44 },
+      { nome: 'Saldo final', alinhar: 'right', moeda: true },
+    ], {
+      linhas: book.map(l => [l.conta, l.nome, num(l.saldo_final)]),
+      arquivo: `book_composicoes_${compSlug}.xlsx`,
+      aba: 'Book',
+    })
   }
 
   function exportarPendencias() {
-    const dados = [
-      ['Pendência', 'Origem / Categoria'],
-      ...pendencias.map(d => [d.name, d.cat || 'Documento']),
-      ...concPend.map(c => [`Conciliação · ${c.conta}${c.nome ? ' · ' + c.nome : ''}${c.justificativa ? ' — ' + c.justificativa : ''}`, 'Conciliação (saldo sem extrato)']),
-    ]
-    baixarCSV(`pendencias_${compSlug}.csv`, dados)
+    xls('Relatório de Pendências', [
+      { nome: 'Pendência', largura: 60, wrap: true },
+      { nome: 'Origem / Categoria', largura: 34 },
+    ], {
+      linhas: [
+        ...pendencias.map(d => [d.name, d.cat || 'Documento']),
+        ...concPend.map(c => [`Conciliação · ${c.conta}${c.nome ? ' · ' + c.nome : ''}${c.justificativa ? ' — ' + c.justificativa : ''}`, 'Conciliação (saldo sem extrato)']),
+      ],
+      arquivo: `pendencias_${compSlug}.xlsx`,
+      aba: 'Pendências',
+    })
   }
 
   function exportarAuditoria() {
-    const dados = [
-      ['Módulo', 'Item', 'Tipo', 'Detalhe', 'Dedutibilidade', 'Usuário', 'Data'],
-      ...auditoria.map(a => [a.modulo, a.item, a.tipo, a.detalhe, a.dedutibilidade, a.usuario, dataPtBR(a.created_at)]),
-    ]
-    baixarCSV(`auditoria_${compSlug}.csv`, dados)
+    xls('Justificativas e correções do fechamento', [
+      { nome: 'Módulo', largura: 16 },
+      { nome: 'Item', largura: 26 },
+      { nome: 'Tipo', largura: 16 },
+      { nome: 'Detalhe', largura: 50, wrap: true },
+      { nome: 'Dedutibilidade', largura: 18 },
+      { nome: 'Usuário', largura: 22 },
+      { nome: 'Data', largura: 18 },
+    ], {
+      linhas: auditoria.map(a => [a.modulo, a.item, a.tipo, a.detalhe, a.dedutibilidade, a.usuario, dataPtBR(a.created_at)]),
+      arquivo: `auditoria_${compSlug}.xlsx`,
+      aba: 'Auditoria',
+    })
   }
 
   function exportarBancoResult() {
-    const dados = [
-      ['Data', 'Banco', 'Conta resultado', 'Valor', 'Despesa (LALUR)', 'Histórico'],
-      ...(br?.lancamentos || []).map(l => [
-        l.data ? l.data.split('-').reverse().join('/') : '', l.banco, l.resultado, csvNum(l.valor), l.despesa ? 'Sim' : 'Não', l.historico,
+    xls('Banco × Resultado', [
+      { nome: 'Data', largura: 14 },
+      { nome: 'Banco', largura: 24 },
+      { nome: 'Conta resultado', largura: 28 },
+      { nome: 'Valor', alinhar: 'right', moeda: true },
+      { nome: 'Despesa (LALUR)', largura: 16 },
+      { nome: 'Histórico', largura: 50, wrap: true },
+    ], {
+      linhas: (br?.lancamentos || []).map(l => [
+        l.data ? l.data.split('-').reverse().join('/') : '', l.banco, l.resultado, num(l.valor), l.despesa ? 'Sim' : 'Não', l.historico,
       ]),
-    ]
-    baixarCSV(`banco_x_resultado_${compSlug}.csv`, dados)
+      arquivo: `banco_x_resultado_${compSlug}.xlsx`,
+      aba: 'Banco x Resultado',
+    })
   }
 
   function exportarDistribuicao() {
-    const dados = [
-      ['Sócio', 'Identificação', 'Total recebido', 'Limite', 'Acima do limite', 'IRRF estimado'],
-      ...(dist?.socios || []).map(s => [s.nome, s.ident, csvNum(s.total), csvNum(dist.limite), s.excede ? 'Sim' : 'Não', csvNum(s.irrf)]),
-    ]
-    baixarCSV(`distribuicao_lucros_${compSlug}.csv`, dados)
+    xls('Distribuição de lucros · IRRF 2026', [
+      { nome: 'Sócio', largura: 30 },
+      { nome: 'Identificação', largura: 22 },
+      { nome: 'Total recebido', alinhar: 'right', moeda: true },
+      { nome: 'Limite', alinhar: 'right', moeda: true },
+      { nome: 'Acima do limite', largura: 16 },
+      { nome: 'IRRF estimado', alinhar: 'right', moeda: true },
+    ], {
+      linhas: (dist?.socios || []).map(s => [s.nome, s.ident, num(s.total), num(dist.limite), s.excede ? 'Sim' : 'Não', num(s.irrf)]),
+      arquivo: `distribuicao_lucros_${compSlug}.xlsx`,
+      aba: 'Distribuição',
+    })
   }
 
   function exportarBalanco() {
-    const dados = [
-      ['Grupo', 'Conta', 'Nome', 'Saldo final'],
-      ...ativo.map(l => ['Ativo', l.conta, l.nome, csvNum(l.saldo_final)]),
-      ['', '', 'TOTAL ATIVO', csvNum(totAtivo)],
-      ...passivo.map(l => ['Passivo + PL', l.conta, l.nome, csvNum(l.saldo_final)]),
-      ['', '', 'TOTAL PASSIVO + PL', csvNum(totPassivo)],
-    ]
-    baixarCSV(`balanco_${compSlug}.csv`, dados)
+    const colMoeda = { alinhar: 'right', moeda: true }
+    xls('Balanço Patrimonial', [
+      { nome: 'Conta', largura: 14 },
+      { nome: 'Nome', largura: 46 },
+      { nome: 'Saldo final', ...colMoeda },
+    ], {
+      secoes: [
+        { titulo: 'Ativo', linhas: ativo.map(l => [l.conta, l.nome, num(l.saldo_final)]), totais: ['', 'TOTAL ATIVO', num(totAtivo)] },
+        { titulo: 'Passivo + Patrimônio Líquido', linhas: passivo.map(l => [l.conta, l.nome, num(l.saldo_final)]), totais: ['', 'TOTAL PASSIVO + PL', num(totPassivo)] },
+      ],
+      arquivo: `balanco_${compSlug}.xlsx`,
+      aba: 'Balanço',
+    })
   }
 
   function exportarComparativo() {
     const meses = comparativo?.meses || []
-    const dados = [
-      ['Conta', 'Nome', ...meses.map(m => MESES[m - 1])],
-      ...(comparativo?.contas || []).map(c => [c.conta, c.nome, ...meses.map(m => {
-        const v = comparativo.matriz[c.conta]?.[m]; return v == null ? '' : csvNum(v)
+    xls('Comparativo de Movimento · 2026', [
+      { nome: 'Conta', largura: 12 },
+      { nome: 'Nome', largura: 38 },
+      ...meses.map(m => ({ nome: MESES[m - 1], alinhar: 'right', moeda: true })),
+    ], {
+      linhas: (comparativo?.contas || []).map(c => [c.conta, c.nome, ...meses.map(m => {
+        const v = comparativo.matriz[c.conta]?.[m]; return v == null ? '' : num(v)
       })]),
-    ]
-    baixarCSV('comparativo_2026.csv', dados)
+      arquivo: 'comparativo_2026.xlsx',
+      aba: 'Comparativo',
+    })
   }
 
   function exportarIndedutiveis() {
-    const dados = [
-      ['Item', 'Detalhe', 'Usuário', 'Data'],
-      ...indedutiveis.map(a => [a.item, a.detalhe, a.usuario, dataPtBR(a.created_at)]),
-    ]
-    baixarCSV(`indedutiveis_lalur_${compSlug}.csv`, dados)
+    xls('Despesas indedutíveis (LALUR)', [
+      { nome: 'Item', largura: 30 },
+      { nome: 'Detalhe', largura: 56, wrap: true },
+      { nome: 'Usuário', largura: 22 },
+      { nome: 'Data', largura: 18 },
+    ], {
+      linhas: indedutiveis.map(a => [a.item, a.detalhe, a.usuario, dataPtBR(a.created_at)]),
+      arquivo: `indedutiveis_lalur_${compSlug}.xlsx`,
+      aba: 'Indedutíveis',
+    })
   }
 
   const semBalancete = !carregando && temComp && linhas.length === 0
@@ -611,7 +644,7 @@ const thNum = { ...th, textAlign: 'right' }
 const td = { padding: '9px 14px', fontSize: 12.5, color: theme.text, whiteSpace: 'nowrap', maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis' }
 const tdNum = { ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }
 
-// Cabeçalho de seção com botões Excel (CSV) e PDF (window.print).
+// Cabeçalho de seção com botões Excel (.xlsx timbrado) e PDF (window.print).
 function Secao({ titulo, onExportar, children }) {
   return (
     <>
@@ -624,7 +657,7 @@ function Secao({ titulo, onExportar, children }) {
             disabled={!onExportar}
             style={{ display: 'inline-flex', alignItems: 'center', gap: 8, opacity: onExportar ? 1 : .5, cursor: onExportar ? 'pointer' : 'not-allowed' }}
           >
-            <i className="ti ti-file-spreadsheet" /> Excel (CSV)
+            <i className="ti ti-file-spreadsheet" /> Excel
           </button>
           <button
             className="btn-ghost"
