@@ -1,9 +1,39 @@
+/* Paleta por tema (mesmos tokens do protótipo). A sidebar e as cores de status
+   (accent/verde/amarelo/vermelho) são constantes; só o conteúdo muda no claro. */
+:root {
+  --c-sidebar: #1A2236;
+  --c-accent: #4A7CFF;
+  --c-contentBg: #161B29;
+  --c-card: #1F2634;
+  --c-cb: rgba(255,255,255,0.06);
+  --c-text: #E8EAF0;
+  --c-sub: #9BA3BC;
+  --c-input: #1B212E;
+  --c-border: rgba(255,255,255,0.08);
+  --c-green: #30A46C;
+  --c-yellow: #F5A623;
+  --c-red: #E5484D;
+  --c-btnghost-border: rgba(255,255,255,0.12);
+  --c-input-border: rgba(255,255,255,0.10);
+}
+[data-theme="light"] {
+  --c-contentBg: #FFFFFF;
+  --c-card: #F4F6FA;
+  --c-cb: rgba(0,0,0,0.06);
+  --c-text: #1A2236;
+  --c-sub: #5A6785;
+  --c-input: #F8F9FC;
+  --c-border: rgba(0,0,0,0.08);
+  --c-btnghost-border: rgba(0,0,0,0.14);
+  --c-input-border: rgba(0,0,0,0.12);
+}
+
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body, #root { height: 100%; }
 body {
   font-family: 'DM Sans', system-ui, sans-serif;
-  background: #161B29;
-  color: #E8EAF0;
+  background: var(--c-contentBg);
+  color: var(--c-text);
   -webkit-font-smoothing: antialiased;
 }
 a { color: inherit; text-decoration: none; }
@@ -12,16 +42,16 @@ input, select, textarea { font-family: inherit; }
 
 .btn {
   border: none; border-radius: 8px; padding: 9px 16px;
-  font-size: 14px; font-weight: 600; color: #fff; background: #4A7CFF;
+  font-size: 14px; font-weight: 600; color: #fff; background: var(--c-accent);
 }
-.btn-ghost { background: transparent; border: 1px solid rgba(255,255,255,0.12); color: #E8EAF0; }
+.btn-ghost { background: transparent; border: 1px solid var(--c-btnghost-border); color: var(--c-text); }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
 
 .input {
-  width: 100%; background: #1B212E; border: 1px solid rgba(255,255,255,0.10);
-  border-radius: 8px; padding: 9px 11px; color: #E8EAF0; font-size: 14px;
+  width: 100%; background: var(--c-input); border: 1px solid var(--c-input-border);
+  border-radius: 8px; padding: 9px 11px; color: var(--c-text); font-size: 14px;
 }
-label { display: block; font-size: 12px; color: #9BA3BC; margin-bottom: 4px; }
+label { display: block; font-size: 12px; color: var(--c-sub); margin-bottom: 4px; }
 table { width: 100%; border-collapse: collapse; }
 
 /* Itens de navegação da sidebar (mesma linguagem visual do protótipo) */

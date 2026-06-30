@@ -3,7 +3,7 @@ import { NavLink, Link, Outlet, useLocation, useNavigate } from 'react-router-do
 import { useAuth } from './AuthProvider'
 import { useAppData } from '../lib/appData'
 import SeletorEmpresa from './SeletorEmpresa'
-import { theme } from '../lib/theme'
+import { theme, applyThemeMode, getThemeMode } from '../lib/theme'
 
 // Rotas (funções do fechamento) que só liberam com um fechamento aberto.
 const ROTAS_FECHAMENTO = new Set(['/razao', '/documentos', '/integracao', '/conciliacao', '/comparativo', '/contabilizar', '/relatorios', '/status', '/base'])
@@ -43,6 +43,36 @@ function Item({ to, end, icon, label, sub, badge, colapsado }) {
         <span style={{ position: 'absolute', top: 6, right: 14, width: 8, height: 8, borderRadius: '50%', background: theme.red }} />
       )}
     </NavLink>
+  )
+}
+
+// Alternância de tema (claro/escuro). Troca o atributo data-theme — as cores vêm das
+// CSS variables, então a mudança é instantânea e persiste no localStorage.
+function ThemeToggle({ colapsado }) {
+  const [mode, setMode] = useState(getThemeMode())
+  const claro = mode === 'light'
+  const flip = () => setMode(applyThemeMode(claro ? 'dark' : 'light'))
+
+  if (colapsado) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', padding: '0 12px 8px' }}>
+        <i className={`ti ${claro ? 'ti-sun' : 'ti-moon'}`} onClick={flip} title={claro ? 'Tema claro' : 'Tema escuro'}
+          style={{ color: '#C5CFE3', cursor: 'pointer', fontSize: 19, background: '#141A2A', borderRadius: 10, width: 42, height: 42, display: 'flex', alignItems: 'center', justifyContent: 'center' }} />
+      </div>
+    )
+  }
+  return (
+    <div style={{ padding: '0 14px 8px' }}>
+      <div onClick={flip} title="Alternar tema claro/escuro"
+        style={{ background: '#141A2A', borderRadius: 10, padding: '10px 14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}>
+        <span style={{ color: '#C5CFE3', fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <i className={`ti ${claro ? 'ti-sun' : 'ti-moon'}`} /> {claro ? 'Claro' : 'Escuro'}
+        </span>
+        <span style={{ width: 38, height: 22, borderRadius: 20, background: claro ? theme.accent : '#3A4356', position: 'relative', transition: 'background .15s', flexShrink: 0, display: 'inline-block' }}>
+          <span style={{ position: 'absolute', top: 2, left: claro ? 18 : 2, width: 18, height: 18, borderRadius: '50%', background: '#fff', transition: 'left .15s' }} />
+        </span>
+      </div>
+    </div>
   )
 }
 
@@ -129,6 +159,9 @@ export default function Layout() {
           {!colapsado && <p className="sec-title">Sistema</p>}
           {SISTEMA.map(i => <Item key={i.to} {...i} colapsado={colapsado} />)}
         </nav>
+
+        {/* Tema claro/escuro */}
+        <ThemeToggle colapsado={colapsado} />
 
         {/* Usuário */}
         <div style={{ padding: 14, borderTop: '1px solid #263044' }}>
