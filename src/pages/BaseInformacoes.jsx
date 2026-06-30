@@ -59,8 +59,48 @@ const MODELOS = {
   },
 }
 
+// Modelos da carga inicial — separados por TIPO de conta (Saldo × Composição).
+// Conta de Saldo: basta o saldo de abertura. Conta de Composição: sobe os títulos em
+// aberto (por cliente/NF) e o sistema confere se a soma bate com o saldo da conta.
+const MODELO_SALDOS = {
+  cols: ['Código', 'Nome', 'Saldo', 'D/C'],
+  ex: [['1.1.1.01', 'Banco Itaú c/c', '15230.45', 'D'], ['2.1.4.01', 'Impostos a recolher', '3120.00', 'C']],
+  dica: 'Contas de saldo (banco, aplicação, impostos a recolher…). Uma linha por conta: código, nome, saldo e D/C.',
+}
+const MODELO_COMP = {
+  cols: ['Conta', 'Cliente/Fornecedor', 'NF', 'Valor', 'D/C'],
+  ex: [['1.1.2.01', 'PAGSEGURO INTERNET', '3256', '24275.92', 'D'], ['2.1.1.01', 'CPFL ENERGIAS', '8842', '1200.00', 'C']],
+  dica: 'Contas de composição (clientes, fornecedores, contas a pagar, adiantamentos). Um título em aberto por linha.',
+}
+
+// Lê valor em formato brasileiro ("1.234,56") ou americano ("1234.56").
+function numBR(v) {
+  if (typeof v === 'number') return v
+  let s = String(v ?? '').trim().replace(/[R$\s]/g, '')
+  if (!s) return 0
+  if (s.includes(',')) s = s.replace(/\./g, '').replace(',', '.')
+  const n = parseFloat(s)
+  return isNaN(n) ? 0 : n
+}
+// Saldo com sinal: D (devedor) positivo, C (credor) negativo. Usa a coluna D/C;
+// na falta dela, respeita o sinal do próprio número.
+function saldoComSinal(valor, dc) {
+  const n = numBR(valor)
+  const s = String(dc ?? '').trim()
+  if (/c/i.test(s)) return -Math.abs(n)
+  if (/d/i.test(s)) return Math.abs(n)
+  return n
+}
+
 // Extrai { codigo, nome, tipo, classif } de uma linha salva (qualquer formato de coluna).
 const normK = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+// Acha o valor de uma coluna por regex no nome (normalizado).
+function campoPor(obj, re) {
+  const k = Object.keys(obj || {}).find(k => re.test(normK(k)))
+  return k ? obj[k] : ''
+}
+// Chave de conta p/ casar saldo × composição (dígitos da classificação/código).
+const chaveConta = v => String(v ?? '').replace(/\D/g, '')
 function extrairConta(obj) {
   const keys = Object.keys(obj || {})
   const acha = re => keys.find(k => re.test(normK(k)))
@@ -149,8 +189,8 @@ export default function BaseInformacoes() {
     supabase.from('clientes').update({ competencia_inicio: v, carga_saldos: true }).eq('id', empresaId).then(() => {})
     setModal({ tipo: 'cargaInicial', vigencia: v })
   }
-  async function concluirCargaInicial(vigencia, dados, nome) {
-    await supabase.from('cargas_cadastro').insert({ cliente_id: empresaId, tipo: 'financeiro', vigencia, dados, usuario: user?.email, obs: 'Carga inicial de saldos · ' + nome })
+  async function concluirCargaInicial(vigencia, payload, obs) {
+    await supabase.from('cargas_cadastro').insert({ cliente_id: empresaId, tipo: 'financeiro', vigencia, dados: payload, usuario: user?.email, obs: 'Carga inicial · ' + obs })
     await supabase.from('clientes').update({ carga_inicial_feita: true }).eq('id', empresaId)
     setCargaFeita(true); carregarCargas(); recalcularPendencias?.(); setModal(null)
   }
@@ -240,7 +280,7 @@ export default function BaseInformacoes() {
           onClose={() => setModal(null)} onSalvar={salvarPeriodo} onFazerCarga={abrirCargaInicial} />
       )}
       {modal?.tipo === 'cargaInicial' && (
-        <ModalCargaInicial vigencia={modal.vigencia} onClose={() => setModal(null)} onConcluir={concluirCargaInicial} />
+        <ModalCargaInicial vigencia={modal.vigencia} empresaId={empresaId} onClose={() => setModal(null)} onConcluir={concluirCargaInicial} />
       )}
       {modal?.tipo === 'dist' && (
         <ModalDist inicial={dist} onClose={() => setModal(null)} onSalvar={salvarDist} />
@@ -630,12 +670,29 @@ function ModalPeriodo({ valorInicial, cargaSaldos, cargaFeita, onClose, onSalvar
   )
 }
 
-function ModalCargaInicial({ vigencia, onClose, onConcluir }) {
-  const [preview, setPreview] = useState(null)
+function ModalCargaInicial({ vigencia, empresaId, onClose, onConcluir }) {
+  const [saldos, setSaldos] = useState(null)        // { nome, dados:[...] }
+  const [comp, setComp] = useState(null)            // { nome, dados:[...] }
   const [erro, setErro] = useState('')
   const [salvando, setSalvando] = useState(false)
+  const [planoNomes, setPlanoNomes] = useState({})  // chaveConta → nome (fallback p/ conferência)
 
-  async function aoEscolher(file) {
+  // Nomes do plano p/ exibir na conferência quando a conta não veio no bloco de saldos.
+  useEffect(() => {
+    if (!empresaId) return
+    supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'plano')
+      .order('created_at', { ascending: false }).limit(1).maybeSingle()
+      .then(({ data }) => {
+        const m = {}
+        for (const p of parsePlano(data?.dados)) {
+          if (p.classif) m[chaveConta(p.classif)] = p.nome
+          if (p.reduzido) m[chaveConta(p.reduzido)] = p.nome
+        }
+        setPlanoNomes(m)
+      })
+  }, [empresaId])
+
+  async function lerArquivo(file, setter) {
     if (!file) return
     setErro('')
     try {
@@ -643,21 +700,120 @@ function ModalCargaInicial({ vigencia, onClose, onConcluir }) {
       const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' })
       const dados = lerPlanilha(XLSX, wb.Sheets[wb.SheetNames[0]])
       if (!dados.length) { setErro('Planilha vazia.'); return }
-      setPreview({ nome: file.name, dados })
+      setter({ nome: file.name, dados })
     } catch (err) { setErro('Não consegui ler: ' + err.message) }
   }
 
+  async function baixarModelo(modelo, arquivo) {
+    const XLSX = await import('xlsx')
+    const ws = XLSX.utils.aoa_to_sheet([modelo.cols, ...(modelo.ex || [])])
+    ws['!cols'] = modelo.cols.map(c => ({ wch: Math.max(16, c.length + 4) }))
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Modelo')
+    XLSX.writeFile(wb, arquivo)
+  }
+
+  // Conferência: soma da composição por conta × saldo informado no bloco de saldos.
+  const conferencia = (() => {
+    const compRows = comp?.dados || []
+    if (!compRows.length) return []
+    // Saldo informado por conta (chave dígitos).
+    const saldoPorConta = {}
+    const nomePorConta = {}
+    for (const r of (saldos?.dados || [])) {
+      const cod = campoPor(r, /(codigo|conta)/) || campoPor(r, /^cod/)
+      const k = chaveConta(cod); if (!k) continue
+      saldoPorConta[k] = (saldoPorConta[k] || 0) + saldoComSinal(campoPor(r, /saldo|valor/), campoPor(r, /^d\/?c$|natureza/))
+      nomePorConta[k] = campoPor(r, /nome|descri/) || nomePorConta[k]
+    }
+    // Soma da composição por conta.
+    const compPorConta = {}
+    for (const r of compRows) {
+      const cod = campoPor(r, /^conta$|(codigo|conta)/) || campoPor(r, /^cod/)
+      const k = chaveConta(cod); if (!k) continue
+      compPorConta[k] = (compPorConta[k] || 0) + saldoComSinal(campoPor(r, /valor|saldo/), campoPor(r, /^d\/?c$|natureza/))
+    }
+    return Object.keys(compPorConta).map(k => {
+      const somaComp = compPorConta[k]
+      const saldo = saldoPorConta[k]
+      const temSaldo = saldoPorConta[k] !== undefined
+      const diff = temSaldo ? (saldo - somaComp) : null
+      return {
+        k, nome: nomePorConta[k] || planoNomes[k] || '',
+        somaComp, saldo, temSaldo, diff,
+        ok: temSaldo && Math.abs(diff) < 0.005,
+      }
+    }).sort((a, b) => a.k.localeCompare(b.k))
+  })()
+
+  const temAlgo = (saldos?.dados?.length || 0) + (comp?.dados?.length || 0) > 0
+  const temDivergencia = conferencia.some(c => !c.ok)
+
+  async function concluir() {
+    setSalvando(true)
+    const obsArq = [saldos?.nome, comp?.nome].filter(Boolean).join(' + ') || 'manual'
+    await onConcluir(vigencia, { saldos: saldos?.dados || [], composicoes: comp?.dados || [] }, obsArq)
+  }
+
+  const Bloco = ({ icon, titulo, dica, modelo, arquivo, estado, setter }) => (
+    <div style={{ background: theme.input, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: 16, marginBottom: 14 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10, marginBottom: 10 }}>
+        <div style={{ flex: 1 }}>
+          <p style={{ color: theme.text, fontSize: 14, fontWeight: 600, margin: 0 }}><i className={`ti ${icon}`} style={{ color: theme.accent, marginRight: 6 }} />{titulo}</p>
+          <p style={{ color: theme.sub, fontSize: 12, margin: '4px 0 0', lineHeight: 1.5 }}>{dica}</p>
+        </div>
+        <button className="btn btn-ghost" style={{ fontSize: 12, whiteSpace: 'nowrap' }} onClick={() => baixarModelo(modelo, arquivo)}><i className="ti ti-download" /> Modelo</button>
+      </div>
+      <DropZone onArquivo={f => lerArquivo(f, setter)} hint="Arraste ou clique · .xlsx, .xls ou .csv" />
+      {estado && (
+        <p style={{ color: theme.green, fontSize: 12.5, marginTop: 8 }}>
+          <i className="ti ti-circle-check" /> {estado.nome} — {estado.dados.length} linha(s)
+          <i className="ti ti-x" title="Remover" onClick={() => setter(null)} style={{ color: theme.sub, cursor: 'pointer', marginLeft: 8 }} />
+        </p>
+      )}
+    </div>
+  )
+
   return (
-    <Modal titulo="Carga inicial de saldos" sub={`Saldo de abertura — vigência ${vigencia}`} onClose={onClose} largura={560}>
+    <Modal titulo="Carga inicial de saldos" sub={`Saldo de abertura — vigência ${vigencia}`} onClose={onClose} largura={640}>
       <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 14, lineHeight: 1.55 }}>
-        Suba a planilha com o saldo de abertura por conta (e, nas contas de composição, os itens iniciais por cliente/NF). Isso vira o saldo inicial do primeiro fechamento.
+        São <b style={{ color: theme.text }}>dois tipos de conta</b>: as de <b style={{ color: theme.text }}>saldo</b> (basta o valor de abertura) e as de
+        <b style={{ color: theme.text }}> composição</b> (clientes, fornecedores, contas a pagar…) que precisam dos títulos em aberto.
+        O sistema confere se a composição bate com o saldo da conta.
       </p>
-      <DropZone onArquivo={aoEscolher} hint="Arraste o arquivo aqui ou clique · .xlsx, .xls ou .csv" />
-      {preview && <p style={{ color: theme.sub, fontSize: 12.5, marginTop: 10 }}><i className="ti ti-file-spreadsheet" /> {preview.nome} — {preview.dados.length} linha(s)</p>}
+
+      {Bloco({ icon: 'ti-scale', titulo: '1. Saldos de abertura', dica: MODELO_SALDOS.dica,
+        modelo: MODELO_SALDOS, arquivo: 'modelo_saldos_abertura.xlsx', estado: saldos, setter: setSaldos })}
+
+      {Bloco({ icon: 'ti-list-details', titulo: '2. Composições de abertura', dica: MODELO_COMP.dica,
+        modelo: MODELO_COMP, arquivo: 'modelo_composicoes_abertura.xlsx', estado: comp, setter: setComp })}
+
+      {/* Conferência composição × saldo */}
+      {conferencia.length > 0 && (
+        <div style={{ marginTop: 4, marginBottom: 8 }}>
+          <p style={{ color: theme.sub, fontSize: 11.5, fontWeight: 600, textTransform: 'uppercase', letterSpacing: .5, margin: '0 0 6px' }}>Conferência composição × saldo</p>
+          {conferencia.map(c => (
+            <div key={c.k} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '7px 0', borderTop: `1px solid ${theme.border}`, fontSize: 12.5 }}>
+              <span style={{ color: theme.text }}>
+                <i className={`ti ${c.ok ? 'ti-circle-check' : 'ti-alert-triangle'}`} style={{ color: c.ok ? theme.green : theme.yellow, marginRight: 6 }} />
+                {c.nome || c.k}
+              </span>
+              <span style={{ color: theme.sub, fontSize: 12, whiteSpace: 'nowrap', textAlign: 'right' }}>
+                comp. {money(Math.abs(c.somaComp))} {c.somaComp < 0 ? 'C' : 'D'}
+                {c.temSaldo
+                  ? <> · saldo {money(Math.abs(c.saldo))} {c.saldo < 0 ? 'C' : 'D'}{c.ok ? '' : <b style={{ color: theme.yellow }}> · dif {money(Math.abs(c.diff))}</b>}</>
+                  : <b style={{ color: theme.yellow }}> · sem saldo informado</b>}
+              </span>
+            </div>
+          ))}
+          {temDivergencia && <p style={{ color: theme.yellow, fontSize: 12, margin: '8px 0 0' }}><i className="ti ti-info-circle" /> Há contas em que a composição não fecha com o saldo. Você pode concluir mesmo assim e ajustar depois.</p>}
+        </div>
+      )}
+
       {erro && <p style={{ color: theme.red, fontSize: 13, marginTop: 10 }}>{erro}</p>}
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
         <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
-        <button className="btn" disabled={!preview || salvando} onClick={async () => { setSalvando(true); await onConcluir(vigencia, preview.dados, preview.nome) }}>
+        <button className="btn" disabled={!temAlgo || salvando} onClick={concluir}>
           <i className="ti ti-cloud-upload" /> {salvando ? 'Concluindo…' : 'Concluir carga inicial'}
         </button>
       </div>
