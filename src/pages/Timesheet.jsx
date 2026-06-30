@@ -9,9 +9,14 @@ const fmt = (s) => {
   return h ? `${h}h ${String(m).padStart(2, '0')}m` : `${m}m ${String(sec).padStart(2, '0')}s`
 }
 
+const MES_NOME = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
+const mesCorrente = () => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}` }
+const rotuloMes = mes => { if (!mes) return 'todos os períodos'; const [y, m] = mes.split('-'); return `${MES_NOME[+m - 1]}/${y}` }
+
 export default function Timesheet() {
   const { empresaId, empresaNome } = useAppData()
   const [modo, setModo] = useState('todos') // 'todos' | 'cliente'
+  const [mes, setMes] = useState(mesCorrente()) // 'YYYY-MM' ou '' (todos os períodos)
   const [linhas, setLinhas] = useState([])
   const [carregando, setCarregando] = useState(true)
 
@@ -19,6 +24,10 @@ export default function Timesheet() {
     setCarregando(true)
     let q = supabase.from('timesheet').select('cliente_id, cliente_nome, segundos, clientes(razao_social)')
     if (modo === 'cliente' && empresaId) q = q.eq('cliente_id', empresaId)
+    if (mes) {
+      const [y, m] = mes.split('-').map(Number)
+      q = q.gte('created_at', new Date(y, m - 1, 1).toISOString()).lt('created_at', new Date(y, m, 1).toISOString())
+    }
     q.then(({ data }) => {
       const agg = {}
       for (const r of (data || [])) {
@@ -30,7 +39,7 @@ export default function Timesheet() {
       setLinhas(Object.values(agg).sort((a, b) => b.segundos - a.segundos))
       setCarregando(false)
     })
-  }, [modo, empresaId])
+  }, [modo, empresaId, mes])
 
   const total = linhas.reduce((s, l) => s + l.segundos, 0)
 
@@ -40,7 +49,7 @@ export default function Timesheet() {
     const csv = '﻿' + linhasCsv.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(';')).join('\r\n')
     const a = document.createElement('a')
     a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }))
-    a.download = `timesheet_${modo === 'cliente' ? 'cliente' : 'geral'}.csv`
+    a.download = `timesheet_${modo === 'cliente' ? 'cliente' : 'geral'}_${mes || 'todos'}.csv`
     a.click(); URL.revokeObjectURL(a.href)
   }
 
@@ -56,12 +65,16 @@ export default function Timesheet() {
         </button>
       </div>
 
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16, alignItems: 'center' }}>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16, alignItems: 'center', flexWrap: 'wrap' }}>
         <button className={modo === 'todos' ? 'btn' : 'btn btn-ghost'} style={{ fontSize: 13 }} onClick={() => setModo('todos')}>Todos os clientes</button>
         <button className={modo === 'cliente' ? 'btn' : 'btn btn-ghost'} style={{ fontSize: 13 }} onClick={() => setModo('cliente')} disabled={!empresaId}>
           Só {empresaNome || 'a empresa selecionada'}
         </button>
-        <span style={{ marginLeft: 'auto', fontSize: 13, color: theme.sub }}>Total: <b style={{ color: theme.accent }}>{fmt(total)}</b></span>
+        <span style={{ width: 1, height: 24, background: theme.border, margin: '0 4px' }} />
+        <i className="ti ti-calendar-month" style={{ color: theme.sub }} />
+        <input type="month" className="input" value={mes} onChange={e => setMes(e.target.value)} style={{ width: 168, fontSize: 13 }} title="Mês do relatório" />
+        <button className={mes ? 'btn btn-ghost' : 'btn'} style={{ fontSize: 13 }} onClick={() => setMes('')}>Todos os períodos</button>
+        <span style={{ marginLeft: 'auto', fontSize: 13, color: theme.sub }}>{rotuloMes(mes)} · Total: <b style={{ color: theme.accent }}>{fmt(total)}</b></span>
       </div>
 
       <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'hidden' }}>
