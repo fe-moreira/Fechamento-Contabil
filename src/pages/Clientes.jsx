@@ -6,7 +6,7 @@ import { normalizaCompetencia } from '../lib/balancete'
 const vazio = {
   codigo_dominio: '', tipo: 'Matriz', codigo_matriz: '', razao_social: '',
   nome_fantasia: '', cnpj: '', regime_tributario: 'Simples', tipo_fechamento: '',
-  competencia_inicio: '', integracao_financeira: 'Não usa', analista: '', observacoes: '',
+  competencia_inicio: '', integracao_financeira: 'Não usa', analista: '', observacoes: '', prazo_entrega: '',
 }
 
 // Helpers da importação em lote (planilha-modelo: aba "Clientes", 15 colunas).
@@ -56,6 +56,7 @@ export default function Clientes() {
         cnpj: H.findIndex(h => h.includes('cnpj')),
         regime_tributario: H.findIndex(h => h.includes('regime')),
         tipo_fechamento: H.findIndex(h => h.includes('tipo') && h.includes('fechamento')),
+        prazo_entrega: H.findIndex(h => h.includes('prazo')),
         competencia_inicio: H.findIndex(h => h.includes('competencia')),
         carga_saldos: H.findIndex(h => h.includes('carga')),
         coleta_razao: H.findIndex(h => h.includes('coleta')),
@@ -87,6 +88,9 @@ export default function Clientes() {
         const ci = normalizaCompetencia(raw(row, 'competencia_inicio')); if (ci) campos.competencia_inicio = ci
         const cs = raw(row, 'carga_saldos'); if (cs) campos.carga_saldos = simNao(cs)
         const cr = raw(row, 'coleta_razao'); if (cr) campos.coleta_razao = simNao(cr)
+        // Prazo de entrega do balancete: dia do mês (5,10,15,20,25,30).
+        const pz = parseInt(String(raw(row, 'prazo_entrega')).replace(/\D/g, ''), 10)
+        if ([5, 10, 15, 20, 25, 30].includes(pz)) campos.prazo_entrega = pz
 
         registros.push({ cod, campos })
       }
@@ -132,6 +136,7 @@ export default function Clientes() {
     const payload = { ...form }
     if (payload.tipo === 'Matriz') payload.codigo_matriz = null
     if (payload.competencia_inicio) payload.competencia_inicio = normalizaCompetencia(payload.competencia_inicio) || payload.competencia_inicio
+    payload.prazo_entrega = payload.prazo_entrega ? Number(payload.prazo_entrega) : null
     let res
     if (editId) res = await supabase.from('clientes').update(payload).eq('id', editId)
     else res = await supabase.from('clientes').insert(payload)
@@ -226,6 +231,12 @@ export default function Clientes() {
                 </select>
               </Campo>
               <Campo label="Tipo de fechamento"><input className="input" value={form.tipo_fechamento || ''} onChange={set('tipo_fechamento')} /></Campo>
+              <Campo label="Prazo de entrega do balancete">
+                <select className="input" value={form.prazo_entrega ?? ''} onChange={set('prazo_entrega')}>
+                  <option value="">—</option>
+                  {[5, 10, 15, 20, 25, 30].map(d => <option key={d} value={d}>Dia {d}</option>)}
+                </select>
+              </Campo>
               <Campo label="Competência de início (MM/AAAA)"><input className="input" value={form.competencia_inicio || ''} onChange={set('competencia_inicio')} placeholder="01/2026" /></Campo>
               <Campo label="Integração financeira">
                 <select className="input" value={form.integracao_financeira} onChange={set('integracao_financeira')}>

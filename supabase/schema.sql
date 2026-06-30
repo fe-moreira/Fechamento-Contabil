@@ -15,6 +15,7 @@ create table if not exists public.clientes (
   cnpj              text,
   regime_tributario text,                        -- Simples / Presumido / Real
   tipo_fechamento   text,
+  prazo_entrega     int,                           -- dia do mês p/ entrega do balancete (5,10,15,20,25,30)
   competencia_inicio text,                        -- 'MM/AAAA'
   carga_saldos      boolean default false,
   coleta_razao      boolean default false,
