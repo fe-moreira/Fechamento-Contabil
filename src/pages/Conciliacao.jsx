@@ -3,7 +3,7 @@ import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { theme, money, moneyDC } from '../lib/theme'
-import { montarBalancete, parsePlano } from '../lib/balancete'
+import { montarBalancete, parsePlano, composicaoAbertura } from '../lib/balancete'
 import { abrePdfTimbrado } from '../lib/pdf'
 import CampoConta from '../components/CampoConta'
 
@@ -309,12 +309,14 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, getCompetenc
 
   async function carregarLanc() {
     setCarregando(true)
-    const [{ data: rz }, { data: aj }] = await Promise.all([
+    const [{ data: rz }, { data: aj }, abertura] = await Promise.all([
       supabase.from('razao').select('id, data, contrapartida, historico, debito, credito').eq('competencia_id', compId).eq('conta', conta.conta).order('data'),
       supabase.from('ajuste_leitura').select('razao_id, nf, entidade, historico').eq('competencia_id', compId),
+      composicaoAbertura(empresaId, compId, conta.conta, conta.classifRaw),
     ])
     const ajById = {}; for (const a of (aj || [])) ajById[a.razao_id] = a
-    setLanc((rz || []).map(l => aplicarAjuste(l, ajById[l.id])))
+    // Títulos de abertura (saldo anterior) primeiro; depois o movimento do mês.
+    setLanc([...(abertura || []), ...(rz || []).map(l => aplicarAjuste(l, ajById[l.id]))])
     setCarregando(false)
   }
   useEffect(() => { carregarLanc() }, [compId, conta.conta]) // eslint-disable-line react-hooks/exhaustive-deps

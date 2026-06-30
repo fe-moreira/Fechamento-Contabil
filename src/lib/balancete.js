@@ -55,6 +55,77 @@ export function parsePlano(dados) {
   return out
 }
 
+// ---- Carga inicial (abertura): saldos + composições digitados na Base de Informações ----
+// Gravada em cargas_cadastro tipo 'financeiro' com dados no formato
+// { saldos:[...], composicoes:[...] } (a carga mensal de financeiro é um array simples).
+const normCK = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+const campoPor = (obj, re) => { const k = Object.keys(obj || {}).find(k => re.test(normCK(k))); return k ? obj[k] : '' }
+const soDig = v => String(v ?? '').replace(/\D/g, '')
+const codConta = r => campoPor(r, /^conta$/) || campoPor(r, /^codigo$/) || campoPor(r, /codigo|conta/)
+function numBR(v) {
+  if (typeof v === 'number') return v
+  let s = String(v ?? '').trim().replace(/[R$\s]/g, '')
+  if (!s) return 0
+  if (s.includes(',')) s = s.replace(/\./g, '').replace(',', '.')
+  const n = parseFloat(s); return isNaN(n) ? 0 : n
+}
+// Saldo com sinal: D (devedor) +, C (credor) −. Usa a coluna D/C; na falta, o sinal do número.
+function saldoSinalAb(valor, dc) {
+  const n = numBR(valor), s = String(dc ?? '').trim()
+  if (/c/i.test(s)) return -Math.abs(n)
+  if (/d/i.test(s)) return Math.abs(n)
+  return n
+}
+
+// Carga inicial mais recente do cliente (saldos de abertura + composições de abertura).
+export async function carregarCargaInicial(empresaId) {
+  const { data } = await supabase.from('cargas_cadastro').select('dados, vigencia, created_at')
+    .eq('cliente_id', empresaId).eq('tipo', 'financeiro').order('created_at', { ascending: false })
+  for (const c of (data || [])) {
+    const d = c?.dados
+    if (d && !Array.isArray(d) && (Array.isArray(d.saldos) || Array.isArray(d.composicoes)))
+      return { saldos: d.saldos || [], composicoes: d.composicoes || [], vigencia: c.vigencia }
+  }
+  return { saldos: [], composicoes: [], vigencia: null }
+}
+
+// A competência informada é a de ABERTURA do cliente (== competencia_inicio)?
+export async function ehCompetenciaInicial(empresaId, compId) {
+  const [{ data: comp }, { data: cli }] = await Promise.all([
+    supabase.from('competencias').select('ano, mes').eq('id', compId).maybeSingle(),
+    supabase.from('clientes').select('competencia_inicio').eq('id', empresaId).maybeSingle(),
+  ])
+  const m = String(cli?.competencia_inicio || '').match(/^(\d{2})\/(\d{4})$/)
+  if (!comp || !m) return false
+  return comp.mes === +m[1] && comp.ano === +m[2]
+}
+
+// Títulos em aberto de ABERTURA de uma conta (só na competência inicial), devolvidos como
+// lançamentos sintéticos: entram na conciliação como "saldo anterior" e casam por NF com as
+// baixas do mês (recebimento/pagamento), zerando o que já foi liquidado.
+export async function composicaoAbertura(empresaId, compId, contaCod, classifRaw) {
+  if (!(await ehCompetenciaInicial(empresaId, compId))) return []
+  const { composicoes } = await carregarCargaInicial(empresaId)
+  if (!composicoes.length) return []
+  const alvo = new Set([soDig(contaCod), soDig(classifRaw)].filter(Boolean))
+  const out = []
+  let i = 0
+  for (const r of composicoes) {
+    if (!alvo.has(soDig(codConta(r)))) continue
+    const valor = saldoSinalAb(campoPor(r, /valor|saldo/), campoPor(r, /^d\/?c$|natureza/))
+    if (Math.abs(valor) < 0.005) continue
+    const cliente = String(campoPor(r, /cliente|fornec|nome|descri/) || '').trim()
+    const nf = String(campoPor(r, /\bnf\b|nota|document/) || '').trim()
+    out.push({
+      id: `abertura-${i++}`, data: 'abertura', contrapartida: '',
+      historico: `Saldo anterior · ${cliente}${nf ? ' · NF ' + nf : ''}`,
+      debito: valor > 0 ? valor : 0, credito: valor < 0 ? -valor : 0, abertura: true,
+      leitura: { nf, entidade: cliente, ident: !!cliente, conf: (cliente && nf) ? 'alta' : cliente ? 'media' : 'baixa', abertura: true },
+    })
+  }
+  return out
+}
+
 // Balancete hierárquico (sintéticas + analíticas) de uma competência.
 // Os movimentos (razão/balancete) vêm pelo CÓDIGO da conta (reduzido); o plano traduz
 // cada código para a sua CLASSIFICAÇÃO hierárquica (coluna O) e nome, e as sintéticas
@@ -100,6 +171,34 @@ export async function montarBalancete(empresaId, compId) {
     } else {
       const segs = classif.split('.')
       for (let i = 1; i < segs.length; i++) { const e = ensure(segs.slice(0, i).join('.')); e.debito += deb; e.credito += cre; e.saldo_inicial += ini }
+    }
+  }
+
+  // Saldo de ABERTURA (carga inicial) — só na competência inicial do cliente e só nas contas
+  // cujo saldo não veio já no balancete importado (evita duplicar).
+  if (await ehCompetenciaInicial(empresaId, compId)) {
+    const { saldos } = await carregarCargaInicial(empresaId)
+    if (saldos.length) {
+      const byRedDig = {}, byClsDig = {}, byMask = {}
+      for (const p of plano) {
+        if (p.reduzido) byRedDig[soDig(p.reduzido)] = p
+        if (p.classif) { byClsDig[soDig(p.classif)] = p; byMask[applyMask(p.classif, mascara)] = p }
+      }
+      const jaTinha = new Set(Object.keys(map).filter(k => Math.abs(map[k].saldo_inicial) > 0.005))
+      for (const r of saldos) {
+        const cod = String(codConta(r) || '').trim()
+        const val = saldoSinalAb(campoPor(r, /saldo|valor/), campoPor(r, /^d\/?c$|natureza/))
+        if (!cod || Math.abs(val) < 0.005) continue
+        const p = porReduzido[cod] || byRedDig[soDig(cod)] || porClassif[cod] || byClsDig[soDig(cod)] || byMask[cod]
+        const classif = p ? p.classif : cod
+        if (jaTinha.has(classif)) continue
+        const folha = ensure(classif); folha.folha = true
+        if (!folha.nome && p?.nome) folha.nome = p.nome
+        if (!folha.reduzido) folha.reduzido = p?.reduzido || cod
+        folha.saldo_inicial += val
+        if (p) { for (const corte of cortes) { if (corte < classif.length) ensure(classif.slice(0, corte)).saldo_inicial += val } }
+        else { const segs = classif.split('.'); for (let i = 1; i < segs.length; i++) ensure(segs.slice(0, i).join('.')).saldo_inicial += val }
+      }
     }
   }
 

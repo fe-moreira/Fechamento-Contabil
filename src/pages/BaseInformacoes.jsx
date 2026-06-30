@@ -64,13 +64,13 @@ const MODELOS = {
 // aberto (por cliente/NF) e o sistema confere se a soma bate com o saldo da conta.
 const MODELO_SALDOS = {
   cols: ['Código', 'Nome', 'Saldo', 'D/C'],
-  ex: [['1.1.1.01', 'Banco Itaú c/c', '15230.45', 'D'], ['2.1.4.01', 'Impostos a recolher', '3120.00', 'C']],
-  dica: 'Contas de saldo (banco, aplicação, impostos a recolher…). Uma linha por conta: código, nome, saldo e D/C.',
+  ex: [['12', 'Banco Itaú c/c', '15230.45', 'D'], ['340', 'Impostos a recolher', '3120.00', 'C']],
+  dica: 'Contas de saldo (banco, aplicação, impostos a recolher…). Uma linha por conta: código da conta (o mesmo do razão/plano), nome, saldo e D/C.',
 }
 const MODELO_COMP = {
   cols: ['Conta', 'Cliente/Fornecedor', 'NF', 'Valor', 'D/C'],
-  ex: [['1.1.2.01', 'PAGSEGURO INTERNET', '3256', '24275.92', 'D'], ['2.1.1.01', 'CPFL ENERGIAS', '8842', '1200.00', 'C']],
-  dica: 'Contas de composição (clientes, fornecedores, contas a pagar, adiantamentos). Um título em aberto por linha.',
+  ex: [['118', 'PAGSEGURO INTERNET', '3256', '24275.92', 'D'], ['205', 'CPFL ENERGIAS', '8842', '1200.00', 'C']],
+  dica: 'Contas de composição (clientes, fornecedores, contas a pagar, adiantamentos). Um título em aberto por linha: código da conta, cliente/fornecedor, NF, valor e D/C.',
 }
 
 // Lê valor em formato brasileiro ("1.234,56") ou americano ("1234.56").
@@ -564,7 +564,7 @@ function ModalCarga({ carga, historico, empresaId, usuario, onClose, onImportado
         ? <p style={{ color: theme.sub, fontSize: 12.5 }}>Nenhuma carga ainda.</p>
         : hist.slice().reverse().map(c => (
           <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '9px 0', borderTop: `1px solid ${theme.border}`, fontSize: 12.5 }}>
-            <span style={{ color: theme.text }}>Vigência <b>{c.vigencia || '—'}</b> · {Array.isArray(c.dados) ? c.dados.length : 0} conta(s) <span style={{ color: theme.sub }}>· {c.obs || ''}</span></span>
+            <span style={{ color: theme.text }}>Vigência <b>{c.vigencia || '—'}</b> · {Array.isArray(c.dados) ? c.dados.length : ((c.dados?.saldos?.length || 0) + (c.dados?.composicoes?.length || 0))} item(ns) <span style={{ color: theme.sub }}>· {c.obs || ''}</span></span>
             <span style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <span style={{ color: theme.sub, whiteSpace: 'nowrap' }}>{(c.usuario || '').split('@')[0]} · {new Date(c.created_at).toLocaleDateString('pt-BR')}</span>
               <i className="ti ti-pencil" title="Editar esta vigência" onClick={() => editarVigencia(c)} style={{ color: theme.accent, cursor: 'pointer', flexShrink: 0 }} />
