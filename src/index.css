@@ -28,6 +28,9 @@
   --c-input-border: rgba(0,0,0,0.12);
 }
 
+@keyframes painelGrow { from { width: 0 } to { width: 100% } }
+@keyframes painelFade { from { opacity: 0; transform: translateY(10px) } to { opacity: 1; transform: none } }
+
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body, #root { height: 100%; }
 body {

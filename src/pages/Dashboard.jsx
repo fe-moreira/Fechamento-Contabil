@@ -1,83 +1,463 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
-import { theme } from '../lib/theme'
+import { theme, applyThemeMode, getThemeMode } from '../lib/theme'
+import { normalizaCompetencia } from '../lib/balancete'
 
-const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
+const MES = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
+const MES_C = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
+const DIAS = [5, 10, 15, 20, 25, 30]
+const TEMPO = 10000 // 10s por tela
+const N = 7
+
+const fmtH = s => { const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return `${h}h${String(m).padStart(2, '0')}` }
+
+// Meses ANTERIORES à competência-alvo que o cliente já deveria ter fechado: do início
+// (competencia_inicio) até o mês imediatamente anterior ao alvo (o alvo é o fechamento
+// corrente — esse fica no placar, não no atraso).
+function mesesEsperados(inicio, alvoAno, alvoMes) {
+  const m = normalizaCompetencia(inicio).match(/^(\d{2})\/(\d{4})$/)
+  if (!m) return []
+  let mes = +m[1], ano = +m[2]
+  const out = []
+  let guard = 0
+  while ((ano < alvoAno || (ano === alvoAno && mes < alvoMes)) && guard++ < 240) {
+    out.push({ ano, mes }); mes++; if (mes > 12) { mes = 1; ano++ }
+  }
+  return out
+}
+
+// Donut (gráfico de pizza). segs: [{ v, c }]. Mostra um rótulo central.
+function Donut({ size = 150, segs, label, sub, labelColor }) {
+  const total = segs.reduce((a, s) => a + s.v, 0) || 1
+  let acc = 0
+  return (
+    <div style={{ position: 'relative', width: size, height: size, alignSelf: 'center' }}>
+      <svg width={size} height={size} viewBox="0 0 42 42">
+        <circle cx="21" cy="21" r="15.9155" fill="none" stroke={theme.cb} strokeWidth="5" />
+        {segs.filter(s => s.v > 0).map((s, i) => {
+          const p = (s.v / total) * 100, off = 25 - acc; acc += p
+          return <circle key={i} cx="21" cy="21" r="15.9155" fill="none" stroke={s.c} strokeWidth="5" strokeDasharray={`${p} ${100 - p}`} strokeDashoffset={off} />
+        })}
+      </svg>
+      <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+        <b style={{ fontSize: Math.round(size * 0.2), fontWeight: 800, lineHeight: 1, color: labelColor || theme.text }}>{label}</b>
+        {sub && <small style={{ color: theme.sub, fontSize: 11 }}>{sub}</small>}
+      </div>
+    </div>
+  )
+}
 
 export default function Dashboard() {
   const nav = useNavigate()
-  const [s, setS] = useState({ clientes: null, fechado: 0, andamento: 0, pendente: 0 })
-  const [recentes, setRecentes] = useState([])
+  const box = useRef(null)
+  const [d, setD] = useState(null)
+  const [idx, setIdx] = useState(0)
+  const [paused, setPaused] = useState(false)
+  const [mode, setMode] = useState(getThemeMode())
+  const [agora, setAgora] = useState(new Date())
+
+  // Competência do painel = mês ANTERIOR ao calendário (a contabilidade fecha um mês depois).
+  const hoje = new Date()
+  const alvo = new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1)
+  const targAno = alvo.getFullYear(), targMes = alvo.getMonth() + 1
+
+  useEffect(() => {
+    const iv = setInterval(() => setAgora(new Date()), 30000)
+    return () => clearInterval(iv)
+  }, [])
 
   useEffect(() => {
     (async () => {
-      const { count } = await supabase.from('clientes').select('id', { count: 'exact', head: true })
-      const { data: comps } = await supabase.from('competencias').select('status')
-      const c = { fechado: 0, andamento: 0, pendente: 0 }
-      for (const x of (comps || [])) c[x.status] = (c[x.status] || 0) + 1
-      setS({ clientes: count ?? 0, ...c })
+      const inicioMes = new Date(hoje.getFullYear(), hoje.getMonth(), 1).toISOString()
+      const [{ data: cli }, { data: comps }, { data: ts }] = await Promise.all([
+        supabase.from('clientes').select('*'),
+        supabase.from('competencias').select('cliente_id, ano, mes, status, created_at'),
+        supabase.from('timesheet').select('cliente_id, cliente_nome, segundos, created_at').gte('created_at', inicioMes),
+      ])
+      const clientes = cli || [], cps = comps || [], tss = ts || []
+      const nomeCli = Object.fromEntries(clientes.map(c => [c.id, c.razao_social]))
 
-      const { data: rec } = await supabase.from('competencias')
-        .select('id, ano, mes, status, clientes(razao_social)')
-        .order('created_at', { ascending: false }).limit(6)
-      setRecentes(rec || [])
+      // Status da competência-alvo por cliente.
+      const statusAlvo = {}
+      for (const cp of cps) if (cp.ano === targAno && cp.mes === targMes) statusAlvo[cp.cliente_id] = cp.status
+      const contaStatus = lista => {
+        const fechadas = lista.filter(c => statusAlvo[c.id] === 'fechado').length
+        const andamento = lista.filter(c => statusAlvo[c.id] === 'andamento').length
+        return { total: lista.length, fechadas, andamento, pendentes: lista.length - fechadas - andamento }
+      }
+
+      // 1 · Placar
+      const placar = contaStatus(clientes)
+      const recentes = cps.slice().sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))).slice(0, 5)
+        .map(c => ({ nome: nomeCli[c.cliente_id] || '—', mes: c.mes, ano: c.ano, status: c.status }))
+
+      // 2 · Atraso: meses esperados (desde o início) não fechados, até a competência-alvo.
+      const fechadoSet = new Set(cps.filter(c => c.status === 'fechado').map(c => `${c.cliente_id}|${c.ano}|${c.mes}`))
+      const atrasoLista = []
+      let atrasoTotal = 0
+      for (const c of clientes) {
+        const mm = mesesEsperados(c.competencia_inicio, targAno, targMes)
+        let n = 0, oldest = null
+        for (const { ano, mes } of mm) if (!fechadoSet.has(`${c.id}|${ano}|${mes}`)) { n++; if (!oldest) oldest = { ano, mes } }
+        if (n > 0) { atrasoTotal += n; atrasoLista.push({ nome: c.razao_social, regime: c.regime_tributario, analista: c.analista, meses: n, oldest }) }
+      }
+      atrasoLista.sort((a, b) => b.meses - a.meses)
+
+      // 3 · Regime
+      const regMap = {}
+      for (const c of clientes) { const r = (c.regime_tributario || '').trim() || 'Sem regime'; regMap[r] = (regMap[r] || 0) + 1 }
+      const regime = Object.entries(regMap).map(([nome, n]) => ({ nome, n })).sort((a, b) => b.n - a.n)
+
+      // 4 · Por usuário (analista)
+      const porAnalista = {}
+      for (const c of clientes) { const a = (c.analista || '').trim() || 'Sem analista'; (porAnalista[a] = porAnalista[a] || []).push(c) }
+      const analistas = Object.entries(porAnalista).map(([nome, lista]) => ({ nome, ...contaStatus(lista) }))
+        .sort((a, b) => b.total - a.total)
+
+      // 5 · Timesheet do mês corrente por cliente
+      const tsMap = {}
+      for (const t of tss) { const k = t.cliente_nome || nomeCli[t.cliente_id] || '—'; tsMap[k] = (tsMap[k] || 0) + (Number(t.segundos) || 0) }
+      const tsLista = Object.entries(tsMap).map(([nome, s]) => ({ nome, s })).sort((a, b) => b.s - a.s).slice(0, 8)
+      const tsTotal = Object.values(tsMap).reduce((a, b) => a + b, 0)
+
+      // 6 · Prazo de entrega (dia do mês). Entregue = competência-alvo fechada.
+      const diaCli = {}
+      for (const dia of DIAS) diaCli[dia] = []
+      const semPrazo = []
+      for (const c of clientes) {
+        const p = Number(c.prazo_entrega)
+        if (DIAS.includes(p)) diaCli[p].push(c); else semPrazo.push(c)
+      }
+      const prazos = DIAS.map(dia => {
+        const lista = diaCli[dia]
+        const entregues = lista.filter(c => statusAlvo[c.id] === 'fechado').length
+        const faltam = lista.length - entregues
+        const vencido = hoje.getDate() > dia && faltam > 0
+        const prox = !vencido && faltam > 0 && hoje.getDate() <= dia && (DIAS.filter(x => x >= hoje.getDate())[0] === dia)
+        return { dia, total: lista.length, entregues, faltam, vencido, prox }
+      })
+
+      // 7 · Matriz prazo × usuário
+      const nomesAnal = analistas.map(a => a.nome)
+      const matriz = DIAS.map(dia => {
+        const row = { dia, cels: {}, total: 0 }
+        for (const a of nomesAnal) {
+          const n = (diaCli[dia] || []).filter(c => ((c.analista || '').trim() || 'Sem analista') === a).length
+          row.cels[a] = n; row.total += n
+        }
+        return row
+      })
+      const matrizTot = {}
+      for (const a of nomesAnal) matrizTot[a] = matriz.reduce((s, r) => s + r.cels[a], 0)
+
+      setD({ placar, recentes, atrasoLista, atrasoTotal, regime, analistas, tsLista, tsTotal, prazos, semPrazo: semPrazo.length, nomesAnal, matriz, matrizTot, totalClientes: clientes.length })
     })()
-  }, [])
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Rotação automática (pausa no mouse).
+  useEffect(() => {
+    if (paused) return
+    const t = setTimeout(() => setIdx(i => (i + 1) % N), TEMPO)
+    return () => clearTimeout(t)
+  }, [idx, paused, d])
+
+  const irPara = i => setIdx((i + N) % N)
+  const flipTema = () => setMode(applyThemeMode(mode === 'light' ? 'dark' : 'light'))
+  const telaCheia = () => {
+    if (!document.fullscreenElement) box.current?.requestFullscreen?.()
+    else document.exitFullscreen?.()
+  }
+
+  const nomeComp = `${MES[targMes - 1]} / ${targAno}`
+
+  if (!d) return <div style={{ color: theme.sub, fontSize: 13 }}>Carregando painel…</div>
 
   return (
-    <div>
-      <h1 style={{ fontSize: 22, fontWeight: 500, marginBottom: 4 }}>Dashboard</h1>
-      <p style={{ color: theme.sub, fontSize: 13, marginBottom: 18 }}>Visão geral de todos os clientes.</p>
+    <div ref={box} onMouseEnter={() => setPaused(true)} onMouseLeave={() => setPaused(false)}
+      style={{ background: theme.contentBg, display: 'flex', flexDirection: 'column', gap: 14, minHeight: 'calc(100vh - 160px)' }}>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gap: 14, marginBottom: 18 }}>
-        <Metric label="Clientes" valor={s.clientes} icon="ti-building" />
-        <Metric label="Fechados" valor={s.fechado} icon="ti-circle-check" cor={theme.green} />
-        <Metric label="Em andamento" valor={s.andamento} icon="ti-progress" cor={theme.yellow} />
-        <Metric label="Pendentes" valor={s.pendente} icon="ti-alert-triangle" cor={theme.red} />
+      {/* topo */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
+        <div>
+          <h1 style={{ fontSize: 20, fontWeight: 600, margin: 0 }}>Painel do escritório <span style={{ color: theme.sub, fontWeight: 400, fontSize: 14 }}>· visão global</span></h1>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <span style={{ color: theme.sub, fontSize: 13, fontVariantNumeric: 'tabular-nums' }}>{agora.toLocaleDateString('pt-BR')} · {agora.toLocaleTimeString('pt-BR').slice(0, 5)}</span>
+          <div style={{ background: theme.card, border: `1px solid ${theme.cb}`, borderRadius: 12, padding: '6px 14px', lineHeight: 1.15 }}>
+            <small style={{ color: theme.sub, fontSize: 10.5, textTransform: 'uppercase', letterSpacing: .6, display: 'block' }}>Fechamento</small>
+            <b style={{ fontSize: 16 }}>{nomeComp}</b>
+          </div>
+          <button className="iconbtn-dash" onClick={flipTema} title="Tema claro/escuro" style={iconBtn}><i className={`ti ${mode === 'light' ? 'ti-moon' : 'ti-sun'}`} /></button>
+          <button onClick={telaCheia} title="Tela cheia" style={iconBtn}><i className="ti ti-maximize" /></button>
+        </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.7fr) minmax(0,1fr)', gap: 16 }}>
-        <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: 20 }}>
-          <p style={{ fontSize: 16, fontWeight: 500, margin: '0 0 12px' }}>Fechamentos recentes</p>
-          {recentes.length === 0 ? (
-            <p style={{ color: theme.sub, fontSize: 13 }}>Nenhum fechamento aberto ainda.</p>
-          ) : recentes.map(r => (
-            <div key={r.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderTop: `1px solid ${theme.border}`, fontSize: 13 }}>
-              <span style={{ color: theme.text }}>{r.clientes?.razao_social || '—'} <span style={{ color: theme.sub }}>· {MESES[r.mes - 1]}/{r.ano}</span></span>
-              <span style={{ color: r.status === 'fechado' ? theme.green : r.status === 'pendente' ? theme.red : theme.yellow, fontSize: 12 }}>{r.status}</span>
-            </div>
-          ))}
-        </div>
+      {/* barra de rotação */}
+      <div style={{ height: 4, background: theme.cb, borderRadius: 20, overflow: 'hidden' }}>
+        <div key={idx + (paused ? 'p' : '')} style={{ height: '100%', background: theme.accent, borderRadius: 20, animation: paused ? 'none' : `painelGrow ${TEMPO}ms linear forwards`, width: paused ? '100%' : 0 }} />
+      </div>
 
-        <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: 20 }}>
-          <p style={{ fontSize: 16, fontWeight: 500, margin: '0 0 12px' }}>Ações rápidas</p>
-          {[
-            ['ti-calendar-check', 'Ver fechamentos', '/fechamentos'],
-            ['ti-file-import', 'Importar razão', '/razao'],
-            ['ti-file-check', 'Documentos recebidos', '/documentos'],
-            ['ti-info-circle', 'Base de Informações', '/base'],
-          ].map(([icon, txt, to]) => (
-            <div key={to} onClick={() => nav(to)} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 0', cursor: 'pointer', fontSize: 13.5, color: theme.text }}>
-              <i className={`ti ${icon}`} style={{ color: theme.accent }} /> {txt}
-            </div>
+      {/* palco */}
+      <div key={idx} style={{ flex: 1, display: 'flex', flexDirection: 'column', animation: 'painelFade .45s ease' }}>
+        {idx === 0 && <PainelVisao d={d} nomeComp={nomeComp} nav={nav} />}
+        {idx === 1 && <PainelAtraso d={d} />}
+        {idx === 2 && <PainelRegime d={d} />}
+        {idx === 3 && <PainelUsuario d={d} />}
+        {idx === 4 && <PainelTimesheet d={d} />}
+        {idx === 5 && <PainelPrazo d={d} />}
+        {idx === 6 && <PainelMatriz d={d} />}
+      </div>
+
+      {/* navegação */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 16 }}>
+        <button onClick={() => irPara(idx - 1)} style={arrow}><i className="ti ti-chevron-left" /></button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {Array.from({ length: N }).map((_, i) => (
+            <span key={i} onClick={() => irPara(i)} style={{ width: i === idx ? 26 : 9, height: 9, borderRadius: 20, background: i === idx ? theme.accent : theme.cb, cursor: 'pointer', transition: '.2s' }} />
           ))}
         </div>
+        <button onClick={() => irPara(idx + 1)} style={arrow}><i className="ti ti-chevron-right" /></button>
       </div>
     </div>
   )
 }
 
-function Metric({ label, valor, icon, cor }) {
+/* ---------- Painéis ---------- */
+function Titulo({ h2, sub }) {
+  return <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 14 }}>
+    <h2 style={{ fontSize: 22, fontWeight: 600, margin: 0 }}>{h2}</h2><span style={{ color: theme.sub, fontSize: 13 }}>{sub}</span>
+  </div>
+}
+
+function PainelVisao({ d, nomeComp, nav }) {
+  const p = d.placar
+  const cor = { fechado: theme.green, andamento: theme.yellow, pendente: theme.red }
   return (
-    <div style={{ background: theme.input, borderRadius: 10, padding: 16 }}>
+    <>
+      <Titulo h2="Visão geral" sub={`Competência ${nomeComp} (mês anterior — a contabilidade fecha um mês depois)`} />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 14, marginBottom: 16 }}>
+        <Metric label="Clientes" v={p.total} icon="ti-building" />
+        <Metric label="Fechados" v={p.fechadas} icon="ti-circle-check" cor={theme.green} />
+        <Metric label="Em andamento" v={p.andamento} icon="ti-progress" cor={theme.yellow} />
+        <Metric label="Pendentes" v={p.pendentes} icon="ti-alert-triangle" cor={theme.red} />
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.7fr) minmax(0,1fr)', gap: 16, flex: 1 }}>
+        <div style={card}>
+          <p style={{ fontSize: 16, fontWeight: 600, margin: '0 0 8px' }}>Fechamentos recentes</p>
+          {d.recentes.length === 0 ? <p style={{ color: theme.sub, fontSize: 13 }}>Nenhum fechamento ainda.</p>
+            : d.recentes.map((r, i) => (
+              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '9px 0', borderTop: `1px solid ${theme.border}`, fontSize: 14 }}>
+                <span>{r.nome} <span style={{ color: theme.sub }}>· {MES_C[r.mes - 1]}/{r.ano}</span></span>
+                <span style={{ color: cor[r.status] || theme.sub, fontSize: 13 }}>{r.status}</span>
+              </div>
+            ))}
+        </div>
+        <div style={card}>
+          <p style={{ fontSize: 16, fontWeight: 600, margin: '0 0 8px' }}>Ações rápidas</p>
+          {[['ti-calendar-check', 'Ver fechamentos', '/fechamentos'], ['ti-file-import', 'Importar razão', '/razao'], ['ti-file-check', 'Documentos recebidos', '/documentos'], ['ti-info-circle', 'Base de Informações', '/base']].map(([ic, txt, to]) => (
+            <div key={to} onClick={() => nav(to)} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 0', cursor: 'pointer', fontSize: 14 }}><i className={`ti ${ic}`} style={{ color: theme.accent }} /> {txt}</div>
+          ))}
+        </div>
+      </div>
+    </>
+  )
+}
+
+function PainelAtraso({ d }) {
+  const nClientes = d.atrasoLista.length
+  return (
+    <>
+      <Titulo h2="Balancetes em atraso" sub="Competências de meses anteriores ainda não fechadas" />
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,.8fr) minmax(0,1.4fr)', gap: 16, flex: 1, minHeight: 0 }}>
+        <div style={{ ...card, display: 'flex', alignItems: 'center', gap: 22 }}>
+          <div style={{ fontSize: 92, fontWeight: 800, lineHeight: .9, color: d.atrasoTotal ? theme.red : theme.green }}>{d.atrasoTotal}</div>
+          <div style={{ fontSize: 16, color: theme.sub, lineHeight: 1.4 }}>balancete(s) em atraso<br />em <b style={{ color: theme.text }}>{nClientes} cliente(s)</b></div>
+        </div>
+        <div style={{ ...card, overflow: 'auto' }}>
+          {nClientes === 0 ? <p style={{ color: theme.sub, fontSize: 14 }}><i className="ti ti-circle-check" style={{ color: theme.green }} /> Nada em atraso. 🎉</p>
+            : d.atrasoLista.slice(0, 7).map((a, i) => (
+              <div key={i} style={{ display: 'grid', gridTemplateColumns: '28px 1fr auto', alignItems: 'center', gap: 12, padding: '11px 0', borderTop: i ? `1px solid ${theme.border}` : 'none' }}>
+                <span style={{ color: theme.sub, fontWeight: 700, textAlign: 'center' }}>{i + 1}</span>
+                <div><div style={{ fontSize: 15, fontWeight: 600 }}>{a.nome}</div>
+                  <div style={{ fontSize: 12, color: theme.sub }}>{a.oldest ? `desde ${MES_C[a.oldest.mes - 1]}/${a.oldest.ano}` : ''}{a.regime ? ` · ${a.regime}` : ''}{a.analista ? ` · ${a.analista}` : ''}</div></div>
+                <span style={{ fontSize: 16, fontWeight: 700, color: a.meses >= 3 ? theme.red : theme.yellow }}>{a.meses} {a.meses === 1 ? 'mês' : 'meses'}</span>
+              </div>
+            ))}
+        </div>
+      </div>
+    </>
+  )
+}
+
+function PainelRegime({ d }) {
+  const max = Math.max(1, ...d.regime.map(r => r.n))
+  const cores = [theme.green, theme.accent, theme.yellow, '#7C5CFF', '#E5894D', '#22B8CF']
+  return (
+    <>
+      <Titulo h2="Clientes por regime tributário" sub="Composição da carteira" />
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.6fr) minmax(0,.7fr)', gap: 16, flex: 1 }}>
+        <div style={{ ...card, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 18 }}>
+          {d.regime.length === 0 ? <p style={{ color: theme.sub }}>Sem clientes cadastrados.</p>
+            : d.regime.map((r, i) => (
+              <div key={r.nome}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 15, marginBottom: 6 }}><span>{r.nome}</span><b>{r.n}</b></div>
+                <div style={{ height: 24, background: theme.input, borderRadius: 8, overflow: 'hidden' }}>
+                  <div style={{ width: `${(r.n / max) * 100}%`, height: '100%', background: cores[i % cores.length], borderRadius: 8, minWidth: 6 }} />
+                </div>
+              </div>
+            ))}
+        </div>
+        <div style={{ ...card, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
+          <small style={{ color: theme.sub, textTransform: 'uppercase', letterSpacing: .6, fontSize: 12 }}>Carteira total</small>
+          <b style={{ fontSize: 64, fontWeight: 800 }}>{d.totalClientes}</b>
+          <small style={{ color: theme.sub }}>clientes ativos</small>
+        </div>
+      </div>
+    </>
+  )
+}
+
+function PainelUsuario({ d }) {
+  return (
+    <>
+      <Titulo h2="Fechamento por usuário" sub="Progresso de cada analista no mês" />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 16, flex: 1 }}>
+        {d.analistas.length === 0 ? <p style={{ color: theme.sub }}>Sem analistas atribuídos.</p>
+          : d.analistas.map((a, i) => {
+            const pct = a.total ? Math.round((a.fechadas / a.total) * 100) : 0
+            const ini = (a.nome[0] || '?').toUpperCase()
+            const cor = ['#4A7CFF', '#7C5CFF', '#E5894D', '#22B8CF', '#30A46C', '#E54D8A'][i % 6]
+            return (
+              <div key={a.nome} style={{ ...card, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <span style={{ width: 46, height: 46, borderRadius: '50%', background: cor, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 18 }}>{ini}</span>
+                  <div><b style={{ fontSize: 18 }}>{a.nome}</b><br /><small style={{ color: theme.sub }}>{a.total} empresa(s)</small></div>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8 }}>
+                  <MiniN n={a.fechadas} t="fechadas" c={theme.green} /><MiniN n={a.andamento} t="andamento" c={theme.yellow} /><MiniN n={a.pendentes} t="pendente" c={theme.red} />
+                </div>
+                <Donut size={180} label={`${pct}%`} segs={[{ v: a.fechadas, c: theme.green }, { v: a.andamento, c: theme.yellow }, { v: a.pendentes, c: theme.red }]} />
+              </div>
+            )
+          })}
+      </div>
+    </>
+  )
+}
+
+function PainelTimesheet({ d }) {
+  const max = Math.max(1, ...d.tsLista.map(t => t.s))
+  return (
+    <>
+      <Titulo h2="Timesheet por cliente" sub="Horas no mês corrente" />
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.5fr) minmax(0,.7fr)', gap: 16, flex: 1, minHeight: 0 }}>
+        <div style={{ ...card, overflow: 'auto' }}>
+          {d.tsLista.length === 0 ? <p style={{ color: theme.sub, fontSize: 14 }}>Sem tempo registrado neste mês.</p>
+            : d.tsLista.map((t, i) => (
+              <div key={i} style={{ display: 'grid', gridTemplateColumns: '28px 1fr auto', alignItems: 'center', gap: 12, padding: '11px 0', borderTop: i ? `1px solid ${theme.border}` : 'none' }}>
+                <span style={{ color: theme.sub, fontWeight: 700, textAlign: 'center' }}>{i + 1}</span>
+                <div style={{ width: '100%' }}><div style={{ fontSize: 15, fontWeight: 600 }}>{t.nome}</div>
+                  <div style={{ height: 8, background: theme.cb, borderRadius: 20, marginTop: 6, overflow: 'hidden' }}><div style={{ width: `${(t.s / max) * 100}%`, height: '100%', background: theme.accent, borderRadius: 20 }} /></div></div>
+                <span style={{ fontSize: 16, fontWeight: 700 }}>{fmtH(t.s)}</span>
+              </div>
+            ))}
+        </div>
+        <div style={{ ...card, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
+          <small style={{ color: theme.sub, textTransform: 'uppercase', letterSpacing: .6, fontSize: 12 }}>Total da equipe</small>
+          <b style={{ fontSize: 52, fontWeight: 800 }}>{fmtH(d.tsTotal)}</b>
+          <small style={{ color: theme.sub }}>no mês</small>
+        </div>
+      </div>
+    </>
+  )
+}
+
+function PainelPrazo({ d }) {
+  return (
+    <>
+      <Titulo h2="Empresas por prazo de entrega" sub={`Prazo do balancete · hoje é dia ${new Date().getDate()}${d.semPrazo ? ` · ${d.semPrazo} sem prazo definido` : ''}`} />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gridAutoRows: '1fr', gap: 14, flex: 1, minHeight: 0 }}>
+        {d.prazos.map(p => {
+          const pct = p.total ? Math.round((p.entregues / p.total) * 100) : 0
+          const corFalta = p.vencido ? theme.red : p.prox ? theme.accent : '#5A6785'
+          const borda = p.vencido ? theme.red : p.prox ? theme.accent : 'transparent'
+          const av = p.vencido ? theme.red : p.prox ? theme.accent : p.total && p.faltam === 0 ? theme.green : '#5A6785'
+          const st = p.total === 0 ? 'sem empresas' : p.vencido ? `${p.faltam} vencida(s)` : p.prox ? 'próximo prazo' : p.faltam === 0 ? 'em dia' : 'aguardando'
+          return (
+            <div key={p.dia} style={{ ...card, padding: 16, display: 'flex', flexDirection: 'column', gap: 9, border: `2px solid ${borda}` }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <span style={{ width: 44, height: 44, borderRadius: '50%', background: av, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 15 }}>{p.dia}</span>
+                <div><b style={{ fontSize: 18 }}>Dia {p.dia}</b><br /><small style={{ color: p.vencido ? theme.red : theme.sub }}>{p.total} empresa(s) · {st}</small></div>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                <MiniN n={p.entregues} t="entregues" c={theme.green} sm /><MiniN n={p.faltam} t="faltam" c={p.vencido ? theme.red : theme.sub} sm />
+              </div>
+              <Donut size={120} label={`${pct}%`} labelColor={p.total ? theme.text : theme.sub} segs={[{ v: p.entregues, c: theme.green }, { v: p.faltam, c: corFalta }]} />
+            </div>
+          )
+        })}
+      </div>
+    </>
+  )
+}
+
+function PainelMatriz({ d }) {
+  const intens = n => n ? `rgba(74,124,255,${Math.min(0.62, 0.16 + (n - 1) * 0.22)})` : theme.input
+  return (
+    <>
+      <Titulo h2="Empresas por prazo e usuário" sub="Quantas empresas cada analista entrega em cada data" />
+      <div style={{ ...card, flex: 1, display: 'flex', alignItems: 'center', overflow: 'auto' }}>
+        {d.nomesAnal.length === 0 ? <p style={{ color: theme.sub }}>Sem analistas atribuídos.</p> : (
+          <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 10 }}>
+            <thead>
+              <tr>
+                <th style={{ ...mth, textAlign: 'left' }}>Prazo</th>
+                {d.nomesAnal.map(a => <th key={a} style={mth}>{a}</th>)}
+                <th style={mth}>Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {d.matriz.map(r => (
+                <tr key={r.dia}>
+                  <td style={{ ...mtd, background: 'transparent', textAlign: 'left', fontSize: 16, fontWeight: 700 }}>Dia {r.dia}</td>
+                  {d.nomesAnal.map(a => <td key={a} style={{ ...mtd, background: intens(r.cels[a]), color: r.cels[a] ? theme.text : theme.sub }}>{r.cels[a]}</td>)}
+                  <td style={{ ...mtd, background: 'transparent', color: theme.sub }}>{r.total}</td>
+                </tr>
+              ))}
+              <tr>
+                <td style={{ ...mtd, background: 'transparent', textAlign: 'left', fontSize: 16, fontWeight: 700, borderTop: `1px solid ${theme.border}` }}>Total</td>
+                {d.nomesAnal.map(a => <td key={a} style={{ ...mtd, background: 'transparent', borderTop: `1px solid ${theme.border}` }}>{d.matrizTot[a]}</td>)}
+                <td style={{ ...mtd, background: 'transparent', borderTop: `1px solid ${theme.border}`, color: theme.accent }}>{d.totalClientes - d.semPrazo}</td>
+              </tr>
+            </tbody>
+          </table>
+        )}
+      </div>
+    </>
+  )
+}
+
+/* ---------- peças ---------- */
+function Metric({ label, v, icon, cor }) {
+  return (
+    <div style={{ background: theme.input, borderRadius: 12, padding: 16 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <span style={{ color: theme.sub, fontSize: 11, textTransform: 'uppercase', letterSpacing: .5 }}>{label}</span>
-        <span style={{ background: 'rgba(74,124,255,0.15)', borderRadius: 8, width: 30, height: 30, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <i className={`ti ${icon}`} style={{ color: theme.accent, fontSize: 16 }} />
-        </span>
+        <span style={{ background: 'rgba(74,124,255,0.15)', borderRadius: 8, width: 30, height: 30, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><i className={`ti ${icon}`} style={{ color: theme.accent, fontSize: 16 }} /></span>
       </div>
-      <p style={{ fontSize: 28, fontWeight: 700, margin: '8px 0 0', color: cor || theme.text }}>{valor === null ? '…' : valor}</p>
+      <p style={{ fontSize: 34, fontWeight: 800, margin: '8px 0 0', color: cor || theme.text }}>{v}</p>
     </div>
   )
 }
+function MiniN({ n, t, c, sm }) {
+  return <div style={{ background: theme.input, borderRadius: 10, padding: sm ? 8 : 10, textAlign: 'center' }}>
+    <b style={{ display: 'block', fontSize: sm ? 20 : 24, fontWeight: 800, color: c }}>{n}</b><small style={{ fontSize: 11, color: theme.sub }}>{t}</small>
+  </div>
+}
+
+const card = { background: theme.card, border: `1px solid ${theme.cb}`, borderRadius: 16, padding: 22 }
+const iconBtn = { background: theme.card, border: `1px solid ${theme.cb}`, color: theme.text, borderRadius: 10, width: 40, height: 40, cursor: 'pointer', fontSize: 18, display: 'flex', alignItems: 'center', justifyContent: 'center' }
+const arrow = { background: theme.card, border: `1px solid ${theme.cb}`, color: theme.text, width: 38, height: 38, borderRadius: '50%', cursor: 'pointer', fontSize: 18, display: 'flex', alignItems: 'center', justifyContent: 'center' }
+const mth = { fontSize: 13, color: theme.sub, textTransform: 'uppercase', letterSpacing: .5, fontWeight: 600, padding: '6px 8px', textAlign: 'center' }
+const mtd = { textAlign: 'center', borderRadius: 12, padding: 16, fontSize: 22, fontWeight: 800, color: theme.text }
