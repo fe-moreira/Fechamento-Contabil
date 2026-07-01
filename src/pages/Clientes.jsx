@@ -3,9 +3,12 @@ import { supabase } from '../lib/supabase'
 import { theme } from '../lib/theme'
 import { normalizaCompetencia } from '../lib/balancete'
 
+// Regimes tributários — nomenclatura padrão da carteira.
+const REGIMES = ['SIMPLES NACIONAL', 'LUCRO PRESUMIDO', 'LUCRO REAL', 'LUCRO REAL TRIMESTRAL', 'ISENTA FEDERAL']
+
 const vazio = {
   codigo_dominio: '', tipo: 'Matriz', codigo_matriz: '', razao_social: '',
-  nome_fantasia: '', cnpj: '', regime_tributario: 'Simples', tipo_fechamento: '',
+  nome_fantasia: '', cnpj: '', regime_tributario: 'SIMPLES NACIONAL', tipo_fechamento: '',
   competencia_inicio: '', sistema_financeiro: '', integracao_financeira: 'Não usa',
   analista: '', observacoes: '', prazo_entrega: '', tipo_fechamento: 'Consolidado',
 }
@@ -344,7 +347,7 @@ export default function Clientes() {
               <Campo label="CNPJ" req><input className="input" value={form.cnpj || ''} onChange={set('cnpj')} placeholder="00.000.000/0000-00" required /></Campo>
               <Campo label="Regime tributário" req>
                 <select className="input" value={form.regime_tributario} onChange={set('regime_tributario')}>
-                  <option>Simples</option><option>Presumido</option><option>Real</option>
+                  {(!form.regime_tributario || REGIMES.includes(form.regime_tributario) ? REGIMES : [form.regime_tributario, ...REGIMES]).map(r => <option key={r}>{r}</option>)}
                 </select>
               </Campo>
               <Campo label="Tipo de fechamento" req>

@@ -24,7 +24,7 @@ const COLS = [
   { nome: 'Razão Social', largura: 40 },
   { nome: 'Nome Fantasia', largura: 26 },
   { nome: 'CNPJ', largura: 22 },
-  { nome: 'Regime Tributário', largura: 18, lista: ['Simples', 'Presumido', 'Real'] },
+  { nome: 'Regime Tributário', largura: 22, lista: ['SIMPLES NACIONAL', 'LUCRO PRESUMIDO', 'LUCRO REAL', 'LUCRO REAL TRIMESTRAL', 'ISENTA FEDERAL'] },
   { nome: 'Tipo de Fechamento', largura: 22, lista: ['Consolidado', 'Individualizado'] },
   { nome: 'Prazo de entrega do balancete', largura: 28 },
   { nome: 'Competência de início (mm/aaaa)', largura: 26 },
