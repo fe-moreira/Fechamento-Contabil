@@ -28,6 +28,10 @@ create table if not exists public.clientes (
   updated_at        timestamptz default now()
 );
 create unique index if not exists clientes_codigo_dominio_uidx on public.clientes(codigo_dominio);
+-- Duplicidade amarrada pelo CNPJ normalizado (só dígitos), ignorando quem não tem CNPJ.
+create unique index if not exists clientes_cnpj_norm_uidx
+  on public.clientes ((regexp_replace(coalesce(cnpj,''), '\D', '', 'g')))
+  where nullif(regexp_replace(coalesce(cnpj,''), '\D', '', 'g'), '') is not null;
 
 -- ---------- COMPETÊNCIAS (cliente x mês/ano) ----------
 create table if not exists public.competencias (

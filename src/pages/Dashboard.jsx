@@ -87,9 +87,10 @@ export default function Dashboard() {
         return { total: lista.length, fechadas, andamento, pendentes: lista.length - fechadas - andamento }
       }
 
-      // 1 · Placar
+      // 1 · Placar — só a competência-alvo (o fechamento atual). Atrasos ficam nos outros painéis.
       const placar = contaStatus(clientes)
-      const recentes = cps.slice().sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))).slice(0, 5)
+      const recentes = cps.filter(c => c.ano === targAno && c.mes === targMes)
+        .slice().sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))).slice(0, 6)
         .map(c => ({ nome: nomeCli[c.cliente_id] || '—', mes: c.mes, ano: c.ano, status: c.status }))
 
       // 2 · Atraso: meses esperados (desde o início) não fechados, até a competência-alvo.
@@ -244,8 +245,8 @@ function PainelVisao({ d, nomeComp, nav }) {
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.7fr) minmax(0,1fr)', gap: 16, flex: 1 }}>
         <div style={card}>
-          <p style={{ fontSize: 16, fontWeight: 600, margin: '0 0 8px' }}>Fechamentos recentes</p>
-          {d.recentes.length === 0 ? <p style={{ color: theme.sub, fontSize: 13 }}>Nenhum fechamento ainda.</p>
+          <p style={{ fontSize: 16, fontWeight: 600, margin: '0 0 8px' }}>Fechamentos de {nomeComp}</p>
+          {d.recentes.length === 0 ? <p style={{ color: theme.sub, fontSize: 13 }}>Nenhum fechamento de {nomeComp} ainda.</p>
             : d.recentes.map((r, i) => (
               <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '9px 0', borderTop: `1px solid ${theme.border}`, fontSize: 14 }}>
                 <span>{r.nome} <span style={{ color: theme.sub }}>· {MES_C[r.mes - 1]}/{r.ano}</span></span>
