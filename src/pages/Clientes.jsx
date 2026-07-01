@@ -7,7 +7,7 @@ const vazio = {
   codigo_dominio: '', tipo: 'Matriz', codigo_matriz: '', razao_social: '',
   nome_fantasia: '', cnpj: '', regime_tributario: 'Simples', tipo_fechamento: '',
   competencia_inicio: '', sistema_financeiro: '', integracao_financeira: 'Não usa',
-  analista: '', observacoes: '', prazo_entrega: '',
+  analista: '', observacoes: '', prazo_entrega: '', tipo_fechamento: 'Consolidado',
 }
 
 // Helpers da importação em lote (planilha-modelo: aba "Clientes", 15 colunas).
@@ -149,7 +149,7 @@ export default function Clientes() {
         const cs = raw(row, 'carga_saldos'); if (cs) campos.carga_saldos = simNao(cs)
         const cr = raw(row, 'coleta_razao'); if (cr) campos.coleta_razao = simNao(cr)
         const pz = parseInt(String(raw(row, 'prazo_entrega')).replace(/\D/g, ''), 10)
-        if ([5, 10, 15, 20, 25, 30].includes(pz)) campos.prazo_entrega = pz
+        if (pz >= 1 && pz <= 31) campos.prazo_entrega = pz
 
         registros.push({ cnpjNorm: soDigitos(cnpjFmt), campos })
       }
@@ -237,6 +237,9 @@ export default function Clientes() {
     // 1) cadastro completo obrigatório
     const faltam = camposFaltando(form)
     if (faltam.length) { setErro('Preencha todos os campos obrigatórios: ' + faltam.join(', ') + '.'); return }
+    // 1b) prazo de entrega precisa ser um dia válido (1 a 31)
+    const pz = Number(form.prazo_entrega)
+    if (!Number.isInteger(pz) || pz < 1 || pz > 31) { setErro('Prazo de entrega inválido: informe um dia entre 1 e 31.'); return }
     // 2) duplicidade amarrada pelo CNPJ (compara com 14 dígitos)
     const cnpjN = soDigitos(formatarCnpj(form.cnpj))
     const dup = lista.find(c => soDigitos(formatarCnpj(c.cnpj)) === cnpjN && c.id !== editId)
@@ -344,12 +347,13 @@ export default function Clientes() {
                   <option>Simples</option><option>Presumido</option><option>Real</option>
                 </select>
               </Campo>
-              <Campo label="Tipo de fechamento" req><input className="input" value={form.tipo_fechamento || ''} onChange={set('tipo_fechamento')} required /></Campo>
-              <Campo label="Prazo de entrega do balancete" req>
-                <select className="input" value={form.prazo_entrega ?? ''} onChange={set('prazo_entrega')} required>
-                  <option value="">—</option>
-                  {[5, 10, 15, 20, 25, 30].map(d => <option key={d} value={d}>Dia {d}</option>)}
+              <Campo label="Tipo de fechamento" req>
+                <select className="input" value={form.tipo_fechamento || 'Consolidado'} onChange={set('tipo_fechamento')} required>
+                  <option>Consolidado</option><option>Individualizado</option>
                 </select>
+              </Campo>
+              <Campo label="Prazo de entrega do balancete (dia)" req>
+                <input className="input" type="number" min="1" max="31" value={form.prazo_entrega ?? ''} onChange={set('prazo_entrega')} placeholder="Dia do mês (1–31)" required />
               </Campo>
               <Campo label="Competência de início (MM/AAAA)" req><input className="input" value={form.competencia_inicio || ''} onChange={set('competencia_inicio')} placeholder="01/2026" required /></Campo>
               <Campo label="Integração financeira" req>

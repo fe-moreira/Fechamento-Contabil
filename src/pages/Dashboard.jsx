@@ -3,10 +3,10 @@ import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { theme, applyThemeMode, getThemeMode } from '../lib/theme'
 import { normalizaCompetencia } from '../lib/balancete'
+import { fechaSozinho } from '../lib/clientes'
 
 const MES = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
 const MES_C = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
-const DIAS = [5, 10, 15, 20, 25, 30]
 const TEMPO = 10000 // 10s por tela
 const N = 7
 
@@ -75,7 +75,9 @@ export default function Dashboard() {
         supabase.from('competencias').select('cliente_id, ano, mes, status, created_at'),
         supabase.from('timesheet').select('cliente_id, cliente_nome, segundos, created_at').gte('created_at', inicioMes),
       ])
-      const clientes = cli || [], cps = comps || [], tss = ts || []
+      // Só quem fecha sozinho entra no painel: matriz e filial individualizada.
+      // Filial consolidada é representada pela matriz (não conta em placar/atraso/prazo).
+      const clientes = (cli || []).filter(fechaSozinho), cps = comps || [], tss = ts || []
       const nomeCli = Object.fromEntries(clientes.map(c => [c.id, c.razao_social]))
 
       // Status da competência-alvo por cliente.
@@ -122,26 +124,27 @@ export default function Dashboard() {
       const tsLista = Object.entries(tsMap).map(([nome, s]) => ({ nome, s })).sort((a, b) => b.s - a.s).slice(0, 8)
       const tsTotal = Object.values(tsMap).reduce((a, b) => a + b, 0)
 
-      // 6 · Prazo de entrega (dia do mês). Entregue = competência-alvo fechada.
+      // 6 · Prazo de entrega (dia do mês). Livre: os dias vêm do que está cadastrado.
+      const dias = [...new Set(clientes.map(c => Number(c.prazo_entrega)).filter(p => p >= 1 && p <= 31))].sort((a, b) => a - b)
       const diaCli = {}
-      for (const dia of DIAS) diaCli[dia] = []
+      for (const dia of dias) diaCli[dia] = []
       const semPrazo = []
       for (const c of clientes) {
         const p = Number(c.prazo_entrega)
-        if (DIAS.includes(p)) diaCli[p].push(c); else semPrazo.push(c)
+        if (p >= 1 && p <= 31) diaCli[p].push(c); else semPrazo.push(c)
       }
-      const prazos = DIAS.map(dia => {
+      const prazos = dias.map(dia => {
         const lista = diaCli[dia]
         const entregues = lista.filter(c => statusAlvo[c.id] === 'fechado').length
         const faltam = lista.length - entregues
         const vencido = hoje.getDate() > dia && faltam > 0
-        const prox = !vencido && faltam > 0 && hoje.getDate() <= dia && (DIAS.filter(x => x >= hoje.getDate())[0] === dia)
+        const prox = !vencido && faltam > 0 && hoje.getDate() <= dia && (dias.filter(x => x >= hoje.getDate())[0] === dia)
         return { dia, total: lista.length, entregues, faltam, vencido, prox }
       })
 
       // 7 · Matriz prazo × usuário
       const nomesAnal = analistas.map(a => a.nome)
-      const matriz = DIAS.map(dia => {
+      const matriz = dias.map(dia => {
         const row = { dia, cels: {}, total: 0 }
         for (const a of nomesAnal) {
           const n = (diaCli[dia] || []).filter(c => ((c.analista || '').trim() || 'Sem analista') === a).length
@@ -152,7 +155,7 @@ export default function Dashboard() {
       const matrizTot = {}
       for (const a of nomesAnal) matrizTot[a] = matriz.reduce((s, r) => s + r.cels[a], 0)
 
-      setD({ placar, recentes, atrasoLista, atrasoTotal, regime, analistas, tsLista, tsTotal, prazos, semPrazo: semPrazo.length, nomesAnal, matriz, matrizTot, totalClientes: clientes.length })
+      setD({ placar, recentes, atrasoLista, atrasoTotal, regime, analistas, tsLista, tsTotal, prazos, dias, semPrazo: semPrazo.length, nomesAnal, matriz, matrizTot, totalClientes: clientes.length })
     })()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -378,7 +381,12 @@ function PainelPrazo({ d }) {
   return (
     <>
       <Titulo h2="Empresas por prazo de entrega" sub={`Prazo do balancete · hoje é dia ${new Date().getDate()}${d.semPrazo ? ` · ${d.semPrazo} sem prazo definido` : ''}`} />
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gridAutoRows: '1fr', gap: 14, flex: 1, minHeight: 0 }}>
+      {d.prazos.length === 0 ? (
+        <div style={{ ...card, flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: theme.sub, fontSize: 15 }}>
+          Nenhum prazo de entrega definido nos clientes. Preencha o dia no cadastro para ver este painel.
+        </div>
+      ) : (
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gridAutoRows: '1fr', gap: 14, flex: 1, minHeight: 0 }}>
         {d.prazos.map(p => {
           const pct = p.total ? Math.round((p.entregues / p.total) * 100) : 0
           const corFalta = p.vencido ? theme.red : p.prox ? theme.accent : '#5A6785'
@@ -399,6 +407,7 @@ function PainelPrazo({ d }) {
           )
         })}
       </div>
+      )}
     </>
   )
 }

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
+import { fechaSozinho } from '../lib/clientes'
 import { theme } from '../lib/theme'
 
 const MESES = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
@@ -14,8 +15,11 @@ const ST = {
 }
 
 export default function Fechamentos() {
-  const { empresaId, empresaNome, competencia, setCompetencia, abrirFechamento, isAdmin, recalcularPendencias } = useAppData()
+  const { empresas, empresaId, empresaNome, competencia, setCompetencia, abrirFechamento, isAdmin, recalcularPendencias } = useAppData()
   const nav = useNavigate()
+  const cli = empresas.find(e => e.id === empresaId)
+  const podeFechar = cli ? fechaSozinho(cli) : true // filial consolidada fecha na matriz
+  const matriz = cli && cli.tipo === 'Filial' ? empresas.find(e => e.codigo_dominio === cli.codigo_matriz) : null
   const [lista, setLista] = useState([])
   const [loading, setLoading] = useState(true)
   const [fAno, setFAno] = useState('todos')
@@ -45,6 +49,7 @@ export default function Fechamentos() {
     nav('/status')
   }
   async function criar() {
+    if (!podeFechar) { setNovo(null); return }
     const { ano, mes } = novo
     const existe = lista.find(c => c.ano === +ano && c.mes === +mes)
     if (existe) { setNovo(null); abrir(existe); return }
@@ -82,10 +87,22 @@ export default function Fechamentos() {
     <Wrapper>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 18, flexWrap: 'wrap' }}>
         <p style={{ color: theme.sub, fontSize: 13.5 }}><b style={{ color: theme.text }}>{empresaNome}</b> — escolha uma competência ou abra um novo fechamento.</p>
-        <button className="btn" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }} onClick={() => setNovo({ ano: 2026, mes: 6 })}>
-          <i className="ti ti-plus" /> Novo fechamento
-        </button>
+        {podeFechar && (
+          <button className="btn" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }} onClick={() => setNovo({ ano: 2026, mes: 6 })}>
+            <i className="ti ti-plus" /> Novo fechamento
+          </button>
+        )}
       </div>
+
+      {!podeFechar && (
+        <div style={{ background: 'rgba(74,124,255,0.12)', border: `1px solid ${theme.accent}`, borderRadius: 12, padding: '16px 18px', display: 'flex', alignItems: 'center', gap: 14, marginBottom: 16 }}>
+          <i className="ti ti-git-merge" style={{ fontSize: 22, color: theme.accent, flexShrink: 0 }} />
+          <p style={{ fontSize: 13.5, color: theme.text, margin: 0, lineHeight: 1.5 }}>
+            Esta filial tem fechamento <b>consolidado na matriz</b>{matriz ? <> — <b>{matriz.razao_social}</b> (código {matriz.codigo_dominio})</> : cli?.codigo_matriz ? <> (código da matriz {cli.codigo_matriz})</> : ''}. Faça o fechamento pela matriz.
+            {' '}Para dar fechamento próprio a esta filial, altere o <b>Tipo de fechamento</b> para <b>Individualizado</b> no cadastro.
+          </p>
+        </div>
+      )}
 
       {/* Filtro */}
       <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', marginBottom: 16 }}>
