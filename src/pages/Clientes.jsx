@@ -15,6 +15,16 @@ const norm = (s) => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-
 const simNao = (v) => /^sim/i.test(String(v ?? '').trim())
 // CNPJ só com dígitos — é a chave de duplicidade (amarra "12.345.678/0001-90" = "12345678000190").
 const soDigitos = (v) => String(v ?? '').replace(/\D/g, '')
+// Formata/normaliza o CNPJ com 14 dígitos (repõe zero à esquerda que o Excel come
+// ao guardar como número). Mantém o texto original se não parecer um CNPJ.
+const formatarCnpj = (v) => {
+  const d = soDigitos(v)
+  if (d.length >= 11 && d.length <= 14) {
+    const p = d.padStart(14, '0')
+    return `${p.slice(0, 2)}.${p.slice(2, 5)}.${p.slice(5, 8)}/${p.slice(8, 12)}-${p.slice(12)}`
+  }
+  return String(v ?? '').trim()
+}
 
 // Campos obrigatórios do cadastro (todos, menos observações; código da matriz só p/ filial).
 const OBRIG = [
@@ -85,7 +95,15 @@ export default function Clientes() {
       const linhas = XLSX.utils.sheet_to_json(wb.Sheets[aba], { header: 1, defval: '' })
       if (linhas.length < 2) { setImportMsg(''); setErro('A aba de clientes está vazia.'); return }
 
-      const H = linhas[0].map(norm)
+      // Acha a linha do cabeçalho — ela pode não ser a primeira (o modelo tem
+      // logo e título acima). Procura a linha que tem "Razão Social" e "CNPJ".
+      const hIdx = linhas.findIndex(r => {
+        const hs = r.map(norm)
+        return hs.some(h => h.includes('razao')) && hs.some(h => h.includes('cnpj'))
+      })
+      if (hIdx < 0) { setImportMsg(''); setErro('Não encontrei o cabeçalho da planilha (a linha com "Razão Social" e "CNPJ"). Use o modelo de importação.'); return }
+
+      const H = linhas[hIdx].map(norm)
       const col = {
         codigo_dominio: H.findIndex(h => h.includes('codigo') && h.includes('dominio')),
         tipo: H.findIndex(h => h === 'tipo'),
@@ -108,7 +126,7 @@ export default function Clientes() {
 
       // Monta os campos preenchidos de cada linha (célula vazia não entra).
       const registros = []
-      for (const row of linhas.slice(1)) {
+      for (const row of linhas.slice(hIdx + 1)) {
         const cod = raw(row, 'codigo_dominio')
         const razao = raw(row, 'razao_social')
         const cnpjTxt = raw(row, 'cnpj')
@@ -120,22 +138,26 @@ export default function Clientes() {
         const tipoRaw = raw(row, 'tipo')
         if (tipoRaw) campos.tipo = tipoRaw.toLowerCase().startsWith('fil') ? 'Filial' : 'Matriz'
         const cm = raw(row, 'codigo_matriz'); if (cm) campos.codigo_matriz = cm
-        for (const k of ['nome_fantasia', 'cnpj', 'regime_tributario', 'tipo_fechamento', 'sistema_financeiro', 'integracao_financeira', 'analista', 'observacoes']) {
+        for (const k of ['nome_fantasia', 'regime_tributario', 'tipo_fechamento', 'sistema_financeiro', 'integracao_financeira', 'analista', 'observacoes']) {
           const v = raw(row, k); if (v) campos[k] = v
         }
+        // CNPJ normalizado/formatado: o Excel guarda como número e come o zero à
+        // esquerda; repõe os 14 dígitos para a chave de duplicidade ficar estável.
+        const cnpjFmt = formatarCnpj(cnpjTxt)
+        if (cnpjFmt) campos.cnpj = cnpjFmt
         const ci = normalizaCompetencia(raw(row, 'competencia_inicio')); if (ci) campos.competencia_inicio = ci
         const cs = raw(row, 'carga_saldos'); if (cs) campos.carga_saldos = simNao(cs)
         const cr = raw(row, 'coleta_razao'); if (cr) campos.coleta_razao = simNao(cr)
         const pz = parseInt(String(raw(row, 'prazo_entrega')).replace(/\D/g, ''), 10)
         if ([5, 10, 15, 20, 25, 30].includes(pz)) campos.prazo_entrega = pz
 
-        registros.push({ cnpjNorm: soDigitos(cnpjTxt), campos })
+        registros.push({ cnpjNorm: soDigitos(cnpjFmt), campos })
       }
       if (!registros.length) { setImportMsg(''); setErro('Nenhuma linha de cliente encontrada na planilha.'); return }
 
       // Estado atual do banco: amarra por CNPJ (chave) e por código (que também é único).
       const { data: existentes } = await supabase.from('clientes').select('*')
-      const porCnpj = new Map((existentes || []).filter(c => soDigitos(c.cnpj)).map(c => [soDigitos(c.cnpj), c]))
+      const porCnpj = new Map((existentes || []).filter(c => soDigitos(c.cnpj)).map(c => [soDigitos(formatarCnpj(c.cnpj)), c]))
       const codigosUsados = new Map((existentes || []).map(c => [c.codigo_dominio, c]))
 
       const novos = [], conflitos = [], invalidos = [], inalterados = []
@@ -215,14 +237,15 @@ export default function Clientes() {
     // 1) cadastro completo obrigatório
     const faltam = camposFaltando(form)
     if (faltam.length) { setErro('Preencha todos os campos obrigatórios: ' + faltam.join(', ') + '.'); return }
-    // 2) duplicidade amarrada pelo CNPJ
-    const cnpjN = soDigitos(form.cnpj)
-    const dup = lista.find(c => soDigitos(c.cnpj) === cnpjN && c.id !== editId)
+    // 2) duplicidade amarrada pelo CNPJ (compara com 14 dígitos)
+    const cnpjN = soDigitos(formatarCnpj(form.cnpj))
+    const dup = lista.find(c => soDigitos(formatarCnpj(c.cnpj)) === cnpjN && c.id !== editId)
     if (dup) { setErro(`Já existe um cliente com esse CNPJ: ${dup.razao_social} (código ${dup.codigo_dominio}). Edite o cliente existente em vez de cadastrar outro.`); return }
 
     setSalvando(true)
     const payload = { ...form }
     if (payload.tipo === 'Matriz') payload.codigo_matriz = null
+    payload.cnpj = formatarCnpj(payload.cnpj)
     payload.competencia_inicio = normalizaCompetencia(payload.competencia_inicio) || payload.competencia_inicio
     payload.prazo_entrega = payload.prazo_entrega ? Number(payload.prazo_entrega) : null
     let res
