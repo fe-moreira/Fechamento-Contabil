@@ -8,7 +8,7 @@ import { fechaSozinho } from '../lib/clientes'
 const MES = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
 const MES_C = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
 const TEMPO = 10000 // 10s por tela
-const N = 7
+const N = 8
 
 const fmtH = s => { const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return `${h}h${String(m).padStart(2, '0')}` }
 
@@ -155,7 +155,17 @@ export default function Dashboard() {
       const matrizTot = {}
       for (const a of nomesAnal) matrizTot[a] = matriz.reduce((s, r) => s + r.cels[a], 0)
 
-      setD({ placar, recentes, atrasoLista, atrasoTotal, regime, analistas, tsLista, tsTotal, prazos, dias, semPrazo: semPrazo.length, nomesAnal, matriz, matrizTot, totalClientes: clientes.length })
+      // 8 · Sistemas financeiros usados pelos clientes (coluna M). Vazio e
+      // variações de "Sem Sistema" caem no mesmo balde.
+      const sisMap = {}
+      for (const c of clientes) {
+        let s = (c.sistema_financeiro || '').trim()
+        if (!s || /^sem\s*sistema$/i.test(s)) s = 'Sem sistema'
+        sisMap[s] = (sisMap[s] || 0) + 1
+      }
+      const sistemas = Object.entries(sisMap).map(([nome, n]) => ({ nome, n })).sort((a, b) => b.n - a.n)
+
+      setD({ placar, recentes, atrasoLista, atrasoTotal, regime, analistas, tsLista, tsTotal, prazos, dias, semPrazo: semPrazo.length, nomesAnal, matriz, matrizTot, totalClientes: clientes.length, sistemas })
     })()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -211,6 +221,7 @@ export default function Dashboard() {
         {idx === 4 && <PainelTimesheet d={d} />}
         {idx === 5 && <PainelPrazo d={d} />}
         {idx === 6 && <PainelMatriz d={d} />}
+        {idx === 7 && <PainelSistemas d={d} />}
       </div>
 
       {/* navegação */}
@@ -443,6 +454,45 @@ function PainelMatriz({ d }) {
             </tbody>
           </table>
         )}
+      </div>
+    </>
+  )
+}
+
+function PainelSistemas({ d }) {
+  const sistemas = d.sistemas || []
+  const max = Math.max(1, ...sistemas.map(s => s.n))
+  const totalCli = sistemas.reduce((a, s) => a + s.n, 0)
+  const comSistema = sistemas.filter(s => s.nome !== 'Sem sistema').reduce((a, s) => a + s.n, 0)
+  const distintos = sistemas.filter(s => s.nome !== 'Sem sistema').length
+  const cores = [theme.accent, theme.green, '#7C5CFF', '#E5894D', theme.yellow, '#22B8CF', '#E54D8A', '#30A46C']
+  return (
+    <>
+      <Titulo h2="Sistemas usados pelos clientes" sub="Quantos clientes usam cada sistema financeiro" />
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.6fr) minmax(0,.7fr)', gap: 16, flex: 1, minHeight: 0 }}>
+        <div style={{ ...card, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 16, overflow: 'auto' }}>
+          {sistemas.length === 0 ? <p style={{ color: theme.sub }}>Sem clientes cadastrados.</p>
+            : sistemas.map((s, i) => {
+              const pct = totalCli ? Math.round((s.n / totalCli) * 100) : 0
+              const semSis = s.nome === 'Sem sistema'
+              return (
+                <div key={s.nome}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontSize: 15, marginBottom: 6 }}>
+                    <span style={{ color: semSis ? theme.sub : theme.text }}>{s.nome}</span>
+                    <span><b>{s.n}</b> <small style={{ color: theme.sub }}>· {pct}%</small></span>
+                  </div>
+                  <div style={{ height: 24, background: theme.input, borderRadius: 8, overflow: 'hidden' }}>
+                    <div style={{ width: `${(s.n / max) * 100}%`, height: '100%', background: semSis ? '#5A6785' : cores[i % cores.length], borderRadius: 8, minWidth: 6 }} />
+                  </div>
+                </div>
+              )
+            })}
+        </div>
+        <div style={{ ...card, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
+          <small style={{ color: theme.sub, textTransform: 'uppercase', letterSpacing: .6, fontSize: 12 }}>Sistemas diferentes</small>
+          <b style={{ fontSize: 64, fontWeight: 800 }}>{distintos}</b>
+          <small style={{ color: theme.sub }}>{comSistema} de {totalCli} clientes usam sistema</small>
+        </div>
       </div>
     </>
   )
