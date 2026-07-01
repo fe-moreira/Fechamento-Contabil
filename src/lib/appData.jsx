@@ -45,7 +45,7 @@ export function AppDataProvider({ children }) {
 
   async function carregarEmpresas() {
     const { data } = await supabase
-      .from('clientes').select('id, razao_social, codigo_dominio')
+      .from('clientes').select('id, razao_social, codigo_dominio, integracao_financeira, sistema_financeiro')
       .order('razao_social', { ascending: true })
     setEmpresas(data || [])
   }
