@@ -75,9 +75,11 @@ export default function Dashboard() {
         supabase.from('competencias').select('cliente_id, ano, mes, status, created_at'),
         supabase.from('timesheet').select('cliente_id, cliente_nome, segundos, created_at').gte('created_at', inicioMes),
       ])
-      // Só quem fecha sozinho entra no painel: matriz e filial individualizada.
+      // Carteira inteira (matriz + filiais) — usada no painel de regime.
+      const todos = cli || []
+      // Só quem fecha sozinho entra nos demais painéis: matriz e filial individualizada.
       // Filial consolidada é representada pela matriz (não conta em placar/atraso/prazo).
-      const clientes = (cli || []).filter(fechaSozinho), cps = comps || [], tss = ts || []
+      const clientes = todos.filter(fechaSozinho), cps = comps || [], tss = ts || []
       const nomeCli = Object.fromEntries(clientes.map(c => [c.id, c.razao_social]))
 
       // Status da competência-alvo por cliente.
@@ -107,10 +109,12 @@ export default function Dashboard() {
       }
       atrasoLista.sort((a, b) => b.meses - a.meses)
 
-      // 3 · Regime
+      // 3 · Regime — carteira INTEIRA (matriz + filiais), somando os dois.
       const regMap = {}
-      for (const c of clientes) { const r = (c.regime_tributario || '').trim() || 'Sem regime'; regMap[r] = (regMap[r] || 0) + 1 }
+      for (const c of todos) { const r = (c.regime_tributario || '').trim() || 'Sem regime'; regMap[r] = (regMap[r] || 0) + 1 }
       const regime = Object.entries(regMap).map(([nome, n]) => ({ nome, n })).sort((a, b) => b.n - a.n)
+      const matrizes = todos.filter(c => c.tipo !== 'Filial').length
+      const filiais = todos.filter(c => c.tipo === 'Filial').length
 
       // 4 · Por usuário (analista)
       const porAnalista = {}
@@ -165,7 +169,7 @@ export default function Dashboard() {
       }
       const sistemas = Object.entries(sisMap).map(([nome, n]) => ({ nome, n })).sort((a, b) => b.n - a.n)
 
-      setD({ placar, recentes, atrasoLista, atrasoTotal, regime, analistas, tsLista, tsTotal, prazos, dias, semPrazo: semPrazo.length, nomesAnal, matriz, matrizTot, totalClientes: clientes.length, sistemas })
+      setD({ placar, recentes, atrasoLista, atrasoTotal, regime, matrizes, filiais, analistas, tsLista, tsTotal, prazos, dias, semPrazo: semPrazo.length, nomesAnal, matriz, matrizTot, totalClientes: clientes.length, sistemas })
     })()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -323,10 +327,19 @@ function PainelRegime({ d }) {
               </div>
             ))}
         </div>
-        <div style={{ ...card, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
-          <small style={{ color: theme.sub, textTransform: 'uppercase', letterSpacing: .6, fontSize: 12 }}>Carteira total</small>
-          <b style={{ fontSize: 64, fontWeight: 800 }}>{d.totalClientes}</b>
-          <small style={{ color: theme.sub }}>clientes ativos</small>
+        <div style={{ ...card, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 16 }}>
+          <div style={{ textAlign: 'center' }}>
+            <small style={{ color: theme.sub, textTransform: 'uppercase', letterSpacing: .6, fontSize: 12 }}>Matrizes</small>
+            <b style={{ fontSize: 52, fontWeight: 800, display: 'block', lineHeight: 1 }}>{d.matrizes}</b>
+          </div>
+          <div style={{ textAlign: 'center' }}>
+            <small style={{ color: theme.sub, textTransform: 'uppercase', letterSpacing: .6, fontSize: 12 }}>Filiais</small>
+            <b style={{ fontSize: 52, fontWeight: 800, display: 'block', lineHeight: 1 }}>{d.filiais}</b>
+          </div>
+          <div style={{ textAlign: 'center', borderTop: `1px solid ${theme.border}`, paddingTop: 12 }}>
+            <small style={{ color: theme.sub, textTransform: 'uppercase', letterSpacing: .6, fontSize: 12 }}>Total da carteira</small>
+            <b style={{ fontSize: 30, fontWeight: 800, display: 'block' }}>{d.matrizes + d.filiais}</b>
+          </div>
         </div>
       </div>
     </>
