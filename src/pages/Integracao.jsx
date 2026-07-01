@@ -21,7 +21,10 @@ function somaNumerica(linhas) {
 }
 
 export default function Integracao() {
-  const { empresaId, empresaNome, competencia } = useAppData()
+  const { empresas, empresaId, empresaNome, competencia } = useAppData()
+  const cliente = empresas.find(e => e.id === empresaId)
+  const integ = cliente?.integracao_financeira || 'Não usa'
+  const sistema = (cliente?.sistema_financeiro || '').trim()
   const [tab, setTab] = useState('fiscal')
   const [dados, setDados] = useState({}) // { tab: { nome, linhas } }
   const [erro, setErro] = useState('')
@@ -57,7 +60,9 @@ export default function Integracao() {
       {erro && <p style={{ color: theme.red, fontSize: 13, marginBottom: 12 }}>{erro}</p>}
 
       {tab === 'financeira'
-        ? <Financeira dados={dados.financeira} onImport={f => importar('financeira', f)} competencia={competencia} />
+        ? (integ === 'Excel'
+          ? <Financeira dados={dados.financeira} onImport={f => importar('financeira', f)} competencia={competencia} />
+          : <FinanceiraViaSistema integ={integ} sistema={sistema} />)
         : <Cruzamento tab={tab} dados={dados[tab]} onImport={f => importar(tab, f)} />}
     </Wrapper>
   )
@@ -99,6 +104,36 @@ function Financeira({ dados, onImport, competencia }) {
         <i className="ti ti-file-export" /> Gerar arquivo financeiro
       </button>
     </>
+  )
+}
+
+// Cliente sem integração por Excel: não habilita a importação, só informa a origem.
+function FinanceiraViaSistema({ integ, sistema }) {
+  const usaSistema = integ === 'Sistema' || (integ !== 'Excel' && sistema)
+  return (
+    <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: '26px 24px', display: 'flex', alignItems: 'center', gap: 16, maxWidth: 640 }}>
+      <span style={{ background: 'rgba(74,124,255,0.15)', borderRadius: 12, width: 48, height: 48, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+        <i className={`ti ${usaSistema ? 'ti-plug-connected' : 'ti-plug-off'}`} style={{ color: theme.accent, fontSize: 24 }} />
+      </span>
+      <div>
+        {usaSistema ? (
+          <>
+            <p style={{ fontSize: 15, fontWeight: 600, margin: 0 }}>Financeiro importado via sistema</p>
+            <p style={{ color: theme.sub, fontSize: 13.5, margin: '6px 0 0', lineHeight: 1.5 }}>
+              Este cliente utiliza o sistema <b style={{ color: theme.text }}>{sistema || 'não informado'}</b>. A importação por Excel fica desabilitada — o financeiro vem direto do sistema.
+              {!sistema && <span style={{ display: 'block', color: theme.yellow, marginTop: 6 }}>Informe o sistema no cadastro do cliente (campo “Sistema financeiro”).</span>}
+            </p>
+          </>
+        ) : (
+          <>
+            <p style={{ fontSize: 15, fontWeight: 600, margin: 0 }}>Sem integração financeira</p>
+            <p style={{ color: theme.sub, fontSize: 13.5, margin: '6px 0 0', lineHeight: 1.5 }}>
+              Este cliente está marcado como <b style={{ color: theme.text }}>“Não usa”</b> integração financeira. Para habilitar a importação por Excel, ajuste o campo “Integração financeira” do cliente para <b style={{ color: theme.text }}>Excel</b>.
+            </p>
+          </>
+        )}
+      </div>
+    </div>
   )
 }
 

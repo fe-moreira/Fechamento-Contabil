@@ -6,7 +6,8 @@ import { normalizaCompetencia } from '../lib/balancete'
 const vazio = {
   codigo_dominio: '', tipo: 'Matriz', codigo_matriz: '', razao_social: '',
   nome_fantasia: '', cnpj: '', regime_tributario: 'Simples', tipo_fechamento: '',
-  competencia_inicio: '', integracao_financeira: 'Não usa', analista: '', observacoes: '', prazo_entrega: '',
+  competencia_inicio: '', sistema_financeiro: '', integracao_financeira: 'Não usa',
+  analista: '', observacoes: '', prazo_entrega: '',
 }
 
 // Helpers da importação em lote (planilha-modelo: aba "Clientes", 15 colunas).
@@ -31,6 +32,8 @@ const OBRIG = [
 function camposFaltando(f) {
   const faltam = OBRIG.filter(([k]) => !String(f[k] ?? '').trim()).map(([, l]) => l)
   if (f.tipo === 'Filial' && !String(f.codigo_matriz ?? '').trim()) faltam.push('Código da matriz')
+  // Sistema financeiro é obrigatório quando o cliente usa alguma integração.
+  if (String(f.integracao_financeira || 'Não usa') !== 'Não usa' && !String(f.sistema_financeiro ?? '').trim()) faltam.push('Sistema financeiro')
   return faltam
 }
 
@@ -330,6 +333,10 @@ export default function Clientes() {
                 <select className="input" value={form.integracao_financeira} onChange={set('integracao_financeira')}>
                   <option>Não usa</option><option>Sistema</option><option>Excel</option>
                 </select>
+              </Campo>
+              <Campo label="Sistema financeiro" req={form.integracao_financeira !== 'Não usa'}>
+                <input className="input" value={form.sistema_financeiro || ''} onChange={set('sistema_financeiro')} placeholder="Ex.: Conta Azul"
+                  required={form.integracao_financeira !== 'Não usa'} disabled={form.integracao_financeira === 'Não usa'} />
               </Campo>
               <Campo label="Analista" req><input className="input" value={form.analista || ''} onChange={set('analista')} required /></Campo>
               <Campo label="Observações" full><textarea className="input" rows={2} value={form.observacoes || ''} onChange={set('observacoes')} /></Campo>
