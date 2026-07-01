@@ -1,20 +1,16 @@
 // Regenera public/modelo-importacao-clientes.xlsx — a planilha-modelo do cadastro
-// de clientes. Sai EM BRANCO (só o cabeçalho, sem clientes de exemplo) e no padrão
-// visual da Attentive: logo no topo, cabeçalho navy, larguras ajustadas, cabeçalho
-// congelado e listas suspensas nos campos de escolha.
+// de clientes. Sai EM BRANCO (só o cabeçalho, sem clientes de exemplo): cabeçalho
+// navy, larguras ajustadas, cabeçalho congelado e listas suspensas nos campos de
+// escolha. (Sem logo, a pedido — só o cabeçalho colorido.)
 //
 // Rodar: node scripts/gerar-modelo-clientes.mjs
 import ExcelJS from 'exceljs'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 const raiz = join(dirname(fileURLToPath(import.meta.url)), '..')
 const NAVY = 'FF1B2A4A'
-
-// Logo reaproveitada do pdf.js (extrai só o data URI, sem executar o módulo).
-const pdfSrc = readFileSync(join(raiz, 'src/lib/pdf.js'), 'utf8')
-const HEADER_IMG = (pdfSrc.match(/HEADER_IMG\s*=\s*'(data:image\/png;base64,[^']+)'/) || [])[1] || null
 
 // Colunas na MESMA ordem/nome que o importador espera (Clientes.jsx).
 const COLS = [
@@ -61,19 +57,9 @@ INSTR.forEach((row, i) => {
 })
 
 // ---- Aba Clientes (em branco) ----
-const linhaHdr = HEADER_IMG ? 3 : 1
+const linhaHdr = 1
 const ws = wb.addWorksheet('Clientes', { views: [{ state: 'frozen', ySplit: linhaHdr, showGridLines: false }] })
 ws.columns = COLS.map(c => ({ width: c.largura }))
-
-if (HEADER_IMG) {
-  const id = wb.addImage({ base64: HEADER_IMG.replace(/^data:image\/png;base64,/, ''), extension: 'png' })
-  ws.addImage(id, { tl: { col: 0, row: 0 }, ext: { width: 300, height: 49 } })
-  ws.getRow(1).height = 40
-  ws.mergeCells(2, 1, 2, COLS.length)
-  const t = ws.getCell(2, 1)
-  t.value = 'Cadastro de Clientes — uma linha por empresa (matriz e filiais)'
-  t.font = { italic: true, size: 10, color: { argb: 'FF666666' } }
-}
 
 const header = ws.getRow(linhaHdr)
 header.height = 32
@@ -85,14 +71,21 @@ COLS.forEach((c, i) => {
   cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true }
 })
 
-// Listas suspensas nas próximas 200 linhas dos campos de escolha.
-const prim = linhaHdr + 1, ult = linhaHdr + 200
-COLS.forEach((c, i) => {
-  if (!c.lista) return
-  for (let r = prim; r <= ult; r++) {
-    ws.getCell(r, i + 1).dataValidation = { type: 'list', allowBlank: true, formulae: [`"${c.lista.join(',')}"`] }
+// Linhas de preenchimento: desenha bordas leves + zebra e coloca as listas
+// suspensas, para ficar com cara de planilha (e não um branco total).
+const N_LINHAS = 1000
+const bordaClara = { style: 'thin', color: { argb: 'FFDCE0E8' } }
+const prim = linhaHdr + 1, ult = linhaHdr + N_LINHAS
+for (let r = prim; r <= ult; r++) {
+  const row = ws.getRow(r)
+  const zebra = (r - prim) % 2 === 1
+  for (let i = 0; i < COLS.length; i++) {
+    const cell = row.getCell(i + 1)
+    cell.border = { top: bordaClara, bottom: bordaClara, left: bordaClara, right: bordaClara }
+    if (zebra) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF6F8FB' } }
+    if (COLS[i].lista) cell.dataValidation = { type: 'list', allowBlank: true, formulae: [`"${COLS[i].lista.join(',')}"`] }
   }
-})
+}
 
 const buf = await wb.xlsx.writeBuffer()
 writeFileSync(join(raiz, 'public/modelo-importacao-clientes.xlsx'), Buffer.from(buf))
