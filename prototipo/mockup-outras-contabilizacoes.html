@@ -308,13 +308,13 @@
     <div class="navsec">Fechamento Contábil</div>
     <div class="nav"><span class="ic">▦</span>Fechamentos</div>
     <div class="nav"><span class="ic">▤</span>Importar Razão</div>
-    <div class="nav"><span class="ic">⇄</span>Conciliação</div>
-    <div class="nav"><span class="ic">◫</span>Comp. Movimento</div>
+    <div class="nav" id="nav-sugestoes" onclick="showView('sugestoes')"><span class="ic">💡</span>Sugestões de Contab.<span class="badge" style="background:#35C08A">5</span></div>
     <div class="nav gone" title="Descontinuado — a função virou Outros Lançamentos"><span class="ic">✎</span>Contabilizar<span class="moved">→ Outras Contab.</span></div>
     <div class="nav active" id="nav-outras" onclick="showView('outras')"><span class="ic">⊞</span>Outras Contabilizações</div>
-    <div class="nav" id="nav-sugestoes" onclick="showView('sugestoes')"><span class="ic">💡</span>Sugestões de Contab.<span class="badge" style="background:#35C08A">5</span></div>
-    <div class="nav"><span class="ic">▣</span>Relatórios</div>
+    <div class="nav"><span class="ic">⇄</span>Conciliação</div>
+    <div class="nav"><span class="ic">◫</span>Comp. Movimento</div>
     <div class="nav" id="nav-status" onclick="showView('status')"><span class="ic">◉</span>Status<span class="badge" style="background:#E5484D">5</span></div>
+    <div class="nav"><span class="ic">▣</span>Relatórios</div>
     <div class="navsec">Cliente</div>
     <div class="nav"><span class="ic">☰</span>Base de Informações</div>
   </aside>
@@ -335,60 +335,16 @@
         (o antigo <b>Contabilizar</b>). Tudo que tem <b>débito e crédito</b> vira pendência no <b>Status</b>,
         de onde sai o arquivo do Domínio.</p>
 
-      <!-- fechamento banner -->
+      <!-- intro / ponteiro para o Status -->
       <div class="banner">
         <div class="bi">◉</div>
         <div class="txt">
-          <b>12 lançamentos gerados nesta competência — R$ 41.830,00</b>
-          <p>Apropriações, parcelas, MEP, correções e lançamentos avulsos. A geração do arquivo do Domínio
-             agora acontece no <b style="color:#8FB0FF">Status</b>, junto com as demais pendências do fechamento.</p>
+          <b>Cada contabilização é confirmada dentro do seu card — e atualiza a Conciliação</b>
+          <p>Clique num bloco (Seguro, Importação, Empréstimo, Equivalência ou Outros Lançamentos) e confirme ali. Tudo que você
+             <b>confirma ou corrige atualiza automaticamente a Conciliação</b>. O que ficar sem confirmar vira
+             <b style="color:#8FB0FF">pendência no Status</b>, de onde sai o arquivo do Domínio.</p>
         </div>
         <button class="pbtn" onclick="showView('status')">Ir para o Status →</button>
-      </div>
-
-      <!-- link para o painel separado de Sugestões -->
-      <div class="banner" style="margin-bottom:16px;cursor:pointer" onclick="showView('sugestoes')">
-        <div class="bi" style="background:rgba(53,192,138,.16);color:#5FD9A6">💡</div>
-        <div class="txt"><b>5 sugestões de contabilização aguardando</b>
-          <p>A plataforma leu o razão e encontrou baixas de adiantamento, rendimentos e ajustes a lançar.</p></div>
-        <button class="pbtn" onclick="showView('sugestoes')">Abrir painel de Sugestões →</button>
-      </div>
-
-      <!-- PENDÊNCIAS RECORRENTES (confirmar → vira lançamento) -->
-      <div class="card" style="margin-bottom:22px">
-        <div class="cbar" style="margin-top:0">
-          <div><p class="sec-t" style="margin:0">Pendências recorrentes de Julho / 2026</p>
-            <p class="sec-s" style="margin:0">Virou o mês → cada contrato gera um apontamento. Você dá OK e <b>só então</b> vira lançamento. Nada é postado sozinho.</p></div>
-          <button class="pbtn mini ghost" onclick="confirmAll('rec')">✓ Confirmar todas</button>
-        </div>
-        <div class="srow" data-g="rec">
-          <div class="si2" style="background:rgba(74,124,255,.16);color:#8FB0FF">🛡️</div>
-          <div class="mid"><b>Apropriação de seguro — julho (3 apólices)</b>
-            <div class="why"><span class="wi">📅</span><span>Parcela 1/12, 5/12 e 3/12 dos contratos ativos.</span></div>
-            <span class="part">D 4.1.2.18 Despesas com seguros · C 1.1.3.02 Prêmios a apropriar</span></div>
-          <div class="rt"><span class="amt2 tnum">3.000,00</span>
-            <span class="doneflag">✓ gerado</span>
-            <div class="acts"><button class="pbtn mini" onclick="confirmRow(this)">Gerar e OK</button>
-              <button class="iconbtn" title="Ver detalhe">⤢</button></div></div>
-        </div>
-        <div class="srow" data-g="rec">
-          <div class="si2" style="background:rgba(154,124,240,.16);color:#B49DF5">🏦</div>
-          <div class="mid"><b>Parcela de empréstimo — julho (3 contratos)</b>
-            <div class="why"><span class="wi">📅</span><span>Amortização do principal + juros do mês (juros decrescentes).</span></div>
-            <span class="part">D 2.1.2 Empréstimos / 4.3.1 Juros · C 1.1.1.02 Banco</span></div>
-          <div class="rt"><span class="amt2 tnum">13.110,00</span>
-            <span class="doneflag">✓ gerado</span>
-            <div class="acts"><button class="pbtn mini" onclick="confirmRow(this)">Gerar e OK</button>
-              <button class="iconbtn" title="Ver detalhe">⤢</button></div></div>
-        </div>
-        <div class="srow" data-g="rec">
-          <div class="si2" style="background:rgba(224,108,159,.16);color:#EE93BC">⚖︎</div>
-          <div class="mid"><b>Equivalência patrimonial — julho</b>
-            <div class="why"><span class="wi">⚠</span><span>Frenax (coligada) ainda sem o resultado da investida. Precisa subir o balancete dela.</span></div>
-            <span class="part">D 4.3.2.01 Result. neg. equivalência · C 1.2.1.03 Investimentos</span></div>
-          <div class="rt"><span class="apont">apontamento</span>
-            <div class="acts"><button class="pbtn mini" style="background:#E5484D" onclick="go2('equivalencia')">Resolver</button></div></div>
-        </div>
       </div>
 
       <!-- OVERVIEW BLOCKS -->
@@ -417,10 +373,10 @@
           <div class="rail" style="background:var(--emp)"></div>
           <div class="bhead">
             <div class="bic" style="background:rgba(154,124,240,.16);color:#B49DF5">🏦</div>
-            <div><div class="bt">Empréstimo</div><div class="bsub">Contratos &amp; financiamentos</div></div>
+            <div><div class="bt">Empréstimo</div><div class="bsub">Contratos &amp; conferência</div></div>
           </div>
           <div class="bnum tnum">3</div>
-          <div class="bfoot"><span>contratos ativos</span><b>+3 parcelas/mês</b></div>
+          <div class="bfoot"><span>contratos armazenados</span><b>confere × concil.</b></div>
         </div>
 
         <div class="blk" onclick="go('equivalencia')">
@@ -455,6 +411,43 @@
 
       <!-- ============ SEGURO ============ -->
       <section id="pane-seguro">
+        <!-- apropriações a confirmar -->
+        <div class="card">
+          <div class="cbar" style="margin-top:0">
+            <div><p class="sec-t" style="margin:0">Apropriações de Julho / 2026 — a confirmar</p>
+              <p class="sec-s" style="margin:0">Virou o mês → a apropriação de cada apólice fica aqui. Confirme e vira lançamento; nada é postado sozinho.</p></div>
+            <button class="pbtn mini ghost" onclick="confirmAll('seg-conf')">✓ Confirmar todas</button>
+          </div>
+          <div class="srow" data-g="seg-conf">
+            <div class="si2" style="background:rgba(74,124,255,.16);color:#8FB0FF">🛡️</div>
+            <div class="mid"><b>Porto Seguro — apólice 1188-4477</b>
+              <div class="why"><span class="wi">📅</span><span>Parcela 1/12 · patrimonial.</span></div>
+              <span class="part">D 4.1.2.18 Despesas com seguros · C 1.1.3.02 Prêmios a apropriar</span></div>
+            <div class="rt"><span class="amt2 tnum">1.000,00</span><span class="doneflag">✓ confirmado</span>
+              <div class="acts"><button class="pbtn mini" onclick="confirmRow(this)">Confirmar</button>
+                <button class="iconbtn no" title="Não contabilizar">✕</button></div></div>
+          </div>
+          <div class="srow" data-g="seg-conf">
+            <div class="si2" style="background:rgba(74,124,255,.16);color:#8FB0FF">🛡️</div>
+            <div class="mid"><b>Bradesco Seguros — apólice 55-9021</b>
+              <div class="why"><span class="wi">📅</span><span>Parcela 5/12 · frota / veículos.</span></div>
+              <span class="part">D 4.1.2.18 Despesas com seguros · C 1.1.3.02 Prêmios a apropriar</span></div>
+            <div class="rt"><span class="amt2 tnum">800,00</span><span class="doneflag">✓ confirmado</span>
+              <div class="acts"><button class="pbtn mini" onclick="confirmRow(this)">Confirmar</button>
+                <button class="iconbtn no" title="Não contabilizar">✕</button></div></div>
+          </div>
+          <div class="srow" data-g="seg-conf">
+            <div class="si2" style="background:rgba(74,124,255,.16);color:#8FB0FF">🛡️</div>
+            <div class="mid"><b>Allianz — apólice A-33120</b>
+              <div class="why"><span class="wi">📅</span><span>Parcela 7/12 · responsabilidade civil.</span></div>
+              <span class="part">D 4.1.2.18 Despesas com seguros · C 1.1.3.02 Prêmios a apropriar</span></div>
+            <div class="rt"><span class="amt2 tnum">500,00</span><span class="doneflag">✓ confirmado</span>
+              <div class="acts"><button class="pbtn mini" onclick="confirmRow(this)">Confirmar</button>
+                <button class="iconbtn no" title="Não contabilizar">✕</button></div></div>
+          </div>
+          <div class="note"><span class="ni">✦</span><span>O que você confirmar aqui vira lançamento, <b>atualiza a Conciliação</b> e alimenta o <b>Status → Domínio</b>. O que não confirmar fica como pendência no Status.</span></div>
+        </div>
+
         <!-- new contract flow -->
         <div class="card">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px">
@@ -589,9 +582,11 @@
               <div class="jline credit"><span class="dc c">C</span><span class="acc"><b>1.1.2.31 Impostos a recuperar / recolher</b><small>II, IPI, PIS/COFINS-imp, ICMS</small></span><span class="val">19.140,00</span></div>
               <div class="jline credit"><span class="dc c">C</span><span class="acc"><b>2.1.1.14 Despachante &amp; frete</b><small>Armazenagem, AFRMM, honorários</small></span><span class="val">5.100,00</span></div>
             </div>
-            <div class="note"><span class="ni">✦</span><span>Quando o processo for <b>nacionalizado</b>, a plataforma transfere o total de
-              R$ 78.240,00 para <b>Estoque de mercadorias</b> — um clique, contabilização pronta.</span></div>
-            <div class="center"><button class="pbtn" onclick="alert('MOCKUP: salvaria o processo com sua composição de custo.')">Salvar processo</button></div>
+            <div class="note"><span class="ni">✦</span><span>Ao confirmar, o lançamento <b>atualiza a Conciliação</b> e vai ao Status. Quando o processo for <b>nacionalizado</b>,
+              a plataforma transfere o total de R$ 78.240,00 para <b>Estoque de mercadorias</b> — um clique, contabilização pronta.</span></div>
+            <div class="center" style="gap:10px;display:flex;justify-content:center;flex-wrap:wrap">
+              <button class="pbtn" onclick="alert('MOCKUP: confirmaria o lançamento e alimentaria o Status → Domínio.')">Confirmar lançamento</button>
+              <button class="pbtn ghost" onclick="alert('MOCKUP: arquivaria o processo sem lançar (fica pendente no Status).')">Salvar processo (sem lançar)</button></div>
           </div>
         </div>
 
@@ -620,7 +615,7 @@
               <div class="drop"><div class="di">⤒</div><b>Arraste o contrato de empréstimo</b>
                 <small>Cédula de crédito bancário · tabela de parcelas</small>
                 <div class="file"><span>📄</span><span>ccb_itau_capital_giro.pdf</span><span class="x">✓</span></div></div>
-              <div class="center"><button class="pbtn" onclick="lerEmp()">⚙︎ Ler contrato e contabilizar</button></div>
+              <div class="center"><button class="pbtn" onclick="lerEmp()">⚙︎ Ler contrato e sugerir lançamentos</button></div>
             </div>
             <div class="read pending" id="read-emp">
               <p class="sec-t" style="font-size:13.5px;margin-bottom:10px">Contrato lido</p>
@@ -636,42 +631,49 @@
 
           <div id="ger-emp" class="hidden">
             <div class="hr"></div>
-            <p class="sec-t" style="font-size:14px">Contabilização gerada automaticamente</p>
+            <p class="sec-t" style="font-size:14px">Lançamentos sugeridos pelo contrato</p>
+            <p class="sec-s">O empréstimo <b>não gera lançamento</b> aqui — a baixa real vem do banco. A plataforma usa o contrato como referência e <b>cruza com a conciliação</b>.</p>
             <div class="je">
-              <div class="jh">① Captação — 01/07/2026 <span class="lote">Lote 1 · origem: Empréstimo</span></div>
+              <div class="jh">Captação (esperado) <span class="lote">referência — não vai ao Domínio</span></div>
               <div class="jline"><span class="dc d">D</span><span class="acc"><b>1.1.1.02 Banco Itaú c/ movimento</b><small>Ingresso do recurso</small></span><span class="val">100.000,00</span></div>
               <div class="jline credit"><span class="dc c">C</span><span class="acc"><b>2.1.2.07 Empréstimos a pagar — Itaú</b><small>Passivo circ./não circ.</small></span><span class="val">100.000,00</span></div>
             </div>
             <div class="je">
-              <div class="jh">② Parcela mensal — recorrente (24×) <span class="lote">amortização + juros, gerado a cada mês</span></div>
+              <div class="jh">Parcela mensal esperada <span class="lote">amortização + juros</span></div>
               <div class="jline"><span class="dc d">D</span><span class="acc"><b>2.1.2.07 Empréstimos a pagar — Itaú</b><small>Amortização do principal</small></span><span class="val">3.530,00</span></div>
-              <div class="jline"><span class="dc d">D</span><span class="acc"><b>4.3.1.01 Juros sobre empréstimos</b><small>Despesa financeira — dedutível</small></span><span class="val">1.450,00</span></div>
+              <div class="jline"><span class="dc d">D</span><span class="acc"><b>4.3.1.01 Juros sobre empréstimos</b><small>Despesa financeira</small></span><span class="val">1.450,00</span></div>
               <div class="jline credit"><span class="dc c">C</span><span class="acc"><b>1.1.1.02 Banco Itaú c/ movimento</b><small>Débito da parcela</small></span><span class="val">4.980,00</span></div>
             </div>
-            <p class="sec-t" style="font-size:13.5px;margin:18px 0 8px">Cronograma (juros decrescentes)</p>
-            <div class="parc">
-              <div class="pc now"><div class="m">Jul</div><div class="a tnum">4.980</div><div class="s">este mês</div></div>
-              <div class="pc next"><div class="m">Ago</div><div class="a tnum">4.980</div><div class="s">programado</div></div>
-              <div class="pc next"><div class="m">Set</div><div class="a tnum">4.980</div><div class="s">programado</div></div>
-              <div class="pc next"><div class="m">Out</div><div class="a tnum">4.980</div><div class="s">programado</div></div>
-              <div class="pc next"><div class="m">Nov</div><div class="a tnum">4.980</div><div class="s">programado</div></div>
-              <div class="pc next"><div class="m">+19</div><div class="a tnum">94.620</div><div class="s">até jun/28</div></div>
+
+            <p class="sec-t" style="font-size:13.5px;margin:18px 0 8px">Conferência com a conciliação — Julho / 2026</p>
+            <div style="overflow-x:auto"><table class="tbl">
+              <thead><tr><th>Item</th><th class="r">Esperado (contrato)</th><th class="r">Na conciliação</th><th>Situação</th></tr></thead>
+              <tbody>
+                <tr><td>Amortização do principal</td><td class="r money">3.530,00</td><td class="r money">3.530,00</td><td><span class="chip good">✓ bate</span></td></tr>
+                <tr><td>Juros do mês</td><td class="r money">1.450,00</td><td class="r money">1.640,00</td><td><span class="chip warn">✗ diverge R$ 190</span></td></tr>
+              </tbody>
+            </table></div>
+            <div class="note"><span class="ni">✦</span><span>Divergência? A correção é feita <b>na Conciliação</b> — não aqui. O contrato só aponta o valor esperado; a baixa real veio do banco.</span></div>
+            <div class="center" style="margin-top:6px;gap:10px;display:flex;justify-content:center;flex-wrap:wrap">
+              <button class="pbtn" onclick="alert('MOCKUP: abriria a Conciliação no lançamento divergente.')">Corrigir na Conciliação →</button>
+              <button class="pbtn ghost" onclick="alert('MOCKUP: marcaria a divergência como ignorada (justificada).')">Ignorar divergência</button>
+              <button class="pbtn ghost" onclick="alert('MOCKUP: arquivaria o contrato no bloco.')">Salvar contrato (arquivar)</button>
             </div>
-            <div class="center" style="margin-top:16px"><button class="pbtn" onclick="alert('MOCKUP: salvaria o contrato e as 24 parcelas.')">Salvar contrato e programar parcelas</button></div>
           </div>
         </div>
 
         <div class="card">
-          <p class="sec-t">Contratos de empréstimo ativos</p>
+          <p class="sec-t">Contratos de empréstimo armazenados</p>
+          <p class="sec-s">Todos os contratos ficam guardados aqui. A plataforma confere a parcela do mês contra a conciliação — não gera lançamento.</p>
           <div style="overflow-x:auto"><table class="tbl">
-            <thead><tr><th>Banco / contrato</th><th>Modalidade</th><th class="r">Saldo devedor</th><th class="r">Parcela</th><th class="r">Juros Jul</th><th>Status</th></tr></thead>
+            <thead><tr><th>Banco / contrato</th><th>Modalidade</th><th class="r">Saldo devedor</th><th class="r">Parcela (contrato)</th><th>Conferência Jul</th><th>Arquivo</th></tr></thead>
             <tbody>
-              <tr><td><b>Itaú</b> <span class="muted mono">CCB-8841</span></td><td>Capital de giro</td><td class="r money">100.000,00</td><td class="r money">4.980,00</td><td class="r money">1.450,00</td><td><span class="chip good">✓ ativo</span></td></tr>
-              <tr><td><b>Santander</b> <span class="muted mono">FIN-2207</span></td><td>Financ. máquina</td><td class="r money">64.200,00</td><td class="r money">3.010,00</td><td class="r money">760,00</td><td><span class="chip good">✓ ativo</span></td></tr>
-              <tr><td><b>BNDES</b> <span class="muted mono">33.401-9</span></td><td>Finame</td><td class="r money">210.000,00</td><td class="r money">5.120,00</td><td class="r money">1.190,00</td><td><span class="chip good">✓ ativo</span></td></tr>
+              <tr><td><b>Itaú</b> <span class="muted mono">CCB-8841</span></td><td>Capital de giro</td><td class="r money">100.000,00</td><td class="r money">4.980,00</td><td><span class="chip warn">✗ corrigir na concil.</span></td><td><span class="chip mut">📎 armazenado</span></td></tr>
+              <tr><td><b>Santander</b> <span class="muted mono">FIN-2207</span></td><td>Financ. máquina</td><td class="r money">64.200,00</td><td class="r money">3.010,00</td><td><span class="chip good">✓ bate</span></td><td><span class="chip mut">📎 armazenado</span></td></tr>
+              <tr><td><b>BNDES</b> <span class="muted mono">33.401-9</span></td><td>Finame</td><td class="r money">210.000,00</td><td class="r money">5.120,00</td><td><span class="chip good">✓ bate</span></td><td><span class="chip mut">📎 armazenado</span></td></tr>
             </tbody>
           </table></div>
-          <div class="totrow"><span class="lbl">Juros do mês (resultado) em Julho / 2026</span><span class="amt tnum">R$ 3.400,00</span></div>
+          <div class="totrow"><span class="lbl">Conferência das parcelas × conciliação</span><span class="amt tnum" style="font-size:14px">2 de 3 batem · 1 a corrigir</span></div>
         </div>
       </section>
 
@@ -732,7 +734,7 @@
               <div class="jline"><span class="dc d">D</span><span class="acc"><b>4.3.2.01 Resultado negativo de equivalência</b><small>Despesa — <b>indedutível (LALUR)</b></small></span><span class="val">3.000,00</span></div>
               <div class="jline credit"><span class="dc c">C</span><span class="acc"><b>1.2.1.03 Investimentos — Frenax</b><small>Redução do valor do investimento</small></span><span class="val">3.000,00</span></div>
             </div>
-            <div class="note"><span class="ni">✦</span><span>Ao salvar, o <b>apontamento no Status é baixado</b> e o lançamento entra no lote do mês.
+            <div class="note"><span class="ni">✦</span><span>Ao salvar, o <b>apontamento no Status é baixado</b>, a <b>Conciliação é atualizada</b> e o lançamento entra no lote do mês.
               Se a investida tivesse lucro, seria o inverso: D Investimentos / C resultado positivo de equivalência.</span></div>
             <div class="center"><button class="pbtn" onclick="alert('MOCKUP: salvaria a MEP e baixaria o apontamento.')">Salvar e baixar apontamento</button></div>
           </div>
@@ -829,7 +831,7 @@
         <h1 class="h1">Sugestões de Contabilização</h1>
         <p class="lead">A plataforma varre o <b>razão</b> da competência e aponta o que precisa ser
           <b>lançado ou corrigido</b> — cada sugestão traz a evidência que a gerou. O que você confirmar
-          vira lançamento e alimenta o <b>Status → Domínio</b>.</p>
+          <b>atualiza a Conciliação</b> e alimenta o <b>Status → Domínio</b>. O que você excluir sai da lista.</p>
         <div class="hero">
         <div class="hh">
           <div class="hb">💡</div>
@@ -912,7 +914,7 @@
         <!-- gates -->
         <div class="gate">
           <div class="gi" style="background:rgba(48,164,108,.16);color:#4CD08A">✓</div>
-          <div class="gt"><b>Conciliação</b><small>Contas patrimoniais conciliadas</small></div>
+          <div class="gt"><b>Conciliação</b><small>Atualizada automaticamente a cada contabilização confirmada ou corrigida</small></div>
           <span class="chip good">✓ ok</span>
         </div>
         <div class="gate">
@@ -925,6 +927,16 @@
           <div class="gt"><b>Equivalência patrimonial</b><small>Frenax (coligada 30%) sem MEP lançada — vindo de Outras Contabilizações</small></div>
           <span class="apont">1 apontamento</span>
         </div>
+        <div class="gate">
+          <div class="gi" style="background:rgba(231,168,59,.16);color:#F0BC5E">⊞</div>
+          <div class="gt"><b>Outras Contabilizações a confirmar</b><small>Seguro (3 apropriações) e Importação (1 processo) ainda não confirmados nos cards</small></div>
+          <span class="chip warn">4 a confirmar</span>
+        </div>
+        <div class="gate">
+          <div class="gi" style="background:rgba(53,192,138,.16);color:#5FD9A6">💡</div>
+          <div class="gt"><b>Sugestões de contabilização</b><small>5 sugestões do razão aguardando confirmar / excluir no painel de Sugestões</small></div>
+          <span class="chip warn">5 a confirmar</span>
+        </div>
 
         <!-- MAIN: lançamentos para o Domínio -->
         <div class="card" style="margin-top:16px">
@@ -935,14 +947,14 @@
             <thead><tr><th>Origem</th><th>Descrição</th><th>Partida</th><th class="r">Valor</th></tr></thead>
             <tbody>
               <tr><td><span class="chip info">Seguro</span></td><td>Apropriação de prêmios (3 apólices)</td><td class="mono muted">D 4.1.2.18 · C 1.1.3.02</td><td class="r money">3.000,00</td></tr>
-              <tr><td><span class="chip info">Empréstimo</span></td><td>Amortização + juros (3 contratos)</td><td class="mono muted">D 2.1.2 / 4.3.1 · C banco</td><td class="r money">13.110,00</td></tr>
               <tr><td><span class="chip info">Equivalência</span></td><td>MEP Frenax (após resolver apontamento)</td><td class="mono muted">D 4.3.2.01 · C 1.2.1.03</td><td class="r money">3.000,00</td></tr>
               <tr><td><span class="chip info">Importação</span></td><td>Formação de custo IMP-2026-014</td><td class="mono muted">D 1.1.4.09 · C diversos</td><td class="r money">78.240,00</td></tr>
               <tr><td><span class="chip mut">Outros lanç.</span></td><td>Avulsos — manual e sugestões (5)</td><td class="mono muted">vários</td><td class="r money">26.890,00</td></tr>
+              <tr><td><span class="chip mut">Sugestões</span></td><td>Baixas de adiantamento, rendimento, ICMS… (5)</td><td class="mono muted">vários</td><td class="r money">30.220,00</td></tr>
               <tr><td><span class="chip warn">Correção</span></td><td>Reclassificação banco × resultado (1)</td><td class="mono muted">D 1.1.1.02 · C 3.1.1.08</td><td class="r money">4.700,00</td></tr>
             </tbody>
           </table></div>
-          <div class="totrow"><span class="lbl">18 lançamentos com débito e crédito</span><span class="amt tnum">R$ 128.940,00</span></div>
+          <div class="totrow"><span class="lbl">20 lançamentos com débito e crédito</span><span class="amt tnum">R$ 146.050,00</span></div>
 
           <div class="hr"></div>
           <p class="sec-s" style="margin-bottom:9px"><b style="color:#C6D0E3">Não geram lançamento no Domínio</b> — não precisam reimportar:</p>
@@ -957,6 +969,11 @@
               <div class="gt"><b>Ajustes de nome / apelido de leitura</b><small>Correção de leitura de cliente/histórico — não muda partida</small></div>
               <span class="chip mut">2 · não vai ao Domínio</span>
             </div>
+            <div class="gate" style="margin:0;background:var(--tile2);opacity:.85">
+              <div class="gi" style="background:rgba(154,124,240,.16);color:#B49DF5">🏦</div>
+              <div class="gt"><b>Empréstimo — conferência</b><small>Só cruza o contrato com a conciliação; a baixa real vem do banco</small></div>
+              <span class="chip mut">3 · não vai ao Domínio</span>
+            </div>
           </div>
 
           <div class="center" style="margin-top:18px">
@@ -970,7 +987,7 @@
           <p class="sec-t">Concluir a etapa</p>
           <p class="sec-s">Arquivo gerado no layout do Domínio. Importe no Domínio e, para concluir, suba o balancete atualizado — ele tem que bater com a conciliação.</p>
           <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px">
-            <span class="dl"><span class="df">↓</span> lanctos_eurobrake_072026.txt <span class="muted" style="font-weight:500">· 18 linhas · CSV ;</span></span>
+            <span class="dl"><span class="df">↓</span> lanctos_eurobrake_072026.txt <span class="muted" style="font-weight:500">· 20 linhas · CSV ;</span></span>
             <span class="chip good">✓ gerado</span>
           </div>
 
