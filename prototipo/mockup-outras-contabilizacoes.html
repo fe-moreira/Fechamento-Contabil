@@ -1,0 +1,1070 @@
+<title>Outras Contabilizações — Mockup</title>
+<style>
+  :root{
+    --ground:#161B29; --panel:#1A2236; --panel2:#222B3D;
+    --card:#1F2634; --tile:#232C3E; --tile2:#1B2333;
+    --line:rgba(255,255,255,0.08); --line2:rgba(255,255,255,0.14);
+    --ink:#EAEEF6; --sub:#8B96AB; --sub2:#6B7690;
+    --accent:#4A7CFF; --good:#30A46C; --warn:#E7A83B; --bad:#E5484D;
+    --seg:#4A7CFF; --imp:#2FB6A8; --emp:#9A7CF0; --eqp:#E06C9F; --out:#7C89A6;
+    --radius:12px;
+    font-family:-apple-system,"Segoe UI",system-ui,Roboto,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:#0E1220;color:var(--ink);
+    font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;}
+  .tnum{font-variant-numeric:tabular-nums}
+  button{font-family:inherit;cursor:pointer}
+  a{color:inherit}
+
+  /* shell */
+  .app{display:flex;min-height:100vh;max-width:1440px;margin:0 auto;
+    background:var(--ground);box-shadow:0 0 80px rgba(0,0,0,.5);}
+  .side{width:236px;flex-shrink:0;background:var(--panel);
+    display:flex;flex-direction:column;padding:16px 0;border-right:1px solid var(--line);}
+  .brand{padding:2px 18px 14px;display:flex;align-items:center;gap:10px}
+  .logo{width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,#4A7CFF,#6E5BF0);
+    display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;color:#fff}
+  .brand b{font-size:14px;font-weight:700;letter-spacing:.2px}
+  .brand small{display:block;color:var(--sub2);font-size:11px;font-weight:500}
+  .emp-card{margin:4px 14px 12px;background:var(--panel2);border-radius:10px;
+    padding:10px 12px;display:flex;align-items:center;gap:10px}
+  .emp-card .av{width:30px;height:30px;border-radius:8px;background:#30425f;
+    display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px}
+  .emp-card small{color:var(--sub2);font-size:11px}
+  .emp-card .nm{font-size:13px;font-weight:600;line-height:1.25}
+  .navsec{color:var(--sub2);font-size:10.5px;font-weight:700;letter-spacing:.8px;
+    text-transform:uppercase;padding:12px 20px 6px}
+  .nav{display:flex;align-items:center;gap:11px;padding:9px 20px;color:#AEB8CC;
+    font-size:13.5px;font-weight:500;border-left:3px solid transparent;cursor:pointer}
+  .nav:hover{background:#232E4B;color:#fff}
+  .nav.active{background:#232E4B;color:#fff;border-left-color:var(--accent)}
+  .nav .ic{width:16px;text-align:center;opacity:.9}
+  .nav .badge{margin-left:auto;background:var(--accent);color:#fff;font-size:11px;
+    font-weight:700;border-radius:20px;padding:1px 7px}
+  .nav.active .badge{background:#fff;color:var(--accent)}
+
+  /* main */
+  .main{flex:1;min-width:0;display:flex;flex-direction:column}
+  .top{display:flex;align-items:center;gap:14px;padding:16px 30px;
+    border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--ground);z-index:5}
+  .crumb{color:var(--sub);font-size:13px}
+  .crumb b{color:var(--ink)}
+  .comp{margin-left:auto;display:flex;align-items:center;gap:8px;background:var(--panel2);
+    border:1px solid var(--line);border-radius:9px;padding:7px 12px;font-size:13px;font-weight:600}
+  .comp .k{color:var(--sub2);font-weight:500}
+  .top .me{width:32px;height:32px;border-radius:50%;background:#3a4a6b;
+    display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700}
+  .wrap{padding:26px 30px 60px;max-width:1120px}
+
+  .h1{font-size:22px;font-weight:750;letter-spacing:-.3px;margin:0 0 4px}
+  .lead{color:var(--sub);max-width:60ch;margin:0 0 22px}
+  .lead b{color:#C6D0E3;font-weight:600}
+
+  /* overview blocks */
+  .grid4{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:14px}
+  @media(max-width:820px){.grid4{grid-template-columns:repeat(2,1fr)}}
+  .blk .bt{font-size:14.5px}
+  .apont{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:700;
+    padding:2px 8px;border-radius:20px;background:rgba(229,72,77,.16);color:#F0868B}
+  .blk{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+    padding:16px;cursor:pointer;position:relative;overflow:hidden;transition:.15s;
+    display:flex;flex-direction:column;gap:12px}
+  .blk:hover{border-color:var(--line2);transform:translateY(-2px)}
+  .blk .rail{position:absolute;left:0;top:0;bottom:0;width:3px}
+  .blk .bhead{display:flex;align-items:center;gap:10px}
+  .blk .bic{width:38px;height:38px;border-radius:10px;display:flex;align-items:center;
+    justify-content:center;font-size:19px}
+  .blk .bt{font-size:15px;font-weight:700}
+  .blk .bsub{font-size:11.5px;color:var(--sub2)}
+  .blk .bnum{font-size:26px;font-weight:750;letter-spacing:-.5px}
+  .blk .bfoot{display:flex;justify-content:space-between;font-size:12px;color:var(--sub);
+    border-top:1px solid var(--line);padding-top:10px;margin-top:2px}
+  .blk .bfoot b{color:var(--good);font-weight:700}
+
+  /* generic card */
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:18px}
+  .card+.card{margin-top:14px}
+  .sec-t{font-size:15px;font-weight:700;margin:0 0 2px;display:flex;align-items:center;gap:8px}
+  .sec-s{color:var(--sub);font-size:12.5px;margin:0 0 14px}
+
+  /* fechamento banner */
+  .banner{display:flex;align-items:center;gap:16px;background:linear-gradient(100deg,#1c2740,#1b2333);
+    border:1px solid var(--line2);border-radius:var(--radius);padding:16px 18px;margin-bottom:22px}
+  .banner .bi{width:42px;height:42px;border-radius:11px;background:rgba(74,124,255,.16);
+    color:#8FB0FF;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0}
+  .banner .txt{flex:1;min-width:0}
+  .banner .txt b{color:#fff}
+  .banner .txt p{margin:2px 0 0;color:var(--sub);font-size:12.5px}
+  .pbtn{background:var(--accent);color:#fff;border:0;border-radius:9px;padding:9px 15px;
+    font-size:13px;font-weight:650;display:inline-flex;align-items:center;gap:7px;white-space:nowrap}
+  .pbtn:hover{filter:brightness(1.08)}
+  .pbtn.ghost{background:transparent;border:1px solid var(--line2);color:var(--ink)}
+  .pbtn.ghost:hover{background:rgba(255,255,255,.05)}
+  .pbtn.sm{padding:6px 11px;font-size:12px}
+
+  /* tabs */
+  .tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:20px}
+  .tab{padding:10px 15px;color:var(--sub);font-size:13.5px;font-weight:600;
+    border-bottom:2px solid transparent;margin-bottom:-1px}
+  .tab:hover{color:var(--ink)}
+  .tab.active{color:var(--ink);border-bottom-color:var(--accent)}
+  .tab .d{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:7px;vertical-align:middle}
+
+  /* table */
+  .tbl{width:100%;border-collapse:collapse;font-size:13px}
+  .tbl th{text-align:left;color:var(--sub2);font-size:11px;font-weight:600;
+    text-transform:uppercase;letter-spacing:.4px;padding:0 12px 9px;border-bottom:1px solid var(--line)}
+  .tbl td{padding:12px;border-bottom:1px solid var(--line)}
+  .tbl tr:last-child td{border-bottom:0}
+  .tbl tbody tr:hover{background:rgba(255,255,255,.02)}
+  .tbl .r{text-align:right}
+  .money{font-variant-numeric:tabular-nums;font-weight:600}
+  .mono{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:12.5px}
+  .muted{color:var(--sub)}
+
+  .chip{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:600;
+    padding:3px 9px;border-radius:20px}
+  .chip.good{background:rgba(48,164,108,.16);color:#4CD08A}
+  .chip.warn{background:rgba(231,168,59,.16);color:#F0BC5E}
+  .chip.info{background:rgba(74,124,255,.16);color:#8FB0FF}
+  .chip.mut{background:rgba(124,137,166,.16);color:#A9B4C9}
+
+  .tag{font-size:10.5px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;
+    padding:2px 7px;border-radius:5px;background:rgba(255,255,255,.06);color:var(--sub)}
+
+  /* dropzone / flow */
+  .flow{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:900px){.flow{grid-template-columns:1fr}}
+  .drop{border:1.5px dashed var(--line2);border-radius:var(--radius);padding:26px 20px;
+    text-align:center;background:rgba(255,255,255,.015)}
+  .drop .di{width:52px;height:52px;border-radius:13px;background:rgba(74,124,255,.14);
+    color:#8FB0FF;display:flex;align-items:center;justify-content:center;font-size:24px;margin:0 auto 12px}
+  .drop b{display:block;font-size:14px;margin-bottom:3px}
+  .drop small{color:var(--sub2)}
+  .drop .file{display:inline-flex;align-items:center;gap:9px;background:var(--tile);
+    border:1px solid var(--line);border-radius:9px;padding:9px 13px;margin-top:14px;font-size:13px}
+  .drop .file .x{color:#E86A7A;font-size:16px}
+
+  .read{background:var(--tile2);border:1px solid var(--line);border-radius:var(--radius);padding:16px}
+  .read.pending{opacity:.45;filter:grayscale(.3)}
+  .kv{display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--line);font-size:13px}
+  .kv:last-child{border-bottom:0}
+  .kv .k{color:var(--sub)}
+  .kv .v{font-weight:600;font-variant-numeric:tabular-nums}
+
+  /* journal entry */
+  .je{background:var(--tile2);border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-top:12px}
+  .je .jh{display:flex;align-items:center;gap:8px;padding:9px 13px;background:rgba(255,255,255,.03);
+    font-size:12px;font-weight:600;border-bottom:1px solid var(--line)}
+  .je .jh .lote{margin-left:auto;color:var(--sub2);font-weight:500}
+  .jline{display:grid;grid-template-columns:24px 1fr auto;gap:10px;padding:8px 13px;
+    align-items:baseline;border-bottom:1px solid var(--line);font-size:12.5px}
+  .jline:last-child{border-bottom:0}
+  .jline .dc{font-weight:800;font-size:11px;width:18px;text-align:center;border-radius:4px;padding:1px 0}
+  .jline .dc.d{background:rgba(74,124,255,.18);color:#8FB0FF}
+  .jline .dc.c{background:rgba(231,168,59,.18);color:#F0BC5E}
+  .jline .acc b{font-weight:600}
+  .jline .acc small{display:block;color:var(--sub2);font-size:11px}
+  .jline .val{font-variant-numeric:tabular-nums;font-weight:700;text-align:right}
+  .jline.credit{padding-left:37px}
+
+  /* parcelas timeline */
+  .parc{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-top:6px}
+  @media(max-width:720px){.parc{grid-template-columns:repeat(3,1fr)}}
+  .pc{background:var(--tile);border:1px solid var(--line);border-radius:9px;padding:10px;text-align:center}
+  .pc .m{font-size:11px;color:var(--sub2);text-transform:uppercase;font-weight:700;letter-spacing:.4px}
+  .pc .a{font-size:13.5px;font-weight:700;margin-top:3px;font-variant-numeric:tabular-nums}
+  .pc .s{font-size:10.5px;margin-top:5px}
+  .pc.done{border-color:rgba(48,164,108,.35)}
+  .pc.done .s{color:#4CD08A}
+  .pc.now{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}
+  .pc.now .s{color:#8FB0FF}
+  .pc.next .s{color:var(--sub2)}
+
+  .hr{height:1px;background:var(--line);margin:18px 0}
+  .totrow{display:flex;justify-content:space-between;align-items:center;margin-top:14px;
+    padding-top:14px;border-top:1px dashed var(--line2)}
+  .totrow .lbl{color:var(--sub);font-size:12.5px}
+  .totrow .amt{font-size:16px;font-weight:750;font-variant-numeric:tabular-nums}
+
+  .note{display:flex;gap:9px;background:rgba(74,124,255,.07);border:1px solid rgba(74,124,255,.2);
+    border-radius:10px;padding:11px 13px;font-size:12.5px;color:#BFCEEA;margin-top:16px}
+  .note .ni{color:#8FB0FF}
+  .hidden{display:none}
+  /* cadastro enable strip */
+  .cadastro{display:flex;align-items:center;gap:13px;background:rgba(224,108,159,.07);
+    border:1px solid rgba(224,108,159,.25);border-radius:var(--radius);padding:13px 16px;margin-bottom:14px}
+  .cadastro .ci{width:36px;height:36px;border-radius:10px;background:rgba(224,108,159,.16);
+    color:#EE93BC;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0}
+  .cadastro .ct{flex:1;min-width:0;font-size:12.5px;color:#D9C2CE}
+  .cadastro .ct b{color:#fff}
+  .cadastro .ct a{color:#EE93BC;text-decoration:underline;cursor:pointer}
+  .sw{width:42px;height:23px;border-radius:20px;background:var(--eqp);position:relative;flex-shrink:0}
+  .sw::after{content:"";position:absolute;width:17px;height:17px;border-radius:50%;background:#fff;top:3px;left:22px}
+  .sw-lbl{font-size:11px;font-weight:700;color:#EE93BC}
+  /* alert banner (apontamento) */
+  .banner.alert{background:linear-gradient(100deg,#2b1c24,#231b22);border-color:rgba(229,72,77,.4)}
+  .banner.alert .bi{background:rgba(229,72,77,.16);color:#F0868B}
+  .center{display:flex;justify-content:center;margin-top:18px}
+  .mockbar{background:#111827;color:#8B96AB;font-size:11.5px;text-align:center;
+    padding:7px;border-bottom:1px solid var(--line);letter-spacing:.3px}
+  .nav.gone{opacity:.4;text-decoration:line-through;cursor:default}
+  .nav.gone:hover{background:transparent;color:#AEB8CC}
+  .nav .moved{margin-left:auto;font-size:9.5px;font-weight:700;letter-spacing:.3px;
+    text-transform:uppercase;color:var(--sub2);text-decoration:none;display:inline-block}
+  /* mode toggle */
+  .modetabs{display:inline-flex;background:var(--tile2);border:1px solid var(--line);
+    border-radius:9px;padding:3px;gap:3px;margin:4px 0 16px}
+  .modetab{padding:7px 14px;border-radius:7px;font-size:12.5px;font-weight:600;color:var(--sub)}
+  .modetab.active{background:var(--accent);color:#fff}
+  /* form */
+  .frow{display:grid;grid-template-columns:130px 1fr 1fr 140px;gap:10px;align-items:end}
+  @media(max-width:720px){.frow{grid-template-columns:1fr 1fr}}
+  .field{display:flex;flex-direction:column;gap:5px}
+  .field label{font-size:11px;color:var(--sub2);font-weight:600;text-transform:uppercase;letter-spacing:.4px}
+  .inp{background:var(--tile2);border:1px solid var(--line2);border-radius:8px;padding:9px 11px;
+    font-size:13px;color:var(--ink);font-family:inherit}
+  .inp::placeholder{color:var(--sub2)}
+  .inp.mono{font-family:ui-monospace,Menlo,monospace}
+  .frow2{display:grid;grid-template-columns:1fr 150px;gap:10px;align-items:end;margin-top:12px}
+  /* suggestion card */
+  .sug{display:flex;align-items:center;gap:12px;background:var(--tile2);border:1px solid var(--line);
+    border-radius:10px;padding:12px 14px;margin-top:10px}
+  .sug .si{width:34px;height:34px;border-radius:9px;background:rgba(74,124,255,.16);color:#8FB0FF;
+    display:flex;align-items:center;justify-content:center;flex-shrink:0}
+  .sug .sb{flex:1;min-width:0}
+  .sug .sb b{font-size:13px}
+  .sug .sb small{display:block;color:var(--sub2);font-size:11.5px;font-family:ui-monospace,Menlo,monospace}
+  .sug .acts{display:flex;gap:6px}
+  .iconbtn{width:30px;height:30px;border-radius:8px;border:1px solid var(--line2);background:transparent;
+    color:var(--sub);font-size:14px;display:flex;align-items:center;justify-content:center}
+  .iconbtn.ok{color:#4CD08A;border-color:rgba(48,164,108,.4)}
+  .iconbtn.no{color:#E86A7A;border-color:rgba(229,72,77,.35)}
+  /* gates */
+  .gate{display:flex;align-items:center;gap:13px;padding:13px 15px;border:1px solid var(--line);
+    border-radius:10px;margin-bottom:9px;background:var(--card)}
+  .gate .gi{width:32px;height:32px;border-radius:9px;display:flex;align-items:center;justify-content:center;
+    font-size:15px;flex-shrink:0}
+  .gate .gt{flex:1;min-width:0}
+  .gate .gt b{font-size:13.5px}
+  .gate .gt small{display:block;color:var(--sub2);font-size:11.5px}
+  /* download + check */
+  .dl{display:inline-flex;align-items:center;gap:10px;background:var(--tile);border:1px solid var(--line2);
+    border-radius:10px;padding:11px 15px;font-size:13px;font-weight:600}
+  .dl .df{width:30px;height:30px;border-radius:8px;background:rgba(48,164,108,.16);color:#4CD08A;
+    display:flex;align-items:center;justify-content:center}
+  .chk{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--line);font-size:13px}
+  .chk:last-child{border-bottom:0}
+  .chk .ck{width:20px;height:20px;border-radius:50%;background:rgba(48,164,108,.16);color:#4CD08A;
+    display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;flex-shrink:0}
+  .chk .cn{flex:1}
+  .chk .cv{font-variant-numeric:tabular-nums;color:var(--sub)}
+  .step{display:flex;align-items:center;gap:9px;font-size:11px;font-weight:700;letter-spacing:.5px;
+    text-transform:uppercase;color:var(--sub2);margin:2px 0 12px}
+  .step .n{width:22px;height:22px;border-radius:50%;background:var(--accent);color:#fff;
+    display:flex;align-items:center;justify-content:center;font-size:12px}
+  /* suggestions hero */
+  .hero{background:linear-gradient(155deg,rgba(53,192,138,.10),var(--card) 55%);
+    border:1px solid rgba(53,192,138,.35);border-radius:14px;padding:18px 20px;margin-bottom:16px}
+  .hero .hh{display:flex;align-items:center;gap:10px;margin-bottom:3px}
+  .hero .hh .hb{width:34px;height:34px;border-radius:9px;background:rgba(53,192,138,.18);color:#5FD9A6;
+    display:flex;align-items:center;justify-content:center;font-size:17px}
+  .cbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:14px 0 4px}
+  .cbar .ct{font-size:12.5px;color:var(--sub)}
+  .cbar .ct b{color:var(--ink)}
+  .srow{display:grid;grid-template-columns:38px 1fr auto;gap:13px;padding:13px 2px;
+    border-top:1px solid var(--line);align-items:center}
+  .srow .si2{width:34px;height:34px;border-radius:9px;display:flex;align-items:center;
+    justify-content:center;font-size:15px;flex-shrink:0}
+  .srow .mid{min-width:0}
+  .srow .mid b{font-size:13.5px}
+  .srow .why{display:flex;align-items:baseline;gap:6px;font-size:12px;color:var(--sub);margin:3px 0 5px}
+  .srow .why .wi{color:#F0BC5E;flex-shrink:0}
+  .srow .part{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:#9FB0CC;
+    background:var(--tile2);border:1px solid var(--line);border-radius:6px;padding:4px 8px;display:inline-block}
+  .srow .rt{display:flex;flex-direction:column;align-items:flex-end;gap:7px;flex-shrink:0}
+  .srow .amt2{font-size:14px;font-weight:750;font-variant-numeric:tabular-nums}
+  .srow .acts{display:flex;gap:6px}
+  .srow.done{opacity:.5}
+  .srow.done .acts{display:none}
+  .doneflag{font-size:11.5px;font-weight:700;color:#4CD08A;display:none}
+  .srow.done .doneflag{display:inline}
+  .pbtn.mini{padding:6px 12px;font-size:12px}
+</style>
+
+<div class="mockbar">🎨 MOCKUP para avaliação — dados fictícios, nada é gravado. Painel proposto: <b style="color:#AEB8CC">Outras Contabilizações</b></div>
+<div class="app">
+  <!-- SIDEBAR -->
+  <aside class="side">
+    <div class="brand">
+      <div class="logo">A</div>
+      <div><b>Contabilidade</b><small>by Attentive</small></div>
+    </div>
+    <div class="emp-card">
+      <div class="av">EB</div>
+      <div><small>Cliente ativo</small><div class="nm">Euro Brake Ltda</div></div>
+    </div>
+    <div class="navsec">Fechamento Contábil</div>
+    <div class="nav"><span class="ic">▦</span>Fechamentos</div>
+    <div class="nav"><span class="ic">▤</span>Importar Razão</div>
+    <div class="nav" id="nav-sugestoes" onclick="showView('sugestoes')"><span class="ic">💡</span>Sugestões de Contab.<span class="badge" style="background:#35C08A">5</span></div>
+    <div class="nav gone" title="Descontinuado — a função virou Outros Lançamentos"><span class="ic">✎</span>Contabilizar<span class="moved">→ Outras Contab.</span></div>
+    <div class="nav active" id="nav-outras" onclick="showView('outras')"><span class="ic">⊞</span>Outras Contabilizações</div>
+    <div class="nav"><span class="ic">⇄</span>Conciliação</div>
+    <div class="nav"><span class="ic">◫</span>Comp. Movimento</div>
+    <div class="nav" id="nav-status" onclick="showView('status')"><span class="ic">◉</span>Status<span class="badge" style="background:#E5484D">5</span></div>
+    <div class="nav"><span class="ic">▣</span>Relatórios</div>
+    <div class="navsec">Cliente</div>
+    <div class="nav"><span class="ic">☰</span>Base de Informações</div>
+  </aside>
+
+  <!-- MAIN -->
+  <main class="main">
+    <div class="top">
+      <div class="crumb">Euro Brake Ltda · <b id="crumb-pg">Outras Contabilizações</b></div>
+      <div class="comp"><span class="k">Competência</span> Julho / 2026</div>
+      <div class="me">FM</div>
+    </div>
+
+    <div class="wrap">
+      <div id="view-outras">
+      <h1 class="h1">Outras Contabilizações</h1>
+      <p class="lead">Cadastre um contrato uma vez, <b>jogue o documento</b> e a plataforma lê, gera a
+        contabilização e programa as <b>parcelas mensais</b>. Aqui também ficam os <b>lançamentos avulsos</b>
+        (o antigo <b>Contabilizar</b>). Tudo que tem <b>débito e crédito</b> vira pendência no <b>Status</b>,
+        de onde sai o arquivo do Domínio.</p>
+
+      <!-- intro / ponteiro para o Status -->
+      <div class="banner">
+        <div class="bi">◉</div>
+        <div class="txt">
+          <b>Cada contabilização é confirmada dentro do seu card — e atualiza a Conciliação</b>
+          <p>Clique num bloco (Seguro, Importação, Empréstimo, Equivalência ou Outros Lançamentos) e confirme ali. Tudo que você
+             <b>confirma ou corrige atualiza automaticamente a Conciliação</b>. O que ficar sem confirmar vira
+             <b style="color:#8FB0FF">pendência no Status</b>, de onde sai o arquivo do Domínio.</p>
+        </div>
+        <button class="pbtn" onclick="showView('status')">Ir para o Status →</button>
+      </div>
+
+      <!-- OVERVIEW BLOCKS -->
+      <div class="grid4">
+        <div class="blk" onclick="go('seguro')">
+          <div class="rail" style="background:var(--seg)"></div>
+          <div class="bhead">
+            <div class="bic" style="background:rgba(74,124,255,.16);color:#8FB0FF">🛡️</div>
+            <div><div class="bt">Seguro</div><div class="bsub">Apólices &amp; apropriação</div></div>
+          </div>
+          <div class="bnum tnum">4</div>
+          <div class="bfoot"><span>contratos ativos</span><b>+4 parcelas/mês</b></div>
+        </div>
+
+        <div class="blk" onclick="go('importacao')">
+          <div class="rail" style="background:var(--imp)"></div>
+          <div class="bhead">
+            <div class="bic" style="background:rgba(47,182,168,.16);color:#4FD3C4">🚢</div>
+            <div><div class="bt">Importação</div><div class="bsub">Processos de mercadoria</div></div>
+          </div>
+          <div class="bnum tnum">2</div>
+          <div class="bfoot"><span>processos em curso</span><b>1 a nacionalizar</b></div>
+        </div>
+
+        <div class="blk" onclick="go('emprestimo')">
+          <div class="rail" style="background:var(--emp)"></div>
+          <div class="bhead">
+            <div class="bic" style="background:rgba(154,124,240,.16);color:#B49DF5">🏦</div>
+            <div><div class="bt">Empréstimo</div><div class="bsub">Contratos &amp; conferência</div></div>
+          </div>
+          <div class="bnum tnum">3</div>
+          <div class="bfoot"><span>contratos armazenados</span><b>confere × concil.</b></div>
+        </div>
+
+        <div class="blk" onclick="go('equivalencia')">
+          <div class="rail" style="background:var(--eqp)"></div>
+          <div class="bhead">
+            <div class="bic" style="background:rgba(224,108,159,.16);color:#EE93BC">⚖︎</div>
+            <div><div class="bt">Equiv. Patrimonial</div><div class="bsub">Participações (MEP)</div></div>
+          </div>
+          <div class="bnum tnum">2</div>
+          <div class="bfoot"><span>investidas</span><span class="apont">1 apontamento</span></div>
+        </div>
+
+        <div class="blk" onclick="go('outros')">
+          <div class="rail" style="background:var(--out)"></div>
+          <div class="bhead">
+            <div class="bic" style="background:rgba(124,137,166,.16);color:#AEB8CC">✎</div>
+            <div><div class="bt">Outros Lançamentos</div><div class="bsub">Manual ou por relatório</div></div>
+          </div>
+          <div class="bnum tnum">5</div>
+          <div class="bfoot"><span>lançamentos no mês</span><b>antigo Contabilizar</b></div>
+        </div>
+      </div>
+
+      <!-- TABS -->
+      <div class="tabs">
+        <div class="tab active" data-tab="seguro" onclick="go('seguro')"><span class="d" style="background:var(--seg)"></span>Seguro</div>
+        <div class="tab" data-tab="importacao" onclick="go('importacao')"><span class="d" style="background:var(--imp)"></span>Importação</div>
+        <div class="tab" data-tab="emprestimo" onclick="go('emprestimo')"><span class="d" style="background:var(--emp)"></span>Empréstimo</div>
+        <div class="tab" data-tab="equivalencia" onclick="go('equivalencia')"><span class="d" style="background:var(--eqp)"></span>Equivalência Patrimonial</div>
+        <div class="tab" data-tab="outros" onclick="go('outros')"><span class="d" style="background:var(--out)"></span>Outros Lançamentos</div>
+      </div>
+
+      <!-- ============ SEGURO ============ -->
+      <section id="pane-seguro">
+        <!-- apropriações a confirmar -->
+        <div class="card">
+          <div class="cbar" style="margin-top:0">
+            <div><p class="sec-t" style="margin:0">Apropriações de Julho / 2026 — a confirmar</p>
+              <p class="sec-s" style="margin:0">Virou o mês → a apropriação de cada apólice fica aqui. Confirme e vira lançamento; nada é postado sozinho.</p></div>
+            <button class="pbtn mini ghost" onclick="confirmAll('seg-conf')">✓ Confirmar todas</button>
+          </div>
+          <div class="srow" data-g="seg-conf">
+            <div class="si2" style="background:rgba(74,124,255,.16);color:#8FB0FF">🛡️</div>
+            <div class="mid"><b>Porto Seguro — apólice 1188-4477</b>
+              <div class="why"><span class="wi">📅</span><span>Parcela 1/12 · patrimonial.</span></div>
+              <span class="part">D 4.1.2.18 Despesas com seguros · C 1.1.3.02 Prêmios a apropriar</span></div>
+            <div class="rt"><span class="amt2 tnum">1.000,00</span><span class="doneflag">✓ confirmado</span>
+              <div class="acts"><button class="pbtn mini" onclick="confirmRow(this)">Confirmar</button>
+                <button class="iconbtn no" title="Não contabilizar">✕</button></div></div>
+          </div>
+          <div class="srow" data-g="seg-conf">
+            <div class="si2" style="background:rgba(74,124,255,.16);color:#8FB0FF">🛡️</div>
+            <div class="mid"><b>Bradesco Seguros — apólice 55-9021</b>
+              <div class="why"><span class="wi">📅</span><span>Parcela 5/12 · frota / veículos.</span></div>
+              <span class="part">D 4.1.2.18 Despesas com seguros · C 1.1.3.02 Prêmios a apropriar</span></div>
+            <div class="rt"><span class="amt2 tnum">800,00</span><span class="doneflag">✓ confirmado</span>
+              <div class="acts"><button class="pbtn mini" onclick="confirmRow(this)">Confirmar</button>
+                <button class="iconbtn no" title="Não contabilizar">✕</button></div></div>
+          </div>
+          <div class="srow" data-g="seg-conf">
+            <div class="si2" style="background:rgba(74,124,255,.16);color:#8FB0FF">🛡️</div>
+            <div class="mid"><b>Allianz — apólice A-33120</b>
+              <div class="why"><span class="wi">📅</span><span>Parcela 7/12 · responsabilidade civil.</span></div>
+              <span class="part">D 4.1.2.18 Despesas com seguros · C 1.1.3.02 Prêmios a apropriar</span></div>
+            <div class="rt"><span class="amt2 tnum">500,00</span><span class="doneflag">✓ confirmado</span>
+              <div class="acts"><button class="pbtn mini" onclick="confirmRow(this)">Confirmar</button>
+                <button class="iconbtn no" title="Não contabilizar">✕</button></div></div>
+          </div>
+          <div class="note"><span class="ni">✦</span><span>O que você confirmar aqui vira lançamento, <b>atualiza a Conciliação</b> e alimenta o <b>Status → Domínio</b>. O que não confirmar fica como pendência no Status.</span></div>
+        </div>
+
+        <!-- new contract flow -->
+        <div class="card">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px">
+            <div>
+              <p class="sec-t">🛡️ Novo contrato de seguro</p>
+              <p class="sec-s">Jogue o contrato/apólice — a plataforma extrai os dados e monta a contabilização.</p>
+            </div>
+            <span class="tag">Passo a passo</span>
+          </div>
+          <div class="flow">
+            <div>
+              <div class="drop">
+                <div class="di">⤒</div>
+                <b>Arraste a apólice aqui</b>
+                <small>PDF, XML ou imagem · ou clique para selecionar</small>
+                <div class="file"><span>📄</span><span>apolice_porto_1188.pdf</span><span class="x">✓</span></div>
+              </div>
+              <div class="center">
+                <button class="pbtn" id="btn-ler-seg" onclick="lerSeguro()">⚙︎ Ler documento e contabilizar</button>
+              </div>
+            </div>
+            <div class="read pending" id="read-seg">
+              <p class="sec-t" style="font-size:13.5px;margin-bottom:10px">Dados lidos da apólice</p>
+              <div class="kv"><span class="k">Seguradora</span><span class="v">Porto Seguro Cia S.A.</span></div>
+              <div class="kv"><span class="k">Apólice / ramo</span><span class="v mono">1188-4477 · Patrimonial</span></div>
+              <div class="kv"><span class="k">Vigência</span><span class="v">01/07/2026 → 30/06/2027</span></div>
+              <div class="kv"><span class="k">Prêmio total</span><span class="v">R$ 12.000,00</span></div>
+              <div class="kv"><span class="k">Parcelamento</span><span class="v">12× R$ 1.000,00</span></div>
+              <div class="kv"><span class="k">Forma de pagto</span><span class="v">Boleto — dia 10</span></div>
+              <span class="chip info" style="margin-top:10px">Confiança da leitura 96%</span>
+            </div>
+          </div>
+
+          <!-- generated accounting -->
+          <div id="ger-seg" class="hidden">
+            <div class="hr"></div>
+            <p class="sec-t" style="font-size:14px">Contabilização gerada automaticamente</p>
+            <p class="sec-s">Prêmio lançado como despesa antecipada e apropriado mês a mês pela vigência.</p>
+
+            <div class="je">
+              <div class="jh">① Contratação — 01/07/2026 <span class="lote">Lote 1 · origem: Seguro</span></div>
+              <div class="jline"><span class="dc d">D</span>
+                <span class="acc"><b>1.1.3.02 Prêmios de seguros a apropriar</b><small>Despesa antecipada — ativo circulante</small></span>
+                <span class="val">12.000,00</span></div>
+              <div class="jline credit"><span class="dc c">C</span>
+                <span class="acc"><b>2.1.1.05 Porto Seguro a pagar</b><small>Fornecedores / seguradora</small></span>
+                <span class="val">12.000,00</span></div>
+            </div>
+
+            <div class="je">
+              <div class="jh">② Apropriação mensal — recorrente (12×) <span class="lote">gerado a cada fechamento</span></div>
+              <div class="jline"><span class="dc d">D</span>
+                <span class="acc"><b>4.1.2.18 Despesas com seguros</b><small>Resultado — dedutível (LALUR)</small></span>
+                <span class="val">1.000,00</span></div>
+              <div class="jline credit"><span class="dc c">C</span>
+                <span class="acc"><b>1.1.3.02 Prêmios de seguros a apropriar</b><small>Baixa proporcional</small></span>
+                <span class="val">1.000,00</span></div>
+            </div>
+
+            <p class="sec-t" style="font-size:13.5px;margin:18px 0 8px">Parcelas / apropriação programada</p>
+            <div class="parc">
+              <div class="pc now"><div class="m">Jul</div><div class="a tnum">1.000</div><div class="s">este mês</div></div>
+              <div class="pc next"><div class="m">Ago</div><div class="a tnum">1.000</div><div class="s">programado</div></div>
+              <div class="pc next"><div class="m">Set</div><div class="a tnum">1.000</div><div class="s">programado</div></div>
+              <div class="pc next"><div class="m">Out</div><div class="a tnum">1.000</div><div class="s">programado</div></div>
+              <div class="pc next"><div class="m">Nov</div><div class="a tnum">1.000</div><div class="s">programado</div></div>
+              <div class="pc next"><div class="m">+7</div><div class="a tnum">7.000</div><div class="s">até jun/27</div></div>
+            </div>
+
+            <div class="note"><span class="ni">✦</span>
+              <span>A partir daqui a plataforma cuida sozinha: todo fechamento ela gera a apropriação do mês
+              e a baixa da parcela paga, já prontas para o arquivo do Domínio. Você só confere.</span></div>
+            <div class="center">
+              <button class="pbtn" onclick="alert('MOCKUP: salvaria o contrato e o cronograma de 12 parcelas.')">Salvar contrato e programar parcelas</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- existing contracts -->
+        <div class="card">
+          <p class="sec-t">Contratos de seguro ativos</p>
+          <p class="sec-s">Histórico salvo — cada apólice mantém seu cronograma e contabilização.</p>
+          <div style="overflow-x:auto">
+          <table class="tbl">
+            <thead><tr><th>Seguradora / apólice</th><th>Ramo</th><th>Vigência</th><th class="r">Prêmio</th><th class="r">Parcela</th><th>Jul/26</th><th>Status</th></tr></thead>
+            <tbody>
+              <tr><td><b>Porto Seguro</b> <span class="muted mono">1188-4477</span></td><td>Patrimonial</td><td class="mono">07/26–06/27</td><td class="r money">12.000,00</td><td class="r money">1.000,00</td><td><span class="chip info">apropria</span></td><td><span class="chip good">✓ ativo</span></td></tr>
+              <tr><td><b>Bradesco Seguros</b> <span class="muted mono">55-9021</span></td><td>Frota / veículos</td><td class="mono">03/26–02/27</td><td class="r money">9.600,00</td><td class="r money">800,00</td><td><span class="chip info">apropria</span></td><td><span class="chip good">✓ ativo</span></td></tr>
+              <tr><td><b>Allianz</b> <span class="muted mono">A-33120</span></td><td>Resp. civil</td><td class="mono">01/26–12/26</td><td class="r money">6.000,00</td><td class="r money">500,00</td><td><span class="chip info">apropria</span></td><td><span class="chip good">✓ ativo</span></td></tr>
+              <tr><td><b>Tokio Marine</b> <span class="muted mono">TM-7788</span></td><td>Vida em grupo</td><td class="mono">05/26–04/27</td><td class="r money">8.400,00</td><td class="r money">700,00</td><td><span class="chip warn">revisar</span></td><td><span class="chip warn">◔ leitura</span></td></tr>
+            </tbody>
+          </table>
+          </div>
+          <div class="totrow"><span class="lbl">Apropriação de seguros em Julho / 2026</span><span class="amt tnum">R$ 3.000,00</span></div>
+        </div>
+      </section>
+
+      <!-- ============ IMPORTAÇÃO ============ -->
+      <section id="pane-importacao" class="hidden">
+        <div class="card">
+          <div style="display:flex;align-items:center;justify-content:space-between">
+            <div><p class="sec-t">🚢 Novo processo de importação</p>
+              <p class="sec-s">Jogue o processo (DI, invoice, notas de despesas) — a plataforma acumula os custos no processo.</p></div>
+            <span class="tag">Passo a passo</span>
+          </div>
+          <div class="flow" style="margin-top:14px">
+            <div>
+              <div class="drop"><div class="di">⤒</div><b>Arraste o processo de importação</b>
+                <small>DI / DUIMP · Invoice · notas de frete e despachante</small>
+                <div class="file"><span>📄</span><span>processo_IMP-2026-014.zip</span><span class="x">✓</span></div></div>
+              <div class="center"><button class="pbtn" onclick="lerImp()">⚙︎ Ler processo e contabilizar</button></div>
+            </div>
+            <div class="read pending" id="read-imp">
+              <p class="sec-t" style="font-size:13.5px;margin-bottom:10px">Processo lido</p>
+              <div class="kv"><span class="k">Nº do processo / DI</span><span class="v mono">IMP-2026-014 · 26/0891234-5</span></div>
+              <div class="kv"><span class="k">Fornecedor (exterior)</span><span class="v">Brembo S.p.A. — Itália</span></div>
+              <div class="kv"><span class="k">Mercadoria</span><span class="v">Pastilhas de freio</span></div>
+              <div class="kv"><span class="k">Invoice</span><span class="v">USD 10.000 · câmbio 5,40</span></div>
+              <div class="kv"><span class="k">Chegada</span><span class="v">Porto de Santos · 28/07/2026</span></div>
+              <span class="chip info" style="margin-top:10px">Confiança da leitura 91%</span>
+            </div>
+          </div>
+
+          <div id="ger-imp" class="hidden">
+            <div class="hr"></div>
+            <p class="sec-t" style="font-size:14px">Composição do custo — contabilização gerada</p>
+            <p class="sec-s">Todos os custos entram em "estoque de importação em andamento" até a nacionalização.</p>
+            <div class="je">
+              <div class="jh">Formação de custo — Processo IMP-2026-014 <span class="lote">Lote 1 · origem: Importação</span></div>
+              <div class="jline"><span class="dc d">D</span><span class="acc"><b>1.1.4.09 Importação em andamento</b><small>Estoque em formação</small></span><span class="val">78.240,00</span></div>
+              <div class="jline credit"><span class="dc c">C</span><span class="acc"><b>2.1.1.11 Fornecedor exterior — Brembo</b><small>Invoice USD 10.000 × 5,40</small></span><span class="val">54.000,00</span></div>
+              <div class="jline credit"><span class="dc c">C</span><span class="acc"><b>1.1.2.31 Impostos a recuperar / recolher</b><small>II, IPI, PIS/COFINS-imp, ICMS</small></span><span class="val">19.140,00</span></div>
+              <div class="jline credit"><span class="dc c">C</span><span class="acc"><b>2.1.1.14 Despachante &amp; frete</b><small>Armazenagem, AFRMM, honorários</small></span><span class="val">5.100,00</span></div>
+            </div>
+            <div class="note"><span class="ni">✦</span><span>Ao confirmar, o lançamento <b>atualiza a Conciliação</b> e vai ao Status. Quando o processo for <b>nacionalizado</b>,
+              a plataforma transfere o total de R$ 78.240,00 para <b>Estoque de mercadorias</b> — um clique, contabilização pronta.</span></div>
+            <div class="center" style="gap:10px;display:flex;justify-content:center;flex-wrap:wrap">
+              <button class="pbtn" onclick="alert('MOCKUP: confirmaria o lançamento e alimentaria o Status → Domínio.')">Confirmar lançamento</button>
+              <button class="pbtn ghost" onclick="alert('MOCKUP: arquivaria o processo sem lançar (fica pendente no Status).')">Salvar processo (sem lançar)</button></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <p class="sec-t">Processos de importação</p>
+          <div style="overflow-x:auto"><table class="tbl">
+            <thead><tr><th>Processo / DI</th><th>Fornecedor</th><th class="r">Invoice</th><th class="r">Custo acumulado</th><th>Etapa</th><th>Status</th></tr></thead>
+            <tbody>
+              <tr><td><b>IMP-2026-014</b> <span class="muted mono">26/0891234-5</span></td><td>Brembo S.p.A.</td><td class="r money">USD 10.000</td><td class="r money">78.240,00</td><td><span class="chip warn">em curso</span></td><td><span class="chip info">a nacionalizar</span></td></tr>
+              <tr><td><b>IMP-2026-009</b> <span class="muted mono">26/0774510-2</span></td><td>Sachs GmbH</td><td class="r money">EUR 22.500</td><td class="r money">146.900,00</td><td><span class="chip good">nacionalizado</span></td><td><span class="chip good">✓ em estoque</span></td></tr>
+            </tbody>
+          </table></div>
+        </div>
+      </section>
+
+      <!-- ============ EMPRÉSTIMO ============ -->
+      <section id="pane-emprestimo" class="hidden">
+        <div class="card">
+          <div style="display:flex;align-items:center;justify-content:space-between">
+            <div><p class="sec-t">🏦 Novo contrato de empréstimo</p>
+              <p class="sec-s">Jogue o contrato — a plataforma lê a captação e monta o cronograma de amortização + juros.</p></div>
+            <span class="tag">Passo a passo</span>
+          </div>
+          <div class="flow" style="margin-top:14px">
+            <div>
+              <div class="drop"><div class="di">⤒</div><b>Arraste o contrato de empréstimo</b>
+                <small>Cédula de crédito bancário · tabela de parcelas</small>
+                <div class="file"><span>📄</span><span>ccb_itau_capital_giro.pdf</span><span class="x">✓</span></div></div>
+              <div class="center"><button class="pbtn" onclick="lerEmp()">⚙︎ Ler contrato e sugerir lançamentos</button></div>
+            </div>
+            <div class="read pending" id="read-emp">
+              <p class="sec-t" style="font-size:13.5px;margin-bottom:10px">Contrato lido</p>
+              <div class="kv"><span class="k">Banco</span><span class="v">Itaú Unibanco</span></div>
+              <div class="kv"><span class="k">Modalidade</span><span class="v">Capital de giro (CCB)</span></div>
+              <div class="kv"><span class="k">Valor liberado</span><span class="v">R$ 100.000,00</span></div>
+              <div class="kv"><span class="k">Prazo / taxa</span><span class="v">24× · 1,45% a.m.</span></div>
+              <div class="kv"><span class="k">Parcela</span><span class="v">R$ 4.980,00 (PMT)</span></div>
+              <div class="kv"><span class="k">1º vencimento</span><span class="v">10/07/2026</span></div>
+              <span class="chip info" style="margin-top:10px">Confiança da leitura 94%</span>
+            </div>
+          </div>
+
+          <div id="ger-emp" class="hidden">
+            <div class="hr"></div>
+            <p class="sec-t" style="font-size:14px">Lançamentos sugeridos pelo contrato</p>
+            <p class="sec-s">O empréstimo <b>não gera lançamento</b> aqui — a baixa real vem do banco. A plataforma usa o contrato como referência e <b>cruza com a conciliação</b>.</p>
+            <div class="je">
+              <div class="jh">Captação (esperado) <span class="lote">referência — não vai ao Domínio</span></div>
+              <div class="jline"><span class="dc d">D</span><span class="acc"><b>1.1.1.02 Banco Itaú c/ movimento</b><small>Ingresso do recurso</small></span><span class="val">100.000,00</span></div>
+              <div class="jline credit"><span class="dc c">C</span><span class="acc"><b>2.1.2.07 Empréstimos a pagar — Itaú</b><small>Passivo circ./não circ.</small></span><span class="val">100.000,00</span></div>
+            </div>
+            <div class="je">
+              <div class="jh">Parcela mensal esperada <span class="lote">amortização + juros</span></div>
+              <div class="jline"><span class="dc d">D</span><span class="acc"><b>2.1.2.07 Empréstimos a pagar — Itaú</b><small>Amortização do principal</small></span><span class="val">3.530,00</span></div>
+              <div class="jline"><span class="dc d">D</span><span class="acc"><b>4.3.1.01 Juros sobre empréstimos</b><small>Despesa financeira</small></span><span class="val">1.450,00</span></div>
+              <div class="jline credit"><span class="dc c">C</span><span class="acc"><b>1.1.1.02 Banco Itaú c/ movimento</b><small>Débito da parcela</small></span><span class="val">4.980,00</span></div>
+            </div>
+
+            <p class="sec-t" style="font-size:13.5px;margin:18px 0 8px">Conferência com a conciliação — Julho / 2026</p>
+            <div style="overflow-x:auto"><table class="tbl">
+              <thead><tr><th>Item</th><th class="r">Esperado (contrato)</th><th class="r">Na conciliação</th><th>Situação</th></tr></thead>
+              <tbody>
+                <tr><td>Amortização do principal</td><td class="r money">3.530,00</td><td class="r money">3.530,00</td><td><span class="chip good">✓ bate</span></td></tr>
+                <tr><td>Juros do mês</td><td class="r money">1.450,00</td><td class="r money">1.640,00</td><td><span class="chip warn">✗ diverge R$ 190</span></td></tr>
+              </tbody>
+            </table></div>
+            <div class="note"><span class="ni">✦</span><span>Divergência? A correção é feita <b>na Conciliação</b> — não aqui. O contrato só aponta o valor esperado; a baixa real veio do banco.</span></div>
+            <div class="center" style="margin-top:6px;gap:10px;display:flex;justify-content:center;flex-wrap:wrap">
+              <button class="pbtn" onclick="alert('MOCKUP: abriria a Conciliação no lançamento divergente.')">Corrigir na Conciliação →</button>
+              <button class="pbtn ghost" onclick="alert('MOCKUP: marcaria a divergência como ignorada (justificada).')">Ignorar divergência</button>
+              <button class="pbtn ghost" onclick="alert('MOCKUP: arquivaria o contrato no bloco.')">Salvar contrato (arquivar)</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <p class="sec-t">Contratos de empréstimo armazenados</p>
+          <p class="sec-s">Todos os contratos ficam guardados aqui. A plataforma confere a parcela do mês contra a conciliação — não gera lançamento.</p>
+          <div style="overflow-x:auto"><table class="tbl">
+            <thead><tr><th>Banco / contrato</th><th>Modalidade</th><th class="r">Saldo devedor</th><th class="r">Parcela (contrato)</th><th>Conferência Jul</th><th>Arquivo</th></tr></thead>
+            <tbody>
+              <tr><td><b>Itaú</b> <span class="muted mono">CCB-8841</span></td><td>Capital de giro</td><td class="r money">100.000,00</td><td class="r money">4.980,00</td><td><span class="chip warn">✗ corrigir na concil.</span></td><td><span class="chip mut">📎 armazenado</span></td></tr>
+              <tr><td><b>Santander</b> <span class="muted mono">FIN-2207</span></td><td>Financ. máquina</td><td class="r money">64.200,00</td><td class="r money">3.010,00</td><td><span class="chip good">✓ bate</span></td><td><span class="chip mut">📎 armazenado</span></td></tr>
+              <tr><td><b>BNDES</b> <span class="muted mono">33.401-9</span></td><td>Finame</td><td class="r money">210.000,00</td><td class="r money">5.120,00</td><td><span class="chip good">✓ bate</span></td><td><span class="chip mut">📎 armazenado</span></td></tr>
+            </tbody>
+          </table></div>
+          <div class="totrow"><span class="lbl">Conferência das parcelas × conciliação</span><span class="amt tnum" style="font-size:14px">2 de 3 batem · 1 a corrigir</span></div>
+        </div>
+      </section>
+
+      <!-- ============ EQUIVALÊNCIA PATRIMONIAL ============ -->
+      <section id="pane-equivalencia" class="hidden">
+        <!-- cadastro enablement -->
+        <div class="cadastro">
+          <div class="ci">🔗</div>
+          <div class="ct"><b>Habilitado no cadastro.</b> Na <a onclick="alert('MOCKUP: abriria a Base de Informações › Participações societárias.')">Base de Informações</a>
+            está marcado que <b>Euro Brake participa de outras empresas</b> — então a equivalência patrimonial é
+            <b>obrigatória</b> no fechamento e, se não for lançada, <b>vira apontamento no Status</b>.</div>
+          <span class="sw-lbl">Investe em outra empresa</span>
+          <div class="sw" title="Ligado no cadastro"></div>
+        </div>
+
+        <!-- apontamento -->
+        <div class="banner alert">
+          <div class="bi">⚠</div>
+          <div class="txt">
+            <b>Apontamento aberto — equivalência de Julho/2026 não lançada</b>
+            <p>1 de 2 investidas ainda sem MEP reconhecida. Enquanto pendente, o <b style="color:#F0868B">Status</b>
+               do fechamento não fecha. Jogue o resultado da investida abaixo para resolver.</p>
+          </div>
+          <button class="pbtn" onclick="go2('equivalencia')" style="background:#E5484D">Resolver apontamento</button>
+        </div>
+
+        <!-- flow -->
+        <div class="card">
+          <div style="display:flex;align-items:center;justify-content:space-between">
+            <div><p class="sec-t">⚖︎ Reconhecer equivalência patrimonial</p>
+              <p class="sec-s">Jogue o balancete/resultado da investida — a plataforma aplica o % de participação e monta o MEP.</p></div>
+            <span class="tag">Passo a passo</span>
+          </div>
+          <div class="flow" style="margin-top:14px">
+            <div>
+              <div class="drop"><div class="di">⤒</div><b>Arraste o resultado da investida</b>
+                <small>Balancete / DRE da coligada ou controlada</small>
+                <div class="file"><span>📄</span><span>frenax_balancete_jul26.xlsx</span><span class="x">✓</span></div></div>
+              <div class="center"><button class="pbtn" onclick="lerEqp()">⚙︎ Ler resultado e contabilizar</button></div>
+            </div>
+            <div class="read pending" id="read-eqp">
+              <p class="sec-t" style="font-size:13.5px;margin-bottom:10px">Resultado lido da investida</p>
+              <div class="kv"><span class="k">Investida</span><span class="v">Frenax Distribuidora S.A.</span></div>
+              <div class="kv"><span class="k">Vínculo</span><span class="v">Coligada</span></div>
+              <div class="kv"><span class="k">Participação</span><span class="v">30%</span></div>
+              <div class="kv"><span class="k">Resultado do mês</span><span class="v" style="color:#F0868B">− R$ 10.000,00 (prejuízo)</span></div>
+              <div class="kv"><span class="k">MEP a reconhecer</span><span class="v" style="color:#F0868B">− R$ 3.000,00</span></div>
+              <span class="chip info" style="margin-top:10px">30% × resultado da investida</span>
+            </div>
+          </div>
+
+          <div id="ger-eqp" class="hidden">
+            <div class="hr"></div>
+            <p class="sec-t" style="font-size:14px">Contabilização gerada automaticamente</p>
+            <p class="sec-s">Investida com prejuízo → resultado negativo de equivalência e redução do investimento.</p>
+            <div class="je">
+              <div class="jh">Equivalência — Frenax (coligada 30%) · Jul/2026 <span class="lote">Lote 1 · origem: Equiv. Patrimonial</span></div>
+              <div class="jline"><span class="dc d">D</span><span class="acc"><b>4.3.2.01 Resultado negativo de equivalência</b><small>Despesa — <b>indedutível (LALUR)</b></small></span><span class="val">3.000,00</span></div>
+              <div class="jline credit"><span class="dc c">C</span><span class="acc"><b>1.2.1.03 Investimentos — Frenax</b><small>Redução do valor do investimento</small></span><span class="val">3.000,00</span></div>
+            </div>
+            <div class="note"><span class="ni">✦</span><span>Ao salvar, o <b>apontamento no Status é baixado</b>, a <b>Conciliação é atualizada</b> e o lançamento entra no lote do mês.
+              Se a investida tivesse lucro, seria o inverso: D Investimentos / C resultado positivo de equivalência.</span></div>
+            <div class="center"><button class="pbtn" onclick="alert('MOCKUP: salvaria a MEP e baixaria o apontamento.')">Salvar e baixar apontamento</button></div>
+          </div>
+        </div>
+
+        <!-- participações -->
+        <div class="card">
+          <p class="sec-t">Participações societárias (do cadastro)</p>
+          <p class="sec-s">Cada investida gera equivalência todo mês. Faltou lançar → apontamento.</p>
+          <div style="overflow-x:auto"><table class="tbl">
+            <thead><tr><th>Investida</th><th>Vínculo</th><th class="r">Particip.</th><th class="r">Investimento</th><th class="r">Result. investida</th><th class="r">MEP mês</th><th>Status</th></tr></thead>
+            <tbody>
+              <tr><td><b>Euro Brake Peças Ltda</b></td><td>Controlada</td><td class="r money">80%</td><td class="r money">400.000,00</td><td class="r money" style="color:#4CD08A">+25.000,00</td><td class="r money" style="color:#4CD08A">+20.000,00</td><td><span class="chip good">✓ lançado</span></td></tr>
+              <tr><td><b>Frenax Distribuidora S.A.</b></td><td>Coligada</td><td class="r money">30%</td><td class="r money">180.000,00</td><td class="r money" style="color:#F0868B">−10.000,00</td><td class="r money" style="color:#F0868B">−3.000,00</td><td><span class="chip warn">◔ pendente</span></td></tr>
+            </tbody>
+          </table></div>
+          <div class="totrow"><span class="lbl">Resultado líquido de equivalência em Julho / 2026</span><span class="amt tnum" style="color:#4CD08A">+ R$ 17.000,00</span></div>
+        </div>
+      </section>
+
+      <!-- ============ OUTROS LANÇAMENTOS ============ -->
+      <section id="pane-outros" class="hidden">
+        <div class="card">
+          <p class="sec-t">✎ Novo lançamento avulso</p>
+          <p class="sec-s">Substitui o antigo <b>Contabilizar</b>. Escreva a partida manualmente, ou suba um relatório para a plataforma ler e sugerir.</p>
+
+          <div class="modetabs">
+            <div class="modetab active" id="mt-manual" onclick="setMode('manual')">✎ Manual</div>
+            <div class="modetab" id="mt-report" onclick="setMode('report')">⤒ Por relatório</div>
+          </div>
+
+          <!-- MANUAL -->
+          <div id="mode-manual">
+            <div class="frow">
+              <div class="field"><label>Data</label><input class="inp mono" value="31/07/2026"></div>
+              <div class="field"><label>Conta débito</label><input class="inp" placeholder="buscar conta…" value="4.1.2.40 Despesas diversas"></div>
+              <div class="field"><label>Conta crédito</label><input class="inp" placeholder="buscar conta…" value="1.1.1.02 Banco Itaú"></div>
+              <div class="field"><label>Valor</label><input class="inp mono" style="text-align:right" value="1.250,00"></div>
+            </div>
+            <div class="frow2">
+              <div class="field"><label>Histórico</label><input class="inp" value="Taxa de manutenção de conta — julho/2026"></div>
+              <button class="pbtn" style="height:38px" onclick="alert('MOCKUP: entraria na fila e viraria pendência no Status.')">＋ Lançar</button>
+            </div>
+            <div class="note"><span class="ni">✦</span><span>Só entra no arquivo do Domínio quando tem <b>débito E crédito</b>.
+              Um ajuste de <b>nome/histórico</b> ou uma <b>justificativa</b> não vira lançamento e não precisa reimportar.</span></div>
+          </div>
+
+          <!-- REPORT -->
+          <div id="mode-report" class="hidden">
+            <div class="flow">
+              <div>
+                <div class="drop"><div class="di">⤒</div><b>Arraste o relatório</b>
+                  <small>Extrato, planilha de rateio, relatório de despesas…</small>
+                  <div class="file"><span>📄</span><span>rateio_despesas_jul26.xlsx</span><span class="x">✓</span></div></div>
+                <div class="center"><button class="pbtn" onclick="lerRel()">⚙︎ Ler e sugerir lançamentos</button></div>
+              </div>
+              <div class="read pending" id="read-rel">
+                <p class="sec-t" style="font-size:13.5px;margin-bottom:6px">Lançamentos sugeridos</p>
+                <p class="sec-s" style="margin-bottom:10px">Confira, edite ou descarte cada sugestão.</p>
+                <div class="sug"><div class="si">✎</div><div class="sb"><b>Energia elétrica — rateio matriz</b>
+                  <small>D 4.1.2.05 · C 1.1.1.02 · R$ 3.480,00</small></div>
+                  <div class="acts"><button class="iconbtn ok" title="Confirmar">✓</button><button class="iconbtn" title="Editar">✎</button><button class="iconbtn no" title="Descartar">✕</button></div></div>
+                <div class="sug"><div class="si">✎</div><div class="sb"><b>Telefonia / internet</b>
+                  <small>D 4.1.2.09 · C 1.1.1.02 · R$ 920,00</small></div>
+                  <div class="acts"><button class="iconbtn ok" title="Confirmar">✓</button><button class="iconbtn" title="Editar">✎</button><button class="iconbtn no" title="Descartar">✕</button></div></div>
+                <div class="sug"><div class="si">✎</div><div class="sb"><b>Material de escritório</b>
+                  <small>D 4.1.2.11 · C 1.1.1.02 · R$ 610,00</small></div>
+                  <div class="acts"><button class="iconbtn ok" title="Confirmar">✓</button><button class="iconbtn" title="Editar">✎</button><button class="iconbtn no" title="Descartar">✕</button></div></div>
+                <div class="center"><button class="pbtn sm" onclick="alert('MOCKUP: confirmaria os selecionados e mandaria pra fila.')">Confirmar selecionados</button></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <p class="sec-t">Lançamentos avulsos — Julho / 2026</p>
+          <div style="overflow-x:auto"><table class="tbl">
+            <thead><tr><th>Data</th><th>Débito</th><th>Crédito</th><th>Histórico</th><th class="r">Valor</th><th>Origem</th></tr></thead>
+            <tbody>
+              <tr><td class="mono">05/07</td><td class="mono">4.1.2.05</td><td class="mono">1.1.1.02</td><td>Energia elétrica — rateio</td><td class="r money">3.480,00</td><td><span class="chip info">sugestão</span></td></tr>
+              <tr><td class="mono">05/07</td><td class="mono">4.1.2.09</td><td class="mono">1.1.1.02</td><td>Telefonia / internet</td><td class="r money">920,00</td><td><span class="chip info">sugestão</span></td></tr>
+              <tr><td class="mono">12/07</td><td class="mono">1.1.1.02</td><td class="mono">1.1.1.05</td><td>Transferência entre contas</td><td class="r money">15.000,00</td><td><span class="chip mut">manual</span></td></tr>
+              <tr><td class="mono">18/07</td><td class="mono">4.1.2.22</td><td class="mono">2.1.1.01</td><td>Provisão de férias</td><td class="r money">6.240,00</td><td><span class="chip mut">manual</span></td></tr>
+              <tr><td class="mono">31/07</td><td class="mono">4.1.2.40</td><td class="mono">1.1.1.02</td><td>Taxa de manutenção de conta</td><td class="r money">1.250,00</td><td><span class="chip mut">manual</span></td></tr>
+            </tbody>
+          </table></div>
+          <div class="totrow"><span class="lbl">Lançamentos avulsos em Julho / 2026</span><span class="amt tnum">R$ 26.890,00</span></div>
+        </div>
+      </section>
+      </div><!-- /view-outras -->
+
+      <!-- ================= VIEW: SUGESTÕES ================= -->
+      <div id="view-sugestoes" class="hidden">
+        <h1 class="h1">Sugestões de Contabilização</h1>
+        <p class="lead">A plataforma varre o <b>razão</b> da competência e aponta o que precisa ser
+          <b>lançado ou corrigido</b> — cada sugestão traz a evidência que a gerou. O que você confirmar
+          <b>atualiza a Conciliação</b> e alimenta o <b>Status → Domínio</b>. O que você excluir sai da lista.</p>
+        <div class="hero">
+        <div class="hh">
+          <div class="hb">💡</div>
+          <div><p class="sec-t" style="margin:0">Sugestões de Contabilização</p>
+            <p class="sec-s" style="margin:0">A plataforma lê o razão e aponta o que precisa ser lançado ou corrigido.</p></div>
+        </div>
+        <div class="cbar">
+          <span class="ct"><b>5 sugestões</b> em Julho/2026 · o que você confirmar vira lançamento e alimenta o Status → Domínio</span>
+          <button class="pbtn mini ghost" onclick="confirmAll('sug')">✓ Confirmar todas</button>
+        </div>
+
+        <div class="srow" data-g="sug">
+          <div class="si2" style="background:rgba(74,124,255,.16);color:#8FB0FF">⇄</div>
+          <div class="mid"><b>Baixar adiantamento de fornecedor — Metalúrgica Sul</b>
+            <div class="why"><span class="wi">💡</span><span>NF 4471 de R$ 12.000 lançada este mês bate com o adiantamento de R$ 12.000 pago em jun/26.</span></div>
+            <span class="part">D 2.1.1.05 Fornecedor Metalúrgica Sul · C 1.1.5.02 Adiant. a fornecedores</span></div>
+          <div class="rt"><span class="amt2 tnum">12.000,00</span>
+            <span class="chip good" style="font-size:10.5px">confiança 97%</span>
+            <span class="doneflag">✓ confirmado</span>
+            <div class="acts"><button class="iconbtn ok" onclick="confirmRow(this)" title="Confirmar">✓</button>
+              <button class="iconbtn" title="Editar">✎</button><button class="iconbtn no" title="Descartar">✕</button></div></div>
+        </div>
+
+        <div class="srow" data-g="sug">
+          <div class="si2" style="background:rgba(74,124,255,.16);color:#8FB0FF">⇄</div>
+          <div class="mid"><b>Baixar adiantamento de cliente — Rodobens</b>
+            <div class="why"><span class="wi">💡</span><span>NF de saída 8890 de R$ 8.500 bate com o adiantamento recebido do cliente em jun/26.</span></div>
+            <span class="part">D 2.1.4.01 Adiant. de clientes · C 1.1.2.01 Clientes a receber</span></div>
+          <div class="rt"><span class="amt2 tnum">8.500,00</span>
+            <span class="chip good" style="font-size:10.5px">confiança 95%</span>
+            <span class="doneflag">✓ confirmado</span>
+            <div class="acts"><button class="iconbtn ok" onclick="confirmRow(this)" title="Confirmar">✓</button>
+              <button class="iconbtn" title="Editar">✎</button><button class="iconbtn no" title="Descartar">✕</button></div></div>
+        </div>
+
+        <div class="srow" data-g="sug">
+          <div class="si2" style="background:rgba(48,164,108,.16);color:#4CD08A">＄</div>
+          <div class="mid"><b>Rendimento de aplicação financeira — Itaú</b>
+            <div class="why"><span class="wi">💡</span><span>Extrato mostra rendimento de R$ 1.240 no mês, sem lançamento no razão.</span></div>
+            <span class="part">D 1.1.1.20 Aplicações financeiras · C 3.2.1.01 Receita financeira</span></div>
+          <div class="rt"><span class="amt2 tnum">1.240,00</span>
+            <span class="chip good" style="font-size:10.5px">confiança 99%</span>
+            <span class="doneflag">✓ confirmado</span>
+            <div class="acts"><button class="iconbtn ok" onclick="confirmRow(this)" title="Confirmar">✓</button>
+              <button class="iconbtn" title="Editar">✎</button><button class="iconbtn no" title="Descartar">✕</button></div></div>
+        </div>
+
+        <div class="srow" data-g="sug">
+          <div class="si2" style="background:rgba(231,168,59,.16);color:#F0BC5E">🧾</div>
+          <div class="mid"><b>Baixa de ICMS recolhido (mês anterior)</b>
+            <div class="why"><span class="wi">💡</span><span>ICMS de jun/26 (R$ 5.300) foi debitado do banco em 10/jul — a conta a recolher continua aberta.</span></div>
+            <span class="part">D 2.1.3.01 ICMS a recolher · C 1.1.1.02 Banco Itaú</span></div>
+          <div class="rt"><span class="amt2 tnum">5.300,00</span>
+            <span class="chip good" style="font-size:10.5px">confiança 98%</span>
+            <span class="doneflag">✓ confirmado</span>
+            <div class="acts"><button class="iconbtn ok" onclick="confirmRow(this)" title="Confirmar">✓</button>
+              <button class="iconbtn" title="Editar">✎</button><button class="iconbtn no" title="Descartar">✕</button></div></div>
+        </div>
+
+        <div class="srow" data-g="sug">
+          <div class="si2" style="background:rgba(154,124,240,.16);color:#B49DF5">▤</div>
+          <div class="mid"><b>Depreciação mensal do imobilizado</b>
+            <div class="why"><span class="wi">💡</span><span>Imobilizado com base de cálculo ativa e sem depreciação lançada em julho.</span></div>
+            <span class="part">D 4.1.3.01 Depreciação · C 1.2.3.09 Depreciação acumulada</span></div>
+          <div class="rt"><span class="amt2 tnum">3.180,00</span>
+            <span class="chip warn" style="font-size:10.5px">confiança 92%</span>
+            <span class="doneflag">✓ confirmado</span>
+            <div class="acts"><button class="iconbtn ok" onclick="confirmRow(this)" title="Confirmar">✓</button>
+              <button class="iconbtn" title="Editar">✎</button><button class="iconbtn no" title="Descartar">✕</button></div></div>
+        </div>
+      </div>
+      </div><!-- /view-sugestoes -->
+
+      <!-- ================= VIEW: STATUS ================= -->
+      <div id="view-status" class="hidden">
+        <h1 class="h1">Status do fechamento</h1>
+        <p class="lead">Farol de pendências da competência. Quando tudo zera <b>e</b> o balancete do Domínio
+          bate com a conciliação, o fechamento é liberado. A geração do arquivo do Domínio agora mora aqui.</p>
+
+        <!-- gates -->
+        <div class="gate">
+          <div class="gi" style="background:rgba(48,164,108,.16);color:#4CD08A">✓</div>
+          <div class="gt"><b>Conciliação</b><small>Atualizada automaticamente a cada contabilização confirmada ou corrigida</small></div>
+          <span class="chip good">✓ ok</span>
+        </div>
+        <div class="gate">
+          <div class="gi" style="background:rgba(231,168,59,.16);color:#F0BC5E">!</div>
+          <div class="gt"><b>Lançamentos banco × resultado</b><small>2 apontamentos — 1 justificado, 1 a corrigir</small></div>
+          <span class="chip warn">2 pendências</span>
+        </div>
+        <div class="gate">
+          <div class="gi" style="background:rgba(229,72,77,.16);color:#F0868B">⚖︎</div>
+          <div class="gt"><b>Equivalência patrimonial</b><small>Frenax (coligada 30%) sem MEP lançada — vindo de Outras Contabilizações</small></div>
+          <span class="apont">1 apontamento</span>
+        </div>
+        <div class="gate">
+          <div class="gi" style="background:rgba(231,168,59,.16);color:#F0BC5E">⊞</div>
+          <div class="gt"><b>Outras Contabilizações a confirmar</b><small>Seguro (3 apropriações) e Importação (1 processo) ainda não confirmados nos cards</small></div>
+          <span class="chip warn">4 a confirmar</span>
+        </div>
+        <div class="gate">
+          <div class="gi" style="background:rgba(53,192,138,.16);color:#5FD9A6">💡</div>
+          <div class="gt"><b>Sugestões de contabilização</b><small>5 sugestões do razão aguardando confirmar / excluir no painel de Sugestões</small></div>
+          <span class="chip warn">5 a confirmar</span>
+        </div>
+
+        <!-- MAIN: lançamentos para o Domínio -->
+        <div class="card" style="margin-top:16px">
+          <div class="step"><span class="n">1</span> Gerar o arquivo de lançamentos</div>
+          <p class="sec-t">Lançamentos para importar no Domínio</p>
+          <p class="sec-s">Tudo que foi gerado no sistema nesta competência <b>com débito e crédito</b>. É isto que vira o arquivo.</p>
+          <div style="overflow-x:auto"><table class="tbl">
+            <thead><tr><th>Origem</th><th>Descrição</th><th>Partida</th><th class="r">Valor</th></tr></thead>
+            <tbody>
+              <tr><td><span class="chip info">Seguro</span></td><td>Apropriação de prêmios (3 apólices)</td><td class="mono muted">D 4.1.2.18 · C 1.1.3.02</td><td class="r money">3.000,00</td></tr>
+              <tr><td><span class="chip info">Equivalência</span></td><td>MEP Frenax (após resolver apontamento)</td><td class="mono muted">D 4.3.2.01 · C 1.2.1.03</td><td class="r money">3.000,00</td></tr>
+              <tr><td><span class="chip info">Importação</span></td><td>Formação de custo IMP-2026-014</td><td class="mono muted">D 1.1.4.09 · C diversos</td><td class="r money">78.240,00</td></tr>
+              <tr><td><span class="chip mut">Outros lanç.</span></td><td>Avulsos — manual e sugestões (5)</td><td class="mono muted">vários</td><td class="r money">26.890,00</td></tr>
+              <tr><td><span class="chip mut">Sugestões</span></td><td>Baixas de adiantamento, rendimento, ICMS… (5)</td><td class="mono muted">vários</td><td class="r money">30.220,00</td></tr>
+              <tr><td><span class="chip warn">Correção</span></td><td>Reclassificação banco × resultado (1)</td><td class="mono muted">D 1.1.1.02 · C 3.1.1.08</td><td class="r money">4.700,00</td></tr>
+            </tbody>
+          </table></div>
+          <div class="totrow"><span class="lbl">20 lançamentos com débito e crédito</span><span class="amt tnum">R$ 146.050,00</span></div>
+
+          <div class="hr"></div>
+          <p class="sec-s" style="margin-bottom:9px"><b style="color:#C6D0E3">Não geram lançamento no Domínio</b> — não precisam reimportar:</p>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <div class="gate" style="margin:0;background:var(--tile2);opacity:.85">
+              <div class="gi" style="background:rgba(124,137,166,.16);color:#AEB8CC">“”</div>
+              <div class="gt"><b>Justificativas</b><small>Banco × resultado, comparativo — apenas texto, com usuário e data</small></div>
+              <span class="chip mut">3 · não vai ao Domínio</span>
+            </div>
+            <div class="gate" style="margin:0;background:var(--tile2);opacity:.85">
+              <div class="gi" style="background:rgba(124,137,166,.16);color:#AEB8CC">Aa</div>
+              <div class="gt"><b>Ajustes de nome / apelido de leitura</b><small>Correção de leitura de cliente/histórico — não muda partida</small></div>
+              <span class="chip mut">2 · não vai ao Domínio</span>
+            </div>
+            <div class="gate" style="margin:0;background:var(--tile2);opacity:.85">
+              <div class="gi" style="background:rgba(154,124,240,.16);color:#B49DF5">🏦</div>
+              <div class="gt"><b>Empréstimo — conferência</b><small>Só cruza o contrato com a conciliação; a baixa real vem do banco</small></div>
+              <span class="chip mut">3 · não vai ao Domínio</span>
+            </div>
+          </div>
+
+          <div class="center" style="margin-top:18px">
+            <button class="pbtn" id="btn-dom" onclick="gerarDominio()" style="padding:11px 18px">⤓ Gerar lançamentos para importar no Domínio</button>
+          </div>
+        </div>
+
+        <!-- STEP 2: conclude with balancete -->
+        <div class="card hidden" id="dom-step2">
+          <div class="step"><span class="n">2</span> Importar no Domínio e conferir</div>
+          <p class="sec-t">Concluir a etapa</p>
+          <p class="sec-s">Arquivo gerado no layout do Domínio. Importe no Domínio e, para concluir, suba o balancete atualizado — ele tem que bater com a conciliação.</p>
+          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px">
+            <span class="dl"><span class="df">↓</span> lanctos_eurobrake_072026.txt <span class="muted" style="font-weight:500">· 20 linhas · CSV ;</span></span>
+            <span class="chip good">✓ gerado</span>
+          </div>
+
+          <div class="flow">
+            <div>
+              <div class="drop"><div class="di">⤒</div><b>Suba o balancete atualizado do Domínio</b>
+                <small>Após importar os lançamentos — Excel exportado do Domínio</small>
+                <div class="file"><span>📄</span><span>balancete_eurobrake_072026.xls</span><span class="x">✓</span></div></div>
+              <div class="center"><button class="pbtn" onclick="conferir()">⚖︎ Conferir com a conciliação</button></div>
+            </div>
+            <div class="read pending" id="read-bal">
+              <p class="sec-t" style="font-size:13.5px;margin-bottom:6px">Contas patrimoniais — balancete × conciliação</p>
+              <div class="chk"><span class="ck">✓</span><span class="cn">Caixa e bancos</span><span class="cv">confere</span></div>
+              <div class="chk"><span class="ck">✓</span><span class="cn">Clientes a receber</span><span class="cv">confere</span></div>
+              <div class="chk"><span class="ck">✓</span><span class="cn">Estoques</span><span class="cv">confere</span></div>
+              <div class="chk"><span class="ck">✓</span><span class="cn">Investimentos (após MEP)</span><span class="cv">confere</span></div>
+              <div class="chk"><span class="ck">✓</span><span class="cn">Fornecedores</span><span class="cv">confere</span></div>
+              <div class="chk"><span class="ck">✓</span><span class="cn">Empréstimos a pagar</span><span class="cv">confere</span></div>
+              <div class="note" style="margin-top:14px;background:rgba(48,164,108,.08);border-color:rgba(48,164,108,.3);color:#BFE6D0">
+                <span class="ni" style="color:#4CD08A">✓</span><span><b>Balancete confere com a conciliação.</b> Etapa concluída — fechamento pronto para ser liberado.</span></div>
+            </div>
+          </div>
+        </div>
+      </div><!-- /view-status -->
+
+    </div>
+  </main>
+</div>
+
+<script>
+  var panes=['seguro','importacao','emprestimo','equivalencia','outros'];
+  function go(t){
+    panes.forEach(function(p){
+      document.getElementById('pane-'+p).classList.toggle('hidden',p!==t);
+    });
+    document.querySelectorAll('.tab').forEach(function(el){
+      el.classList.toggle('active',el.dataset.tab===t);
+    });
+    document.querySelector('.wrap').scrollIntoView({behavior:'smooth',block:'start'});
+  }
+  function reveal(readId,gerId,btn){
+    document.getElementById(readId).classList.remove('pending');
+    var g=document.getElementById(gerId); g.classList.remove('hidden');
+    if(btn){btn.textContent='✓ Documento lido';btn.disabled=true;btn.style.opacity=.6;}
+    g.scrollIntoView({behavior:'smooth',block:'nearest'});
+  }
+  function lerSeguro(){reveal('read-seg','ger-seg',document.getElementById('btn-ler-seg'));}
+  function lerImp(){reveal('read-imp','ger-imp',event.target);}
+  function lerEmp(){reveal('read-emp','ger-emp',event.target);}
+  function lerEqp(){reveal('read-eqp','ger-eqp',event.target);}
+  function lerRel(){document.getElementById('read-rel').classList.remove('pending');event.target.textContent='✓ Relatório lido';event.target.disabled=true;event.target.style.opacity=.6;}
+  function go2(t){go(t);document.getElementById('read-eqp').scrollIntoView({behavior:'smooth',block:'center'});}
+
+  var VIEWS={outras:'Outras Contabilizações',sugestoes:'Sugestões de Contabilização',status:'Status'};
+  function showView(v){
+    Object.keys(VIEWS).forEach(function(x){
+      document.getElementById('view-'+x).classList.toggle('hidden',x!==v);
+      var nav=document.getElementById('nav-'+x); if(nav) nav.classList.toggle('active',x===v);
+    });
+    document.getElementById('crumb-pg').textContent = VIEWS[v];
+    window.scrollTo({top:0,behavior:'smooth'});
+  }
+  function setMode(m){
+    document.getElementById('mode-manual').classList.toggle('hidden',m!=='manual');
+    document.getElementById('mode-report').classList.toggle('hidden',m!=='report');
+    document.getElementById('mt-manual').classList.toggle('active',m==='manual');
+    document.getElementById('mt-report').classList.toggle('active',m==='report');
+  }
+  function gerarDominio(){
+    var b=document.getElementById('btn-dom');b.textContent='✓ Arquivo gerado';b.disabled=true;b.style.opacity=.6;
+    document.getElementById('dom-step2').classList.remove('hidden');
+    document.getElementById('dom-step2').scrollIntoView({behavior:'smooth',block:'start'});
+  }
+  function conferir(){document.getElementById('read-bal').classList.remove('pending');event.target.textContent='✓ Conferido';event.target.disabled=true;event.target.style.opacity=.6;}
+  function confirmRow(btn){btn.closest('.srow').classList.add('done');}
+  function confirmAll(g){document.querySelectorAll('.srow[data-g="'+g+'"]').forEach(function(r){
+    if(!r.querySelector('.doneflag'))return;
+    var res=r.querySelector('.pbtn[style*="E5484D"]'); if(res)return; // deixa apontamento em aberto
+    r.classList.add('done');});}
+</script>
