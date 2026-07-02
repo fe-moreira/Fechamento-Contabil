@@ -312,6 +312,7 @@
     <div class="nav"><span class="ic">◫</span>Comp. Movimento</div>
     <div class="nav gone" title="Descontinuado — a função virou Outros Lançamentos"><span class="ic">✎</span>Contabilizar<span class="moved">→ Outras Contab.</span></div>
     <div class="nav active" id="nav-outras" onclick="showView('outras')"><span class="ic">⊞</span>Outras Contabilizações</div>
+    <div class="nav" id="nav-sugestoes" onclick="showView('sugestoes')"><span class="ic">💡</span>Sugestões de Contab.<span class="badge" style="background:#35C08A">5</span></div>
     <div class="nav"><span class="ic">▣</span>Relatórios</div>
     <div class="nav" id="nav-status" onclick="showView('status')"><span class="ic">◉</span>Status<span class="badge" style="background:#E5484D">5</span></div>
     <div class="navsec">Cliente</div>
@@ -345,77 +346,12 @@
         <button class="pbtn" onclick="showView('status')">Ir para o Status →</button>
       </div>
 
-      <!-- SUGESTÕES DE CONTABILIZAÇÃO -->
-      <div class="hero">
-        <div class="hh">
-          <div class="hb">💡</div>
-          <div><p class="sec-t" style="margin:0">Sugestões de Contabilização</p>
-            <p class="sec-s" style="margin:0">A plataforma lê o razão e aponta o que precisa ser lançado ou corrigido.</p></div>
-        </div>
-        <div class="cbar">
-          <span class="ct"><b>5 sugestões</b> em Julho/2026 · o que você confirmar vira lançamento e alimenta o Status → Domínio</span>
-          <button class="pbtn mini ghost" onclick="confirmAll('sug')">✓ Confirmar todas</button>
-        </div>
-
-        <div class="srow" data-g="sug">
-          <div class="si2" style="background:rgba(74,124,255,.16);color:#8FB0FF">⇄</div>
-          <div class="mid"><b>Baixar adiantamento de fornecedor — Metalúrgica Sul</b>
-            <div class="why"><span class="wi">💡</span><span>NF 4471 de R$ 12.000 lançada este mês bate com o adiantamento de R$ 12.000 pago em jun/26.</span></div>
-            <span class="part">D 2.1.1.05 Fornecedor Metalúrgica Sul · C 1.1.5.02 Adiant. a fornecedores</span></div>
-          <div class="rt"><span class="amt2 tnum">12.000,00</span>
-            <span class="chip good" style="font-size:10.5px">confiança 97%</span>
-            <span class="doneflag">✓ confirmado</span>
-            <div class="acts"><button class="iconbtn ok" onclick="confirmRow(this)" title="Confirmar">✓</button>
-              <button class="iconbtn" title="Editar">✎</button><button class="iconbtn no" title="Descartar">✕</button></div></div>
-        </div>
-
-        <div class="srow" data-g="sug">
-          <div class="si2" style="background:rgba(74,124,255,.16);color:#8FB0FF">⇄</div>
-          <div class="mid"><b>Baixar adiantamento de cliente — Rodobens</b>
-            <div class="why"><span class="wi">💡</span><span>NF de saída 8890 de R$ 8.500 bate com o adiantamento recebido do cliente em jun/26.</span></div>
-            <span class="part">D 2.1.4.01 Adiant. de clientes · C 1.1.2.01 Clientes a receber</span></div>
-          <div class="rt"><span class="amt2 tnum">8.500,00</span>
-            <span class="chip good" style="font-size:10.5px">confiança 95%</span>
-            <span class="doneflag">✓ confirmado</span>
-            <div class="acts"><button class="iconbtn ok" onclick="confirmRow(this)" title="Confirmar">✓</button>
-              <button class="iconbtn" title="Editar">✎</button><button class="iconbtn no" title="Descartar">✕</button></div></div>
-        </div>
-
-        <div class="srow" data-g="sug">
-          <div class="si2" style="background:rgba(48,164,108,.16);color:#4CD08A">＄</div>
-          <div class="mid"><b>Rendimento de aplicação financeira — Itaú</b>
-            <div class="why"><span class="wi">💡</span><span>Extrato mostra rendimento de R$ 1.240 no mês, sem lançamento no razão.</span></div>
-            <span class="part">D 1.1.1.20 Aplicações financeiras · C 3.2.1.01 Receita financeira</span></div>
-          <div class="rt"><span class="amt2 tnum">1.240,00</span>
-            <span class="chip good" style="font-size:10.5px">confiança 99%</span>
-            <span class="doneflag">✓ confirmado</span>
-            <div class="acts"><button class="iconbtn ok" onclick="confirmRow(this)" title="Confirmar">✓</button>
-              <button class="iconbtn" title="Editar">✎</button><button class="iconbtn no" title="Descartar">✕</button></div></div>
-        </div>
-
-        <div class="srow" data-g="sug">
-          <div class="si2" style="background:rgba(231,168,59,.16);color:#F0BC5E">🧾</div>
-          <div class="mid"><b>Baixa de ICMS recolhido (mês anterior)</b>
-            <div class="why"><span class="wi">💡</span><span>ICMS de jun/26 (R$ 5.300) foi debitado do banco em 10/jul — a conta a recolher continua aberta.</span></div>
-            <span class="part">D 2.1.3.01 ICMS a recolher · C 1.1.1.02 Banco Itaú</span></div>
-          <div class="rt"><span class="amt2 tnum">5.300,00</span>
-            <span class="chip good" style="font-size:10.5px">confiança 98%</span>
-            <span class="doneflag">✓ confirmado</span>
-            <div class="acts"><button class="iconbtn ok" onclick="confirmRow(this)" title="Confirmar">✓</button>
-              <button class="iconbtn" title="Editar">✎</button><button class="iconbtn no" title="Descartar">✕</button></div></div>
-        </div>
-
-        <div class="srow" data-g="sug">
-          <div class="si2" style="background:rgba(154,124,240,.16);color:#B49DF5">▤</div>
-          <div class="mid"><b>Depreciação mensal do imobilizado</b>
-            <div class="why"><span class="wi">💡</span><span>Imobilizado com base de cálculo ativa e sem depreciação lançada em julho.</span></div>
-            <span class="part">D 4.1.3.01 Depreciação · C 1.2.3.09 Depreciação acumulada</span></div>
-          <div class="rt"><span class="amt2 tnum">3.180,00</span>
-            <span class="chip warn" style="font-size:10.5px">confiança 92%</span>
-            <span class="doneflag">✓ confirmado</span>
-            <div class="acts"><button class="iconbtn ok" onclick="confirmRow(this)" title="Confirmar">✓</button>
-              <button class="iconbtn" title="Editar">✎</button><button class="iconbtn no" title="Descartar">✕</button></div></div>
-        </div>
+      <!-- link para o painel separado de Sugestões -->
+      <div class="banner" style="margin-bottom:16px;cursor:pointer" onclick="showView('sugestoes')">
+        <div class="bi" style="background:rgba(53,192,138,.16);color:#5FD9A6">💡</div>
+        <div class="txt"><b>5 sugestões de contabilização aguardando</b>
+          <p>A plataforma leu o razão e encontrou baixas de adiantamento, rendimentos e ajustes a lançar.</p></div>
+        <button class="pbtn" onclick="showView('sugestoes')">Abrir painel de Sugestões →</button>
       </div>
 
       <!-- PENDÊNCIAS RECORRENTES (confirmar → vira lançamento) -->
@@ -888,6 +824,85 @@
       </section>
       </div><!-- /view-outras -->
 
+      <!-- ================= VIEW: SUGESTÕES ================= -->
+      <div id="view-sugestoes" class="hidden">
+        <h1 class="h1">Sugestões de Contabilização</h1>
+        <p class="lead">A plataforma varre o <b>razão</b> da competência e aponta o que precisa ser
+          <b>lançado ou corrigido</b> — cada sugestão traz a evidência que a gerou. O que você confirmar
+          vira lançamento e alimenta o <b>Status → Domínio</b>.</p>
+        <div class="hero">
+        <div class="hh">
+          <div class="hb">💡</div>
+          <div><p class="sec-t" style="margin:0">Sugestões de Contabilização</p>
+            <p class="sec-s" style="margin:0">A plataforma lê o razão e aponta o que precisa ser lançado ou corrigido.</p></div>
+        </div>
+        <div class="cbar">
+          <span class="ct"><b>5 sugestões</b> em Julho/2026 · o que você confirmar vira lançamento e alimenta o Status → Domínio</span>
+          <button class="pbtn mini ghost" onclick="confirmAll('sug')">✓ Confirmar todas</button>
+        </div>
+
+        <div class="srow" data-g="sug">
+          <div class="si2" style="background:rgba(74,124,255,.16);color:#8FB0FF">⇄</div>
+          <div class="mid"><b>Baixar adiantamento de fornecedor — Metalúrgica Sul</b>
+            <div class="why"><span class="wi">💡</span><span>NF 4471 de R$ 12.000 lançada este mês bate com o adiantamento de R$ 12.000 pago em jun/26.</span></div>
+            <span class="part">D 2.1.1.05 Fornecedor Metalúrgica Sul · C 1.1.5.02 Adiant. a fornecedores</span></div>
+          <div class="rt"><span class="amt2 tnum">12.000,00</span>
+            <span class="chip good" style="font-size:10.5px">confiança 97%</span>
+            <span class="doneflag">✓ confirmado</span>
+            <div class="acts"><button class="iconbtn ok" onclick="confirmRow(this)" title="Confirmar">✓</button>
+              <button class="iconbtn" title="Editar">✎</button><button class="iconbtn no" title="Descartar">✕</button></div></div>
+        </div>
+
+        <div class="srow" data-g="sug">
+          <div class="si2" style="background:rgba(74,124,255,.16);color:#8FB0FF">⇄</div>
+          <div class="mid"><b>Baixar adiantamento de cliente — Rodobens</b>
+            <div class="why"><span class="wi">💡</span><span>NF de saída 8890 de R$ 8.500 bate com o adiantamento recebido do cliente em jun/26.</span></div>
+            <span class="part">D 2.1.4.01 Adiant. de clientes · C 1.1.2.01 Clientes a receber</span></div>
+          <div class="rt"><span class="amt2 tnum">8.500,00</span>
+            <span class="chip good" style="font-size:10.5px">confiança 95%</span>
+            <span class="doneflag">✓ confirmado</span>
+            <div class="acts"><button class="iconbtn ok" onclick="confirmRow(this)" title="Confirmar">✓</button>
+              <button class="iconbtn" title="Editar">✎</button><button class="iconbtn no" title="Descartar">✕</button></div></div>
+        </div>
+
+        <div class="srow" data-g="sug">
+          <div class="si2" style="background:rgba(48,164,108,.16);color:#4CD08A">＄</div>
+          <div class="mid"><b>Rendimento de aplicação financeira — Itaú</b>
+            <div class="why"><span class="wi">💡</span><span>Extrato mostra rendimento de R$ 1.240 no mês, sem lançamento no razão.</span></div>
+            <span class="part">D 1.1.1.20 Aplicações financeiras · C 3.2.1.01 Receita financeira</span></div>
+          <div class="rt"><span class="amt2 tnum">1.240,00</span>
+            <span class="chip good" style="font-size:10.5px">confiança 99%</span>
+            <span class="doneflag">✓ confirmado</span>
+            <div class="acts"><button class="iconbtn ok" onclick="confirmRow(this)" title="Confirmar">✓</button>
+              <button class="iconbtn" title="Editar">✎</button><button class="iconbtn no" title="Descartar">✕</button></div></div>
+        </div>
+
+        <div class="srow" data-g="sug">
+          <div class="si2" style="background:rgba(231,168,59,.16);color:#F0BC5E">🧾</div>
+          <div class="mid"><b>Baixa de ICMS recolhido (mês anterior)</b>
+            <div class="why"><span class="wi">💡</span><span>ICMS de jun/26 (R$ 5.300) foi debitado do banco em 10/jul — a conta a recolher continua aberta.</span></div>
+            <span class="part">D 2.1.3.01 ICMS a recolher · C 1.1.1.02 Banco Itaú</span></div>
+          <div class="rt"><span class="amt2 tnum">5.300,00</span>
+            <span class="chip good" style="font-size:10.5px">confiança 98%</span>
+            <span class="doneflag">✓ confirmado</span>
+            <div class="acts"><button class="iconbtn ok" onclick="confirmRow(this)" title="Confirmar">✓</button>
+              <button class="iconbtn" title="Editar">✎</button><button class="iconbtn no" title="Descartar">✕</button></div></div>
+        </div>
+
+        <div class="srow" data-g="sug">
+          <div class="si2" style="background:rgba(154,124,240,.16);color:#B49DF5">▤</div>
+          <div class="mid"><b>Depreciação mensal do imobilizado</b>
+            <div class="why"><span class="wi">💡</span><span>Imobilizado com base de cálculo ativa e sem depreciação lançada em julho.</span></div>
+            <span class="part">D 4.1.3.01 Depreciação · C 1.2.3.09 Depreciação acumulada</span></div>
+          <div class="rt"><span class="amt2 tnum">3.180,00</span>
+            <span class="chip warn" style="font-size:10.5px">confiança 92%</span>
+            <span class="doneflag">✓ confirmado</span>
+            <div class="acts"><button class="iconbtn ok" onclick="confirmRow(this)" title="Confirmar">✓</button>
+              <button class="iconbtn" title="Editar">✎</button><button class="iconbtn no" title="Descartar">✕</button></div></div>
+        </div>
+      </div>
+      </div><!-- /view-sugestoes -->
+
       <!-- ================= VIEW: STATUS ================= -->
       <div id="view-status" class="hidden">
         <h1 class="h1">Status do fechamento</h1>
@@ -1009,12 +1024,13 @@
   function lerRel(){document.getElementById('read-rel').classList.remove('pending');event.target.textContent='✓ Relatório lido';event.target.disabled=true;event.target.style.opacity=.6;}
   function go2(t){go(t);document.getElementById('read-eqp').scrollIntoView({behavior:'smooth',block:'center'});}
 
+  var VIEWS={outras:'Outras Contabilizações',sugestoes:'Sugestões de Contabilização',status:'Status'};
   function showView(v){
-    document.getElementById('view-outras').classList.toggle('hidden',v!=='outras');
-    document.getElementById('view-status').classList.toggle('hidden',v!=='status');
-    document.getElementById('nav-outras').classList.toggle('active',v==='outras');
-    document.getElementById('nav-status').classList.toggle('active',v==='status');
-    document.getElementById('crumb-pg').textContent = v==='status' ? 'Status' : 'Outras Contabilizações';
+    Object.keys(VIEWS).forEach(function(x){
+      document.getElementById('view-'+x).classList.toggle('hidden',x!==v);
+      var nav=document.getElementById('nav-'+x); if(nav) nav.classList.toggle('active',x===v);
+    });
+    document.getElementById('crumb-pg').textContent = VIEWS[v];
     window.scrollTo({top:0,behavior:'smooth'});
   }
   function setMode(m){
