@@ -4,6 +4,7 @@ import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { listar, inserir, remover, gerarLancamento } from '../lib/outras'
 import ObservacoesConciliacao from '../components/ObservacoesConciliacao'
+import LeitorIA from '../components/LeitorIA'
 
 const ACC = { seguro: '#4A7CFF', importacao: '#2FB6A8', emprestimo: '#9A7CF0', parcelamento: '#E8923B', equivalencia: '#E06C9F', outros: '#7C89A6' }
 const BLOCOS = [
@@ -36,6 +37,20 @@ function dataComp(competencia) {
 function useForm(init) {
   const [f, setF] = useState(init)
   return [f, k => e => setF(x => ({ ...x, [k]: e.target.value })), () => setF(init), setF]
+}
+
+// Mescla no formulário só os campos que a IA de fato extraiu (não vazios/zerados)
+// e que existem no formulário — preserva o que já estava preenchido.
+function aplicarIA(setF, dados) {
+  setF(x => {
+    const merge = { ...x }
+    for (const [k, v] of Object.entries(dados || {})) {
+      if (!(k in x)) continue
+      if (v === '' || v === null || v === undefined || v === 0) continue
+      merge[k] = String(v)
+    }
+    return merge
+  })
 }
 
 export default function OutrasContabilizacoes() {
@@ -149,7 +164,7 @@ function Vazio({ colSpan, texto }) { return <tr><td colSpan={colSpan} style={{ p
 // ================= SEGURO =================
 function PaneSeguro({ clienteId, user, competencia, abrirGerar }) {
   const { rows, loading, erro, recarregar, excluir } = useLista('seguros', clienteId)
-  const [f, on, reset] = useForm({ seguradora: '', apolice: '', ramo: '', vigencia_inicio: '', vigencia_fim: '', premio_total: '', num_parcelas: '12', valor_parcela: '', conta_despesa: '4.1.2.18', conta_apropriar: '1.1.3.02', conta_pagar: '2.1.1.05' })
+  const [f, on, reset, setF] = useForm({ seguradora: '', apolice: '', ramo: '', vigencia_inicio: '', vigencia_fim: '', premio_total: '', num_parcelas: '12', valor_parcela: '', conta_despesa: '4.1.2.18', conta_apropriar: '1.1.3.02', conta_pagar: '2.1.1.05' })
   const [sav, setSav] = useState(false)
   async function salvar(e) { e.preventDefault(); setSav(true); try { await inserir('seguros', { cliente_id: clienteId, seguradora: f.seguradora, apolice: f.apolice, ramo: f.ramo, vigencia_inicio: f.vigencia_inicio || null, vigencia_fim: f.vigencia_fim || null, premio_total: num(f.premio_total), num_parcelas: Number(f.num_parcelas) || null, valor_parcela: num(f.valor_parcela), conta_despesa: f.conta_despesa, conta_apropriar: f.conta_apropriar, conta_pagar: f.conta_pagar, usuario: user?.email }); reset(); recarregar() } catch (er) { alert(er.message) } finally { setSav(false) } }
   return (
@@ -157,6 +172,7 @@ function PaneSeguro({ clienteId, user, competencia, abrirGerar }) {
       <Card>
         <SecTitle><i className="ti ti-shield-half" style={{ color: ACC.seguro }} /> Novo contrato de seguro</SecTitle>
         <SecSub>Cadastre a apólice — depois gere a apropriação do mês, que vira lançamento.</SecSub>
+        <LeitorIA tipo="seguro" acento={ACC.seguro} onExtraido={d => aplicarIA(setF, d)} />
         <form onSubmit={salvar} style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10 }}>
           <Field label="Seguradora"><input className="input" value={f.seguradora} onChange={on('seguradora')} required /></Field>
           <Field label="Apólice"><input className="input" value={f.apolice} onChange={on('apolice')} /></Field>
@@ -195,7 +211,7 @@ function PaneSeguro({ clienteId, user, competencia, abrirGerar }) {
 function PaneImportacao({ clienteId, user, competencia, abrirGerar }) {
   const proc = useLista('importacoes', clienteId)
   const adiant = useLista('adiantamentos_importacao', clienteId)
-  const [f, on, reset] = useForm({ numero: '', di: '', fornecedor: '', mercadoria: '', invoice_moeda: 'USD', invoice_valor: '', cambio: '', custo_total: '' })
+  const [f, on, reset, setF] = useForm({ numero: '', di: '', fornecedor: '', mercadoria: '', invoice_moeda: 'USD', invoice_valor: '', cambio: '', custo_total: '' })
   const [fa, ona, resetA] = useForm({ fornecedor: '', data: '', valor: '' })
   async function salvarProc(e) { e.preventDefault(); try { await inserir('importacoes', { cliente_id: clienteId, numero: f.numero, di: f.di, fornecedor: f.fornecedor, mercadoria: f.mercadoria, invoice_moeda: f.invoice_moeda, invoice_valor: num(f.invoice_valor), cambio: num(f.cambio), custo_total: num(f.custo_total), usuario: user?.email }); reset(); proc.recarregar() } catch (er) { alert(er.message) } }
   async function salvarAdiant(e) { e.preventDefault(); try { await inserir('adiantamentos_importacao', { cliente_id: clienteId, fornecedor: fa.fornecedor, data: fa.data || null, valor: num(fa.valor), usuario: user?.email }); resetA(); adiant.recarregar() } catch (er) { alert(er.message) } }
@@ -218,6 +234,7 @@ function PaneImportacao({ clienteId, user, competencia, abrirGerar }) {
       </Card>
       <Card>
         <SecTitle><i className="ti ti-ship" style={{ color: ACC.importacao }} /> Novo processo de importação</SecTitle>
+        <LeitorIA tipo="importacao" acento={ACC.importacao} onExtraido={d => aplicarIA(setF, d)} />
         <form onSubmit={salvarProc} style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10 }}>
           <Field label="Nº processo"><input className="input" value={f.numero} onChange={on('numero')} required /></Field>
           <Field label="DI / DUIMP"><input className="input" value={f.di} onChange={on('di')} /></Field>
@@ -249,13 +266,14 @@ function PaneImportacao({ clienteId, user, competencia, abrirGerar }) {
 // ================= EMPRÉSTIMO =================
 function PaneEmprestimo({ clienteId, user }) {
   const { rows, recarregar, excluir } = useLista('emprestimos', clienteId)
-  const [f, on, reset] = useForm({ banco: '', contrato: '', modalidade: '', valor: '', prazo: '', taxa_mensal: '', valor_parcela: '', saldo_devedor: '' })
+  const [f, on, reset, setF] = useForm({ banco: '', contrato: '', modalidade: '', valor: '', prazo: '', taxa_mensal: '', valor_parcela: '', saldo_devedor: '' })
   async function salvar(e) { e.preventDefault(); try { await inserir('emprestimos', { cliente_id: clienteId, banco: f.banco, contrato: f.contrato, modalidade: f.modalidade, valor: num(f.valor), prazo: Number(f.prazo) || null, taxa_mensal: num(f.taxa_mensal), valor_parcela: num(f.valor_parcela), saldo_devedor: num(f.saldo_devedor), usuario: user?.email }); reset(); recarregar() } catch (er) { alert(er.message) } }
   return (
     <div style={{ display: 'grid', gap: 14 }}>
       <Card>
         <SecTitle><i className="ti ti-building-bank" style={{ color: ACC.emprestimo }} /> Novo contrato de empréstimo</SecTitle>
         <SecSub>O empréstimo <b>não gera lançamento</b> — serve de referência para conferir com a Conciliação.</SecSub>
+        <LeitorIA tipo="emprestimo" acento={ACC.emprestimo} onExtraido={d => aplicarIA(setF, d)} />
         <form onSubmit={salvar} style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10 }}>
           <Field label="Banco"><input className="input" value={f.banco} onChange={on('banco')} required /></Field>
           <Field label="Contrato"><input className="input" value={f.contrato} onChange={on('contrato')} /></Field>
@@ -283,13 +301,14 @@ function PaneEmprestimo({ clienteId, user }) {
 // ================= PARCELAMENTO =================
 function PaneParcelamento({ clienteId, user, competencia, abrirGerar }) {
   const { rows, recarregar, excluir } = useLista('parcelamentos', clienteId)
-  const [f, on, reset] = useForm({ orgao: '', numero: '', tributo: '', consolidado: '', num_parcelas: '', valor_parcela: '', saldo_devedor: '', juros_multa_mes: '', conta_despesa: '4.3.1.05', conta_passivo: '2.1.2.20' })
+  const [f, on, reset, setF] = useForm({ orgao: '', numero: '', tributo: '', consolidado: '', num_parcelas: '', valor_parcela: '', saldo_devedor: '', juros_multa_mes: '', conta_despesa: '4.3.1.05', conta_passivo: '2.1.2.20' })
   async function salvar(e) { e.preventDefault(); try { await inserir('parcelamentos', { cliente_id: clienteId, orgao: f.orgao, numero: f.numero, tributo: f.tributo, consolidado: num(f.consolidado), num_parcelas: Number(f.num_parcelas) || null, valor_parcela: num(f.valor_parcela), saldo_devedor: num(f.saldo_devedor), juros_multa_mes: num(f.juros_multa_mes), conta_despesa: f.conta_despesa, conta_passivo: f.conta_passivo, usuario: user?.email }); reset(); recarregar() } catch (er) { alert(er.message) } }
   return (
     <div style={{ display: 'grid', gap: 14 }}>
       <Card>
         <SecTitle><i className="ti ti-receipt" style={{ color: ACC.parcelamento }} /> Novo parcelamento de impostos</SecTitle>
         <SecSub>A única contabilização é a <b>atualização de juros e multa</b>. A parcela (principal) vem do banco, na conciliação.</SecSub>
+        <LeitorIA tipo="parcelamento" acento={ACC.parcelamento} onExtraido={d => aplicarIA(setF, d)} />
         <form onSubmit={salvar} style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10 }}>
           <Field label="Órgão"><input className="input" value={f.orgao} onChange={on('orgao')} placeholder="PGFN / Sefaz…" required /></Field>
           <Field label="Nº parcelamento"><input className="input" value={f.numero} onChange={on('numero')} /></Field>
@@ -321,7 +340,7 @@ function PaneParcelamento({ clienteId, user, competencia, abrirGerar }) {
 // ================= EQUIVALÊNCIA =================
 function PaneEquivalencia({ clienteId, user, competencia, abrirGerar }) {
   const { rows, recarregar, excluir } = useLista('participacoes', clienteId)
-  const [f, on, reset] = useForm({ investida: '', vinculo: 'Coligada', participacao_pct: '', valor_investimento: '', conta_investimento: '1.2.1.03', conta_resultado: '4.3.2.01' })
+  const [f, on, reset, setF] = useForm({ investida: '', vinculo: 'Coligada', participacao_pct: '', valor_investimento: '', conta_investimento: '1.2.1.03', conta_resultado: '4.3.2.01' })
   const [res, setRes] = useState({}) // id -> resultado do mês digitado
   async function salvar(e) { e.preventDefault(); try { await inserir('participacoes', { cliente_id: clienteId, investida: f.investida, vinculo: f.vinculo, participacao_pct: num(f.participacao_pct), valor_investimento: num(f.valor_investimento), conta_investimento: f.conta_investimento, conta_resultado: f.conta_resultado, usuario: user?.email }); reset(); recarregar() } catch (er) { alert(er.message) } }
   function gerarMEP(r) {
@@ -341,6 +360,7 @@ function PaneEquivalencia({ clienteId, user, competencia, abrirGerar }) {
       <Card>
         <SecTitle><i className="ti ti-scale" style={{ color: ACC.equivalencia }} /> Nova participação societária</SecTitle>
         <SecSub>Cadastre a investida. Para gerar a MEP, informe o <b>resultado da investida no mês</b> na tabela abaixo.</SecSub>
+        <LeitorIA tipo="participacao" acento={ACC.equivalencia} onExtraido={d => aplicarIA(setF, d)} />
         <form onSubmit={salvar} style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10 }}>
           <Field label="Investida"><input className="input" value={f.investida} onChange={on('investida')} required /></Field>
           <Field label="Vínculo"><select className="input" value={f.vinculo} onChange={on('vinculo')}><option>Coligada</option><option>Controlada</option></select></Field>
