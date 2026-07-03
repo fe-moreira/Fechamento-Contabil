@@ -60,7 +60,7 @@ export default function Status() {
       const docs = Array.isArray(comp.documentos) ? comp.documentos : []
       temRazao = (razaoCount || 0) > 0
       docsPendentes = docs.filter(d => d && d.rec === false)
-      contasAbertas = (balancete || []).filter(b => Number(b.saldo_final) !== 0)
+      contasAbertas = (balancete || []).filter(b => Math.abs(Number(b.saldo_final)) > 0.005)
       integracoes = comp.integracoes || {}
       observacoes = obs || []
     } else {

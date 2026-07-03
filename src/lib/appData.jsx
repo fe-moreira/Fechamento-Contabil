@@ -60,13 +60,15 @@ export function AppDataProvider({ children }) {
     if (cli?.carga_saldos && !cli?.carga_inicial_feita) p += 1
     const [mes, ano] = competencia.split('/').map(Number)
     const { data: comp } = await supabase.from('competencias')
-      .select('id, documentos').eq('cliente_id', empresaId).eq('ano', ano).eq('mes', mes).maybeSingle()
+      .select('id, documentos, integracoes').eq('cliente_id', empresaId).eq('ano', ano).eq('mes', mes).maybeSingle()
     if (!comp) { setPendencias(p + 1); return } // razão ainda não importado
     const { count } = await supabase.from('razao').select('id', { count: 'exact', head: true }).eq('competencia_id', comp.id)
     if (!count) p += 1
-    p += (Array.isArray(comp.documentos) ? comp.documentos : []).filter(d => !d.rec).length
+    p += (Array.isArray(comp.documentos) ? comp.documentos : []).filter(d => d && d.rec === false).length
     const { data: bal } = await supabase.from('balancete').select('saldo_final').eq('competencia_id', comp.id)
-    p += (bal || []).filter(b => Math.abs(Number(b.saldo_final)) > 0.01).length
+    p += (bal || []).filter(b => Math.abs(Number(b.saldo_final)) > 0.005).length
+    // Integrações não validadas (mesma régua do gate no Status).
+    p += ['fiscal', 'folha', 'patrimonio', 'financeira'].filter(k => !comp.integracoes?.[k]?.estado).length
     const dist = await apurarDistribuicao(empresaId, comp.id)
     p += (dist.socios || []).filter(s => s.excede).length
     const br = await apurarBancoResultado(empresaId, comp.id)
