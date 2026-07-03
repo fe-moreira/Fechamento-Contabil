@@ -41,6 +41,7 @@ create table if not exists public.competencias (
   mes         int  not null check (mes between 1 and 12),
   status      text not null default 'andamento' check (status in ('andamento','fechado','pendente')),
   pct         int  default 0,
+  integracoes jsonb not null default '{}'::jsonb,  -- estado por integração (fiscal/folha/patrimonio/financeira)
   created_at  timestamptz default now(),
   updated_at  timestamptz default now(),
   unique (cliente_id, ano, mes)

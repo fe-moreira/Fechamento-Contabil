@@ -1,5 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
+import { useAuth } from '../components/AuthProvider'
 import { theme, money } from '../lib/theme'
 
 const TABS = [['fiscal', 'Fiscal'], ['folha', 'Folha'], ['patrimonio', 'Patrimônio'], ['financeira', 'Financeira']]
@@ -21,13 +23,24 @@ function somaNumerica(linhas) {
 }
 
 export default function Integracao() {
-  const { empresas, empresaId, empresaNome, competencia } = useAppData()
+  const { empresas, empresaId, empresaNome, competencia, getCompetenciaId } = useAppData()
+  const { user } = useAuth()
   const cliente = empresas.find(e => e.id === empresaId)
   const integ = cliente?.integracao_financeira || 'Não usa'
   const sistema = (cliente?.sistema_financeiro || '').trim()
   const [tab, setTab] = useState('fiscal')
   const [dados, setDados] = useState({}) // { tab: { nome, linhas } }
+  const [estado, setEstado] = useState({}) // integrações validadas/sem movimento salvas na competência
   const [erro, setErro] = useState('')
+
+  // Carrega o estado das integrações já salvas nesta competência.
+  useEffect(() => {
+    if (!empresaId) { setEstado({}); return }
+    const [mes, ano] = (competencia || '').split('/').map(Number)
+    supabase.from('competencias').select('integracoes')
+      .eq('cliente_id', empresaId).eq('ano', ano).eq('mes', mes).maybeSingle()
+      .then(({ data }) => setEstado(data?.integracoes || {}))
+  }, [empresaId, competencia])
 
   if (!empresaId) {
     return <Wrapper><Aviso texto="Selecione uma empresa no menu lateral para usar a integração." /></Wrapper>
@@ -42,6 +55,13 @@ export default function Integracao() {
       const arr = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' })
       const linhas = arr.slice(1).filter(r => r.some(c => c !== '' && c != null)).slice(0, 300)
       setDados(d => ({ ...d, [alvo]: { nome: file.name, linhas } }))
+      // Persiste: integração validada (documento importado) na competência → some do Status.
+      const id = await getCompetenciaId()
+      if (id) {
+        const novo = { ...estado, [alvo]: { estado: 'validado', doc: file.name, usuario: user?.email || null } }
+        await supabase.from('competencias').update({ integracoes: novo }).eq('id', id)
+        setEstado(novo)
+      }
     } catch (err) { setErro('Não consegui ler: ' + err.message) }
   }
 
@@ -61,17 +81,29 @@ export default function Integracao() {
 
       {tab === 'financeira'
         ? (integ === 'Excel'
-          ? <Financeira dados={dados.financeira} onImport={f => importar('financeira', f)} competencia={competencia} />
+          ? <Financeira dados={dados.financeira} onImport={f => importar('financeira', f)} competencia={competencia} est={estado.financeira} />
           : <FinanceiraViaSistema integ={integ} sistema={sistema} />)
-        : <Cruzamento tab={tab} dados={dados[tab]} onImport={f => importar(tab, f)} />}
+        : <Cruzamento tab={tab} dados={dados[tab]} onImport={f => importar(tab, f)} est={estado[tab]} />}
     </Wrapper>
   )
 }
 
-function Cruzamento({ tab, dados, onImport }) {
+function EstadoBadge({ est }) {
+  if (!est?.estado) return null
+  const semMov = est.estado === 'sem_movimento'
+  return (
+    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: semMov ? theme.sub : theme.green, background: theme.card, border: `1px solid ${theme.cb}`, borderRadius: 20, padding: '5px 12px', marginBottom: 12 }}>
+      <i className={`ti ${semMov ? 'ti-circle-minus' : 'ti-circle-check'}`} />
+      {semMov ? 'Sem movimento no período' : `Validado${est.doc ? ` · ${est.doc}` : ''}`}
+    </div>
+  )
+}
+
+function Cruzamento({ tab, dados, onImport, est }) {
   const total = dados ? somaNumerica(dados.linhas) : 0
   return (
     <>
+      <div><EstadoBadge est={est} /></div>
       <ImpCard titulo={`Importar — ${DESC[tab].split(' ')[1] || 'relatório'}`} desc={DESC[tab]} onImport={onImport} nome={dados?.nome} qtd={dados?.linhas.length} />
       {dados && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(180px,1fr))', gap: 12, marginTop: 16 }}>
@@ -84,7 +116,7 @@ function Cruzamento({ tab, dados, onImport }) {
   )
 }
 
-function Financeira({ dados, onImport, competencia }) {
+function Financeira({ dados, onImport, competencia, est }) {
   function gerar() {
     const linhas = dados?.linhas || []
     const csv = '﻿' + linhas.map(r => r.map(c => `"${String(c ?? '').replace(/"/g, '""')}"`).join(';')).join('\r\n')
@@ -95,6 +127,7 @@ function Financeira({ dados, onImport, competencia }) {
   }
   return (
     <>
+      <div><EstadoBadge est={est} /></div>
       <ImpCard titulo="Importar extrato financeiro" desc="Importe o extrato; o que a plataforma identificar é contabilizado automaticamente, o resto fica para classificar." onImport={onImport} nome={dados?.nome} qtd={dados?.linhas.length} />
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginTop: 16 }}>
         <Balde titulo="Contabilizado automaticamente" cor={theme.green} icon="ti-circle-check" linhas={[]} vazio="A classificação automática (de/para) entra na próxima onda." />
