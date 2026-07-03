@@ -851,7 +851,7 @@ function ModalLancamento({ lanc, conta, lab, plano, natCredito, residuo = 0, onC
     data: lanc.data || '', valor: valorLan,
     conta_debito: ehDeb ? '' : conta.conta,
     conta_credito: ehDeb ? conta.conta : '',
-    historico: `Ajuste conciliação · NF ${lanc.leitura.nf || '—'} · ${conta.nome}`,
+    historico: `Reclassificação · NF ${lanc.leitura.nf || '—'} · ${conta.nome}`,
   })
   // Ajuste de leitura (ajuda o sistema a cruzar): nome do cliente/fornecedor, NF e histórico.
   const [ajuste, setAjuste] = useState({ entidade: lanc.leitura.entidade || '', nf: lanc.leitura.nf || '', historico: lanc.historico || '' })
