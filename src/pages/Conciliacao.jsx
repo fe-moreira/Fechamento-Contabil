@@ -882,8 +882,14 @@ function ModalLancamento({ lanc, conta, lab, plano, natCredito, residuo = 0, onC
 
   function registrar() {
     if (tipo === 'Justificativa') return onRegistrar('Justificativa', { detalhe: txt.trim() })
+    // Ajuste de leitura puro (mudou NF/nome/histórico, sem partida): resolve-se aqui na
+    // Conciliação e NÃO vira sugestão de lançamento — só entra no relatório de correções.
+    // Por isso o detalhe começa sempre com "Ajuste de leitura" (marcador estável).
+    const soAjuste = ajusteMudou && !partidaOk
     onRegistrar('Correção', {
-      detalhe: txt.trim() || (ajusteMudou ? 'Ajuste de leitura' : form.historico),
+      detalhe: soAjuste
+        ? 'Ajuste de leitura' + (txt.trim() ? ` — ${txt.trim()}` : '')
+        : (txt.trim() || form.historico),
       ajuste: ajusteMudou ? { entidade: ajuste.entidade.trim(), nf: ajuste.nf.trim(), historico: ajuste.historico.trim() } : null,
       lancamento: partidaOk ? form : null,
     })

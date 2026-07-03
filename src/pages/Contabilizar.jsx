@@ -63,7 +63,13 @@ export default function Contabilizar() {
     const soNF = s => String(s ?? '').replace(/\D/g, '')
     const docsCorrecao = new Set((data || []).filter(l => l.origem === 'correcao' && l.documento).map(l => soNF(l.documento)).filter(Boolean))
     const nfDoItem = it => soNF((String(it || '').match(/NF\s*([\w]+)/i) || [])[1] || '')
-    setSugestoes((aud || []).filter(s => { const nf = nfDoItem(s.item); return !(nf && docsCorrecao.has(nf)) }))
+    // Ajuste de leitura (NF/nome/histórico) resolve-se na Conciliação e só vai para o
+    // relatório de correções — não entra como sugestão de lançamento.
+    const ehAjusteLeitura = s => /^ajuste de leitura/i.test(String(s.detalhe || ''))
+    setSugestoes((aud || []).filter(s => {
+      if (ehAjusteLeitura(s)) return false
+      const nf = nfDoItem(s.item); return !(nf && docsCorrecao.has(nf))
+    }))
     setLoading(false)
   }
 
