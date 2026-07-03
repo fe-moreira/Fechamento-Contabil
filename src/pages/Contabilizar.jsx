@@ -106,7 +106,7 @@ export default function Contabilizar() {
         if (!errada || !certa) { setErro('Informe a conta lançada (errada) e a conta correta.'); setSalvando(false); return }
         if (errada === certa) { setErro('A conta correta precisa ser diferente da conta lançada.'); setSalvando(false); return }
         if (rec.lado === 'debito') { deb = certa; cred = errada } else { deb = errada; cred = certa }
-        historico = historico || `Reclassificação: ${errada} → ${certa}`
+        historico = historico || `Reclassificação: ${errada} para ${certa}`
         origem = 'correcao'
       }
 
@@ -140,7 +140,7 @@ export default function Contabilizar() {
     lista.forEach((l, i) => {
       const v = (Number(l.valor) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
       const data = l.data ? l.data.split('-').reverse().join('/') : ''
-      linhas.push([data, l.conta_debito || '', l.conta_credito || '', v, '', l.historico || '', i === 0 ? '1' : '', '9999', '', ''].join(';'))
+      linhas.push([data, l.conta_debito || '', l.conta_credito || '', v, '', historicoDominio(l.historico), i === 0 ? '1' : '', '9999', '', ''].join(';'))
     })
     baixar('﻿' + linhas.join('\r\n'), 'lanctos_dominio.csv')
   }
@@ -299,7 +299,7 @@ export default function Contabilizar() {
                   <Campo label="Conta correta"><CampoConta value={rec.certa} onChange={v => setRec(r => ({ ...r, certa: v }))} /></Campo>
                   <Campo label="Valor"><input className="input" type="number" step="0.01" value={form.valor} onChange={set('valor')} required /></Campo>
                   <Campo label="Data"><input className="input" type="date" value={form.data} onChange={set('data')} required /></Campo>
-                  <Campo label="Histórico (opcional)"><input className="input" value={form.historico} onChange={set('historico')} placeholder={rec.errada && rec.certa ? `Reclassificação: ${rec.errada} → ${rec.certa}` : 'Reclassificação…'} /></Campo>
+                  <Campo label="Histórico (opcional)"><input className="input" value={form.historico} onChange={set('historico')} placeholder={rec.errada && rec.certa ? `Reclassificação: ${rec.errada} para ${rec.certa}` : 'Reclassificação…'} /></Campo>
                 </div>
                 {rec.errada && rec.certa && (
                   <div style={{ background: theme.input, borderRadius: 10, padding: '10px 12px', marginTop: 12, fontSize: 12.5 }}>
@@ -341,6 +341,17 @@ function ContaInput({ value, onChange, plano }) {
     </select>
   )
   return <input className="input" value={value} onChange={onChange} placeholder="Código da conta" />
+}
+
+// Histórico no padrão do Domínio: MAIÚSCULAS, sem acento e sem caracteres especiais
+// (mantém só letras, números, espaço e . , - / ). Evita quebrar o CSV e o import.
+function historicoDominio(s) {
+  return String(s ?? '')
+    .normalize('NFD').replace(/[̀-ͯ]/g, '') // remove acentos
+    .toUpperCase()
+    .replace(/[^A-Z0-9 .,\-/]/g, ' ')                 // troca o resto por espaço
+    .replace(/\s+/g, ' ')
+    .trim()
 }
 
 const csv = v => `"${String(v ?? '').replace(/"/g, '""')}"`
