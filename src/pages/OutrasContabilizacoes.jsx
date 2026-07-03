@@ -3,6 +3,7 @@ import { theme, money } from '../lib/theme'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { listar, inserir, remover, gerarLancamento } from '../lib/outras'
+import ObservacoesConciliacao from '../components/ObservacoesConciliacao'
 
 const ACC = { seguro: '#4A7CFF', importacao: '#2FB6A8', emprestimo: '#9A7CF0', parcelamento: '#E8923B', equivalencia: '#E06C9F', outros: '#7C89A6' }
 const BLOCOS = [
@@ -70,6 +71,8 @@ export default function OutrasContabilizacoes() {
       </p>
 
       {msg && <div style={{ background: theme.card, border: `1px solid ${theme.accent}`, borderRadius: 10, padding: '10px 14px', fontSize: 13, marginBottom: 14, color: theme.text }}><i className="ti ti-info-circle" style={{ color: theme.accent }} /> {msg}</div>}
+
+      <ObservacoesConciliacao clienteId={empresaId} competencia={competencia} user={user} irPara={setTab} />
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(168px,1fr))', gap: 12, marginBottom: 18 }}>
         {BLOCOS.map(b => {
