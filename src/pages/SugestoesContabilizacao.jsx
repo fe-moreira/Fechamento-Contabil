@@ -25,7 +25,9 @@ export default function SugestoesContabilizacao() {
     if (!comp) { setRows([]); setLoading(false); return }
     const { data } = await supabase.from('auditoria').select('id, modulo, item, tipo, detalhe, competencia_id')
       .eq('competencia_id', comp.id).eq('tipo', 'Correção').order('id', { ascending: false })
-    setRows(data || []); setLoading(false)
+    // Ajuste de leitura (NF/nome/histórico) resolve-se na Conciliação e só vai para o
+    // relatório de correções — não entra como sugestão de lançamento.
+    setRows((data || []).filter(r => !/^ajuste de leitura/i.test(String(r.detalhe || '')))); setLoading(false)
   }
   useEffect(() => { if (!empresaId) { setRows([]); setLoading(false); return } setTratadas(new Set()); carregar() }, [empresaId, competencia]) // eslint-disable-line
 
