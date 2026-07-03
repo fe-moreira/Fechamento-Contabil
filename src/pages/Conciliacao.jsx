@@ -8,6 +8,15 @@ import { abrePdfTimbrado } from '../lib/pdf'
 import { gerarExcelTimbrado } from '../lib/excel'
 import CampoConta from '../components/CampoConta'
 
+// NF no histórico só faz sentido em contas de cliente/fornecedor (a pagar/a receber,
+// duplicatas, adiantamentos). Nas demais (banco, despesa, etc.) o histórico sai sem NF.
+const contaComNF = (nome) => {
+  const s = String(nome || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+  // cliente/fornecedor/duplicata/adiantamento, ou "contas/títulos/valores a pagar/receber"
+  // (exclui "salários a pagar", "impostos a pagar" etc. — não envolvem NF).
+  return /cliente|fornecedor|duplicata|adiantament|(contas?|titulos?|valores?|creditos?) a (pagar|receber)/.test(s)
+}
+
 // ---- Leitura do histórico: extrai NF e entidade (cliente/fornecedor) com confiança ----
 const RUIDO = /\b(VENDA|VENDAS|COMPRA|COMPRAS|PAGTO|PAGAMENTO|RECEBIMENTO|RECEBTO|REF|REFERENTE|NOTA|FISCAL|DUPLICATA|DUPL|BOLETO|TITULO|TÍTULO|VLR|VALOR|PARCELA|PARC|CONF|S\/|A|DE|DA|DO|DOS|DAS|E|NO|NA|EM)\b/ig
 // Remove o sufixo societário (S.A, LTDA, EIRELI, ME, EPP) e o que vier depois.
@@ -851,7 +860,9 @@ function ModalLancamento({ lanc, conta, lab, plano, natCredito, residuo = 0, onC
     data: lanc.data || '', valor: valorLan,
     conta_debito: ehDeb ? '' : conta.conta,
     conta_credito: ehDeb ? conta.conta : '',
-    historico: `Reclassificação · NF ${lanc.leitura.nf || '—'} · ${conta.nome}`,
+    historico: contaComNF(conta.nome)
+      ? `Reclassificação · NF ${lanc.leitura.nf || '—'} · ${conta.nome}`
+      : `Reclassificação · ${conta.nome}`,
   })
   // Ajuste de leitura (ajuda o sistema a cruzar): nome do cliente/fornecedor, NF e histórico.
   const [ajuste, setAjuste] = useState({ entidade: lanc.leitura.entidade || '', nf: lanc.leitura.nf || '', historico: lanc.historico || '' })
