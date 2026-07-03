@@ -14,6 +14,8 @@ import Integracao from './pages/Integracao'
 import Conciliacao from './pages/Conciliacao'
 import CompMovimento from './pages/CompMovimento'
 import Contabilizar from './pages/Contabilizar'
+import OutrasContabilizacoes from './pages/OutrasContabilizacoes'
+import SugestoesContabilizacao from './pages/SugestoesContabilizacao'
 import Relatorios from './pages/Relatorios'
 import Status from './pages/Status'
 import BaseInformacoes from './pages/BaseInformacoes'
@@ -42,6 +44,8 @@ function Rotas() {
         <Route path="integracao" element={<Integracao />} />
         <Route path="conciliacao" element={<Conciliacao />} />
         <Route path="comparativo" element={<CompMovimento />} />
+        <Route path="sugestoes" element={<SugestoesContabilizacao />} />
+        <Route path="outras" element={<OutrasContabilizacoes />} />
         <Route path="contabilizar" element={<Contabilizar />} />
         <Route path="relatorios" element={<Relatorios />} />
         <Route path="status" element={<Status />} />
