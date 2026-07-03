@@ -19,7 +19,8 @@ export default function Contabilizar() {
   const [loading, setLoading] = useState(true)
   const [erro, setErro] = useState('')
   const [form, setForm] = useState(vazio)
-  const [modo, setModo] = useState('escrever') // 'escrever' | 'documento'
+  const [modo, setModo] = useState('escrever') // 'escrever' | 'reclassificar' | 'documento'
+  const [rec, setRec] = useState({ errada: '', certa: '', lado: 'debito' }) // reclassificação de conta
   const [salvando, setSalvando] = useState(false)
   const [aberto, setAberto] = useState(false)
 
@@ -80,7 +81,7 @@ export default function Contabilizar() {
   }, [empresaId, competencia])
 
   const set = k => e => setForm(f => ({ ...f, [k]: e.target.value }))
-  function abrirNovo() { setForm(vazio); setModo('escrever'); setSugConfirmando(null); setAberto(true) }
+  function abrirNovo() { setForm(vazio); setModo('escrever'); setRec({ errada: '', certa: '', lado: 'debito' }); setSugConfirmando(null); setAberto(true) }
   function confirmarSugestao(s) {
     setForm({ ...vazio, historico: s.detalhe || `${s.modulo} · ${s.item}` })
     setModo('escrever'); setSugConfirmando(s.id); setAberto(true)
@@ -92,15 +93,32 @@ export default function Contabilizar() {
     try {
       const competencia_id = await getCompetenciaId()
       if (!competencia_id) { setErro('Selecione uma empresa.'); return }
+
+      let deb = form.conta_debito.trim() || null
+      let cred = form.conta_credito.trim() || null
+      let historico = form.historico.trim() || null
+      let origem = sugConfirmando ? 'sugestao' : (modo === 'documento' ? 'documento' : 'manual')
+
+      // Reclassificação: monta a partida de estorno mantendo o lado (natureza) original.
+      // Errada no débito → D certa / C errada. Errada no crédito → D errada / C certa.
+      if (modo === 'reclassificar') {
+        const errada = rec.errada.trim(), certa = rec.certa.trim()
+        if (!errada || !certa) { setErro('Informe a conta lançada (errada) e a conta correta.'); setSalvando(false); return }
+        if (errada === certa) { setErro('A conta correta precisa ser diferente da conta lançada.'); setSalvando(false); return }
+        if (rec.lado === 'debito') { deb = certa; cred = errada } else { deb = errada; cred = certa }
+        historico = historico || `Reclassificação: ${errada} → ${certa}`
+        origem = 'correcao'
+      }
+
       const { error } = await supabase.from('lancamentos').insert({
         competencia_id,
         data: form.data || null,
-        conta_debito: form.conta_debito.trim() || null,
-        conta_credito: form.conta_credito.trim() || null,
+        conta_debito: deb,
+        conta_credito: cred,
         valor: Number(form.valor) || 0,
-        historico: form.historico.trim() || null,
+        historico,
         documento: form.documento.trim() || null,
-        origem: sugConfirmando ? 'sugestao' : (modo === 'documento' ? 'documento' : 'manual'),
+        origem,
         usuario: user?.email || null,
       })
       if (error) throw error
@@ -246,12 +264,15 @@ export default function Contabilizar() {
         <div onClick={() => setAberto(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 50 }}>
           <form onClick={e => e.stopPropagation()} onSubmit={salvar} style={{ width: 'min(580px,96vw)', maxHeight: '90vh', overflow: 'auto', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
             <h2 style={{ fontSize: 17, marginBottom: 4 }}>{sugConfirmando ? 'Confirmar lançamento' : 'Novo lançamento'}</h2>
-            <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 14 }}>Escreva a partida com as contas do plano ou suba o documento.</p>
+            <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 14 }}>Escreva a partida, reclassifique uma conta ou suba o documento.</p>
 
-            <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-              <button type="button" className={modo === 'escrever' ? 'btn' : 'btn btn-ghost'} style={{ fontSize: 13 }} onClick={() => setModo('escrever')}><i className="ti ti-pencil" /> Escrever a partida</button>
-              <button type="button" className={modo === 'documento' ? 'btn' : 'btn btn-ghost'} style={{ fontSize: 13 }} onClick={() => setModo('documento')}><i className="ti ti-cloud-upload" /> Subir documento</button>
-            </div>
+            {!sugConfirmando && (
+              <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+                <button type="button" className={modo === 'escrever' ? 'btn' : 'btn btn-ghost'} style={{ fontSize: 13 }} onClick={() => setModo('escrever')}><i className="ti ti-pencil" /> Escrever a partida</button>
+                <button type="button" className={modo === 'reclassificar' ? 'btn' : 'btn btn-ghost'} style={{ fontSize: 13 }} onClick={() => setModo('reclassificar')}><i className="ti ti-arrows-exchange" /> Reclassificar conta</button>
+                <button type="button" className={modo === 'documento' ? 'btn' : 'btn btn-ghost'} style={{ fontSize: 13 }} onClick={() => setModo('documento')}><i className="ti ti-cloud-upload" /> Subir documento</button>
+              </div>
+            )}
 
             {modo === 'documento' && (
               <div style={{ marginBottom: 12 }}>
@@ -261,13 +282,42 @@ export default function Contabilizar() {
               </div>
             )}
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-              <Campo label="Data"><input className="input" type="date" value={form.data} onChange={set('data')} required /></Campo>
-              <Campo label="Valor"><input className="input" type="number" step="0.01" value={form.valor} onChange={set('valor')} required /></Campo>
-              <Campo label="Conta débito"><CampoConta value={form.conta_debito} onChange={v => setForm(f => ({ ...f, conta_debito: v }))} /></Campo>
-              <Campo label="Conta crédito"><CampoConta value={form.conta_credito} onChange={v => setForm(f => ({ ...f, conta_credito: v }))} /></Campo>
-              <Campo label="Histórico" full><textarea className="input" rows={2} value={form.historico} onChange={set('historico')} /></Campo>
-            </div>
+            {modo === 'reclassificar' ? (
+              <>
+                <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 12 }}>
+                  Informe a conta que <b style={{ color: theme.text }}>foi lançada errada</b>, de que lado ela entrou e a <b style={{ color: theme.text }}>conta correta</b>. A plataforma monta o lançamento de estorno para o Domínio (a outra conta original — ex.: o banco — não é tocada).
+                </p>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                  <Campo label="Conta lançada (errada)"><CampoConta value={rec.errada} onChange={v => setRec(r => ({ ...r, errada: v }))} /></Campo>
+                  <Campo label="Lançada no">
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      {[['debito', 'Débito'], ['credito', 'Crédito']].map(([v, l]) => (
+                        <button key={v} type="button" className={rec.lado === v ? 'btn' : 'btn btn-ghost'} style={{ fontSize: 13, flex: 1 }} onClick={() => setRec(r => ({ ...r, lado: v }))}>{l}</button>
+                      ))}
+                    </div>
+                  </Campo>
+                  <Campo label="Conta correta"><CampoConta value={rec.certa} onChange={v => setRec(r => ({ ...r, certa: v }))} /></Campo>
+                  <Campo label="Valor"><input className="input" type="number" step="0.01" value={form.valor} onChange={set('valor')} required /></Campo>
+                  <Campo label="Data"><input className="input" type="date" value={form.data} onChange={set('data')} required /></Campo>
+                  <Campo label="Histórico (opcional)"><input className="input" value={form.historico} onChange={set('historico')} placeholder={rec.errada && rec.certa ? `Reclassificação: ${rec.errada} → ${rec.certa}` : 'Reclassificação…'} /></Campo>
+                </div>
+                {rec.errada && rec.certa && (
+                  <div style={{ background: theme.input, borderRadius: 10, padding: '10px 12px', marginTop: 12, fontSize: 12.5 }}>
+                    <span style={{ color: theme.sub }}>Lançamento gerado: </span>
+                    <b>D {rec.lado === 'debito' ? rec.certa : rec.errada}</b> <span style={{ color: theme.sub }}>/</span> <b>C {rec.lado === 'debito' ? rec.errada : rec.certa}</b>
+                    {Number(form.valor) > 0 && <span style={{ color: theme.sub }}> · {money(form.valor)}</span>}
+                  </div>
+                )}
+              </>
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <Campo label="Data"><input className="input" type="date" value={form.data} onChange={set('data')} required /></Campo>
+                <Campo label="Valor"><input className="input" type="number" step="0.01" value={form.valor} onChange={set('valor')} required /></Campo>
+                <Campo label="Conta débito"><CampoConta value={form.conta_debito} onChange={v => setForm(f => ({ ...f, conta_debito: v }))} /></Campo>
+                <Campo label="Conta crédito"><CampoConta value={form.conta_credito} onChange={v => setForm(f => ({ ...f, conta_credito: v }))} /></Campo>
+                <Campo label="Histórico" full><textarea className="input" rows={2} value={form.historico} onChange={set('historico')} /></Campo>
+              </div>
+            )}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
               <button type="button" className="btn btn-ghost" onClick={() => setAberto(false)}>Cancelar</button>
               <button className="btn" disabled={salvando}>{salvando ? 'Salvando…' : 'Salvar'}</button>
