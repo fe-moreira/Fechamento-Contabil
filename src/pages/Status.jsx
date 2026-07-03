@@ -11,6 +11,12 @@ import { gerarExcelTimbrado } from '../lib/excel'
 import CampoConta from '../components/CampoConta'
 
 const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
+const INTEGRACOES = [
+  { key: 'fiscal', nome: 'Fiscal' },
+  { key: 'folha', nome: 'Folha' },
+  { key: 'patrimonio', nome: 'Patrimônio' },
+  { key: 'financeira', nome: 'Financeira' },
+]
 
 export default function Status() {
   const { empresaId, empresaNome, competencia, getCompetenciaId, plano } = useAppData()
@@ -38,20 +44,25 @@ export default function Status() {
 
     const [mes, ano] = competencia.split('/').map(Number)
     const { data: comp } = await supabase.from('competencias')
-      .select('id, status, documentos')
+      .select('id, status, documentos, integracoes')
       .eq('cliente_id', empresaId).eq('ano', ano).eq('mes', mes).maybeSingle()
 
-    let temRazao = false, docsPendentes = [], contasAbertas = []
+    let temRazao = false, docsPendentes = [], contasAbertas = [], integracoes = {}, observacoes = []
     if (comp) {
       setCompId(comp.id); setStatus(comp.status || 'andamento')
       const { count: razaoCount } = await supabase.from('razao')
         .select('id', { count: 'exact', head: true }).eq('competencia_id', comp.id)
       const { data: balancete } = await supabase.from('balancete')
         .select('conta, saldo_final').eq('competencia_id', comp.id)
+      const { data: obs } = await supabase.from('auditoria')
+        .select('modulo, item, detalhe, created_at').eq('competencia_id', comp.id)
+        .eq('tipo', 'Justificativa').order('created_at', { ascending: false })
       const docs = Array.isArray(comp.documentos) ? comp.documentos : []
       temRazao = (razaoCount || 0) > 0
       docsPendentes = docs.filter(d => d && d.rec === false)
       contasAbertas = (balancete || []).filter(b => Number(b.saldo_final) !== 0)
+      integracoes = comp.integracoes || {}
+      observacoes = obs || []
     } else {
       setCompId(null); setStatus(null)
     }
@@ -60,7 +71,7 @@ export default function Status() {
     const br = await apurarBancoResultado(empresaId, comp?.id)
     const variacoes = await apurarVariacoes(empresaId)
 
-    setDados({ temRazao, docsPendentes, contasAbertas, cargaInicialPendente, dist, br, variacoes })
+    setDados({ temRazao, docsPendentes, contasAbertas, cargaInicialPendente, dist, br, variacoes, integracoes, observacoes })
     setCarregando(false)
   }
 
@@ -156,9 +167,33 @@ export default function Status() {
         detalhe: `Acima do limite (${money(dados.dist.limite)}). IRRF estimado ${money(s.irrf)} — ${dados.dist.aliquota}% do total recebido no mês.`,
       })),
     },
+    {
+      key: 'integracoes',
+      nome: 'Integrações validadas',
+      icon: 'ti-plug-connected',
+      descricao: 'Fiscal, Folha, Patrimônio e Financeira: documento importado ou marcado sem movimento.',
+      itens: INTEGRACOES.filter(ig => !dados.integracoes?.[ig.key]?.estado).map(ig => ({
+        item: `Integração ${ig.nome} não validada`,
+        detalhe: 'Nenhum documento importado. Importe em Integração ou marque “Não tem movimento”.',
+        integracao: ig.key,
+      })),
+    },
+    {
+      key: 'observacoes',
+      nome: 'Observações e justificativas',
+      icon: 'ti-message-circle',
+      descricao: 'Observações registradas no fechamento (visibilidade — não bloqueiam o encerramento).',
+      informativo: true,
+      itens: (dados.observacoes || []).map(o => ({
+        item: o.item || o.modulo || 'Observação',
+        sub: o.modulo,
+        detalhe: o.detalhe || '',
+      })),
+    },
   ]
 
-  const totalPendencias = gates.reduce((s, g) => s + g.itens.length, 0)
+  // Gates informativos (observações) não bloqueiam o encerramento.
+  const totalPendencias = gates.filter(g => !g.informativo).reduce((s, g) => s + g.itens.length, 0)
   const pronto = totalPendencias === 0
   const fechado = status === 'fechado'
 
@@ -173,6 +208,21 @@ export default function Status() {
     const { error } = await supabase.from('competencias').update({ status: 'andamento' }).eq('id', compId)
     setSalvando(false)
     if (!error) { setStatus('andamento'); setMsg('Fechamento reaberto.') }
+  }
+
+  // "Não tem movimento": marca a integração como sem movimento → zera a pendência.
+  async function marcarSemMovimento(key) {
+    const id = await getCompetenciaId()
+    const { data: comp } = await supabase.from('competencias').select('integracoes').eq('id', id).maybeSingle()
+    const novo = { ...(comp?.integracoes || {}), [key]: { estado: 'sem_movimento', usuario: user?.email || null } }
+    await supabase.from('competencias').update({ integracoes: novo }).eq('id', id)
+    const nome = (INTEGRACOES.find(i => i.key === key) || {}).nome || key
+    await supabase.from('auditoria').insert({
+      competencia_id: id, modulo: 'Integração', item: `Integração ${nome}`, tipo: 'Justificativa',
+      detalhe: 'Sem movimento no período.', usuario: user?.email,
+    })
+    setMsg(`Integração ${nome} marcada como “sem movimento”.`)
+    carregar()
   }
 
   async function registrar(item, tipo, detalhe, dedutibilidade) {
@@ -284,9 +334,10 @@ export default function Status() {
       <div style={{ display: 'grid', gap: 12 }}>
         {gates.map(g => {
           const n = g.itens.length
-          const pend = n > 0
-          const cor = pend ? theme.red : theme.green
-          const clicavel = pend && !g.emBreve
+          const info = g.informativo
+          const pend = !info && n > 0
+          const cor = info ? (n > 0 ? theme.accent : theme.sub) : (pend ? theme.red : theme.green)
+          const clicavel = n > 0 && !g.emBreve
           return (
             <div key={g.key}
               onClick={clicavel ? () => { setSel(g); setMsg('') } : undefined}
@@ -298,7 +349,7 @@ export default function Status() {
               <div style={{
                 width: 42, height: 42, borderRadius: 10, flexShrink: 0,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
-                background: g.emBreve ? 'rgba(255,255,255,0.04)' : (pend ? 'rgba(229,72,77,0.12)' : 'rgba(48,164,108,0.12)'),
+                background: g.emBreve ? 'rgba(255,255,255,0.04)' : info ? 'rgba(74,124,255,0.12)' : (pend ? 'rgba(229,72,77,0.12)' : 'rgba(48,164,108,0.12)'),
                 border: `0.5px solid ${theme.cb}`,
               }}>
                 <i className={`ti ${g.icon}`} style={{ fontSize: 20, color: g.emBreve ? theme.sub : cor }} />
@@ -324,7 +375,7 @@ export default function Status() {
                 <span style={{
                   fontSize: 13, fontWeight: 700, minWidth: 30, textAlign: 'center',
                   padding: '5px 12px', borderRadius: 999, color: '#fff',
-                  background: pend ? theme.red : theme.green,
+                  background: cor,
                 }}>
                   {n}
                 </span>
@@ -350,6 +401,7 @@ export default function Status() {
           onClose={() => setSel(null)}
           onJustificar={(it) => setModal({ item: it, tipo: 'Justificativa' })}
           onCorrigir={(it) => setModal({ item: it, tipo: it.partida ? 'Partida' : 'Correção' })}
+          onSemMovimento={(key) => marcarSemMovimento(key)}
         />
       )}
 
@@ -376,7 +428,12 @@ export default function Status() {
   )
 }
 
-function PainelGate({ gate, onClose, onJustificar, onCorrigir, onExportar }) {
+function PainelGate({ gate, onClose, onJustificar, onCorrigir, onSemMovimento, onExportar }) {
+  const legenda = gate.informativo
+    ? 'Observações registradas (somente visualização — não bloqueiam o encerramento).'
+    : gate.key === 'integracoes'
+      ? 'Importe o documento em Integração ou marque “Não tem movimento” para zerar.'
+      : 'Justifique ou corrija cada item — fica registrado na auditoria.'
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 50 }}>
       <div onClick={e => e.stopPropagation()} style={{ width: 'min(680px,96vw)', maxHeight: '86vh', overflow: 'auto', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
@@ -388,7 +445,7 @@ function PainelGate({ gate, onClose, onJustificar, onCorrigir, onExportar }) {
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', margin: '0 0 16px' }}>
           <p style={{ color: theme.sub, fontSize: 12.5, margin: 0 }}>
-            {gate.itens.length} pendência{gate.itens.length > 1 ? 's' : ''}. Justifique ou corrija cada item — fica registrado na auditoria.
+            {gate.itens.length} {gate.informativo ? 'observação(ões)' : 'pendência(s)'}. {legenda}
           </p>
           {gate.itens.length > 0 && onExportar && (
             <div style={{ display: 'flex', gap: 8 }}>
@@ -406,10 +463,16 @@ function PainelGate({ gate, onClose, onJustificar, onCorrigir, onExportar }) {
                 {it.sub && <p style={{ fontSize: 11.5, color: theme.accent, margin: '3px 0 0' }}>{it.sub}</p>}
                 <p style={{ fontSize: 12, color: theme.sub, margin: '3px 0 0' }}>{it.detalhe}</p>
               </div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button className="btn btn-ghost" style={{ fontSize: 13 }} onClick={() => onJustificar(it)}><i className="ti ti-flag" /> Justificar</button>
-                <button className="btn" style={{ fontSize: 13 }} onClick={() => onCorrigir(it)}><i className="ti ti-pencil-bolt" /> Corrigir</button>
-              </div>
+              {gate.informativo ? null : it.integracao ? (
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button className="btn" style={{ fontSize: 13 }} onClick={() => onSemMovimento(it.integracao)}><i className="ti ti-circle-minus" /> Não tem movimento</button>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button className="btn btn-ghost" style={{ fontSize: 13 }} onClick={() => onJustificar(it)}><i className="ti ti-flag" /> Justificar</button>
+                  <button className="btn" style={{ fontSize: 13 }} onClick={() => onCorrigir(it)}><i className="ti ti-pencil-bolt" /> Corrigir</button>
+                </div>
+              )}
             </div>
           ))}
         </div>
