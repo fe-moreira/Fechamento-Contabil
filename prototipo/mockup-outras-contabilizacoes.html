@@ -6,7 +6,7 @@
     --line:rgba(255,255,255,0.08); --line2:rgba(255,255,255,0.14);
     --ink:#EAEEF6; --sub:#8B96AB; --sub2:#6B7690;
     --accent:#4A7CFF; --good:#30A46C; --warn:#E7A83B; --bad:#E5484D;
-    --seg:#4A7CFF; --imp:#2FB6A8; --emp:#9A7CF0; --eqp:#E06C9F; --out:#7C89A6;
+    --seg:#4A7CFF; --imp:#2FB6A8; --emp:#9A7CF0; --eqp:#E06C9F; --par:#E8923B; --out:#7C89A6;
     --radius:12px;
     font-family:-apple-system,"Segoe UI",system-ui,Roboto,sans-serif;
   }
@@ -62,7 +62,7 @@
   .lead b{color:#C6D0E3;font-weight:600}
 
   /* overview blocks */
-  .grid4{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:14px}
+  .grid4{display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));gap:12px;margin-bottom:14px}
   @media(max-width:820px){.grid4{grid-template-columns:repeat(2,1fr)}}
   .blk .bt{font-size:14.5px}
   .apont{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:700;
@@ -286,11 +286,40 @@
   .srow .rt{display:flex;flex-direction:column;align-items:flex-end;gap:7px;flex-shrink:0}
   .srow .amt2{font-size:14px;font-weight:750;font-variant-numeric:tabular-nums}
   .srow .acts{display:flex;gap:6px}
-  .srow.done{opacity:.5}
+  .srow.done{opacity:.72}
   .srow.done .acts{display:none}
-  .doneflag{font-size:11.5px;font-weight:700;color:#4CD08A;display:none}
-  .srow.done .doneflag{display:inline}
+  .sug.done{opacity:.72}
+  .sug.done .acts{display:none}
+  .doneflag{display:none}
+  .statusline{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+  .flag{font-size:11.5px;font-weight:700}
+  .flag.ok{color:#4CD08A}
+  .flag.no{color:#E86A7A}
+  .reopen{background:transparent;border:1px solid var(--line2);color:var(--sub);border-radius:7px;
+    padding:4px 9px;font-size:11px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:4px}
+  .reopen:hover{color:var(--ink);border-color:var(--sub)}
   .pbtn.mini{padding:6px 12px;font-size:12px}
+  .linkchip{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;color:#8FB0FF;
+    background:rgba(74,124,255,.12);border:1px solid rgba(74,124,255,.25);border-radius:20px;padding:2px 9px}
+  .obs-toggle{background:transparent;border:1px solid var(--line2);color:var(--sub);border-radius:8px;
+    width:32px;height:28px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
+  .obs-toggle:hover{color:var(--ink);border-color:var(--sub)}
+  .obs-chev{display:inline-block;font-size:12px;color:inherit;transition:transform .2s}
+  .obs-card.collapsed .obs-chev{transform:rotate(-90deg)}
+  .obs-card.collapsed .obs-body{display:none}
+  .obs-card.collapsed .obs-hide{display:none}
+  .modal-ov{position:fixed;inset:0;background:rgba(8,11,18,.64);z-index:60;display:none;
+    align-items:center;justify-content:center;padding:24px}
+  .modal-ov.show{display:flex}
+  .modal-card{background:var(--card);border:1px solid var(--line2);border-radius:14px;
+    max-width:540px;width:100%;padding:22px 24px;box-shadow:0 24px 70px rgba(0,0,0,.55)}
+  .modal-card h3{margin:0 0 4px;font-size:16px;font-weight:750}
+  .modal-card .msub{color:var(--sub);font-size:12.5px;margin:0 0 16px}
+  .ta{width:100%;min-height:100px;background:var(--tile2);border:1px solid var(--line2);
+    border-radius:9px;padding:11px 12px;color:var(--ink);font-family:inherit;font-size:13px;resize:vertical}
+  .ta::placeholder{color:var(--sub2)}
+  .modal-acts{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}
+  .g2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 </style>
 
 <div class="mockbar">🎨 MOCKUP para avaliação — dados fictícios, nada é gravado. Painel proposto: <b style="color:#AEB8CC">Outras Contabilizações</b></div>
@@ -347,6 +376,60 @@
         <button class="pbtn" onclick="showView('status')">Ir para o Status →</button>
       </div>
 
+      <!-- OBSERVAÇÕES DETECTADAS NA CONCILIAÇÃO -->
+      <div class="card obs-card" id="obs-card" style="border-color:rgba(231,168,59,.4);margin-bottom:16px">
+        <div class="cbar" style="margin-top:0;cursor:pointer" onclick="toggleObs()" title="Minimizar / expandir">
+          <div><p class="sec-t" style="margin:0">⚠ Observações da conciliação</p>
+            <p class="sec-s obs-hide" style="margin:0">A observação só aparece quando a conciliação mostra que <b>houve lançamento/movimento</b> na conta e ainda <b>não há documento/processo registrado</b>. Confirme e suba o processo, <b>corrija</b> (se foi lançamento errado) ou justifique.</p></div>
+          <div style="display:flex;align-items:center;gap:10px;flex-shrink:0">
+            <span class="chip warn">5 observações</span>
+            <button class="obs-toggle" onclick="event.stopPropagation();toggleObs()" title="Minimizar / expandir"><span class="obs-chev">▾</span></button>
+          </div>
+        </div>
+        <div class="obs-body">
+        <div class="srow" data-g="obs">
+          <div class="si2" style="background:rgba(74,124,255,.16);color:#8FB0FF">🛡️</div>
+          <div class="mid"><b>Seguro detectado sem apólice</b>
+            <div class="why"><span class="wi">🔎</span><span>Conta 1.1.3.02 “Prêmios a apropriar” tem saldo, mas nenhuma apólice foi cadastrada em julho.</span></div></div>
+          <div class="rt">
+            <div class="acts"><button class="pbtn mini" onclick="obsConfirm(this,'seguro')">Confirmar e subir</button>
+              <button class="pbtn mini ghost" onclick="openCorrigir(this)">Corrigir</button><button class="pbtn mini ghost" onclick="openJustify(this)">Justificar</button></div></div>
+        </div>
+        <div class="srow" data-g="obs">
+          <div class="si2" style="background:rgba(47,182,168,.16);color:#4FD3C4">🚢</div>
+          <div class="mid"><b>Importação detectada sem processo</b>
+            <div class="why"><span class="wi">🔎</span><span>“Fornecedor exterior” movimentou no razão e não há processo de importação cadastrado.</span></div></div>
+          <div class="rt">
+            <div class="acts"><button class="pbtn mini" onclick="obsConfirm(this,'importacao')">Confirmar e subir</button>
+              <button class="pbtn mini ghost" onclick="openCorrigir(this)">Corrigir</button><button class="pbtn mini ghost" onclick="openJustify(this)">Justificar</button></div></div>
+        </div>
+        <div class="srow" data-g="obs">
+          <div class="si2" style="background:rgba(154,124,240,.16);color:#B49DF5">🏦</div>
+          <div class="mid"><b>Empréstimo detectado sem contrato conferido</b>
+            <div class="why"><span class="wi">🔎</span><span>Conta 2.1.2 “Empréstimos a pagar” teve movimento e nenhum contrato foi conferido contra a conciliação.</span></div></div>
+          <div class="rt">
+            <div class="acts"><button class="pbtn mini" onclick="obsConfirm(this,'emprestimo')">Confirmar e subir</button>
+              <button class="pbtn mini ghost" onclick="openCorrigir(this)">Corrigir</button><button class="pbtn mini ghost" onclick="openJustify(this)">Justificar</button></div></div>
+        </div>
+        <div class="srow" data-g="obs">
+          <div class="si2" style="background:rgba(229,72,77,.16);color:#F0868B">⏰</div>
+          <div class="mid"><b>Imposto ou parcela de parcelamento em atraso</b>
+            <div class="why"><span class="wi">🔎</span><span>ICMS/PIS vencidos sem baixa, ou parcela de parcelamento não paga. Confirmar o atraso <b>não gera lançamento</b> — vai para o relatório do cliente.</span></div></div>
+          <div class="rt">
+            <div class="acts"><button class="pbtn mini" onclick="obsPendencia(this)">Confirmar atraso</button>
+              <button class="pbtn mini ghost" onclick="openCorrigir(this)">Corrigir</button><button class="pbtn mini ghost" onclick="openJustify(this)">Justificar</button></div></div>
+        </div>
+        <div class="srow" data-g="obs">
+          <div class="si2" style="background:rgba(232,146,59,.16);color:#F0AC6A">🧾</div>
+          <div class="mid"><b>Conta de parcelamento com saldo sem parcelamento cadastrado</b>
+            <div class="why"><span class="wi">🔎</span><span>Conta 2.1.2.20 “Parcelamentos a pagar” tem saldo, mas nenhum termo de parcelamento foi jogado no bloco.</span></div></div>
+          <div class="rt">
+            <div class="acts"><button class="pbtn mini" onclick="obsConfirm(this,'parcelamento')">Confirmar e subir</button>
+              <button class="pbtn mini ghost" onclick="openCorrigir(this)">Corrigir</button><button class="pbtn mini ghost" onclick="openJustify(this)">Justificar</button></div></div>
+        </div>
+        </div><!-- /obs-body -->
+      </div>
+
       <!-- OVERVIEW BLOCKS -->
       <div class="grid4">
         <div class="blk" onclick="go('seguro')">
@@ -379,6 +462,16 @@
           <div class="bfoot"><span>contratos armazenados</span><b>confere × concil.</b></div>
         </div>
 
+        <div class="blk" onclick="go('parcelamento')">
+          <div class="rail" style="background:var(--par)"></div>
+          <div class="bhead">
+            <div class="bic" style="background:rgba(232,146,59,.16);color:#F0AC6A">🧾</div>
+            <div><div class="bt">Parc. Impostos</div><div class="bsub">Só juros &amp; multa</div></div>
+          </div>
+          <div class="bnum tnum">2</div>
+          <div class="bfoot"><span>parcelamentos</span><b>+2 atualiz./mês</b></div>
+        </div>
+
         <div class="blk" onclick="go('equivalencia')">
           <div class="rail" style="background:var(--eqp)"></div>
           <div class="bhead">
@@ -405,6 +498,7 @@
         <div class="tab active" data-tab="seguro" onclick="go('seguro')"><span class="d" style="background:var(--seg)"></span>Seguro</div>
         <div class="tab" data-tab="importacao" onclick="go('importacao')"><span class="d" style="background:var(--imp)"></span>Importação</div>
         <div class="tab" data-tab="emprestimo" onclick="go('emprestimo')"><span class="d" style="background:var(--emp)"></span>Empréstimo</div>
+        <div class="tab" data-tab="parcelamento" onclick="go('parcelamento')"><span class="d" style="background:var(--par)"></span>Parc. de Impostos</div>
         <div class="tab" data-tab="equivalencia" onclick="go('equivalencia')"><span class="d" style="background:var(--eqp)"></span>Equivalência Patrimonial</div>
         <div class="tab" data-tab="outros" onclick="go('outros')"><span class="d" style="background:var(--out)"></span>Outros Lançamentos</div>
       </div>
@@ -425,7 +519,7 @@
               <span class="part">D 4.1.2.18 Despesas com seguros · C 1.1.3.02 Prêmios a apropriar</span></div>
             <div class="rt"><span class="amt2 tnum">1.000,00</span><span class="doneflag">✓ confirmado</span>
               <div class="acts"><button class="pbtn mini" onclick="confirmRow(this)">Confirmar</button>
-                <button class="iconbtn no" title="Não contabilizar">✕</button></div></div>
+                <button class="iconbtn no" title="Não contabilizar" onclick="dismissRow(this,'✕ não contabilizado')">✕</button></div></div>
           </div>
           <div class="srow" data-g="seg-conf">
             <div class="si2" style="background:rgba(74,124,255,.16);color:#8FB0FF">🛡️</div>
@@ -434,7 +528,7 @@
               <span class="part">D 4.1.2.18 Despesas com seguros · C 1.1.3.02 Prêmios a apropriar</span></div>
             <div class="rt"><span class="amt2 tnum">800,00</span><span class="doneflag">✓ confirmado</span>
               <div class="acts"><button class="pbtn mini" onclick="confirmRow(this)">Confirmar</button>
-                <button class="iconbtn no" title="Não contabilizar">✕</button></div></div>
+                <button class="iconbtn no" title="Não contabilizar" onclick="dismissRow(this,'✕ não contabilizado')">✕</button></div></div>
           </div>
           <div class="srow" data-g="seg-conf">
             <div class="si2" style="background:rgba(74,124,255,.16);color:#8FB0FF">🛡️</div>
@@ -443,7 +537,7 @@
               <span class="part">D 4.1.2.18 Despesas com seguros · C 1.1.3.02 Prêmios a apropriar</span></div>
             <div class="rt"><span class="amt2 tnum">500,00</span><span class="doneflag">✓ confirmado</span>
               <div class="acts"><button class="pbtn mini" onclick="confirmRow(this)">Confirmar</button>
-                <button class="iconbtn no" title="Não contabilizar">✕</button></div></div>
+                <button class="iconbtn no" title="Não contabilizar" onclick="dismissRow(this,'✕ não contabilizado')">✕</button></div></div>
           </div>
           <div class="note"><span class="ni">✦</span><span>O que você confirmar aqui vira lançamento, <b>atualiza a Conciliação</b> e alimenta o <b>Status → Domínio</b>. O que não confirmar fica como pendência no Status.</span></div>
         </div>
@@ -521,7 +615,7 @@
               <span>A partir daqui a plataforma cuida sozinha: todo fechamento ela gera a apropriação do mês
               e a baixa da parcela paga, já prontas para o arquivo do Domínio. Você só confere.</span></div>
             <div class="center">
-              <button class="pbtn" onclick="alert('MOCKUP: salvaria o contrato e o cronograma de 12 parcelas.')">Salvar contrato e programar parcelas</button>
+              <button class="pbtn" onclick="toggleSave(this,'contrato salvo')">Salvar contrato e programar parcelas</button>
             </div>
           </div>
         </div>
@@ -547,6 +641,23 @@
 
       <!-- ============ IMPORTAÇÃO ============ -->
       <section id="pane-importacao" class="hidden">
+        <!-- controle de adiantamento de importação (puxado automático) -->
+        <div class="card">
+          <div class="cbar" style="margin-top:0">
+            <div><p class="sec-t" style="margin:0">Adiantamentos de importação — controle automático</p>
+              <p class="sec-s" style="margin:0">Quando a plataforma identifica um <b>adiantamento a fornecedor do exterior</b>, ele já entra aqui. Ao subir o processo, o adiantamento é <b>vinculado</b> automaticamente.</p></div>
+            <span class="chip info">puxado do razão</span>
+          </div>
+          <div style="overflow-x:auto"><table class="tbl">
+            <thead><tr><th>Fornecedor (exterior)</th><th>Data</th><th class="r">Adiantamento</th><th>Vínculo</th><th>Situação</th></tr></thead>
+            <tbody>
+              <tr><td><b>Brembo S.p.A.</b> <span class="muted">— Itália</span></td><td class="mono">15/07/2026</td><td class="r money">20.000,00</td><td><span class="chip mut">sem processo</span></td><td><span class="chip warn">⏳ aguardando processo</span></td></tr>
+              <tr><td><b>Sachs GmbH</b> <span class="muted">— Alemanha</span></td><td class="mono">02/07/2026</td><td class="r money">40.000,00</td><td><span class="linkchip">🔗 IMP-2026-009</span></td><td><span class="chip good">✓ vinculado</span></td></tr>
+            </tbody>
+          </table></div>
+          <div class="note"><span class="ni">✦</span><span>O adiantamento fica em <b>1.1.5.09 Adiantamentos de importação</b> (ativo) até o processo chegar. Ao vincular, ele entra na composição de custo do processo — sem lançamento em duplicidade.</span></div>
+        </div>
+
         <div class="card">
           <div style="display:flex;align-items:center;justify-content:space-between">
             <div><p class="sec-t">🚢 Novo processo de importação</p>
@@ -567,6 +678,7 @@
               <div class="kv"><span class="k">Mercadoria</span><span class="v">Pastilhas de freio</span></div>
               <div class="kv"><span class="k">Invoice</span><span class="v">USD 10.000 · câmbio 5,40</span></div>
               <div class="kv"><span class="k">Chegada</span><span class="v">Porto de Santos · 28/07/2026</span></div>
+              <div class="kv"><span class="k">Adiantamento vinculado</span><span class="v"><span class="linkchip">🔗 R$ 20.000 · Brembo</span></span></div>
               <span class="chip info" style="margin-top:10px">Confiança da leitura 91%</span>
             </div>
           </div>
@@ -582,11 +694,12 @@
               <div class="jline credit"><span class="dc c">C</span><span class="acc"><b>1.1.2.31 Impostos a recuperar / recolher</b><small>II, IPI, PIS/COFINS-imp, ICMS</small></span><span class="val">19.140,00</span></div>
               <div class="jline credit"><span class="dc c">C</span><span class="acc"><b>2.1.1.14 Despachante &amp; frete</b><small>Armazenagem, AFRMM, honorários</small></span><span class="val">5.100,00</span></div>
             </div>
+            <div class="note" style="background:rgba(74,124,255,.07);border-color:rgba(74,124,255,.2);color:#BFCEEA"><span class="ni" style="color:#8FB0FF">🔗</span><span><b>Adiantamento vinculado:</b> R$ 20.000 (Brembo) sai de "Adiantamentos de importação" e entra na composição — <b>sem duplicar</b> o lançamento.</span></div>
             <div class="note"><span class="ni">✦</span><span>Ao confirmar, o lançamento <b>atualiza a Conciliação</b> e vai ao Status. Quando o processo for <b>nacionalizado</b>,
               a plataforma transfere o total de R$ 78.240,00 para <b>Estoque de mercadorias</b> — um clique, contabilização pronta.</span></div>
             <div class="center" style="gap:10px;display:flex;justify-content:center;flex-wrap:wrap">
-              <button class="pbtn" onclick="alert('MOCKUP: confirmaria o lançamento e alimentaria o Status → Domínio.')">Confirmar lançamento</button>
-              <button class="pbtn ghost" onclick="alert('MOCKUP: arquivaria o processo sem lançar (fica pendente no Status).')">Salvar processo (sem lançar)</button></div>
+              <button class="pbtn" onclick="toggleSave(this,'lançamento confirmado')">Confirmar lançamento</button>
+              <button class="pbtn ghost" onclick="toggleSave(this,'processo salvo')">Salvar processo (sem lançar)</button></div>
           </div>
         </div>
 
@@ -656,8 +769,8 @@
             <div class="note"><span class="ni">✦</span><span>Divergência? A correção é feita <b>na Conciliação</b> — não aqui. O contrato só aponta o valor esperado; a baixa real veio do banco.</span></div>
             <div class="center" style="margin-top:6px;gap:10px;display:flex;justify-content:center;flex-wrap:wrap">
               <button class="pbtn" onclick="alert('MOCKUP: abriria a Conciliação no lançamento divergente.')">Corrigir na Conciliação →</button>
-              <button class="pbtn ghost" onclick="alert('MOCKUP: marcaria a divergência como ignorada (justificada).')">Ignorar divergência</button>
-              <button class="pbtn ghost" onclick="alert('MOCKUP: arquivaria o contrato no bloco.')">Salvar contrato (arquivar)</button>
+              <button class="pbtn ghost" onclick="toggleSave(this,'divergência ignorada')">Ignorar divergência</button>
+              <button class="pbtn ghost" onclick="toggleSave(this,'contrato arquivado')">Salvar contrato (arquivar)</button>
             </div>
           </div>
         </div>
@@ -674,6 +787,91 @@
             </tbody>
           </table></div>
           <div class="totrow"><span class="lbl">Conferência das parcelas × conciliação</span><span class="amt tnum" style="font-size:14px">2 de 3 batem · 1 a corrigir</span></div>
+        </div>
+      </section>
+
+      <!-- ============ PARCELAMENTO DE IMPOSTOS ============ -->
+      <section id="pane-parcelamento" class="hidden">
+        <!-- atualização juros/multa a confirmar -->
+        <div class="card">
+          <div class="cbar" style="margin-top:0">
+            <div><p class="sec-t" style="margin:0">Atualização de juros e multa — Julho / 2026 — a confirmar</p>
+              <p class="sec-s" style="margin:0">A <b>única contabilização</b> do parcelamento é a atualização de juros e multa sobre o saldo. Confirme e vira lançamento (atualiza a Conciliação). A parcela paga é baixada pelo banco, na conciliação.</p></div>
+            <button class="pbtn mini ghost" onclick="confirmAll('par-conf')">✓ Confirmar todas</button>
+          </div>
+          <div class="srow" data-g="par-conf">
+            <div class="si2" style="background:rgba(232,146,59,.16);color:#F0AC6A">🧾</div>
+            <div class="mid"><b>PGFN — parcelamento 19.884-0 (Receita/União)</b>
+              <div class="why"><span class="wi">📈</span><span>Atualização Selic + multa sobre o saldo de R$ 132.000,00.</span></div>
+              <span class="part">D 4.3.1.05 Juros e multa s/ parcelamentos · C 2.1.2.20 Parcelamentos de impostos a pagar</span></div>
+            <div class="rt"><span class="amt2 tnum">1.320,00</span><span class="doneflag">✓ confirmado</span>
+              <div class="acts"><button class="pbtn mini" onclick="confirmRow(this)">Confirmar</button>
+                <button class="iconbtn no" title="Não contabilizar" onclick="dismissRow(this,'✕ não contabilizado')">✕</button></div></div>
+          </div>
+          <div class="srow" data-g="par-conf">
+            <div class="si2" style="background:rgba(232,146,59,.16);color:#F0AC6A">🧾</div>
+            <div class="mid"><b>ICMS-SP — parcelamento 7742/2025 (Sefaz-SP)</b>
+              <div class="why"><span class="wi">📈</span><span>Atualização de juros e multa sobre o saldo de R$ 61.000,00.</span></div>
+              <span class="part">D 4.3.1.05 Juros e multa s/ parcelamentos · C 2.1.2.20 Parcelamentos de impostos a pagar</span></div>
+            <div class="rt"><span class="amt2 tnum">610,00</span><span class="doneflag">✓ confirmado</span>
+              <div class="acts"><button class="pbtn mini" onclick="confirmRow(this)">Confirmar</button>
+                <button class="iconbtn no" title="Não contabilizar" onclick="dismissRow(this,'✕ não contabilizado')">✕</button></div></div>
+          </div>
+          <div class="note"><span class="ni">✦</span><span>Só a <b>atualização de juros e multa</b> é contabilizada aqui. O pagamento da parcela (principal) entra pelo banco e é tratado na <b>Conciliação</b>.</span></div>
+        </div>
+
+        <!-- novo parcelamento -->
+        <div class="card">
+          <div style="display:flex;align-items:center;justify-content:space-between">
+            <div><p class="sec-t">🧾 Novo parcelamento de impostos</p>
+              <p class="sec-s">Jogue o termo do parcelamento — a plataforma lê e passa a sugerir a atualização de juros e multa todo mês.</p></div>
+            <span class="tag">Passo a passo</span>
+          </div>
+          <div class="flow" style="margin-top:14px">
+            <div>
+              <div class="drop"><div class="di">⤒</div><b>Arraste o termo do parcelamento</b>
+                <small>PGFN / Receita / Sefaz / Simples · termo, DAS ou guias</small>
+                <div class="file"><span>📄</span><span>parcelamento_pgfn_19884.pdf</span><span class="x">✓</span></div></div>
+              <div class="center"><button class="pbtn" onclick="lerPar()">⚙︎ Ler parcelamento</button></div>
+            </div>
+            <div class="read pending" id="read-par">
+              <p class="sec-t" style="font-size:13.5px;margin-bottom:10px">Parcelamento lido</p>
+              <div class="kv"><span class="k">Órgão</span><span class="v">PGFN — União</span></div>
+              <div class="kv"><span class="k">Nº / tributo</span><span class="v mono">19.884-0 · IRPJ/CSLL</span></div>
+              <div class="kv"><span class="k">Valor consolidado</span><span class="v">R$ 180.000,00</span></div>
+              <div class="kv"><span class="k">Parcelas</span><span class="v">60× (parcela ~R$ 3.500)</span></div>
+              <div class="kv"><span class="k">Saldo devedor</span><span class="v">R$ 132.000,00</span></div>
+              <div class="kv"><span class="k">Índice de atualização</span><span class="v">Selic + multa</span></div>
+              <span class="chip info" style="margin-top:10px">Confiança da leitura 93%</span>
+            </div>
+          </div>
+
+          <div id="ger-par" class="hidden">
+            <div class="hr"></div>
+            <p class="sec-t" style="font-size:14px">Contabilização gerada — só juros e multa</p>
+            <p class="sec-s">O saldo do parcelamento já está registrado no passivo. Mês a mês, o bloco só sugere a atualização de juros e multa.</p>
+            <div class="je">
+              <div class="jh">Atualização mensal de juros e multa <span class="lote">recorrente · origem: Parcelamento</span></div>
+              <div class="jline"><span class="dc d">D</span><span class="acc"><b>4.3.1.05 Juros e multa s/ parcelamentos</b><small>Despesa financeira</small></span><span class="val">1.320,00</span></div>
+              <div class="jline credit"><span class="dc c">C</span><span class="acc"><b>2.1.2.20 Parcelamentos de impostos a pagar</b><small>Atualização do saldo</small></span><span class="val">1.320,00</span></div>
+            </div>
+            <div class="note"><span class="ni">✦</span><span>A <b>parcela mensal (principal)</b> é baixada pelo banco, na Conciliação — o bloco <b>não gera</b> esse lançamento. Aqui só entra a atualização de juros e multa, sob seu OK.</span></div>
+            <div class="center"><button class="pbtn" onclick="toggleSave(this,'parcelamento salvo')">Salvar parcelamento</button></div>
+          </div>
+        </div>
+
+        <!-- armazenados -->
+        <div class="card">
+          <p class="sec-t">Parcelamentos armazenados</p>
+          <p class="sec-s">Todos os parcelamentos ficam guardados aqui. A cada mês, só a atualização de juros e multa é sugerida.</p>
+          <div style="overflow-x:auto"><table class="tbl">
+            <thead><tr><th>Órgão / nº</th><th>Tributo</th><th class="r">Consolidado</th><th class="r">Saldo devedor</th><th class="r">Parcela</th><th class="r">Juros/multa Jul</th><th>Arquivo</th></tr></thead>
+            <tbody>
+              <tr><td><b>PGFN</b> <span class="muted mono">19.884-0</span></td><td>IRPJ/CSLL</td><td class="r money">180.000,00</td><td class="r money">132.000,00</td><td class="r money">3.500,00</td><td class="r money">1.320,00</td><td><span class="chip mut">📎 armazenado</span></td></tr>
+              <tr><td><b>ICMS-SP</b> <span class="muted mono">7742/2025</span></td><td>ICMS</td><td class="r money">90.000,00</td><td class="r money">61.000,00</td><td class="r money">2.100,00</td><td class="r money">610,00</td><td><span class="chip mut">📎 armazenado</span></td></tr>
+            </tbody>
+          </table></div>
+          <div class="totrow"><span class="lbl">Atualização de juros e multa em Julho / 2026</span><span class="amt tnum">R$ 1.930,00</span></div>
         </div>
       </section>
 
@@ -736,7 +934,7 @@
             </div>
             <div class="note"><span class="ni">✦</span><span>Ao salvar, o <b>apontamento no Status é baixado</b>, a <b>Conciliação é atualizada</b> e o lançamento entra no lote do mês.
               Se a investida tivesse lucro, seria o inverso: D Investimentos / C resultado positivo de equivalência.</span></div>
-            <div class="center"><button class="pbtn" onclick="alert('MOCKUP: salvaria a MEP e baixaria o apontamento.')">Salvar e baixar apontamento</button></div>
+            <div class="center"><button class="pbtn" onclick="toggleSave(this,'apontamento baixado')">Salvar e baixar apontamento</button></div>
           </div>
         </div>
 
@@ -776,7 +974,7 @@
             </div>
             <div class="frow2">
               <div class="field"><label>Histórico</label><input class="inp" value="Taxa de manutenção de conta — julho/2026"></div>
-              <button class="pbtn" style="height:38px" onclick="alert('MOCKUP: entraria na fila e viraria pendência no Status.')">＋ Lançar</button>
+              <button class="pbtn" style="height:38px" onclick="toggleSave(this,'lançado')">＋ Lançar</button>
             </div>
             <div class="note"><span class="ni">✦</span><span>Só entra no arquivo do Domínio quando tem <b>débito E crédito</b>.
               Um ajuste de <b>nome/histórico</b> ou uma <b>justificativa</b> não vira lançamento e não precisa reimportar.</span></div>
@@ -796,14 +994,14 @@
                 <p class="sec-s" style="margin-bottom:10px">Confira, edite ou descarte cada sugestão.</p>
                 <div class="sug"><div class="si">✎</div><div class="sb"><b>Energia elétrica — rateio matriz</b>
                   <small>D 4.1.2.05 · C 1.1.1.02 · R$ 3.480,00</small></div>
-                  <div class="acts"><button class="iconbtn ok" title="Confirmar">✓</button><button class="iconbtn" title="Editar">✎</button><button class="iconbtn no" title="Descartar">✕</button></div></div>
+                  <div class="acts"><button class="iconbtn ok" title="Confirmar" onclick="confirmRow(this)">✓</button><button class="iconbtn" title="Editar">✎</button><button class="iconbtn no" title="Descartar" onclick="dismissRow(this,'✕ descartado')">✕</button></div></div>
                 <div class="sug"><div class="si">✎</div><div class="sb"><b>Telefonia / internet</b>
                   <small>D 4.1.2.09 · C 1.1.1.02 · R$ 920,00</small></div>
-                  <div class="acts"><button class="iconbtn ok" title="Confirmar">✓</button><button class="iconbtn" title="Editar">✎</button><button class="iconbtn no" title="Descartar">✕</button></div></div>
+                  <div class="acts"><button class="iconbtn ok" title="Confirmar" onclick="confirmRow(this)">✓</button><button class="iconbtn" title="Editar">✎</button><button class="iconbtn no" title="Descartar" onclick="dismissRow(this,'✕ descartado')">✕</button></div></div>
                 <div class="sug"><div class="si">✎</div><div class="sb"><b>Material de escritório</b>
                   <small>D 4.1.2.11 · C 1.1.1.02 · R$ 610,00</small></div>
-                  <div class="acts"><button class="iconbtn ok" title="Confirmar">✓</button><button class="iconbtn" title="Editar">✎</button><button class="iconbtn no" title="Descartar">✕</button></div></div>
-                <div class="center"><button class="pbtn sm" onclick="alert('MOCKUP: confirmaria os selecionados e mandaria pra fila.')">Confirmar selecionados</button></div>
+                  <div class="acts"><button class="iconbtn ok" title="Confirmar" onclick="confirmRow(this)">✓</button><button class="iconbtn" title="Editar">✎</button><button class="iconbtn no" title="Descartar" onclick="dismissRow(this,'✕ descartado')">✕</button></div></div>
+                <div class="center"><button class="pbtn sm" onclick="toggleSave(this,'sugestões confirmadas')">Confirmar selecionados</button></div>
               </div>
             </div>
           </div>
@@ -852,7 +1050,7 @@
             <span class="chip good" style="font-size:10.5px">confiança 97%</span>
             <span class="doneflag">✓ confirmado</span>
             <div class="acts"><button class="iconbtn ok" onclick="confirmRow(this)" title="Confirmar">✓</button>
-              <button class="iconbtn" title="Editar">✎</button><button class="iconbtn no" title="Descartar">✕</button></div></div>
+              <button class="iconbtn" title="Editar">✎</button><button class="iconbtn no" title="Descartar" onclick="dismissRow(this,'✕ descartado')">✕</button></div></div>
         </div>
 
         <div class="srow" data-g="sug">
@@ -864,7 +1062,7 @@
             <span class="chip good" style="font-size:10.5px">confiança 95%</span>
             <span class="doneflag">✓ confirmado</span>
             <div class="acts"><button class="iconbtn ok" onclick="confirmRow(this)" title="Confirmar">✓</button>
-              <button class="iconbtn" title="Editar">✎</button><button class="iconbtn no" title="Descartar">✕</button></div></div>
+              <button class="iconbtn" title="Editar">✎</button><button class="iconbtn no" title="Descartar" onclick="dismissRow(this,'✕ descartado')">✕</button></div></div>
         </div>
 
         <div class="srow" data-g="sug">
@@ -876,7 +1074,7 @@
             <span class="chip good" style="font-size:10.5px">confiança 99%</span>
             <span class="doneflag">✓ confirmado</span>
             <div class="acts"><button class="iconbtn ok" onclick="confirmRow(this)" title="Confirmar">✓</button>
-              <button class="iconbtn" title="Editar">✎</button><button class="iconbtn no" title="Descartar">✕</button></div></div>
+              <button class="iconbtn" title="Editar">✎</button><button class="iconbtn no" title="Descartar" onclick="dismissRow(this,'✕ descartado')">✕</button></div></div>
         </div>
 
         <div class="srow" data-g="sug">
@@ -888,7 +1086,7 @@
             <span class="chip good" style="font-size:10.5px">confiança 98%</span>
             <span class="doneflag">✓ confirmado</span>
             <div class="acts"><button class="iconbtn ok" onclick="confirmRow(this)" title="Confirmar">✓</button>
-              <button class="iconbtn" title="Editar">✎</button><button class="iconbtn no" title="Descartar">✕</button></div></div>
+              <button class="iconbtn" title="Editar">✎</button><button class="iconbtn no" title="Descartar" onclick="dismissRow(this,'✕ descartado')">✕</button></div></div>
         </div>
 
         <div class="srow" data-g="sug">
@@ -900,7 +1098,7 @@
             <span class="chip warn" style="font-size:10.5px">confiança 92%</span>
             <span class="doneflag">✓ confirmado</span>
             <div class="acts"><button class="iconbtn ok" onclick="confirmRow(this)" title="Confirmar">✓</button>
-              <button class="iconbtn" title="Editar">✎</button><button class="iconbtn no" title="Descartar">✕</button></div></div>
+              <button class="iconbtn" title="Editar">✎</button><button class="iconbtn no" title="Descartar" onclick="dismissRow(this,'✕ descartado')">✕</button></div></div>
         </div>
       </div>
       </div><!-- /view-sugestoes -->
@@ -929,8 +1127,18 @@
         </div>
         <div class="gate">
           <div class="gi" style="background:rgba(231,168,59,.16);color:#F0BC5E">⊞</div>
-          <div class="gt"><b>Outras Contabilizações a confirmar</b><small>Seguro (3 apropriações) e Importação (1 processo) ainda não confirmados nos cards</small></div>
-          <span class="chip warn">4 a confirmar</span>
+          <div class="gt"><b>Outras Contabilizações a confirmar</b><small>Seguro (3), Importação (1) e Parcelamento de impostos (2 atualizações) ainda não confirmados nos cards</small></div>
+          <span class="chip warn">6 a confirmar</span>
+        </div>
+        <div class="gate">
+          <div class="gi" style="background:rgba(231,168,59,.16);color:#F0BC5E">🔎</div>
+          <div class="gt"><b>Observações da conciliação</b><small>Contas de seguro, importação, empréstimo, impostos em atraso e parcelamento sem documento/tratamento</small></div>
+          <span class="chip warn">5 observações</span>
+        </div>
+        <div class="gate">
+          <div class="gi" style="background:rgba(229,72,77,.16);color:#F0868B">⏰</div>
+          <div class="gt"><b>Relatório de pendências do cliente</b><small>Impostos e parcelas de parcelamento em atraso confirmados — não geram lançamento, são enviados ao cliente</small></div>
+          <span class="apont">1 em atraso</span>
         </div>
         <div class="gate">
           <div class="gi" style="background:rgba(53,192,138,.16);color:#5FD9A6">💡</div>
@@ -951,10 +1159,11 @@
               <tr><td><span class="chip info">Importação</span></td><td>Formação de custo IMP-2026-014</td><td class="mono muted">D 1.1.4.09 · C diversos</td><td class="r money">78.240,00</td></tr>
               <tr><td><span class="chip mut">Outros lanç.</span></td><td>Avulsos — manual e sugestões (5)</td><td class="mono muted">vários</td><td class="r money">26.890,00</td></tr>
               <tr><td><span class="chip mut">Sugestões</span></td><td>Baixas de adiantamento, rendimento, ICMS… (5)</td><td class="mono muted">vários</td><td class="r money">30.220,00</td></tr>
+              <tr><td><span class="chip info">Parcelamento</span></td><td>Atualização de juros e multa (2 parcelamentos)</td><td class="mono muted">D 4.3.1.05 · C 2.1.2.20</td><td class="r money">1.930,00</td></tr>
               <tr><td><span class="chip warn">Correção</span></td><td>Reclassificação banco × resultado (1)</td><td class="mono muted">D 1.1.1.02 · C 3.1.1.08</td><td class="r money">4.700,00</td></tr>
             </tbody>
           </table></div>
-          <div class="totrow"><span class="lbl">20 lançamentos com débito e crédito</span><span class="amt tnum">R$ 146.050,00</span></div>
+          <div class="totrow"><span class="lbl">22 lançamentos com débito e crédito</span><span class="amt tnum">R$ 147.980,00</span></div>
 
           <div class="hr"></div>
           <p class="sec-s" style="margin-bottom:9px"><b style="color:#C6D0E3">Não geram lançamento no Domínio</b> — não precisam reimportar:</p>
@@ -987,7 +1196,7 @@
           <p class="sec-t">Concluir a etapa</p>
           <p class="sec-s">Arquivo gerado no layout do Domínio. Importe no Domínio e, para concluir, suba o balancete atualizado — ele tem que bater com a conciliação.</p>
           <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px">
-            <span class="dl"><span class="df">↓</span> lanctos_eurobrake_072026.txt <span class="muted" style="font-weight:500">· 20 linhas · CSV ;</span></span>
+            <span class="dl"><span class="df">↓</span> lanctos_eurobrake_072026.txt <span class="muted" style="font-weight:500">· 22 linhas · CSV ;</span></span>
             <span class="chip good">✓ gerado</span>
           </div>
 
@@ -1017,8 +1226,13 @@
   </main>
 </div>
 
+<!-- MODAL (justificar / corrigir) -->
+<div class="modal-ov" id="modal-ov" onclick="if(event.target===this)closeModal()">
+  <div class="modal-card" id="modal-card"></div>
+</div>
+
 <script>
-  var panes=['seguro','importacao','emprestimo','equivalencia','outros'];
+  var panes=['seguro','importacao','emprestimo','parcelamento','equivalencia','outros'];
   function go(t){
     panes.forEach(function(p){
       document.getElementById('pane-'+p).classList.toggle('hidden',p!==t);
@@ -1026,8 +1240,10 @@
     document.querySelectorAll('.tab').forEach(function(el){
       el.classList.toggle('active',el.dataset.tab===t);
     });
-    document.querySelector('.wrap').scrollIntoView({behavior:'smooth',block:'start'});
+    var tabs=document.querySelector('.tabs');
+    if(tabs) tabs.scrollIntoView({behavior:'smooth',block:'start'});
   }
+  function toggleObs(){document.getElementById('obs-card').classList.toggle('collapsed');}
   function reveal(readId,gerId,btn){
     document.getElementById(readId).classList.remove('pending');
     var g=document.getElementById(gerId); g.classList.remove('hidden');
@@ -1038,6 +1254,7 @@
   function lerImp(){reveal('read-imp','ger-imp',event.target);}
   function lerEmp(){reveal('read-emp','ger-emp',event.target);}
   function lerEqp(){reveal('read-eqp','ger-eqp',event.target);}
+  function lerPar(){reveal('read-par','ger-par',event.target);}
   function lerRel(){document.getElementById('read-rel').classList.remove('pending');event.target.textContent='✓ Relatório lido';event.target.disabled=true;event.target.style.opacity=.6;}
   function go2(t){go(t);document.getElementById('read-eqp').scrollIntoView({behavior:'smooth',block:'center'});}
 
@@ -1062,9 +1279,74 @@
     document.getElementById('dom-step2').scrollIntoView({behavior:'smooth',block:'start'});
   }
   function conferir(){document.getElementById('read-bal').classList.remove('pending');event.target.textContent='✓ Conferido';event.target.disabled=true;event.target.style.opacity=.6;}
-  function confirmRow(btn){btn.closest('.srow').classList.add('done');}
+  function rowOf(btn){return btn.closest('.srow')||btn.closest('.sug');}
+  function setRow(el,html){
+    el.classList.add('done');
+    var acts=el.querySelector('.acts');
+    var host=acts?acts.parentElement:el;
+    var s=host.querySelector('.statusline');
+    if(!s){s=document.createElement('span');s.className='statusline';host.appendChild(s);}
+    s.innerHTML=html+' <button class="reopen" onclick="reopenRow(this)">↺ reabrir</button>';
+  }
+  function confirmRow(btn){setRow(rowOf(btn),'<span class="flag ok">✓ confirmado</span>');}
+  function dismissRow(btn,label){setRow(rowOf(btn),'<span class="flag no">'+(label||'✕ não houve')+'</span>');}
+  function obsConfirm(btn,block){setRow(rowOf(btn),'<span class="flag ok">✓ confirmado</span> <button class="pbtn mini" onclick="go(\''+block+'\')">Subir processo</button>');}
+  var _obsRow=null;
+  function showModal(){document.getElementById('modal-ov').classList.add('show');}
+  function closeModal(){document.getElementById('modal-ov').classList.remove('show');}
+  function obsTitle(){var b=_obsRow&&_obsRow.querySelector('.mid b');return b?b.textContent:'';}
+
+  function openJustify(btn){
+    _obsRow=rowOf(btn);
+    document.getElementById('modal-card').innerHTML=
+      '<h3>Justificar observação</h3>'+
+      '<p class="msub">'+obsTitle()+'</p>'+
+      '<div class="field"><label>Justificativa (obrigatória)</label>'+
+      '<textarea class="ta" id="just-txt" placeholder="Escreva a justificativa desta observação…"></textarea></div>'+
+      '<div class="modal-acts"><button class="pbtn ghost" onclick="closeModal()">Cancelar</button>'+
+      '<button class="pbtn" onclick="saveJustify()">Salvar justificativa</button></div>';
+    showModal();var ta=document.getElementById('just-txt');if(ta)ta.focus();
+  }
+  function saveJustify(){
+    var ta=document.getElementById('just-txt');var v=(ta.value||'').trim();
+    if(!v){ta.style.borderColor='#E5484D';return;}
+    var t=v.length>44?v.slice(0,44)+'…':v;
+    setRow(_obsRow,'<span class="flag" style="color:#A9B4C9">✓ justificado</span> <span class="muted" style="font-size:11px">“'+t+'”</span>');
+    closeModal();
+  }
+  function openCorrigir(btn){
+    _obsRow=rowOf(btn);
+    document.getElementById('modal-card').innerHTML=
+      '<h3>Corrigir lançamento</h3>'+
+      '<p class="msub">'+obsTitle()+' — abra a partida e ajuste.</p>'+
+      '<div class="g2"><div class="field"><label>Data</label><input class="inp mono" value="31/07/2026"></div>'+
+      '<div class="field"><label>Valor</label><input class="inp mono" style="text-align:right" value="4.700,00"></div></div>'+
+      '<div class="g2" style="margin-top:10px"><div class="field"><label>Conta débito</label><input class="inp" value="1.1.1.02 Banco Itaú"></div>'+
+      '<div class="field"><label>Conta crédito</label><input class="inp" value="3.1.1.08 Receita reclassificada"></div></div>'+
+      '<div class="field" style="margin-top:10px"><label>Histórico</label><input class="inp" value="Reclassificação — correção de lançamento"></div>'+
+      '<div class="note" style="margin-top:12px"><span class="ni">✦</span><span>A correção vira lançamento e <b>atualiza a Conciliação</b>.</span></div>'+
+      '<div class="modal-acts"><button class="pbtn ghost" onclick="closeModal()">Cancelar</button>'+
+      '<button class="pbtn" onclick="saveCorrigir()">Salvar correção</button></div>';
+    showModal();
+  }
+  function saveCorrigir(){
+    setRow(_obsRow,'<span class="flag" style="color:#8FB0FF">✓ corrigido · vira lançamento e atualiza a Conciliação</span>');
+    closeModal();
+  }
+  function obsPendencia(btn){setRow(rowOf(btn),'<span class="flag no">⏰ em atraso · no relatório do cliente</span> <button class="pbtn mini ghost" onclick="showView(\'status\')">Ver pendências</button>');}
+  function reopenRow(btn){var r=rowOf(btn);r.classList.remove('done');var s=r.querySelector('.statusline');if(s)s.remove();}
   function confirmAll(g){document.querySelectorAll('.srow[data-g="'+g+'"]').forEach(function(r){
-    if(!r.querySelector('.doneflag'))return;
-    var res=r.querySelector('.pbtn[style*="E5484D"]'); if(res)return; // deixa apontamento em aberto
-    r.classList.add('done');});}
+    if(r.classList.contains('done'))return;
+    if(r.querySelector('.pbtn[style*="E5484D"]'))return; // deixa apontamento em aberto
+    setRow(r,'<span class="flag ok">✓ confirmado</span>');});}
+  function toggleSave(btn,label){
+    if(btn.dataset.orig)return;
+    btn.dataset.orig=btn.textContent;
+    btn.textContent='✓ '+(label||'confirmado');
+    btn.disabled=true;btn.style.opacity=.65;
+    var re=document.createElement('button');
+    re.className='reopen';re.style.marginLeft='8px';re.textContent='↺ reabrir';
+    re.onclick=function(){btn.textContent=btn.dataset.orig;delete btn.dataset.orig;btn.disabled=false;btn.style.opacity=1;re.remove();};
+    btn.parentElement.appendChild(re);
+  }
 </script>
