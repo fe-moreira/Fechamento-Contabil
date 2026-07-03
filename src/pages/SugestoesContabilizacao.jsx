@@ -1,71 +1,116 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { supabase } from '../lib/supabase'
 import { theme, money } from '../lib/theme'
 import { useAppData } from '../lib/appData'
+import { useAuth } from '../components/AuthProvider'
+import { gerarLancamento } from '../lib/outras'
 
-function hexA(hex, a) {
-  const n = parseInt(hex.slice(1), 16)
-  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`
-}
-
-// Sugestões que a plataforma extrai do razão (evidência → partida → confirmar/excluir).
-const SUGESTOES = [
-  { id: 's1', icon: 'ti-arrows-exchange', cor: '#4A7CFF', t: 'Baixar adiantamento de fornecedor — Metalúrgica Sul', w: 'NF 4471 de R$ 12.000 lançada este mês bate com o adiantamento de R$ 12.000 pago em jun/26.', p: 'D 2.1.1.05 Fornecedor Metalúrgica Sul · C 1.1.5.02 Adiant. a fornecedores', v: 12000, conf: 97 },
-  { id: 's2', icon: 'ti-arrows-exchange', cor: '#4A7CFF', t: 'Baixar adiantamento de cliente — Rodobens', w: 'NF de saída 8890 de R$ 8.500 bate com o adiantamento recebido do cliente em jun/26.', p: 'D 2.1.4.01 Adiant. de clientes · C 1.1.2.01 Clientes a receber', v: 8500, conf: 95 },
-  { id: 's3', icon: 'ti-coin', cor: '#30A46C', t: 'Rendimento de aplicação financeira — Itaú', w: 'Extrato mostra rendimento de R$ 1.240 no mês, sem lançamento no razão.', p: 'D 1.1.1.20 Aplicações financeiras · C 3.2.1.01 Receita financeira', v: 1240, conf: 99 },
-  { id: 's4', icon: 'ti-file-invoice', cor: '#F5A623', t: 'Baixa de ICMS recolhido (mês anterior)', w: 'ICMS de jun/26 (R$ 5.300) foi debitado do banco em 10/jul — a conta a recolher continua aberta.', p: 'D 2.1.3.01 ICMS a recolher · C 1.1.1.02 Banco Itaú', v: 5300, conf: 98 },
-  { id: 's5', icon: 'ti-building-warehouse', cor: '#9A7CF0', t: 'Depreciação mensal do imobilizado', w: 'Imobilizado com base de cálculo ativa e sem depreciação lançada em julho.', p: 'D 4.1.3.01 Depreciação · C 1.2.3.09 Depreciação acumulada', v: 3180, conf: 92 },
-]
+function hexA(hex, a) { const n = parseInt(hex.slice(1), 16); return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})` }
+const num = v => Number(String(v).replace(/\./g, '').replace(',', '.')) || 0
 
 export default function SugestoesContabilizacao() {
-  const { empresaNome, competencia } = useAppData()
-  const [estado, setEstado] = useState({}) // id -> 'ok' | 'no'
-  const set = (id, v) => setEstado(e => ({ ...e, [id]: v }))
-  const confirmarTodas = () => setEstado(e => { const n = { ...e }; SUGESTOES.forEach(s => { if (!n[s.id]) n[s.id] = 'ok' }); return n })
-  const pend = SUGESTOES.filter(s => !estado[s.id]).length
+  const { empresaId, empresaNome, competencia } = useAppData()
+  const { user } = useAuth()
+  const [rows, setRows] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [tratadas, setTratadas] = useState(() => new Set())
+  const [modal, setModal] = useState(null)
+  const [msg, setMsg] = useState('')
+
+  async function carregar() {
+    setLoading(true)
+    const [mes, ano] = (competencia || '').split('/').map(Number)
+    const { data: comp } = await supabase.from('competencias').select('id')
+      .eq('cliente_id', empresaId).eq('ano', ano).eq('mes', mes).maybeSingle()
+    if (!comp) { setRows([]); setLoading(false); return }
+    const { data } = await supabase.from('auditoria').select('id, modulo, item, tipo, detalhe, competencia_id')
+      .eq('competencia_id', comp.id).eq('tipo', 'Correção').order('id', { ascending: false })
+    setRows(data || []); setLoading(false)
+  }
+  useEffect(() => { if (!empresaId) { setRows([]); setLoading(false); return } setTratadas(new Set()); carregar() }, [empresaId, competencia]) // eslint-disable-line
+
+  async function confirmar(f) {
+    try {
+      await gerarLancamento({ competencia_id: modal.competencia_id, data: f.data || null, conta_debito: f.conta_debito, conta_credito: f.conta_credito, valor: num(f.valor), historico: f.historico, origem: 'sugestao', usuario: user?.email })
+      setTratadas(s => new Set(s).add(modal.id)); setModal(null); setMsg('Lançamento gerado a partir da sugestão.'); setTimeout(() => setMsg(''), 4000)
+    } catch (e) { setMsg('Erro: ' + e.message) }
+  }
+
+  if (!empresaId) return <Aviso texto="Selecione uma empresa no menu lateral." />
+  const ativos = rows.filter(r => !tratadas.has(r.id))
 
   return (
     <div>
       <h1 style={{ fontSize: 22, fontWeight: 500, marginBottom: 4 }}>Sugestões de Contabilização</h1>
       <p style={{ color: theme.sub, fontSize: 13, marginBottom: 18, maxWidth: 820 }}>
-        A plataforma varre o <b style={{ color: theme.text }}>razão</b> da competência e aponta o que precisa ser lançado ou corrigido — cada sugestão traz a evidência que a gerou. O que você confirmar <b style={{ color: theme.text }}>atualiza a Conciliação</b> e alimenta o Status → Domínio. O que excluir sai da lista.
+        A plataforma aponta, a partir das correções do fechamento, o que precisa ser lançado. O que você confirmar vira lançamento e alimenta o Status → Domínio.
         {empresaNome && <> · <b style={{ color: theme.text }}>{empresaNome}</b> · {competencia}</>}
       </p>
 
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 12 }}>
-        <span style={{ fontSize: 12.5, color: theme.sub }}><b style={{ color: theme.text }}>{pend} sugest{pend === 1 ? 'ão' : 'ões'}</b> a tratar</span>
-        <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={confirmarTodas}><i className="ti ti-checks" /> Confirmar todas</button>
-      </div>
+      {msg && <div style={{ background: theme.card, border: `1px solid ${theme.accent}`, borderRadius: 10, padding: '10px 14px', fontSize: 13, marginBottom: 14 }}><i className="ti ti-info-circle" style={{ color: theme.accent }} /> {msg}</div>}
 
-      <div style={{ display: 'grid', gap: 12 }}>
-        {SUGESTOES.map(s => {
-          const st = estado[s.id]
-          return (
-            <div key={s.id} style={{ background: theme.card, border: `1px solid ${theme.border}`, borderLeft: `3px solid ${s.cor}`, borderRadius: 12, padding: '14px 16px', display: 'grid', gridTemplateColumns: '40px 1fr auto', gap: 14, alignItems: 'center', opacity: st ? 0.72 : 1 }}>
-              <div style={{ width: 36, height: 36, borderRadius: 9, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 17, background: hexA(s.cor, 0.16), color: s.cor }}><i className={`ti ${s.icon}`} /></div>
-              <div style={{ minWidth: 0 }}>
-                <b style={{ fontSize: 14 }}>{s.t}</b>
-                <div style={{ fontSize: 12.5, color: theme.sub, margin: '4px 0 6px' }}><i className="ti ti-bulb" style={{ color: theme.yellow }} /> {s.w}</div>
-                <span style={{ fontFamily: 'ui-monospace,Menlo,monospace', fontSize: 12, color: theme.sub, background: theme.input, border: `1px solid ${theme.border}`, borderRadius: 6, padding: '4px 8px', display: 'inline-block' }}>{s.p}</span>
+      {loading ? (
+        <p style={{ color: theme.sub }}>Carregando…</p>
+      ) : ativos.length === 0 ? (
+        <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: 12, padding: '28px 24px', display: 'flex', alignItems: 'center', gap: 14, maxWidth: 640 }}>
+          <i className="ti ti-bulb" style={{ fontSize: 24, color: theme.yellow }} />
+          <p style={{ fontSize: 13.5, color: theme.text, margin: 0 }}>Nenhuma sugestão nesta competência. As sugestões aparecem conforme a plataforma identifica correções e ajustes no fechamento (Conciliação, Comparativo, Status).</p>
+        </div>
+      ) : (
+        <div style={{ display: 'grid', gap: 12 }}>
+          {ativos.map(s => (
+            <div key={s.id} style={{ background: theme.card, border: `1px solid ${theme.border}`, borderLeft: `3px solid ${theme.accent}`, borderRadius: 12, padding: '14px 16px', display: 'flex', justifyContent: 'space-between', gap: 14, flexWrap: 'wrap' }}>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <b style={{ fontSize: 14 }}>{s.item || s.modulo}</b>
+                <span style={{ marginLeft: 8, background: hexA('#4A7CFF', 0.14), color: '#8FB0FF', fontSize: 11, padding: '3px 9px', borderRadius: 20 }}>{s.modulo}</span>
+                <p style={{ color: theme.sub, fontSize: 12.5, margin: '6px 0 0' }}>{s.detalhe || '(sem detalhe)'}</p>
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 7 }}>
-                <b style={{ fontVariantNumeric: 'tabular-nums', fontSize: 15 }}>{money(s.v)}</b>
-                <span style={{ fontSize: 10.5, fontWeight: 600, color: s.conf >= 95 ? theme.green : theme.yellow }}>confiança {s.conf}%</span>
-                {!st ? (
-                  <div style={{ display: 'flex', gap: 6 }}>
-                    <button className="btn" style={{ fontSize: 12, padding: '6px 11px' }} onClick={() => set(s.id, 'ok')}><i className="ti ti-check" /> Confirmar</button>
-                    <button className="btn btn-ghost" style={{ fontSize: 12, padding: '6px 9px' }} title="Editar"><i className="ti ti-pencil" /></button>
-                    <button className="btn btn-ghost" style={{ fontSize: 12, padding: '6px 9px' }} title="Descartar" onClick={() => set(s.id, 'no')}><i className="ti ti-x" /></button>
-                  </div>
-                ) : (
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: st === 'ok' ? theme.green : theme.red }}>{st === 'ok' ? '✓ confirmado' : '✕ descartado'}</span>
-                    <button className="btn btn-ghost" style={{ fontSize: 11.5, padding: '4px 9px' }} onClick={() => set(s.id, null)}><i className="ti ti-rotate" /> reabrir</button>
-                  </span>
-                )}
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <button className="btn" style={{ fontSize: 13 }} onClick={() => setModal({ id: s.id, competencia_id: s.competencia_id, historico: s.detalhe || `${s.modulo} · ${s.item || ''}` })}><i className="ti ti-check" /> Confirmar</button>
+                <button className="btn btn-ghost" style={{ fontSize: 13 }} onClick={() => setTratadas(x => new Set(x).add(s.id))}><i className="ti ti-x" /> Descartar</button>
               </div>
             </div>
-          )
-        })}
+          ))}
+        </div>
+      )}
+
+      {modal && <PartidaModal cfg={modal} onClose={() => setModal(null)} onConfirm={confirmar} competencia={competencia} />}
+    </div>
+  )
+}
+
+function PartidaModal({ cfg, onClose, onConfirm, competencia }) {
+  const [m, a] = (competencia || '').split('/').map(Number)
+  const dataDefault = m && a ? `${a}-${String(m).padStart(2, '0')}-${String(new Date(a, m, 0).getDate()).padStart(2, '0')}` : ''
+  const [f, setF] = useState({ data: dataDefault, conta_debito: '', conta_credito: '', valor: '', historico: cfg.historico || '' })
+  const on = k => e => setF(x => ({ ...x, [k]: e.target.value }))
+  return (
+    <div onClick={e => { if (e.target === e.currentTarget) onClose() }} style={{ position: 'fixed', inset: 0, background: 'rgba(8,11,18,0.64)', zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+      <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: 14, maxWidth: 560, width: '100%', padding: '22px 24px' }}>
+        <h3 style={{ fontSize: 16, fontWeight: 700, margin: '0 0 4px' }}>Confirmar lançamento</h3>
+        <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 16px' }}>Escreva a partida da sugestão e confirme.</p>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <div><label>Data</label><input className="input" type="date" value={f.data} onChange={on('data')} /></div>
+          <div><label>Valor</label><input className="input" type="number" step="0.01" value={f.valor} onChange={on('valor')} /></div>
+          <div><label>Conta débito</label><input className="input" value={f.conta_debito} onChange={on('conta_debito')} /></div>
+          <div><label>Conta crédito</label><input className="input" value={f.conta_credito} onChange={on('conta_credito')} /></div>
+          <div style={{ gridColumn: '1 / -1' }}><label>Histórico</label><input className="input" value={f.historico} onChange={on('historico')} /></div>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 18 }}>
+          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+          <button className="btn" onClick={() => onConfirm(f)}>Confirmar e gerar</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function Aviso({ texto }) {
+  return (
+    <div>
+      <h1 style={{ fontSize: 22, fontWeight: 500, marginBottom: 12 }}>Sugestões de Contabilização</h1>
+      <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: 12, padding: '28px 24px', display: 'flex', alignItems: 'center', gap: 14, maxWidth: 560 }}>
+        <i className="ti ti-building" style={{ fontSize: 24, color: theme.accent }} /><p style={{ fontSize: 14, color: theme.text }}>{texto}</p>
       </div>
     </div>
   )

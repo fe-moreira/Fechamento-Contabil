@@ -150,6 +150,97 @@ create table if not exists public.ajuste_leitura (
 create index if not exists ajuste_leitura_comp_idx on public.ajuste_leitura(competencia_id);
 
 -- ============================================================
+-- OUTRAS CONTABILIZAÇÕES (contratos/processos por cliente)
+-- Os lançamentos gerados usam a tabela public.lancamentos.
+-- ============================================================
+create table if not exists public.seguros (
+  id uuid primary key default gen_random_uuid(),
+  cliente_id uuid not null references public.clientes(id) on delete cascade,
+  seguradora text, apolice text, ramo text,
+  vigencia_inicio date, vigencia_fim date,
+  premio_total numeric(16,2) default 0, num_parcelas int default 1,
+  valor_parcela numeric(16,2) default 0, dia_pagto int,
+  conta_apropriar text, conta_despesa text, conta_pagar text,
+  arquivo text, status text default 'ativo', usuario text,
+  created_at timestamptz default now(), updated_at timestamptz default now()
+);
+create index if not exists seguros_cliente_idx on public.seguros(cliente_id);
+
+create table if not exists public.emprestimos (
+  id uuid primary key default gen_random_uuid(),
+  cliente_id uuid not null references public.clientes(id) on delete cascade,
+  banco text, contrato text, modalidade text,
+  valor numeric(16,2) default 0, prazo int, taxa_mensal numeric(9,4),
+  valor_parcela numeric(16,2) default 0, saldo_devedor numeric(16,2) default 0,
+  arquivo text, status text default 'ativo', usuario text,
+  created_at timestamptz default now(), updated_at timestamptz default now()
+);
+create index if not exists emprestimos_cliente_idx on public.emprestimos(cliente_id);
+
+create table if not exists public.parcelamentos (
+  id uuid primary key default gen_random_uuid(),
+  cliente_id uuid not null references public.clientes(id) on delete cascade,
+  orgao text, numero text, tributo text,
+  consolidado numeric(16,2) default 0, num_parcelas int,
+  valor_parcela numeric(16,2) default 0, saldo_devedor numeric(16,2) default 0,
+  indice text, juros_multa_mes numeric(16,2) default 0,
+  conta_despesa text, conta_passivo text,
+  arquivo text, status text default 'ativo', usuario text,
+  created_at timestamptz default now(), updated_at timestamptz default now()
+);
+create index if not exists parcelamentos_cliente_idx on public.parcelamentos(cliente_id);
+
+create table if not exists public.participacoes (
+  id uuid primary key default gen_random_uuid(),
+  cliente_id uuid not null references public.clientes(id) on delete cascade,
+  investida text, vinculo text,
+  participacao_pct numeric(7,4) default 0, valor_investimento numeric(16,2) default 0,
+  conta_investimento text, conta_resultado text,
+  status text default 'ativo', usuario text,
+  created_at timestamptz default now(), updated_at timestamptz default now()
+);
+create index if not exists participacoes_cliente_idx on public.participacoes(cliente_id);
+
+create table if not exists public.importacoes (
+  id uuid primary key default gen_random_uuid(),
+  cliente_id uuid not null references public.clientes(id) on delete cascade,
+  numero text, di text, fornecedor text, mercadoria text,
+  invoice_moeda text, invoice_valor numeric(16,2), cambio numeric(12,4),
+  custo_total numeric(16,2) default 0,
+  etapa text default 'em curso', status text default 'a_nacionalizar',
+  composicao jsonb default '[]'::jsonb, adiantamento_id uuid,
+  arquivo text, usuario text,
+  created_at timestamptz default now(), updated_at timestamptz default now()
+);
+create index if not exists importacoes_cliente_idx on public.importacoes(cliente_id);
+
+create table if not exists public.adiantamentos_importacao (
+  id uuid primary key default gen_random_uuid(),
+  cliente_id uuid not null references public.clientes(id) on delete cascade,
+  fornecedor text, data date, valor numeric(16,2) default 0,
+  processo_id uuid references public.importacoes(id) on delete set null,
+  status text default 'aguardando', usuario text,
+  created_at timestamptz default now()
+);
+create index if not exists adiant_imp_cliente_idx on public.adiantamentos_importacao(cliente_id);
+
+alter table public.seguros                 enable row level security;
+alter table public.emprestimos             enable row level security;
+alter table public.parcelamentos           enable row level security;
+alter table public.participacoes           enable row level security;
+alter table public.importacoes             enable row level security;
+alter table public.adiantamentos_importacao enable row level security;
+do $$
+declare t text;
+begin
+  foreach t in array array['seguros','emprestimos','parcelamentos','participacoes','importacoes','adiantamentos_importacao']
+  loop
+    execute format('drop policy if exists "auth_all_%1$s" on public.%1$s;', t);
+    execute format('create policy "auth_all_%1$s" on public.%1$s for all to authenticated using (true) with check (true);', t);
+  end loop;
+end $$;
+
+-- ============================================================
 -- updated_at automático
 -- ============================================================
 create or replace function public.touch_updated_at()
