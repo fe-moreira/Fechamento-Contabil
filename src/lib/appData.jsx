@@ -14,8 +14,6 @@ export const useAppData = () => useContext(Ctx)
 
 const COMPETENCIAS = Array.from({ length: 12 }, (_, i) => `${String(i + 1).padStart(2, '0')}/2026`)
 
-// Administradores (podem excluir fechamentos com dados). Ajuste a lista conforme necessário.
-const ADMIN_EMAILS = ['fernando@attentivecontabilidade.com.br']
 
 export function AppDataProvider({ children }) {
   const [empresas, setEmpresas] = useState([])
@@ -138,7 +136,8 @@ export function AppDataProvider({ children }) {
     return criada.id
   }
 
-  const isAdmin = ADMIN_EMAILS.includes((user?.email || '').toLowerCase())
+  // Perfil único por enquanto: todo usuário logado é ADM.
+  const isAdmin = !!user
 
   const value = {
     empresas, empresaId, setEmpresaId,

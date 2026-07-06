@@ -10,7 +10,7 @@ export default function Configuracoes() {
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 14 }}>
         <Cfg to="/clientes" icon="ti-users" titulo="Cadastro de Clientes" sub="Importação em lote, filiais, CNPJ" />
-        <Cfg icon="ti-user-shield" titulo="Usuários" sub="Perfis: auxiliar × analista" />
+        <Cfg to="/usuarios" icon="ti-user-shield" titulo="Usuários" sub="Convidar e gerenciar acessos (ADM)" />
       </div>
     </div>
   )
