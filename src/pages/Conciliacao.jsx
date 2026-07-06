@@ -707,6 +707,7 @@ function CardConferencia({ conta, reg, compId, usuario, composicao, onSalvo }) {
   const [salvando, setSalvando] = useState(false)
   const [arquivo, setArquivo] = useState(null)          // arquivo selecionado, pendente de upload
   const [path, setPath] = useState(reg?.documento_path || '') // caminho no Storage (arquivo armazenado)
+  const [ocr, setOcr] = useState({ ativo: false, pct: 0 })    // progresso do OCR (PDF-imagem)
 
   const saldo = Number(conta.saldo_final) || 0
   const temDoc = doc && saldoDoc !== ''
@@ -724,13 +725,23 @@ function CardConferencia({ conta, reg, compId, usuario, composicao, onSalvo }) {
     try {
       if (ehPdf) {
         // Extrato em PDF (ex.: extrato bancário do cliente).
-        const { extrairTextoPdf, palpiteSaldo } = await import('../lib/pdfText')
+        const { extrairTextoPdf, palpiteSaldo, ocrPdf } = await import('../lib/pdfText')
         const texto = await extrairTextoPdf(file)
-        const s = palpiteSaldo(texto)
+        let s = palpiteSaldo(texto)
         setDoc(file.name)
-        if (s != null) setSaldoDoc(String(s))
-        else if (texto.replace(/\s/g, '').length < 20)
-          setErro('Este PDF não tem texto selecionável (parece ser um print ou escaneado). Baixe o extrato digital direto do banco — ou digite o saldo abaixo. O arquivo é armazenado do mesmo jeito ao salvar.')
+        if (s != null) { setSaldoDoc(String(s)) }
+        else if (texto.replace(/\s/g, '').length < 20) {
+          // PDF sem texto (imagem/print) → tenta ler por OCR (reconhecimento de imagem).
+          setOcr({ ativo: true, pct: 0 })
+          try {
+            const textoOcr = await ocrPdf(file, pct => setOcr({ ativo: true, pct }))
+            s = palpiteSaldo(textoOcr)
+            if (s != null) { setSaldoDoc(String(s)); setMsg('Saldo lido por reconhecimento de imagem (OCR) — confira se está correto.') }
+            else setErro('Este PDF é uma imagem e o reconhecimento (OCR) não achou o saldo. Baixe o extrato digital direto do banco — ou digite o saldo abaixo.')
+          } catch (eo) {
+            setErro('Não consegui ler a imagem por OCR (' + eo.message + '). Baixe o extrato digital do banco ou digite o saldo abaixo.')
+          } finally { setOcr({ ativo: false, pct: 0 }) }
+        }
         else
           setErro('Li o PDF, mas não identifiquei o saldo automaticamente — confira e digite o saldo abaixo.')
       } else {
@@ -818,10 +829,13 @@ function CardConferencia({ conta, reg, compId, usuario, composicao, onSalvo }) {
           <div><label>Documento suporte <span style={{ color: theme.sub, fontWeight: 400 }}>(Excel ou PDF do extrato)</span></label><input type="file" accept=".xlsx,.xls,.csv,.pdf" onChange={e => lerArquivo(e.target.files?.[0])} style={{ fontSize: 13, color: theme.sub, display: 'block' }} /></div>
           <div><label>Saldo conforme o documento</label><input className="input" type="number" step="0.01" style={{ maxWidth: 200 }} value={saldoDoc} onChange={e => setSaldoDoc(e.target.value)} placeholder="0,00" /></div>
         </div>
+        {ocr.ativo && <p style={{ color: theme.sub, fontSize: 12.5, margin: '10px 0 0', fontWeight: 500 }}>
+          <i className="ti ti-scan" /> Lendo a imagem do extrato (OCR){ocr.pct ? ` — ${Math.round(ocr.pct * 100)}%` : '…'} — pode levar alguns segundos.
+        </p>}
         {doc && <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', margin: '10px 0 0' }}>
           <span style={{ color: theme.sub, fontSize: 12 }}><i className="ti ti-file" /> {doc}{path ? '' : arquivo ? ' (será armazenado ao salvar)' : ''}</span>
-          {path && <button className="btn secondary" style={{ padding: '4px 10px', fontSize: 12 }} onClick={verArquivo}><i className="ti ti-eye" /> Ver arquivo</button>}
-          {path && <button className="btn secondary" style={{ padding: '4px 10px', fontSize: 12, color: theme.red, borderColor: theme.red }} disabled={salvando} onClick={excluirArquivo}><i className="ti ti-trash" /> Excluir arquivo</button>}
+          {path && <button className="btn btn-ghost" style={{ padding: '4px 10px', fontSize: 12 }} onClick={verArquivo}><i className="ti ti-eye" /> Ver arquivo</button>}
+          {path && <button className="btn btn-ghost" style={{ padding: '4px 10px', fontSize: 12, color: theme.red, borderColor: theme.red }} disabled={salvando} onClick={excluirArquivo}><i className="ti ti-trash" /> Excluir arquivo</button>}
         </div>}
         {temDoc && <p style={{ color: bate ? theme.green : bateSaldo ? theme.sub : theme.red, fontSize: 12.5, margin: '10px 0 0', fontWeight: 500 }}>
           <i className={`ti ${bate ? 'ti-circle-check' : bateSaldo ? 'ti-cloud-upload' : 'ti-alert-triangle'}`} /> {bate ? 'Arquivo armazenado e bate com o saldo — fica verde.' : bateSaldo ? 'Bate com o saldo — salve para armazenar o arquivo e ficar verde.' : `Diferença de ${money(Math.abs(dif))} entre o saldo e o documento.`}
