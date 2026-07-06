@@ -189,10 +189,24 @@ export default function BaseInformacoes() {
     supabase.from('clientes').update({ competencia_inicio: v, carga_saldos: true }).eq('id', empresaId).then(() => {})
     setModal({ tipo: 'cargaInicial', vigencia: v })
   }
+  // Só uma carga inicial ativa: se já existe, pergunta e substitui (apaga as anteriores).
   async function concluirCargaInicial(vigencia, payload, obs) {
+    const existentes = (cargas.financeiro || []).filter(c => String(c.obs || '').startsWith('Carga inicial'))
+    if (existentes.length) {
+      if (!confirm('Já existe uma carga inicial para este cliente. Substituir pela nova?')) return
+      for (const c of existentes) await supabase.from('cargas_cadastro').delete().eq('id', c.id)
+    }
     await supabase.from('cargas_cadastro').insert({ cliente_id: empresaId, tipo: 'financeiro', vigencia, dados: payload, usuario: user?.email, obs: 'Carga inicial · ' + obs })
     await supabase.from('clientes').update({ carga_inicial_feita: true }).eq('id', empresaId)
     setCargaFeita(true); carregarCargas(); recalcularPendencias?.(); setModal(null)
+  }
+
+  async function excluirCargaInicial(c) {
+    if (!confirm(`Excluir esta carga inicial (${String(c.obs || '').replace(/^Carga inicial · /, '') || 'sem arquivo'})?`)) return
+    await supabase.from('cargas_cadastro').delete().eq('id', c.id)
+    const resta = (cargas.financeiro || []).filter(x => x.id !== c.id && String(x.obs || '').startsWith('Carga inicial'))
+    if (!resta.length) { await supabase.from('clientes').update({ carga_inicial_feita: false }).eq('id', empresaId); setCargaFeita(false) }
+    carregarCargas(); recalcularPendencias?.()
   }
   async function salvarDist(cfg) {
     if (dist) await supabase.from('dist_lucros_config').update(cfg).eq('id', dist.id)
@@ -263,6 +277,31 @@ export default function BaseInformacoes() {
           onClick={() => setModal({ tipo: 'dist' })} />
       </div>
 
+      {/* Carga inicial de saldos — arquivos importados (ver / excluir) */}
+      {(() => {
+        const cis = (cargas.financeiro || []).filter(c => String(c.obs || '').startsWith('Carga inicial'))
+        if (!cis.length) return null
+        return (
+          <div style={{ marginTop: 24 }}>
+            <p style={{ color: theme.sub, fontSize: 13, fontWeight: 600, textTransform: 'uppercase', letterSpacing: .8, margin: '4px 0 12px' }}>Carga inicial de saldos</p>
+            <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'hidden' }}>
+              {cis.map((c, i) => (
+                <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderTop: i ? `1px solid ${theme.border}` : 'none', fontSize: 13 }}>
+                  <i className="ti ti-file-invoice" style={{ color: theme.accent, fontSize: 18, flexShrink: 0 }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <p style={{ margin: 0, color: theme.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{String(c.obs || '').replace(/^Carga inicial · /, '') || '(sem arquivo)'}</p>
+                    <p style={{ margin: '2px 0 0', color: theme.sub, fontSize: 11.5 }}>vigência {c.vigencia || '—'} · {c.usuario || '—'} · {dataHora(c.created_at)}</p>
+                  </div>
+                  <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => setModal({ tipo: 'verCargaInicial', carga: c })}>ver</button>
+                  <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => excluirCargaInicial(c)}>excluir</button>
+                </div>
+              ))}
+            </div>
+            {cis.length > 1 && <p style={{ color: theme.yellow, fontSize: 12, margin: '8px 0 0' }}><i className="ti ti-alert-triangle" /> Há mais de uma carga inicial. A mais recente é a que vale — exclua as antigas.</p>}
+          </div>
+        )
+      })()}
+
       {/* Modais */}
       {modal?.tipo === 'carga' && (
         <ModalCarga carga={modal.carga} historico={cargas[modal.carga.tipo] || []} empresaId={empresaId} usuario={user?.email}
@@ -288,7 +327,38 @@ export default function BaseInformacoes() {
       {modal?.tipo === 'modelos' && (
         <ModalSimples titulo="Modelos de relatório" texto="Os modelos do escritório (Balancete, DRE, DFC, Balanço) já são gerados na tela de Relatórios a partir do balancete da competência, com exportação para Excel (.xlsx) no papel timbrado da Attentive. A personalização de modelos por cliente entra em breve." onClose={() => setModal(null)} />
       )}
+      {modal?.tipo === 'verCargaInicial' && (
+        <Modal titulo="Carga inicial — conteúdo importado" sub={String(modal.carga.obs || '').replace(/^Carga inicial · /, '')} onClose={() => setModal(null)} largura={760}>
+          <TabelaDados titulo="Saldos de abertura" linhas={modal.carga.dados?.saldos || []} />
+          <TabelaDados titulo="Composições de abertura" linhas={modal.carga.dados?.composicoes || []} />
+        </Modal>
+      )}
     </Wrapper>
+  )
+}
+
+// Data/hora curta pt-BR de um created_at.
+function dataHora(iso) {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  return isNaN(d) ? '—' : d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+}
+
+// Preview das linhas importadas (objetos → tabela; chaves como colunas).
+function TabelaDados({ titulo, linhas }) {
+  const cols = linhas.length ? Object.keys(linhas[0]) : []
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <p style={{ fontSize: 13, fontWeight: 600, margin: '0 0 8px' }}>{titulo} <span style={{ color: theme.sub, fontWeight: 400 }}>· {linhas.length} linha(s)</span></p>
+      {!linhas.length ? <p style={{ color: theme.sub, fontSize: 12.5 }}>Sem linhas.</p> : (
+        <div style={{ border: `1px solid ${theme.border}`, borderRadius: 8, overflow: 'auto', maxHeight: 240 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <thead><tr style={{ background: theme.input }}>{cols.map(k => <th key={k} style={{ textAlign: 'left', padding: '6px 10px', color: theme.sub, whiteSpace: 'nowrap' }}>{k}</th>)}</tr></thead>
+            <tbody>{linhas.slice(0, 300).map((l, i) => <tr key={i} style={{ borderTop: `1px solid ${theme.border}` }}>{cols.map(k => <td key={k} style={{ padding: '6px 10px', whiteSpace: 'nowrap', color: theme.text }}>{String(l[k] ?? '')}</td>)}</tr>)}</tbody>
+          </table>
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -753,7 +823,8 @@ function ModalCargaInicial({ vigencia, empresaId, onClose, onConcluir }) {
   async function concluir() {
     setSalvando(true)
     const obsArq = [saldos?.nome, comp?.nome].filter(Boolean).join(' + ') || 'manual'
-    await onConcluir(vigencia, { saldos: saldos?.dados || [], composicoes: comp?.dados || [] }, obsArq)
+    try { await onConcluir(vigencia, { saldos: saldos?.dados || [], composicoes: comp?.dados || [] }, obsArq) }
+    finally { setSalvando(false) }
   }
 
   const Bloco = ({ icon, titulo, dica, modelo, arquivo, estado, setter }) => (
