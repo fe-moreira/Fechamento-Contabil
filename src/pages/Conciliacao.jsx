@@ -237,7 +237,7 @@ export default function Conciliacao() {
   function statusConta(c) {
     const reg = conf[c.conta]
     if (!reg) return theme.red
-    const docBate = reg.documento && reg.saldo_documento != null &&
+    const docBate = reg.documento_path && reg.saldo_documento != null &&
       Math.abs((Number(c.saldo_final) || 0) - Number(reg.saldo_documento)) < 0.01
     if (docBate) return theme.green
     if (reg.conciliada && reg.justificativa) return theme.yellow
@@ -705,16 +705,21 @@ function CardConferencia({ conta, reg, compId, usuario, composicao, onSalvo }) {
   const [erro, setErro] = useState('')
   const [msg, setMsg] = useState('')
   const [salvando, setSalvando] = useState(false)
+  const [arquivo, setArquivo] = useState(null)          // arquivo selecionado, pendente de upload
+  const [path, setPath] = useState(reg?.documento_path || '') // caminho no Storage (arquivo armazenado)
 
   const saldo = Number(conta.saldo_final) || 0
   const temDoc = doc && saldoDoc !== ''
   const dif = saldo - (Number(saldoDoc) || 0)
-  const bate = temDoc && Math.abs(dif) < 0.01
+  const bateSaldo = temDoc && Math.abs(dif) < 0.01
+  // VERDE só quando o arquivo está armazenado E o saldo bate. Se o arquivo for
+  // excluído (path some), volta ao vermelho mesmo que o saldo continue batendo.
+  const bate = bateSaldo && !!path
   const cor = bate ? theme.green : (conciliada && just.trim()) ? theme.yellow : theme.red
-  const statusTxt = bate ? 'Verde — documento bate com o saldo' : (conciliada && just.trim()) ? 'Amarelo — conferida e justificada (sem documento)' : 'Vermelho — pendente'
+  const statusTxt = bate ? 'Verde — documento armazenado e bate com o saldo' : (conciliada && just.trim()) ? 'Amarelo — conferida e justificada (sem documento)' : 'Vermelho — pendente'
 
   async function lerArquivo(file) {
-    if (!file) return; setErro('')
+    if (!file) return; setErro(''); setMsg('')
     const ehPdf = /\.pdf$/i.test(file.name) || file.type === 'application/pdf'
     try {
       if (ehPdf) {
@@ -733,14 +738,52 @@ function CardConferencia({ conta, reg, compId, usuario, composicao, onSalvo }) {
         setDoc(file.name)
         if (ultimo != null) setSaldoDoc(String(ultimo))
       }
+      setArquivo(file) // guarda o arquivo para armazenar no Storage ao salvar
     } catch (e) { setErro('Não consegui ler: ' + e.message) }
   }
 
+  // Abre o arquivo armazenado (link assinado, válido por 5 min).
+  async function verArquivo() {
+    setErro('')
+    if (!path) return
+    const { data, error } = await supabase.storage.from('extratos').createSignedUrl(path, 300)
+    if (error) { setErro('Não consegui abrir o arquivo: ' + error.message); return }
+    window.open(data.signedUrl, '_blank', 'noopener')
+  }
+
+  // Exclui o arquivo armazenado → a conta volta ao vermelho.
+  async function excluirArquivo() {
+    if (!path) return
+    if (!window.confirm('Excluir o arquivo armazenado? A conta volta a ficar vermelha até você subir um novo.')) return
+    setSalvando(true); setErro(''); setMsg('')
+    const { error: eRm } = await supabase.storage.from('extratos').remove([path])
+    if (eRm) { setSalvando(false); setErro('Não consegui excluir o arquivo: ' + eRm.message); return }
+    let error
+    if (reg) ({ error } = await supabase.from('conciliacao_conta').update({ documento_path: null, documento: null, usuario }).eq('id', reg.id))
+    setSalvando(false)
+    if (error) { setErro(error.message); return }
+    setPath(''); setArquivo(null); setDoc('')
+    setMsg('Arquivo excluído — a conta voltou ao vermelho.'); onSalvo && onSalvo()
+  }
+
   async function salvar() {
-    setSalvando(true); setErro('')
+    setSalvando(true); setErro(''); setMsg('')
+    let novoPath = path
+    // Se há um arquivo novo selecionado, armazena no Storage (bucket privado).
+    if (arquivo) {
+      const ext = (arquivo.name.match(/\.[a-z0-9]+$/i) || [''])[0].toLowerCase()
+      const base = `${compId}/${conta.conta}`.replace(/[^a-zA-Z0-9/_-]/g, '_')
+      novoPath = `${base}/extrato${ext}`
+      const { error: eUp } = await supabase.storage.from('extratos')
+        .upload(novoPath, arquivo, { upsert: true, contentType: arquivo.type || undefined })
+      if (eUp) { setSalvando(false); setErro('Não consegui armazenar o arquivo: ' + eUp.message); return }
+      // Remove um arquivo anterior de nome diferente (garante só um ativo).
+      if (path && path !== novoPath) await supabase.storage.from('extratos').remove([path])
+    }
     const payload = {
       competencia_id: compId, conta: conta.conta,
       documento: doc || null, saldo_documento: saldoDoc === '' ? null : Number(saldoDoc),
+      documento_path: novoPath || null,
       conciliada, justificativa: just || null, pendencia_cliente: pend, usuario,
     }
     let error
@@ -748,6 +791,7 @@ function CardConferencia({ conta, reg, compId, usuario, composicao, onSalvo }) {
     else ({ error } = await supabase.from('conciliacao_conta').insert(payload))
     setSalvando(false)
     if (error) { setErro(error.message); return }
+    setPath(novoPath); setArquivo(null)
     setMsg('Conferência salva.'); onSalvo && onSalvo()
   }
 
@@ -770,9 +814,13 @@ function CardConferencia({ conta, reg, compId, usuario, composicao, onSalvo }) {
           <div><label>Documento suporte <span style={{ color: theme.sub, fontWeight: 400 }}>(Excel ou PDF do extrato)</span></label><input type="file" accept=".xlsx,.xls,.csv,.pdf" onChange={e => lerArquivo(e.target.files?.[0])} style={{ fontSize: 13, color: theme.sub, display: 'block' }} /></div>
           <div><label>Saldo conforme o documento</label><input className="input" type="number" step="0.01" style={{ maxWidth: 200 }} value={saldoDoc} onChange={e => setSaldoDoc(e.target.value)} placeholder="0,00" /></div>
         </div>
-        {doc && <p style={{ color: theme.sub, fontSize: 12, margin: '10px 0 0' }}><i className="ti ti-file" /> {doc}</p>}
-        {temDoc && <p style={{ color: bate ? theme.green : theme.red, fontSize: 12.5, margin: '10px 0 0', fontWeight: 500 }}>
-          <i className={`ti ${bate ? 'ti-circle-check' : 'ti-alert-triangle'}`} /> {bate ? 'Documento bate com o saldo — fica verde.' : `Diferença de ${money(Math.abs(dif))} entre o saldo e o documento.`}
+        {doc && <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', margin: '10px 0 0' }}>
+          <span style={{ color: theme.sub, fontSize: 12 }}><i className="ti ti-file" /> {doc}{path ? '' : arquivo ? ' (será armazenado ao salvar)' : ''}</span>
+          {path && <button className="btn secondary" style={{ padding: '4px 10px', fontSize: 12 }} onClick={verArquivo}><i className="ti ti-eye" /> Ver arquivo</button>}
+          {path && <button className="btn secondary" style={{ padding: '4px 10px', fontSize: 12, color: theme.red, borderColor: theme.red }} disabled={salvando} onClick={excluirArquivo}><i className="ti ti-trash" /> Excluir arquivo</button>}
+        </div>}
+        {temDoc && <p style={{ color: bate ? theme.green : bateSaldo ? theme.sub : theme.red, fontSize: 12.5, margin: '10px 0 0', fontWeight: 500 }}>
+          <i className={`ti ${bate ? 'ti-circle-check' : bateSaldo ? 'ti-cloud-upload' : 'ti-alert-triangle'}`} /> {bate ? 'Arquivo armazenado e bate com o saldo — fica verde.' : bateSaldo ? 'Bate com o saldo — salve para armazenar o arquivo e ficar verde.' : `Diferença de ${money(Math.abs(dif))} entre o saldo e o documento.`}
         </p>}
       </div>
 
