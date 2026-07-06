@@ -713,7 +713,11 @@ function SugestoesDiferenca({ conta, compId, dif }) {
   }
 
   const val = l => Math.round(((Number(l.debito) || 0) - (Number(l.credito) || 0)) * 100) / 100
-  const exatos = (lancs || []).filter(l => Math.abs(Math.abs(val(l)) - alvo) < 0.005)
+  // Agrupa por valor (em módulo) para detectar VALORES REPETIDOS (duplicidade).
+  const grupos = {}
+  for (const l of (lancs || [])) { const k = Math.abs(val(l)).toFixed(2); (grupos[k] = grupos[k] || []).push(l) }
+  const exatos = grupos[alvo.toFixed(2)] || []   // lançamentos com valor == diferença
+  const duplicado = exatos.length >= 2           // 2+ com esse valor → provável duplicidade
   // Se nenhum lançamento sozinho bate, procura PARES que somam a diferença.
   const pares = []
   if (lancs && exatos.length === 0 && alvo > 0.005) {
@@ -738,10 +742,20 @@ function SugestoesDiferenca({ conta, compId, dif }) {
       </button>
       {aberto && <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 10, padding: 12, marginTop: 10 }}>
         {carregando ? <p style={{ color: theme.sub, fontSize: 12.5, margin: 0 }}>Buscando no razão…</p> : <>
-          {exatos.length > 0 && <>
-            <p style={{ fontSize: 12.5, fontWeight: 600, margin: '0 0 4px' }}>Lançamento(s) com valor igual à diferença ({money(alvo)}):</p>
+          {duplicado && <>
+            <div style={{ background: 'rgba(245,166,35,0.10)', border: `1px solid ${theme.yellow}`, borderRadius: 8, padding: '8px 10px', marginBottom: 8 }}>
+              <p style={{ fontSize: 12.5, margin: 0, color: theme.text }}>
+                <i className="ti ti-copy" style={{ color: theme.yellow, marginRight: 6 }} />
+                <b>Provável duplicidade.</b> No razão há <b>{exatos.length} lançamentos de {money(alvo)}</b>, e a diferença é exatamente esse valor. Se no extrato o valor aparece só <b>uma vez</b>, um deles está a mais — <b>estorne o excedente</b>.
+              </p>
+            </div>
             {exatos.map(l => <Linha key={l.id} l={l} />)}
-            <p style={{ color: theme.sub, fontSize: 11.5, margin: '8px 0 0' }}>Provável causa da diferença — confira e, se preciso, corrija em Contabilizar.</p>
+            <p style={{ color: theme.sub, fontSize: 11.5, margin: '8px 0 0' }}>Confira no extrato quantas vezes o valor aparece; para tirar o excedente, clique no lançamento e use “Estornar”.</p>
+          </>}
+          {!duplicado && exatos.length === 1 && <>
+            <p style={{ fontSize: 12.5, fontWeight: 600, margin: '0 0 4px' }}>Lançamento com valor igual à diferença ({money(alvo)}):</p>
+            {exatos.map(l => <Linha key={l.id} l={l} />)}
+            <p style={{ color: theme.sub, fontSize: 11.5, margin: '8px 0 0' }}>Provável causa — confira se ele consta no extrato e, se preciso, estorne/corrija.</p>
           </>}
           {exatos.length === 0 && pares.length > 0 && <>
             <p style={{ fontSize: 12.5, fontWeight: 600, margin: '0 0 4px' }}>Pares de lançamentos que somam a diferença ({money(alvo)}):</p>
