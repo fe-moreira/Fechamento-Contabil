@@ -201,6 +201,7 @@ export default function Conciliacao() {
   const [compId, setCompId] = useState(null)
   const [contas, setContas] = useState([])
   const [conf, setConf] = useState({}) // conta -> registro conciliacao_conta
+  const [acertos, setAcertos] = useState({}) // conta -> ajuste (soma dos lançamentos de acerto pendentes)
   const [carregando, setCarregando] = useState(true)
   const [sel, setSel] = useState(null) // conta selecionada (detalhe)
 
@@ -209,6 +210,21 @@ export default function Conciliacao() {
     const m = {}; for (const r of (data || [])) m[r.conta] = r
     setConf(m)
   }
+
+  // Correções pendentes (tabela lançamentos) alteram o saldo da conta antes mesmo
+  // de irem para o Domínio. Somamos aqui para o saldo "efetivo" reconferir com o extrato.
+  async function carregarAcertos(cid) {
+    const { data } = await supabase.from('lancamentos').select('conta_debito, conta_credito, valor').eq('competencia_id', cid)
+    const m = {}
+    for (const l of (data || [])) {
+      const v = Number(l.valor) || 0
+      if (l.conta_debito) m[l.conta_debito] = (m[l.conta_debito] || 0) + v
+      if (l.conta_credito) m[l.conta_credito] = (m[l.conta_credito] || 0) - v
+    }
+    setAcertos(m)
+  }
+  const recarregar = () => { if (compId) { carregarConf(compId); carregarAcertos(compId) } }
+  const saldoEf = c => (Number(c.saldo_final) || 0) + (acertos[c.conta] || 0)
 
   useEffect(() => {
     setSel(null); setContas([]); setCompId(null); setConf({})
@@ -224,6 +240,7 @@ export default function Conciliacao() {
         const ap = linhas.filter(l => { const d = String(l.classifRaw || l.classif).trim()[0]; return d === '1' || d === '2' })
         setContas(ap.map(l => ({ ...l, conta: l.reduzido })))
         await carregarConf(comp.id)
+        await carregarAcertos(comp.id)
         setCarregando(false)
       })
   }, [empresaId, competencia])
@@ -238,7 +255,7 @@ export default function Conciliacao() {
     const reg = conf[c.conta]
     if (!reg) return theme.red
     const docBate = reg.documento_path && reg.saldo_documento != null &&
-      Math.abs((Number(c.saldo_final) || 0) - Number(reg.saldo_documento)) < 0.01
+      Math.abs(saldoEf(c) - Number(reg.saldo_documento)) < 0.01
     if (docBate) return theme.green
     if (reg.conciliada && reg.justificativa) return theme.yellow
     return theme.red
@@ -256,7 +273,7 @@ export default function Conciliacao() {
   if (carregando) return <Wrapper><p style={{ color: theme.sub, fontSize: 13 }}>Carregando…</p></Wrapper>
   if (!compId || contas.length === 0) return <Wrapper><Aviso icon="ti-table-off" texto="Nenhum balancete nesta competência. Importe o razão primeiro." /></Wrapper>
 
-  if (sel) return <Detalhe conta={sel} tipoCta={tipoEf(sel)} reg={conf[sel.conta]} compId={compId} empresaId={empresaId} usuario={user?.email} getCompetenciaId={getCompetenciaId} onSalvarConf={() => carregarConf(compId)} onVoltar={() => setSel(null)} />
+  if (sel) return <Detalhe conta={sel} tipoCta={tipoEf(sel)} reg={conf[sel.conta]} compId={compId} empresaId={empresaId} usuario={user?.email} saldoAjuste={acertos[sel.conta] || 0} getCompetenciaId={getCompetenciaId} onSalvarConf={recarregar} onMudou={recarregar} onVoltar={() => setSel(null)} />
 
   return (
     <Wrapper nome={empresaNome} comp={competencia}>
@@ -297,7 +314,10 @@ export default function Conciliacao() {
                   <td style={{ ...tdR, fontWeight: peso }}>{moneyDC(c.saldo_inicial)}</td>
                   <td style={{ ...tdR, fontWeight: peso }}>{money(c.debito)}</td>
                   <td style={{ ...tdR, fontWeight: peso }}>{money(c.credito)}</td>
-                  <td style={{ ...tdR, fontWeight: peso, color: inv ? theme.red : undefined }}>{moneyDC(c.saldo_final)}</td>
+                  <td style={{ ...tdR, fontWeight: peso, color: inv ? theme.red : undefined }} title={!sint && acertos[c.conta] ? `Saldo do balancete ${moneyDC(c.saldo_final)} + correções pendentes ${moneyDC(acertos[c.conta])}` : undefined}>
+                    {moneyDC(sint ? c.saldo_final : saldoEf(c))}
+                    {!sint && Math.abs(acertos[c.conta] || 0) > 0.005 && <span title="Inclui correções pendentes de contabilização" style={{ marginLeft: 6, color: theme.accent, fontSize: 10, fontWeight: 700 }}>±</span>}
+                  </td>
                   <td style={{ ...td, textAlign: 'center' }}>{sint ? '' : <Dot c={statusConta(c)} />}</td>
                 </tr>
               )
@@ -309,10 +329,11 @@ export default function Conciliacao() {
   )
 }
 
-function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, getCompetenciaId, onSalvarConf, onVoltar }) {
+function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, saldoAjuste = 0, getCompetenciaId, onSalvarConf, onMudou, onVoltar }) {
   const [lanc, setLanc] = useState([])
   const [carregando, setCarregando] = useState(true)
   const [acao, setAcao] = useState(null)   // lançamento clicado (justificar/corrigir)
+  const [verCorr, setVerCorr] = useState(null) // lançamento já tratado (ver o que foi feito / desfazer)
   const [plano, setPlano] = useState([])   // [{ cod, nome }] para os seletores de conta
   const [partidas, setPartidas] = useState({}) // chave (data|histórico) -> lançamentos da partida (p/ contrapartida)
   const [msg, setMsg] = useState('')
@@ -459,7 +480,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, getCompetenc
         conta_debito: L.conta_debito || null, conta_credito: L.conta_credito || null,
         valor: Number(L.valor) || 0, historico: L.historico || null,
         documento: acao?.leitura.nf ? `NF ${acao.leitura.nf}` : null,
-        origem: 'correcao', usuario,
+        origem: 'correcao', razao_id: acao?.id || null, usuario,
       })
       virouLancamento = true
     }
@@ -477,7 +498,21 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, getCompetenc
     if (acao?.id) setTratados(prev => new Set(prev).add(acao.id)) // marca a linha como tratada na hora
     setAcao(null)
     carregarTratados()
+    if (virouLancamento) onMudou && onMudou() // atualiza o saldo (correção altera o saldo da conta)
     if (ajustouLeitura) carregarLanc()
+  }
+
+  // Desfazer uma correção/estorno: remove o lançamento de acerto e o registro de
+  // auditoria daquela linha; a linha volta a ficar pendente e o saldo se reverte.
+  async function desfazerCorrecao(razaoId) {
+    await supabase.from('lancamentos').delete().eq('competencia_id', compId).eq('razao_id', razaoId)
+    await supabase.from('auditoria').delete().eq('competencia_id', compId).eq('modulo', 'Conciliação').eq('razao_id', razaoId)
+    await supabase.from('ajuste_leitura').delete().eq('competencia_id', compId).eq('razao_id', razaoId)
+    setTratados(prev => { const s = new Set(prev); s.delete(razaoId); return s })
+    setVerCorr(null)
+    setMsg('Correção desfeita — a linha voltou a ficar pendente.')
+    carregarLanc()
+    onMudou && onMudou()
   }
 
   return (
@@ -516,7 +551,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, getCompetenc
       })()}
 
       {/* Conferência (documento → verde; confirmar + justificar → amarelo) */}
-      <CardConferencia conta={conta} reg={reg} compId={compId} usuario={usuario} composicao={tipoCta !== 'saldo'} onSalvo={onSalvarConf} />
+      <CardConferencia conta={conta} reg={reg} compId={compId} usuario={usuario} saldoAjuste={saldoAjuste} composicao={tipoCta !== 'saldo'} onSalvo={onSalvarConf} />
 
       {tipoCta !== 'saldo' && (
         <RelatoriosComposicao conta={conta} emAberto={emAbertoTodos} zerados={zerados} contraDe={contraDe} />
@@ -616,7 +651,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, getCompetenc
                   const semNF = semTit.has(l)
                   const contras = contraDe(l)
                   return (
-                    <tr key={i} onClick={() => { setMsg(''); setAcao(l) }}
+                    <tr key={i} onClick={() => { setMsg(''); tratados.has(l.id) ? setVerCorr(l) : setAcao(l) }}
                       style={{ borderTop: `1px solid ${theme.border}`, cursor: 'pointer', opacity: tratados.has(l.id) ? 0.6 : 1, background: tratados.has(l.id) ? 'rgba(48,164,108,0.08)' : semNF ? 'rgba(229,72,77,0.08)' : 'transparent' }}
                       title={tratados.has(l.id) ? 'Já tratado (corrigido/estornado/justificado) — clique para tratar de novo' : semNF ? 'Baixa com NF que não confere com o título — justifique ou corrija' : 'Justificar ou corrigir este lançamento'}>
                       <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{l.data || '—'}</td>
@@ -649,13 +684,17 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, getCompetenc
       })}
       </>
       ) : (
-        <ListaLancamentos lanc={emAbertoTodos} carregando={carregando} contraDe={contraDe} planoMap={planoMap} tratados={tratados} onTratar={l => { setMsg(''); setAcao(l) }} />
+        <ListaLancamentos lanc={emAbertoTodos} carregando={carregando} contraDe={contraDe} planoMap={planoMap} tratados={tratados} onTratar={l => { setMsg(''); tratados.has(l.id) ? setVerCorr(l) : setAcao(l) }} />
       )}
 
       {acao && (
         <ModalLancamento lanc={acao} conta={conta} lab={lab} plano={plano} natCredito={natCredito}
           residuo={ehEntidadeConta ? residuoNF(acao) : 0}
           onClose={() => setAcao(null)} onRegistrar={registrar} />
+      )}
+      {verCorr && (
+        <ModalCorrigido linha={verCorr} conta={conta} compId={compId} planoMap={planoMap}
+          onClose={() => setVerCorr(null)} onDesfazer={() => desfazerCorrecao(verCorr.id)} />
       )}
     </Wrapper>
   )
@@ -788,7 +827,66 @@ function SugestoesDiferenca({ conta, compId, dif }) {
 // - Verde:   documento suporte importado que BATE com o saldo.
 // - Amarelo: confirmada ("está certo") + justificativa da falta de documento
 //            (marcando "pendência do cliente", entra no Relatório de Pendências).
-function CardConferencia({ conta, reg, compId, usuario, composicao, onSalvo }) {
+// Lançamento JÁ TRATADO: mostra o que foi feito (correção/estorno/justificativa)
+// e o lançamento de acerto gerado — e permite DESFAZER. Não reabre a tela de tratar.
+function ModalCorrigido({ linha, compId, planoMap = {}, onClose, onDesfazer }) {
+  const [dados, setDados] = useState(null)
+  const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    let vivo = true
+    ;(async () => {
+      const [{ data: aud }, { data: lan }] = await Promise.all([
+        supabase.from('auditoria').select('tipo, detalhe, usuario, created_at').eq('competencia_id', compId).eq('modulo', 'Conciliação').eq('razao_id', linha.id).order('created_at'),
+        supabase.from('lancamentos').select('id, conta_debito, conta_credito, valor, historico').eq('competencia_id', compId).eq('razao_id', linha.id),
+      ])
+      if (vivo) setDados({ aud: aud || [], lan: lan || [] })
+    })()
+    return () => { vivo = false }
+  }, [linha.id, compId])
+
+  const valor = Number(linha.debito) ? `D ${money(linha.debito)}` : Number(linha.credito) ? `C ${money(linha.credito)}` : ''
+  const nomeConta = c => c ? `${c}${planoMap[c] ? ' · ' + planoMap[c] : ''}` : '—'
+
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 60 }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 'min(560px,96vw)', maxHeight: '90vh', overflow: 'auto', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
+        <h2 style={{ fontSize: 17, marginBottom: 4 }}>Lançamento já tratado</h2>
+        <div style={{ background: theme.input, borderRadius: 10, padding: '10px 12px', margin: '8px 0 14px', fontSize: 12.5 }}>
+          <span style={{ color: theme.sub }}>{linha.data || '—'} · NF {linha.leitura?.nf || '—'} · {valor}</span>
+          <div style={{ color: theme.sub, fontFamily: 'monospace', fontSize: 11, marginTop: 4 }}>{linha.historico}</div>
+        </div>
+
+        {!dados ? <p style={{ color: theme.sub, fontSize: 12.5 }}>Carregando…</p> : <>
+          {dados.aud.map((a, i) => (
+            <div key={i} style={{ marginBottom: 10 }}>
+              <span style={{ display: 'inline-block', background: 'rgba(48,164,108,0.15)', color: theme.green, fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 20 }}>{a.tipo}</span>
+              {a.detalhe && <p style={{ fontSize: 12.5, margin: '6px 0 0' }}>{a.detalhe}</p>}
+              <p style={{ color: theme.sub, fontSize: 11, margin: '2px 0 0' }}>{a.usuario || '—'}{a.created_at ? ` · ${new Date(a.created_at).toLocaleString('pt-BR')}` : ''}</p>
+            </div>
+          ))}
+          {dados.lan.length > 0 && <div style={{ borderTop: `1px solid ${theme.border}`, paddingTop: 10, marginTop: 6 }}>
+            <p style={{ fontSize: 12, color: theme.sub, margin: '0 0 6px' }}>Lançamento de acerto gerado (no painel Contabilizar):</p>
+            {dados.lan.map(l => (
+              <div key={l.id} style={{ fontSize: 12.5, marginBottom: 8 }}>
+                <div><b>D</b> {nomeConta(l.conta_debito)}</div>
+                <div><b>C</b> {nomeConta(l.conta_credito)}</div>
+                <div style={{ color: theme.sub }}>{money(l.valor)}{l.historico ? ` · ${l.historico}` : ''}</div>
+              </div>
+            ))}
+          </div>}
+          {dados.aud.length === 0 && dados.lan.length === 0 && <p style={{ color: theme.sub, fontSize: 12.5 }}>Sem detalhes registrados para esta linha.</p>}
+        </>}
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginTop: 18 }}>
+          <button className="btn btn-ghost" style={{ color: theme.red, borderColor: theme.red }} disabled={busy} onClick={async () => { setBusy(true); await onDesfazer() }}><i className="ti ti-rotate-2" /> Desfazer correção</button>
+          <button className="btn" onClick={onClose}>Fechar</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function CardConferencia({ conta, reg, compId, usuario, saldoAjuste = 0, composicao, onSalvo }) {
   const [doc, setDoc] = useState(reg?.documento || '')
   const [saldoDoc, setSaldoDoc] = useState(reg?.saldo_documento != null ? String(reg.saldo_documento) : '')
   const [conciliada, setConciliada] = useState(!!reg?.conciliada)
@@ -801,7 +899,9 @@ function CardConferencia({ conta, reg, compId, usuario, composicao, onSalvo }) {
   const [path, setPath] = useState(reg?.documento_path || '') // caminho no Storage (arquivo armazenado)
   const [ocr, setOcr] = useState({ ativo: false, pct: 0 })    // progresso do OCR (PDF-imagem)
 
-  const saldo = Number(conta.saldo_final) || 0
+  // Saldo efetivo = balancete + correções pendentes (estornos/acertos). Assim, ao
+  // corrigir, o saldo já reconfere com o extrato e a conta fica verde na hora.
+  const saldo = (Number(conta.saldo_final) || 0) + (Number(saldoAjuste) || 0)
   const temDoc = doc && saldoDoc !== ''
   const dif = saldo - (Number(saldoDoc) || 0)
   const bateSaldo = temDoc && Math.abs(dif) < 0.01
@@ -912,11 +1012,14 @@ function CardConferencia({ conta, reg, compId, usuario, composicao, onSalvo }) {
         <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 14px' }}>{composicao
           ? 'Importe o documento suporte (ex.: relatório de aberto) e confira com o saldo. Sem documento, confirme que está certo e justifique.'
           : 'Conta de saldo (sem composição). Importe o extrato e confira com o saldo. Sem documento, confirme que está certo e justifique.'}</p>
-        <div style={{ display: 'flex', gap: 28, flexWrap: 'wrap', marginBottom: 12 }}>
+        <div style={{ display: 'flex', gap: 28, flexWrap: 'wrap', marginBottom: Math.abs(Number(saldoAjuste) || 0) > 0.005 ? 4 : 12 }}>
           <Mini label="Saldo da conta" v={moneyDC(saldo)} />
           <Mini label="Saldo do documento" v={saldoDoc === '' ? '—' : money(Number(saldoDoc))} />
           <Mini label="Diferença" v={temDoc ? money(dif) : '—'} cor={!temDoc ? theme.sub : bate ? theme.green : theme.red} />
         </div>
+        {Math.abs(Number(saldoAjuste) || 0) > 0.005 && <p style={{ color: theme.accent, fontSize: 11.5, margin: '0 0 12px' }}>
+          <i className="ti ti-adjustments-alt" /> Inclui {moneyDC(saldoAjuste)} de correções pendentes (balancete: {moneyDC(conta.saldo_final)}).
+        </p>}
         <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
           <div><label>Documento suporte <span style={{ color: theme.sub, fontWeight: 400 }}>(Excel ou PDF do extrato)</span></label><input type="file" accept=".xlsx,.xls,.csv,.pdf" onChange={e => lerArquivo(e.target.files?.[0])} style={{ fontSize: 13, color: theme.sub, display: 'block' }} /></div>
           <div><label>Saldo conforme o documento</label><input className="input" type="number" step="0.01" style={{ maxWidth: 200 }} value={saldoDoc} onChange={e => setSaldoDoc(e.target.value)} placeholder="0,00" /></div>
