@@ -56,6 +56,7 @@ export default function Dashboard() {
   const [paused, setPaused] = useState(false)
   const [mode, setMode] = useState(getThemeMode())
   const [agora, setAgora] = useState(new Date())
+  const [drill, setDrill] = useState(null) // { titulo, itens:[nomes] } — quem compõe um número
 
   // Competência do painel = mês ANTERIOR ao calendário (a contabilidade fecha um mês depois).
   const hoje = new Date()
@@ -72,7 +73,7 @@ export default function Dashboard() {
       const inicioMes = new Date(hoje.getFullYear(), hoje.getMonth(), 1).toISOString()
       const [{ data: cli }, { data: comps }, { data: ts }] = await Promise.all([
         supabase.from('clientes').select('*'),
-        supabase.from('competencias').select('cliente_id, ano, mes, status, created_at'),
+        supabase.from('competencias').select('cliente_id, ano, mes, status, razao_importado, created_at'),
         supabase.from('timesheet').select('cliente_id, cliente_nome, segundos, created_at').gte('created_at', inicioMes),
       ])
       // Carteira inteira (matriz + filiais) — usada no painel de regime.
@@ -82,20 +83,25 @@ export default function Dashboard() {
       const clientes = todos.filter(fechaSozinho), cps = comps || [], tss = ts || []
       const nomeCli = Object.fromEntries(clientes.map(c => [c.id, c.razao_social]))
 
-      // Status da competência-alvo por cliente.
-      const statusAlvo = {}
-      for (const cp of cps) if (cp.ano === targAno && cp.mes === targMes) statusAlvo[cp.cliente_id] = cp.status
+      // Status da competência-alvo por cliente. Uma competência só é "em andamento"
+      // depois que o razão é importado; sem competência ou sem razão → "pendente".
+      const compAlvo = {}
+      for (const cp of cps) if (cp.ano === targAno && cp.mes === targMes) compAlvo[cp.cliente_id] = cp
+      const statusEfetivo = cp => cp?.status === 'fechado' ? 'fechado' : (cp && cp.razao_importado) ? 'andamento' : 'pendente'
       const contaStatus = lista => {
-        const fechadas = lista.filter(c => statusAlvo[c.id] === 'fechado').length
-        const andamento = lista.filter(c => statusAlvo[c.id] === 'andamento').length
-        return { total: lista.length, fechadas, andamento, pendentes: lista.length - fechadas - andamento }
+        const b = { fechado: [], andamento: [], pendente: [] }
+        for (const c of lista) b[statusEfetivo(compAlvo[c.id])].push(c.razao_social)
+        return {
+          total: lista.length, fechadas: b.fechado.length, andamento: b.andamento.length, pendentes: b.pendente.length,
+          fechadasL: b.fechado, andamentoL: b.andamento, pendentesL: b.pendente, totalL: lista.map(c => c.razao_social),
+        }
       }
 
       // 1 · Placar — só a competência-alvo (o fechamento atual). Atrasos ficam nos outros painéis.
       const placar = contaStatus(clientes)
       const recentes = cps.filter(c => c.ano === targAno && c.mes === targMes)
         .slice().sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))).slice(0, 6)
-        .map(c => ({ nome: nomeCli[c.cliente_id] || '—', mes: c.mes, ano: c.ano, status: c.status }))
+        .map(c => ({ nome: nomeCli[c.cliente_id] || '—', mes: c.mes, ano: c.ano, status: statusEfetivo(c) }))
 
       // 2 · Atraso: meses esperados (desde o início) não fechados, até a competência-alvo.
       const fechadoSet = new Set(cps.filter(c => c.status === 'fechado').map(c => `${c.cliente_id}|${c.ano}|${c.mes}`))
@@ -218,10 +224,10 @@ export default function Dashboard() {
 
       {/* palco */}
       <div key={idx} style={{ flex: 1, display: 'flex', flexDirection: 'column', animation: 'painelFade .45s ease' }}>
-        {idx === 0 && <PainelVisao d={d} nomeComp={nomeComp} nav={nav} />}
-        {idx === 1 && <PainelAtraso d={d} />}
+        {idx === 0 && <PainelVisao d={d} nomeComp={nomeComp} nav={nav} onDrill={setDrill} />}
+        {idx === 1 && <PainelAtraso d={d} onDrill={setDrill} />}
         {idx === 2 && <PainelRegime d={d} />}
-        {idx === 3 && <PainelUsuario d={d} />}
+        {idx === 3 && <PainelUsuario d={d} onDrill={setDrill} />}
         {idx === 4 && <PainelTimesheet d={d} />}
         {idx === 5 && <PainelPrazo d={d} />}
         {idx === 6 && <PainelMatriz d={d} />}
@@ -238,6 +244,36 @@ export default function Dashboard() {
         </div>
         <button onClick={() => irPara(idx + 1)} style={arrow}><i className="ti ti-chevron-right" /></button>
       </div>
+
+      {drill && <DrillModal titulo={drill.titulo} itens={drill.itens} onClose={() => setDrill(null)} />}
+    </div>
+  )
+}
+
+// Mostra QUEM compõe um número clicado no painel (ex.: os clientes pendentes).
+function DrillModal({ titulo, itens, onClose }) {
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 80 }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 'min(520px,96vw)', maxHeight: '82vh', overflow: 'auto', background: theme.card, border: `1px solid ${theme.cb}`, borderRadius: 16, padding: 22 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+          <h2 style={{ fontSize: 17, margin: 0 }}>{titulo} <span style={{ color: theme.sub, fontWeight: 400 }}>· {itens.length}</span></h2>
+          <span onClick={onClose} style={{ cursor: 'pointer', color: theme.sub, fontSize: 20, lineHeight: 1 }}><i className="ti ti-x" /></span>
+        </div>
+        {itens.length === 0
+          ? <p style={{ color: theme.sub, fontSize: 13.5, margin: '10px 0 0' }}>Nenhuma empresa nesta categoria.</p>
+          : <div style={{ marginTop: 8 }}>
+              {itens.slice().sort((a, b) => String(a).localeCompare(String(b), 'pt-BR')).map((nome, i) => (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 2px', borderTop: i ? `1px solid ${theme.border}` : 'none', fontSize: 14 }}>
+                  <span style={{ color: theme.sub, fontSize: 12, minWidth: 22, textAlign: 'right' }}>{i + 1}</span>
+                  <i className="ti ti-building" style={{ color: theme.accent, fontSize: 15 }} />
+                  <span>{nome}</span>
+                </div>
+              ))}
+            </div>}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+          <button className="btn btn-ghost" onClick={onClose}>Fechar</button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -249,17 +285,17 @@ function Titulo({ h2, sub }) {
   </div>
 }
 
-function PainelVisao({ d, nomeComp, nav }) {
+function PainelVisao({ d, nomeComp, nav, onDrill }) {
   const p = d.placar
   const cor = { fechado: theme.green, andamento: theme.yellow, pendente: theme.red }
   return (
     <>
       <Titulo h2="Visão geral" sub={`Competência ${nomeComp} (mês anterior — a contabilidade fecha um mês depois)`} />
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 14, marginBottom: 16 }}>
-        <Metric label="Clientes" v={p.total} icon="ti-building" />
-        <Metric label="Fechados" v={p.fechadas} icon="ti-circle-check" cor={theme.green} />
-        <Metric label="Em andamento" v={p.andamento} icon="ti-progress" cor={theme.yellow} />
-        <Metric label="Pendentes" v={p.pendentes} icon="ti-alert-triangle" cor={theme.red} />
+        <Metric label="Clientes" v={p.total} icon="ti-building" onClick={() => onDrill({ titulo: `Clientes · ${nomeComp}`, itens: p.totalL })} />
+        <Metric label="Fechados" v={p.fechadas} icon="ti-circle-check" cor={theme.green} onClick={() => onDrill({ titulo: `Fechados · ${nomeComp}`, itens: p.fechadasL })} />
+        <Metric label="Em andamento" v={p.andamento} icon="ti-progress" cor={theme.yellow} onClick={() => onDrill({ titulo: `Em andamento · ${nomeComp}`, itens: p.andamentoL })} />
+        <Metric label="Pendentes" v={p.pendentes} icon="ti-alert-triangle" cor={theme.red} onClick={() => onDrill({ titulo: `Pendentes · ${nomeComp}`, itens: p.pendentesL })} />
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.7fr) minmax(0,1fr)', gap: 16, flex: 1 }}>
         <div style={card}>
@@ -283,13 +319,14 @@ function PainelVisao({ d, nomeComp, nav }) {
   )
 }
 
-function PainelAtraso({ d }) {
+function PainelAtraso({ d, onDrill }) {
   const nClientes = d.atrasoLista.length
+  const abrir = () => onDrill && onDrill({ titulo: 'Clientes em atraso', itens: d.atrasoLista.map(a => `${a.nome} · ${a.meses} ${a.meses === 1 ? 'mês' : 'meses'}${a.oldest ? ` (desde ${MES_C[a.oldest.mes - 1]}/${a.oldest.ano})` : ''}`) })
   return (
     <>
       <Titulo h2="Balancetes em atraso" sub="Competências de meses anteriores ainda não fechadas" />
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,.8fr) minmax(0,1.4fr)', gap: 16, flex: 1, minHeight: 0 }}>
-        <div style={{ ...card, display: 'flex', alignItems: 'center', gap: 22 }}>
+        <div onClick={nClientes ? abrir : undefined} title={nClientes ? 'Ver quais clientes' : undefined} style={{ ...card, display: 'flex', alignItems: 'center', gap: 22, cursor: nClientes ? 'pointer' : 'default' }}>
           <div style={{ fontSize: 92, fontWeight: 800, lineHeight: .9, color: d.atrasoTotal ? theme.red : theme.green }}>{d.atrasoTotal}</div>
           <div style={{ fontSize: 16, color: theme.sub, lineHeight: 1.4 }}>balancete(s) em atraso<br />em <b style={{ color: theme.text }}>{nClientes} cliente(s)</b></div>
         </div>
@@ -346,7 +383,7 @@ function PainelRegime({ d }) {
   )
 }
 
-function PainelUsuario({ d }) {
+function PainelUsuario({ d, onDrill }) {
   return (
     <>
       <Titulo h2="Fechamento por usuário" sub="Progresso de cada analista no mês" />
@@ -363,7 +400,9 @@ function PainelUsuario({ d }) {
                   <div><b style={{ fontSize: 18 }}>{a.nome}</b><br /><small style={{ color: theme.sub }}>{a.total} empresa(s)</small></div>
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8 }}>
-                  <MiniN n={a.fechadas} t="fechadas" c={theme.green} /><MiniN n={a.andamento} t="andamento" c={theme.yellow} /><MiniN n={a.pendentes} t="pendente" c={theme.red} />
+                  <MiniN n={a.fechadas} t="fechadas" c={theme.green} onClick={() => onDrill && onDrill({ titulo: `${a.nome} · fechadas`, itens: a.fechadasL || [] })} />
+                  <MiniN n={a.andamento} t="andamento" c={theme.yellow} onClick={() => onDrill && onDrill({ titulo: `${a.nome} · em andamento`, itens: a.andamentoL || [] })} />
+                  <MiniN n={a.pendentes} t="pendente" c={theme.red} onClick={() => onDrill && onDrill({ titulo: `${a.nome} · pendentes`, itens: a.pendentesL || [] })} />
                 </div>
                 <Donut size={180} label={`${pct}%`} segs={[{ v: a.fechadas, c: theme.green }, { v: a.andamento, c: theme.yellow }, { v: a.pendentes, c: theme.red }]} />
               </div>
@@ -512,19 +551,21 @@ function PainelSistemas({ d }) {
 }
 
 /* ---------- peças ---------- */
-function Metric({ label, v, icon, cor }) {
+function Metric({ label, v, icon, cor, onClick }) {
   return (
-    <div style={{ background: theme.input, borderRadius: 12, padding: 16 }}>
+    <div onClick={onClick} title={onClick ? 'Ver quais empresas' : undefined}
+      style={{ background: theme.input, borderRadius: 12, padding: 16, cursor: onClick ? 'pointer' : 'default' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <span style={{ color: theme.sub, fontSize: 11, textTransform: 'uppercase', letterSpacing: .5 }}>{label}</span>
         <span style={{ background: 'rgba(74,124,255,0.15)', borderRadius: 8, width: 30, height: 30, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><i className={`ti ${icon}`} style={{ color: theme.accent, fontSize: 16 }} /></span>
       </div>
-      <p style={{ fontSize: 34, fontWeight: 800, margin: '8px 0 0', color: cor || theme.text }}>{v}</p>
+      <p style={{ fontSize: 34, fontWeight: 800, margin: '8px 0 0', color: cor || theme.text }}>{v}{onClick ? <i className="ti ti-chevron-right" style={{ fontSize: 15, color: theme.sub, marginLeft: 6, verticalAlign: 'middle' }} /> : null}</p>
     </div>
   )
 }
-function MiniN({ n, t, c, sm }) {
-  return <div style={{ background: theme.input, borderRadius: 10, padding: sm ? 8 : 10, textAlign: 'center' }}>
+function MiniN({ n, t, c, sm, onClick }) {
+  return <div onClick={onClick} title={onClick ? 'Ver quais empresas' : undefined}
+    style={{ background: theme.input, borderRadius: 10, padding: sm ? 8 : 10, textAlign: 'center', cursor: onClick ? 'pointer' : 'default' }}>
     <b style={{ display: 'block', fontSize: sm ? 20 : 24, fontWeight: 800, color: c }}>{n}</b><small style={{ fontSize: 11, color: theme.sub }}>{t}</small>
   </div>
 }

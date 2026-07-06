@@ -11,7 +11,7 @@ const MESES_CURTO = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Se
 const ST = {
   fechado: { txt: 'Fechado', cor: theme.green, bg: 'rgba(48,164,108,0.15)', icon: 'ti-circle-check', sub: () => 'Entregue' },
   andamento: { txt: 'Em andamento', cor: theme.yellow, bg: 'rgba(245,166,35,0.15)', icon: 'ti-progress', sub: c => `Progresso ${c.pct || 0}%` },
-  pendente: { txt: 'Atrasado', cor: theme.red, bg: 'rgba(229,72,77,0.15)', icon: 'ti-alert-triangle', sub: () => 'Em atraso' },
+  pendente: { txt: 'Pendente', cor: theme.red, bg: 'rgba(229,72,77,0.15)', icon: 'ti-alert-triangle', sub: () => 'Aguardando importação do razão' },
 }
 
 export default function Fechamentos() {
@@ -30,7 +30,7 @@ export default function Fechamentos() {
 
   async function carregar() {
     setLoading(true)
-    const { data } = await supabase.from('competencias').select('id, ano, mes, status, pct, documentos')
+    const { data } = await supabase.from('competencias').select('id, ano, mes, status, razao_importado, pct, documentos')
       .eq('cliente_id', empresaId).order('ano', { ascending: false }).order('mes', { ascending: false })
     setLista(data || []); setLoading(false)
   }
@@ -41,8 +41,10 @@ export default function Fechamentos() {
   }
 
   const filtrada = lista.filter(c => (fAno === 'todos' || c.ano === +fAno) && (fMes === 'todos' || c.mes === +fMes))
+  // Só é "em andamento" depois de importar o razão; sem razão (e não fechado) → "pendente".
+  const efet = c => c.status === 'fechado' ? 'fechado' : (c.razao_importado ? 'andamento' : 'pendente')
   const cont = { fechado: 0, andamento: 0, pendente: 0 }
-  filtrada.forEach(c => { cont[c.status] = (cont[c.status] || 0) + 1 })
+  filtrada.forEach(c => { cont[efet(c)] = (cont[efet(c)] || 0) + 1 })
 
   function abrir(c) {
     abrirFechamento(c.mes, c.ano) // marca o fechamento como ativo (libera as funções)
@@ -120,7 +122,7 @@ export default function Fechamentos() {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 14, marginBottom: 16 }}>
         <ResumoCard label="Fechados" valor={cont.fechado} icon="ti-circle-check" cor={theme.green} />
         <ResumoCard label="Em andamento" valor={cont.andamento} icon="ti-progress" cor={theme.yellow} />
-        <ResumoCard label="Atrasados" valor={cont.pendente} icon="ti-alert-triangle" cor={theme.red} />
+        <ResumoCard label="Pendentes" valor={cont.pendente} icon="ti-alert-triangle" cor={theme.red} />
       </div>
 
       {/* Lista de fechamentos (linhas) */}
@@ -133,7 +135,7 @@ export default function Fechamentos() {
       ) : (
         <div style={{ display: 'grid', gap: 12 }}>
           {filtrada.map(c => {
-            const s = ST[c.status] || ST.andamento
+            const s = ST[efet(c)] || ST.pendente
             const aberto = c.mes === selMes && c.ano === selAno
             return (
               <div key={c.id} onClick={() => abrir(c)} style={{
