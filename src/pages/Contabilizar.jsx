@@ -110,6 +110,16 @@ export default function Contabilizar() {
         origem = 'correcao'
       }
 
+      // Estorno: inverte o lançamento original (D↔C, mesmo valor). Usado quando
+      // um lançamento não deveria existir (ex.: entrada a mais no extrato).
+      if (modo === 'estornar') {
+        const od = form.conta_debito.trim(), oc = form.conta_credito.trim()
+        if (!od || !oc) { setErro('Informe as contas de débito e crédito do lançamento original.'); setSalvando(false); return }
+        deb = oc; cred = od
+        historico = historico || 'Estorno de lançamento'
+        origem = 'correcao'
+      }
+
       const { error } = await supabase.from('lancamentos').insert({
         competencia_id,
         data: form.data || null,
@@ -264,12 +274,13 @@ export default function Contabilizar() {
         <div onClick={() => setAberto(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 50 }}>
           <form onClick={e => e.stopPropagation()} onSubmit={salvar} style={{ width: 'min(580px,96vw)', maxHeight: '90vh', overflow: 'auto', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
             <h2 style={{ fontSize: 17, marginBottom: 4 }}>{sugConfirmando ? 'Confirmar lançamento' : 'Novo lançamento'}</h2>
-            <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 14 }}>Escreva a partida, reclassifique uma conta ou suba o documento.</p>
+            <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 14 }}>Escreva a partida, reclassifique uma conta, estorne um lançamento ou suba o documento.</p>
 
             {!sugConfirmando && (
               <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
                 <button type="button" className={modo === 'escrever' ? 'btn' : 'btn btn-ghost'} style={{ fontSize: 13 }} onClick={() => setModo('escrever')}><i className="ti ti-pencil" /> Escrever a partida</button>
                 <button type="button" className={modo === 'reclassificar' ? 'btn' : 'btn btn-ghost'} style={{ fontSize: 13 }} onClick={() => setModo('reclassificar')}><i className="ti ti-arrows-exchange" /> Reclassificar conta</button>
+                <button type="button" className={modo === 'estornar' ? 'btn' : 'btn btn-ghost'} style={{ fontSize: 13 }} onClick={() => setModo('estornar')}><i className="ti ti-arrow-back-up" /> Estornar lançamento</button>
                 <button type="button" className={modo === 'documento' ? 'btn' : 'btn btn-ghost'} style={{ fontSize: 13 }} onClick={() => setModo('documento')}><i className="ti ti-cloud-upload" /> Subir documento</button>
               </div>
             )}
@@ -305,6 +316,26 @@ export default function Contabilizar() {
                   <div style={{ background: theme.input, borderRadius: 10, padding: '10px 12px', marginTop: 12, fontSize: 12.5 }}>
                     <span style={{ color: theme.sub }}>Lançamento gerado: </span>
                     <b>D {rec.lado === 'debito' ? rec.certa : rec.errada}</b> <span style={{ color: theme.sub }}>/</span> <b>C {rec.lado === 'debito' ? rec.errada : rec.certa}</b>
+                    {Number(form.valor) > 0 && <span style={{ color: theme.sub }}> · {money(form.valor)}</span>}
+                  </div>
+                )}
+              </>
+            ) : modo === 'estornar' ? (
+              <>
+                <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 12 }}>
+                  Informe o lançamento <b style={{ color: theme.text }}>como foi feito originalmente</b> (as duas contas e o valor). A plataforma gera o <b style={{ color: theme.text }}>lançamento inverso</b> (estorno) para o Domínio — você confere e confirma. Use quando um lançamento não deveria existir (ex.: entrada a mais no extrato).
+                </p>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                  <Campo label="Conta débito (original)"><CampoConta value={form.conta_debito} onChange={v => setForm(f => ({ ...f, conta_debito: v }))} /></Campo>
+                  <Campo label="Conta crédito (original)"><CampoConta value={form.conta_credito} onChange={v => setForm(f => ({ ...f, conta_credito: v }))} /></Campo>
+                  <Campo label="Valor"><input className="input" type="number" step="0.01" value={form.valor} onChange={set('valor')} required /></Campo>
+                  <Campo label="Data"><input className="input" type="date" value={form.data} onChange={set('data')} required /></Campo>
+                  <Campo label="Histórico (opcional)" full><input className="input" value={form.historico} onChange={set('historico')} placeholder="Estorno de lançamento" /></Campo>
+                </div>
+                {form.conta_debito.trim() && form.conta_credito.trim() && (
+                  <div style={{ background: theme.input, borderRadius: 10, padding: '10px 12px', marginTop: 12, fontSize: 12.5 }}>
+                    <span style={{ color: theme.sub }}>Estorno gerado: </span>
+                    <b>D {form.conta_credito}</b> <span style={{ color: theme.sub }}>/</span> <b>C {form.conta_debito}</b>
                     {Number(form.valor) > 0 && <span style={{ color: theme.sub }}> · {money(form.valor)}</span>}
                   </div>
                 )}
