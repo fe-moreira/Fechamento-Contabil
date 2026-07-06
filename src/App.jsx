@@ -5,8 +5,10 @@ import { AppDataProvider } from './lib/appData'
 import { theme } from './lib/theme'
 
 import Login from './pages/Login'
+import DefinirSenha from './pages/DefinirSenha'
 import Dashboard from './pages/Dashboard'
 import Clientes from './pages/Clientes'
+import Usuarios from './pages/Usuarios'
 import Fechamentos from './pages/Fechamentos'
 import ImportarRazao from './pages/ImportarRazao'
 import DocumentosRecebidos from './pages/DocumentosRecebidos'
@@ -35,6 +37,7 @@ function Rotas() {
   return (
     <Routes>
       <Route path="/login" element={session ? <Navigate to="/" replace /> : <Login />} />
+      <Route path="/definir-senha" element={<DefinirSenha />} />
       <Route element={<Protegido><AppDataProvider><Layout /></AppDataProvider></Protegido>}>
         <Route index element={<Dashboard />} />
         <Route path="clientes" element={<Clientes />} />
@@ -51,6 +54,7 @@ function Rotas() {
         <Route path="status" element={<Status />} />
         <Route path="base" element={<BaseInformacoes />} />
         <Route path="config" element={<Configuracoes />} />
+        <Route path="usuarios" element={<Usuarios />} />
         <Route path="timesheet" element={<Timesheet />} />
         <Route path="ajuda" element={<Ajuda />} />
       </Route>

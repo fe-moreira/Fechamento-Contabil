@@ -35,8 +35,7 @@ export default function Login() {
           {busy ? 'Entrando…' : 'Entrar'}
         </button>
         <p style={{ color: theme.sub, fontSize: 11.5, marginTop: 14, lineHeight: 1.5 }}>
-          Os usuários são criados no painel do Supabase (Authentication → Users) ou pelo
-          fluxo de convite. Sem cadastro aberto.
+          O acesso é por convite — um administrador cria o seu usuário em Configurações → Usuários. Sem cadastro aberto.
         </p>
       </form>
     </div>
