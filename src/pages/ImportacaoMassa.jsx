@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
 import { fechaSozinho } from '../lib/clientes'
@@ -123,16 +122,6 @@ export default function ImportacaoMassa() {
             <button className="btn btn-ghost" style={{ fontSize: 13 }} onClick={baixarModeloDocs}><i className="ti ti-file-spreadsheet" /> Baixar modelo</button>
           </div>
         </Bloco>
-
-        {/* Clientes (o import fica no cadastro) */}
-        <Bloco icon="ti-users" titulo="Clientes" desc="Cadastro de clientes em lote (matriz e filiais), amarrado pelo CNPJ. O modelo e a importação ficam na tela de Clientes.">
-          <Link to="/clientes" className="btn btn-ghost" style={{ fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-            <i className="ti ti-arrow-right" /> Ir para Clientes
-          </Link>
-        </Bloco>
-
-        {/* Placeholder para próximos */}
-        <Bloco icon="ti-book" titulo="Plano de contas · De/Para" desc="Importação em massa do plano de contas e das amarrações (de/para) por CNPJ." emBreve />
       </div>
 
       {/* Confirmação da importação */}
