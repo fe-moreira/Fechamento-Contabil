@@ -725,10 +725,14 @@ function CardConferencia({ conta, reg, compId, usuario, composicao, onSalvo }) {
       if (ehPdf) {
         // Extrato em PDF (ex.: extrato bancário do cliente).
         const { extrairTextoPdf, palpiteSaldo } = await import('../lib/pdfText')
-        const s = palpiteSaldo(await extrairTextoPdf(file))
+        const texto = await extrairTextoPdf(file)
+        const s = palpiteSaldo(texto)
         setDoc(file.name)
         if (s != null) setSaldoDoc(String(s))
-        else setErro('Li o PDF, mas não identifiquei o saldo automaticamente — informe o saldo abaixo.')
+        else if (texto.replace(/\s/g, '').length < 20)
+          setErro('Este PDF não tem texto selecionável (parece ser um print ou escaneado). Baixe o extrato digital direto do banco — ou digite o saldo abaixo. O arquivo é armazenado do mesmo jeito ao salvar.')
+        else
+          setErro('Li o PDF, mas não identifiquei o saldo automaticamente — confira e digite o saldo abaixo.')
       } else {
         const XLSX = await import('xlsx')
         const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' })
