@@ -34,9 +34,10 @@ export default function DocumentosRecebidos() {
       if (Array.isArray(d) && d.length) {
         setDocs(normaliza(d))
       } else {
-        // Herda a lista do fechamento anterior mais recente; senão, usa o padrão.
+        // Herda a lista do fechamento anterior mais recente; senão, fica vazio
+        // (sem lista-padrão automática — a base é importada por cliente).
         const herdado = await herdarLista(empresaId, ano, mes)
-        setDocs((herdado.length ? herdado : PADRAO).map(name => ({ name, rec: false, date: '' })))
+        setDocs(herdado.map(name => ({ name, rec: false, date: '' })))
       }
       setCarregando(false)
     })()
