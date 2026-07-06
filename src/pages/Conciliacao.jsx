@@ -473,6 +473,17 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
 
   async function registrar(tipo, payload) {
     const id = await getCompetenciaId()
+    // Trava: um lançamento só pode ter UMA correção/estorno por vez. Se já houver,
+    // bloqueia — para refazer, o usuário abre a linha (já tratada) e clica em Desfazer.
+    if (payload.lancamento && acao?.id) {
+      const { count } = await supabase.from('lancamentos').select('id', { count: 'exact', head: true })
+        .eq('competencia_id', id).eq('razao_id', acao.id)
+      if (count) {
+        setAcao(null)
+        setMsg('Este lançamento já foi corrigido/estornado. Abra a linha (marcada como "corrigido") e clique em "Desfazer" antes de refazer.')
+        return
+      }
+    }
     const item = `${conta.conta} · ${acao?.data || ''} · NF ${acao?.leitura.nf || '—'}`
     await supabase.from('auditoria').insert({ competencia_id: id, modulo: 'Conciliação', item, tipo, detalhe: payload.detalhe || null, razao_id: acao?.id || null, usuario })
     let virouLancamento = false
