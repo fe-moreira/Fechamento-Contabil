@@ -715,14 +715,24 @@ function CardConferencia({ conta, reg, compId, usuario, composicao, onSalvo }) {
 
   async function lerArquivo(file) {
     if (!file) return; setErro('')
+    const ehPdf = /\.pdf$/i.test(file.name) || file.type === 'application/pdf'
     try {
-      const XLSX = await import('xlsx')
-      const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' })
-      const arr = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' })
-      let ultimo = null // palpite do saldo: último valor numérico do arquivo
-      for (const row of arr) for (const cel of row) { const n = numCell(cel); if (n) ultimo = n }
-      setDoc(file.name)
-      if (ultimo != null) setSaldoDoc(String(ultimo))
+      if (ehPdf) {
+        // Extrato em PDF (ex.: extrato bancário do cliente).
+        const { extrairTextoPdf, palpiteSaldo } = await import('../lib/pdfText')
+        const s = palpiteSaldo(await extrairTextoPdf(file))
+        setDoc(file.name)
+        if (s != null) setSaldoDoc(String(s))
+        else setErro('Li o PDF, mas não identifiquei o saldo automaticamente — informe o saldo abaixo.')
+      } else {
+        const XLSX = await import('xlsx')
+        const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' })
+        const arr = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' })
+        let ultimo = null // palpite do saldo: último valor numérico do arquivo
+        for (const row of arr) for (const cel of row) { const n = numCell(cel); if (n) ultimo = n }
+        setDoc(file.name)
+        if (ultimo != null) setSaldoDoc(String(ultimo))
+      }
     } catch (e) { setErro('Não consegui ler: ' + e.message) }
   }
 
@@ -757,7 +767,7 @@ function CardConferencia({ conta, reg, compId, usuario, composicao, onSalvo }) {
           <Mini label="Diferença" v={temDoc ? money(dif) : '—'} cor={!temDoc ? theme.sub : bate ? theme.green : theme.red} />
         </div>
         <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
-          <div><label>Documento suporte</label><input type="file" accept=".xlsx,.xls,.csv" onChange={e => lerArquivo(e.target.files?.[0])} style={{ fontSize: 13, color: theme.sub, display: 'block' }} /></div>
+          <div><label>Documento suporte <span style={{ color: theme.sub, fontWeight: 400 }}>(Excel ou PDF do extrato)</span></label><input type="file" accept=".xlsx,.xls,.csv,.pdf" onChange={e => lerArquivo(e.target.files?.[0])} style={{ fontSize: 13, color: theme.sub, display: 'block' }} /></div>
           <div><label>Saldo conforme o documento</label><input className="input" type="number" step="0.01" style={{ maxWidth: 200 }} value={saldoDoc} onChange={e => setSaldoDoc(e.target.value)} placeholder="0,00" /></div>
         </div>
         {doc && <p style={{ color: theme.sub, fontSize: 12, margin: '10px 0 0' }}><i className="ti ti-file" /> {doc}</p>}
