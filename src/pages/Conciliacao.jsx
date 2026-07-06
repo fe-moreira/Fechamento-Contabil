@@ -351,14 +351,31 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
 
   async function carregarLanc() {
     setCarregando(true)
-    const [{ data: rz }, { data: aj }, abertura] = await Promise.all([
+    const [{ data: rz }, { data: aj }, { data: acs }, abertura] = await Promise.all([
       supabase.from('razao').select('id, data, contrapartida, historico, debito, credito').eq('competencia_id', compId).eq('conta', conta.conta).order('data'),
       supabase.from('ajuste_leitura').select('razao_id, nf, entidade, historico').eq('competencia_id', compId),
+      supabase.from('lancamentos').select('id, data, conta_debito, conta_credito, valor, historico, razao_id').eq('competencia_id', compId),
       composicaoAbertura(empresaId, compId, conta.conta, conta.classifRaw),
     ])
     const ajById = {}; for (const a of (aj || [])) ajById[a.razao_id] = a
-    // Títulos de abertura (saldo anterior) primeiro; depois o movimento do mês.
-    setLanc([...(abertura || []), ...(rz || []).map(l => aplicarAjuste(l, ajById[l.id]))])
+    // Correções pendentes (estornos/acertos) que tocam ESTA conta entram na composição
+    // como lançamentos: o estorno aparece aqui e casa por NF com a baixa original → zera
+    // (aparece em "Conciliados") e a contrapartida fica demonstrada nas duas contas.
+    const acertoLancs = (acs || [])
+      .filter(a => String(a.conta_debito) === String(conta.conta) || String(a.conta_credito) === String(conta.conta))
+      .map(a => {
+        const ehDeb = String(a.conta_debito) === String(conta.conta)
+        const base = aplicarAjuste({
+          id: 'ac_' + a.id, data: a.data,
+          contrapartida: ehDeb ? a.conta_credito : a.conta_debito,
+          historico: a.historico,
+          debito: ehDeb ? (Number(a.valor) || 0) : 0,
+          credito: ehDeb ? 0 : (Number(a.valor) || 0),
+        }, null)
+        return { ...base, acerto: true, razaoRef: a.razao_id || null }
+      })
+    // Títulos de abertura (saldo anterior) primeiro; depois o movimento do mês; por fim os acertos.
+    setLanc([...(abertura || []), ...(rz || []).map(l => aplicarAjuste(l, ajById[l.id])), ...acertoLancs])
     setCarregando(false)
   }
   useEffect(() => { carregarLanc() }, [compId, conta.conta]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -399,7 +416,8 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
   }
 
   const somaComp = lanc.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
-  const dif = conta.saldo_final - somaComp
+  // Saldo efetivo (balancete + acertos) para amarrar com a composição, que já inclui os acertos.
+  const dif = (Number(conta.saldo_final) || 0) + ajNet - somaComp
 
   // Resíduo da NF do lançamento (D - C de todos os lançamentos da mesma NF) — usado para
   // tratar a diferença como desconto/juros quando NF e cliente batem mas o valor não.
@@ -512,8 +530,8 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
     if (acao?.id) setTratados(prev => new Set(prev).add(acao.id)) // marca a linha como tratada na hora
     setAcao(null)
     carregarTratados()
-    if (virouLancamento) onMudou && onMudou() // atualiza o saldo (correção altera o saldo da conta)
-    if (ajustouLeitura) carregarLanc()
+    if (virouLancamento) { onMudou && onMudou(); carregarLanc() } // atualiza saldo e mostra o acerto na composição
+    else if (ajustouLeitura) carregarLanc()
   }
 
   // Desfazer uma correção/estorno: remove o lançamento de acerto e o registro de
@@ -527,6 +545,14 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
     setMsg('Correção desfeita — a linha voltou a ficar pendente.')
     carregarLanc()
     onMudou && onMudou()
+  }
+
+  // Clique numa linha: acerto → ver/desfazer (pelo lançamento de origem); linha já
+  // tratada → ver/desfazer; senão → tela de justificar/corrigir.
+  function abrirLinha(l) {
+    setMsg('')
+    if (l.acerto) { if (l.razaoRef) setVerCorr({ ...l, id: l.razaoRef }); return }
+    tratados.has(l.id) ? setVerCorr(l) : setAcao(l)
   }
 
   return (
@@ -668,9 +694,9 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
                   const semNF = semTit.has(l)
                   const contras = contraDe(l)
                   return (
-                    <tr key={i} onClick={() => { setMsg(''); tratados.has(l.id) ? setVerCorr(l) : setAcao(l) }}
-                      style={{ borderTop: `1px solid ${theme.border}`, cursor: 'pointer', opacity: tratados.has(l.id) ? 0.6 : 1, background: tratados.has(l.id) ? 'rgba(48,164,108,0.08)' : semNF ? 'rgba(229,72,77,0.08)' : 'transparent' }}
-                      title={tratados.has(l.id) ? 'Já tratado (corrigido/estornado/justificado) — clique para tratar de novo' : semNF ? 'Baixa com NF que não confere com o título — justifique ou corrija' : 'Justificar ou corrigir este lançamento'}>
+                    <tr key={i} onClick={() => abrirLinha(l)}
+                      style={{ borderTop: `1px solid ${theme.border}`, cursor: 'pointer', opacity: (l.acerto || tratados.has(l.id)) ? 0.7 : 1, background: (l.acerto || tratados.has(l.id)) ? 'rgba(48,164,108,0.08)' : semNF ? 'rgba(229,72,77,0.08)' : 'transparent' }}
+                      title={l.acerto ? 'Lançamento de acerto (estorno/correção) — clique para ver ou desfazer' : tratados.has(l.id) ? 'Já tratado — clique para ver o que foi feito ou desfazer' : semNF ? 'Baixa com NF que não confere com o título — justifique ou corrija' : 'Justificar ou corrigir este lançamento'}>
                       <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{l.data || '—'}</td>
                       <td style={{ ...td, color: semNF ? theme.red : theme.sub, fontWeight: 600 }}>NF {l.leitura.nf || '—'}</td>
                       <td style={{ ...td, color: theme.sub, fontFamily: 'monospace', fontSize: 11, maxWidth: 280 }}>{l.historico}</td>
@@ -682,13 +708,15 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
                       <td style={{ ...tdR, color: theme.green }}>{Number(l.debito) ? money(l.debito) : '—'}</td>
                       <td style={{ ...tdR, color: theme.red }}>{Number(l.credito) ? money(l.credito) : '—'}</td>
                       <td style={{ ...td, textAlign: 'center' }}>
-                        {tratados.has(l.id)
-                          ? <span title="Já tratado" style={{ color: theme.green, fontSize: 10.5, fontWeight: 700, whiteSpace: 'nowrap' }}><i className="ti ti-arrow-back-up" /> corrigido</span>
-                          : semNF
-                            ? <span title="NF não confere com nenhum título" style={{ color: theme.red, fontSize: 10.5, fontWeight: 700 }}>NF s/ título</span>
-                            : rev
-                              ? <span style={{ color: theme.yellow, fontSize: 11, fontWeight: 600 }}>revisar</span>
-                              : <span style={{ color: theme.green, fontSize: 14 }}><i className="ti ti-circle-check" /></span>}
+                        {l.acerto
+                          ? <span title="Lançamento de acerto (estorno/correção)" style={{ color: theme.accent, fontSize: 10.5, fontWeight: 700, whiteSpace: 'nowrap' }}><i className="ti ti-arrow-back-up" /> estorno</span>
+                          : tratados.has(l.id)
+                            ? <span title="Já tratado" style={{ color: theme.green, fontSize: 10.5, fontWeight: 700, whiteSpace: 'nowrap' }}><i className="ti ti-arrow-back-up" /> corrigido</span>
+                            : semNF
+                              ? <span title="NF não confere com nenhum título" style={{ color: theme.red, fontSize: 10.5, fontWeight: 700 }}>NF s/ título</span>
+                              : rev
+                                ? <span style={{ color: theme.yellow, fontSize: 11, fontWeight: 600 }}>revisar</span>
+                                : <span style={{ color: theme.green, fontSize: 14 }}><i className="ti ti-circle-check" /></span>}
                       </td>
                     </tr>
                   )
@@ -701,7 +729,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
       })}
       </>
       ) : (
-        <ListaLancamentos lanc={emAbertoTodos} carregando={carregando} contraDe={contraDe} planoMap={planoMap} tratados={tratados} onTratar={l => { setMsg(''); tratados.has(l.id) ? setVerCorr(l) : setAcao(l) }} />
+        <ListaLancamentos lanc={emAbertoTodos} carregando={carregando} contraDe={contraDe} planoMap={planoMap} tratados={tratados} onTratar={abrirLinha} />
       )}
 
       {acao && (
@@ -739,7 +767,7 @@ function ListaLancamentos({ lanc, carregando, contraDe, planoMap, tratados = new
             ) : lanc.map((l, i) => {
               const contras = contraDe(l)
               return (
-                <tr key={i} onClick={() => onTratar(l)} style={{ borderTop: `1px solid ${theme.border}`, cursor: 'pointer', opacity: tratados.has(l.id) ? 0.6 : 1, background: tratados.has(l.id) ? 'rgba(48,164,108,0.08)' : 'transparent' }} title={tratados.has(l.id) ? 'Já tratado (corrigido/estornado/justificado) — clique para tratar de novo' : 'Justificar ou corrigir este lançamento'}>
+                <tr key={i} onClick={() => onTratar(l)} style={{ borderTop: `1px solid ${theme.border}`, cursor: 'pointer', opacity: (l.acerto || tratados.has(l.id)) ? 0.7 : 1, background: (l.acerto || tratados.has(l.id)) ? 'rgba(48,164,108,0.08)' : 'transparent' }} title={l.acerto ? 'Lançamento de acerto (estorno/correção) — clique para ver ou desfazer' : tratados.has(l.id) ? 'Já tratado — clique para ver ou desfazer' : 'Justificar ou corrigir este lançamento'}>
                   <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{l.data || '—'}</td>
                   <td style={{ ...td, color: theme.sub, fontFamily: 'monospace', fontSize: 11, maxWidth: 320 }}>{l.historico}</td>
                   <td style={{ ...td, fontSize: 11.5, whiteSpace: 'nowrap' }} title={contras.map(c => `${c}${planoMap[c] ? ' · ' + planoMap[c] : ''}`).join('\n')}>
@@ -749,9 +777,11 @@ function ListaLancamentos({ lanc, carregando, contraDe, planoMap, tratados = new
                   </td>
                   <td style={{ ...tdR, color: theme.green }}>{Number(l.debito) ? money(l.debito) : '—'}</td>
                   <td style={{ ...tdR, color: theme.red }}>{Number(l.credito) ? money(l.credito) : '—'}</td>
-                  <td style={{ ...td, textAlign: 'center' }}>{tratados.has(l.id)
-                    ? <span title="Já tratado" style={{ color: theme.green, fontSize: 10.5, fontWeight: 700, whiteSpace: 'nowrap' }}><i className="ti ti-arrow-back-up" /> corrigido</span>
-                    : <i className="ti ti-dots" style={{ color: theme.sub }} />}</td>
+                  <td style={{ ...td, textAlign: 'center' }}>{l.acerto
+                    ? <span title="Lançamento de acerto (estorno/correção)" style={{ color: theme.accent, fontSize: 10.5, fontWeight: 700, whiteSpace: 'nowrap' }}><i className="ti ti-arrow-back-up" /> estorno</span>
+                    : tratados.has(l.id)
+                      ? <span title="Já tratado" style={{ color: theme.green, fontSize: 10.5, fontWeight: 700, whiteSpace: 'nowrap' }}><i className="ti ti-arrow-back-up" /> corrigido</span>
+                      : <i className="ti ti-dots" style={{ color: theme.sub }} />}</td>
                 </tr>
               )
             })}
