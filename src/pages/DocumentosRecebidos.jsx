@@ -1,15 +1,11 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
-import { fechaSozinho } from '../lib/clientes'
 import { theme } from '../lib/theme'
 
 // Lista padrão (só nomes — sem separação por departamento).
 const PADRAO = ['Extratos bancários', 'Notas fiscais de entrada', 'Notas fiscais de saída', 'Folha de pagamento', 'Guias de impostos (DARF/GPS/DAS)', 'Razão do Domínio']
 const hojeCurto = () => new Date().toLocaleDateString('pt-BR').slice(0, 5)
-// CNPJ normalizado a 14 dígitos (repõe zero à esquerda) — chave da amarração em massa.
-const cnpj14 = (v) => { const d = String(v ?? '').replace(/\D/g, ''); return d.length >= 11 && d.length <= 14 ? d.padStart(14, '0') : d }
-const norm = (s) => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim()
 // Converte formato antigo (com cat) para o novo (só name/rec/date).
 const normaliza = (arr) => (arr || []).map(x => ({ name: String(x.name || '').trim(), rec: !!x.rec, date: x.date || '' })).filter(x => x.name)
 
@@ -22,8 +18,6 @@ export default function DocumentosRecebidos() {
   const [editIdx, setEditIdx] = useState(null)
   const [editNome, setEditNome] = useState('')
   const [msg, setMsg] = useState('')
-  const [massa, setMassa] = useState(null)       // preview da importação em massa
-  const [aplicandoMassa, setAplicandoMassa] = useState(false)
 
   const ro = status === 'fechado' // fechado = somente leitura
 
@@ -106,90 +100,6 @@ export default function DocumentosRecebidos() {
     } catch (err) { setMsg('Erro ao importar: ' + err.message) }
   }
 
-  // ---- Importação em massa (todos os clientes, amarrada pelo CNPJ) ----
-  async function baixarModeloMassa() {
-    const XLSX = await import('xlsx')
-    const linhas = [['CNPJ', 'Cliente', 'Documento']]
-    for (const d of PADRAO) linhas.push(['00.000.000/0000-00', 'Razão social (opcional)', d])
-    const ws = XLSX.utils.aoa_to_sheet(linhas)
-    ws['!cols'] = [{ wch: 22 }, { wch: 34 }, { wch: 46 }]
-    const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, ws, 'Documentos')
-    XLSX.writeFile(wb, 'modelo-documentos-massa.xlsx')
-  }
-
-  async function analisarMassa(e) {
-    const file = e.target.files?.[0]; e.target.value = ''
-    if (!file) return
-    setMsg(''); setMassa(null)
-    try {
-      const XLSX = await import('xlsx')
-      const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' })
-      const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' })
-      const hIdx = rows.findIndex(r => r.map(norm).some(h => h.includes('cnpj')))
-      if (hIdx < 0) { setMsg('Não encontrei a coluna CNPJ na planilha.'); return }
-      const H = rows[hIdx].map(norm)
-      const iCnpj = H.findIndex(h => h.includes('cnpj'))
-      const iDoc = H.findIndex(h => h.includes('documento'))
-      if (iDoc < 0) { setMsg('Não encontrei a coluna Documento na planilha.'); return }
-
-      const porCnpj = new Map()
-      for (const r of rows.slice(hIdx + 1)) {
-        const cnpj = cnpj14(r[iCnpj]); const doc = String(r[iDoc] ?? '').trim()
-        if (!cnpj || !doc) continue
-        const arr = porCnpj.get(cnpj) || []
-        if (!arr.includes(doc)) arr.push(doc)
-        porCnpj.set(cnpj, arr)
-      }
-      if (!porCnpj.size) { setMsg('Nenhuma linha válida (CNPJ + Documento).'); return }
-
-      const { data: clientes } = await supabase.from('clientes').select('id, razao_social, cnpj, tipo, tipo_fechamento')
-      const porCli = new Map((clientes || []).map(c => [cnpj14(c.cnpj), c]))
-      const encontrados = [], naoEncontrados = [], consolidadas = []
-      for (const [cnpj, docs] of porCnpj) {
-        const cli = porCli.get(cnpj)
-        if (!cli) { naoEncontrados.push(cnpj); continue }
-        if (!fechaSozinho(cli)) { consolidadas.push(cli.razao_social); continue }
-        encontrados.push({ id: cli.id, nome: cli.razao_social, docs })
-      }
-      const [mes, ano] = competencia.split('/').map(Number)
-      setMassa({ encontrados, naoEncontrados, consolidadas, ano, mes })
-    } catch (err) { setMsg('Erro ao ler a planilha: ' + err.message) }
-  }
-
-  async function aplicarMassa() {
-    if (!massa) return
-    setAplicandoMassa(true); setMsg('')
-    try {
-      const { ano, mes } = massa
-      let atualizados = 0, pulados = 0
-      for (const c of massa.encontrados) {
-        const docs = c.docs.map(name => ({ name, rec: false, date: '' }))
-        // competência atual do cliente (cria se não existir) → substitui a lista.
-        const { data: ex } = await supabase.from('competencias').select('id, status').eq('cliente_id', c.id).eq('ano', ano).eq('mes', mes).maybeSingle()
-        if (ex?.status === 'fechado') { pulados++; continue } // não mexe em fechado
-        let compId = ex?.id
-        if (!compId) {
-          const { data: cr } = await supabase.from('competencias').insert({ cliente_id: c.id, ano, mes }).select('id').single()
-          compId = cr?.id
-        }
-        if (compId) { await supabase.from('competencias').update({ documentos: docs }).eq('id', compId); atualizados++ }
-        // propaga para os fechamentos ABERTOS deste cliente dali pra frente.
-        const { data: futuras } = await supabase.from('competencias').select('id, ano, mes, status, documentos').eq('cliente_id', c.id)
-        for (const f of (futuras || []).filter(x => (x.ano > ano || (x.ano === ano && x.mes > mes)) && x.status !== 'fechado')) {
-          const recPorNome = Object.fromEntries(normaliza(f.documentos).map(x => [x.name, x]))
-          await supabase.from('competencias').update({ documentos: c.docs.map(name => recPorNome[name] || { name, rec: false, date: '' }) }).eq('id', f.id)
-        }
-      }
-      setMsg(`Importação em massa: ${atualizados} cliente(s) atualizado(s) na competência ${String(mes).padStart(2, '0')}/${ano}${pulados ? ` · ${pulados} pulado(s) (fechado)` : ''}.`)
-      setMassa(null)
-      recalcularPendencias()
-      // recarrega a lista da empresa aberta (pode ter sido atualizada na massa)
-      const { data: comp } = await supabase.from('competencias').select('documentos').eq('cliente_id', empresaId).eq('ano', ano).eq('mes', mes).maybeSingle()
-      if (comp && Array.isArray(comp.documentos)) setDocs(normaliza(comp.documentos))
-    } catch (err) { setMsg('Erro ao aplicar: ' + err.message) } finally { setAplicandoMassa(false) }
-  }
-
   if (!empresaId) {
     return <Wrapper><Aviso texto="Selecione uma empresa no menu lateral para conferir os documentos." /></Wrapper>
   }
@@ -229,21 +139,9 @@ export default function DocumentosRecebidos() {
             <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={importar} />
           </label>
           <button className="btn btn-ghost" onClick={baixarModelo}><i className="ti ti-file-spreadsheet" /> Baixar modelo</button>
+          <span style={{ fontSize: 12, color: theme.sub, marginLeft: 'auto' }}>Vários clientes de uma vez? Use <b style={{ color: theme.text }}>Importação em massa</b> (Nível cliente).</span>
         </div>
       )}
-
-      {/* Importação em massa (todos os clientes, por CNPJ) */}
-      <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: 14, marginBottom: 14, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-        <i className="ti ti-users-group" style={{ color: theme.accent, fontSize: 18 }} />
-        <span style={{ fontSize: 13, color: theme.sub, flex: 1, minWidth: 200 }}>
-          <b style={{ color: theme.text }}>Importar todos por CNPJ</b> — sobe a lista de vários clientes de uma vez, na competência <b style={{ color: theme.text }}>{competencia}</b>.
-        </span>
-        <label className="btn" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
-          <i className="ti ti-file-import" /> Importar em massa
-          <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={analisarMassa} />
-        </label>
-        <button className="btn btn-ghost" onClick={baixarModeloMassa}><i className="ti ti-file-spreadsheet" /> Modelo (CNPJ)</button>
-      </div>
 
       {/* Lista */}
       <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'hidden' }}>
@@ -274,49 +172,8 @@ export default function DocumentosRecebidos() {
           </div>
         ))}
       </div>
-
-      {/* Confirmação da importação em massa */}
-      {massa && (
-        <div onClick={() => !aplicandoMassa && setMassa(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 50 }}>
-          <div onClick={e => e.stopPropagation()} style={{ width: 'min(560px,96vw)', maxHeight: '88vh', overflow: 'auto', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
-            <h2 style={{ fontSize: 17, marginBottom: 4 }}>Importar documentos em massa</h2>
-            <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 14 }}>
-              Competência <b style={{ color: theme.text }}>{String(massa.mes).padStart(2, '0')}/{massa.ano}</b>. Cada cliente encontrado tem a lista <b style={{ color: theme.text }}>substituída</b> (e propagada para os fechamentos abertos em diante). Fechados não mudam.
-            </p>
-            <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginBottom: 14 }}>
-              <Tag c={theme.green} n={massa.encontrados.length} t="cliente(s) a atualizar" />
-              {massa.consolidadas.length > 0 && <Tag c={theme.sub} n={massa.consolidadas.length} t="filial consolidada (ignorada)" />}
-              {massa.naoEncontrados.length > 0 && <Tag c={theme.red} n={massa.naoEncontrados.length} t="CNPJ não encontrado" />}
-            </div>
-
-            {massa.encontrados.length > 0 && (
-              <div style={{ maxHeight: 220, overflow: 'auto', border: `1px solid ${theme.border}`, borderRadius: 10, marginBottom: 12 }}>
-                {massa.encontrados.map((c, i) => (
-                  <div key={i} style={{ padding: '9px 12px', borderTop: i ? `1px solid ${theme.border}` : 'none', fontSize: 12.5 }}>
-                    <b>{c.nome}</b> <span style={{ color: theme.sub }}>· {c.docs.length} documento(s)</span>
-                  </div>
-                ))}
-              </div>
-            )}
-            {massa.naoEncontrados.length > 0 && (
-              <p style={{ color: theme.sub, fontSize: 12, margin: '0 0 12px' }}>
-                <b style={{ color: theme.red }}>Não encontrados:</b> {massa.naoEncontrados.join(', ')}
-              </p>
-            )}
-
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-              <button className="btn btn-ghost" onClick={() => setMassa(null)} disabled={aplicandoMassa}>Cancelar</button>
-              <button className="btn" onClick={aplicarMassa} disabled={aplicandoMassa || !massa.encontrados.length}>{aplicandoMassa ? 'Aplicando…' : 'Aplicar importação'}</button>
-            </div>
-          </div>
-        </div>
-      )}
     </Wrapper>
   )
-}
-
-function Tag({ c, n, t }) {
-  return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: theme.text }}><b style={{ color: c, fontSize: 15 }}>{n}</b> {t}</span>
 }
 
 // Lista de documentos do fechamento anterior mais recente (só os nomes).
