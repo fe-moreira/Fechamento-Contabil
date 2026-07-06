@@ -24,17 +24,21 @@ export function palpiteSaldo(texto) {
   const parse = s => parseFloat(String(s).replace(/\./g, '').replace(',', '.'))
   const t = String(texto || '')
   const V = '(-?\\d{1,3}(?:\\.\\d{3})*,\\d{2})'
-  // 1) Saldo em conta corrente (C/C), no último dia — não o "saldo final/total".
-  const prefer = [
-    new RegExp('saldo\\s+em\\s+c\\s*\\/?\\s*c[^\\n]{0,90}?' + V, 'i'),
-    new RegExp('saldo[^\\n]{0,25}?conta\\s+corrente[^\\n]{0,90}?' + V, 'i'),
-    new RegExp('saldo\\s+(?:do\\s+dia|dispon[ií]vel)[^\\n]{0,90}?' + V, 'i'),
-  ]
-  for (const re of prefer) { const m = t.match(re); if (m) return parse(m[1]) }
-  // 2) Última menção a "saldo" com valor.
+  // Pega a ÚLTIMA ocorrência de um rótulo com valor (extrato lista um "saldo do
+  // dia" por dia → o do último dia é o que vale).
+  const ultimo = (rot) => {
+    const ms = [...t.matchAll(new RegExp(rot + '[^\\n]{0,90}?' + V, 'gi'))]
+    return ms.length ? parse(ms[ms.length - 1][1]) : null
+  }
+  // Prioriza a CONTA CORRENTE / saldo do dia — não o "saldo final/total" que
+  // soma investimento (Itaú), e cobre "SALDO DIA" sem "do" (Caixa).
+  for (const rot of ['saldo\\s+em\\s+c\\s*\\/?\\s*c', 'saldo[^\\n]{0,25}?conta\\s+corrente', 'saldo\\s+(?:do\\s+)?dia', 'saldo\\s+dispon[ií]vel']) {
+    const v = ultimo(rot); if (v != null) return v
+  }
+  // senão: última menção a "saldo" com valor.
   const alvos = [...t.matchAll(new RegExp('saldo[^\\n]{0,90}?' + V, 'gi'))]
   if (alvos.length) return parse(alvos[alvos.length - 1][1])
-  // 3) Último valor monetário do documento.
+  // por fim: último valor monetário do documento.
   const todos = t.match(/-?\d{1,3}(?:\.\d{3})*,\d{2}/g)
   return todos && todos.length ? parse(todos[todos.length - 1]) : null
 }
