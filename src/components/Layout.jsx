@@ -155,6 +155,7 @@ export default function Layout() {
           <div className="side-divider" />
           {!colapsado && <p className="sec-title">Nível cliente</p>}
           <Item to="/base" icon="ti-info-circle" label="Base de Informações" colapsado={colapsado} />
+          <Item to="/importacoes" icon="ti-file-upload" label="Importação em massa" colapsado={colapsado} />
 
           <div className="side-divider" />
           {!colapsado && <p className="sec-title">Sistema</p>}

@@ -21,6 +21,7 @@ import SugestoesContabilizacao from './pages/SugestoesContabilizacao'
 import Relatorios from './pages/Relatorios'
 import Status from './pages/Status'
 import BaseInformacoes from './pages/BaseInformacoes'
+import ImportacaoMassa from './pages/ImportacaoMassa'
 import Configuracoes from './pages/Configuracoes'
 import Ajuda from './pages/Ajuda'
 import Timesheet from './pages/Timesheet'
@@ -53,6 +54,7 @@ function Rotas() {
         <Route path="relatorios" element={<Relatorios />} />
         <Route path="status" element={<Status />} />
         <Route path="base" element={<BaseInformacoes />} />
+        <Route path="importacoes" element={<ImportacaoMassa />} />
         <Route path="config" element={<Configuracoes />} />
         <Route path="usuarios" element={<Usuarios />} />
         <Route path="timesheet" element={<Timesheet />} />
