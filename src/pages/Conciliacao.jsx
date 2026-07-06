@@ -216,15 +216,17 @@ export default function Conciliacao() {
   async function carregarAcertos(cid) {
     const { data } = await supabase.from('lancamentos').select('conta_debito, conta_credito, valor').eq('competencia_id', cid)
     const m = {}
+    const add = (c, campo, v) => { if (!c) return; m[c] = m[c] || { deb: 0, cred: 0 }; m[c][campo] += v }
     for (const l of (data || [])) {
       const v = Number(l.valor) || 0
-      if (l.conta_debito) m[l.conta_debito] = (m[l.conta_debito] || 0) + v
-      if (l.conta_credito) m[l.conta_credito] = (m[l.conta_credito] || 0) - v
+      add(l.conta_debito, 'deb', v)
+      add(l.conta_credito, 'cred', v)
     }
     setAcertos(m)
   }
   const recarregar = () => { if (compId) { carregarConf(compId); carregarAcertos(compId) } }
-  const saldoEf = c => (Number(c.saldo_final) || 0) + (acertos[c.conta] || 0)
+  const ajNet = c => { const a = acertos[c.conta]; return a ? a.deb - a.cred : 0 } // efeito no saldo (D-C)
+  const saldoEf = c => (Number(c.saldo_final) || 0) + ajNet(c)
 
   useEffect(() => {
     setSel(null); setContas([]); setCompId(null); setConf({})
@@ -273,7 +275,7 @@ export default function Conciliacao() {
   if (carregando) return <Wrapper><p style={{ color: theme.sub, fontSize: 13 }}>Carregando…</p></Wrapper>
   if (!compId || contas.length === 0) return <Wrapper><Aviso icon="ti-table-off" texto="Nenhum balancete nesta competência. Importe o razão primeiro." /></Wrapper>
 
-  if (sel) return <Detalhe conta={sel} tipoCta={tipoEf(sel)} reg={conf[sel.conta]} compId={compId} empresaId={empresaId} usuario={user?.email} saldoAjuste={acertos[sel.conta] || 0} getCompetenciaId={getCompetenciaId} onSalvarConf={recarregar} onMudou={recarregar} onVoltar={() => setSel(null)} />
+  if (sel) return <Detalhe conta={sel} tipoCta={tipoEf(sel)} reg={conf[sel.conta]} compId={compId} empresaId={empresaId} usuario={user?.email} ajuste={acertos[sel.conta] || null} getCompetenciaId={getCompetenciaId} onSalvarConf={recarregar} onMudou={recarregar} onVoltar={() => setSel(null)} />
 
   return (
     <Wrapper nome={empresaNome} comp={competencia}>
@@ -314,9 +316,9 @@ export default function Conciliacao() {
                   <td style={{ ...tdR, fontWeight: peso }}>{moneyDC(c.saldo_inicial)}</td>
                   <td style={{ ...tdR, fontWeight: peso }}>{money(c.debito)}</td>
                   <td style={{ ...tdR, fontWeight: peso }}>{money(c.credito)}</td>
-                  <td style={{ ...tdR, fontWeight: peso, color: inv ? theme.red : undefined }} title={!sint && acertos[c.conta] ? `Saldo do balancete ${moneyDC(c.saldo_final)} + correções pendentes ${moneyDC(acertos[c.conta])}` : undefined}>
+                  <td style={{ ...tdR, fontWeight: peso, color: inv ? theme.red : undefined }} title={!sint && Math.abs(ajNet(c)) > 0.005 ? `Saldo do balancete ${moneyDC(c.saldo_final)} + correções pendentes ${moneyDC(ajNet(c))}` : undefined}>
                     {moneyDC(sint ? c.saldo_final : saldoEf(c))}
-                    {!sint && Math.abs(acertos[c.conta] || 0) > 0.005 && <span title="Inclui correções pendentes de contabilização" style={{ marginLeft: 6, color: theme.accent, fontSize: 10, fontWeight: 700 }}>±</span>}
+                    {!sint && Math.abs(ajNet(c)) > 0.005 && <span title="Inclui correções pendentes de contabilização" style={{ marginLeft: 6, color: theme.accent, fontSize: 10, fontWeight: 700 }}>±</span>}
                   </td>
                   <td style={{ ...td, textAlign: 'center' }}>{sint ? '' : <Dot c={statusConta(c)} />}</td>
                 </tr>
@@ -329,7 +331,8 @@ export default function Conciliacao() {
   )
 }
 
-function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, saldoAjuste = 0, getCompetenciaId, onSalvarConf, onMudou, onVoltar }) {
+function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = null, getCompetenciaId, onSalvarConf, onMudou, onVoltar }) {
+  const ajDeb = ajuste?.deb || 0, ajCred = ajuste?.cred || 0, ajNet = ajDeb - ajCred // correções pendentes
   const [lanc, setLanc] = useState([])
   const [carregando, setCarregando] = useState(true)
   const [acao, setAcao] = useState(null)   // lançamento clicado (justificar/corrigir)
@@ -528,14 +531,17 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, saldoAjuste 
 
       {msg && <p style={{ color: theme.green, fontSize: 13, marginBottom: 12 }}><i className="ti ti-circle-check" /> {msg}</p>}
 
-      {/* Resumo + amarração */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(150px,1fr))', gap: 12, marginBottom: 16 }}>
+      {/* Resumo + amarração — débito/crédito/saldo já incluem as correções pendentes. */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(150px,1fr))', gap: 12, marginBottom: Math.abs(ajNet) > 0.005 ? 6 : 16 }}>
         <Tile label="Saldo inicial" v={moneyDC(conta.saldo_inicial)} />
-        <Tile label="Débito" v={money(conta.debito)} cor={theme.green} />
-        <Tile label="Crédito" v={money(conta.credito)} cor={theme.red} />
-        <Tile label="Saldo atual" v={moneyDC(conta.saldo_final)} />
+        <Tile label="Débito" v={money((Number(conta.debito) || 0) + ajDeb)} cor={theme.green} />
+        <Tile label="Crédito" v={money((Number(conta.credito) || 0) + ajCred)} cor={theme.red} />
+        <Tile label="Saldo atual" v={moneyDC((Number(conta.saldo_final) || 0) + ajNet)} />
         <Tile label="Diferença (amarração)" v={money(dif)} cor={Math.abs(dif) < 0.01 ? theme.green : theme.yellow} />
       </div>
+      {Math.abs(ajNet) > 0.005 && <p style={{ color: theme.accent, fontSize: 11.5, margin: '0 0 16px' }}>
+        <i className="ti ti-adjustments-alt" /> Débito, crédito e saldo já incluem {moneyDC(ajNet)} de correções pendentes de contabilização (balancete: débito {money(conta.debito)} · crédito {money(conta.credito)} · saldo {moneyDC(conta.saldo_final)}).
+      </p>}
 
       {/* Natureza do saldo: Ativo credor / Passivo devedor (sem ser redutora) */}
       {(() => {
@@ -551,7 +557,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, saldoAjuste 
       })()}
 
       {/* Conferência (documento → verde; confirmar + justificar → amarelo) */}
-      <CardConferencia conta={conta} reg={reg} compId={compId} usuario={usuario} saldoAjuste={saldoAjuste} composicao={tipoCta !== 'saldo'} onSalvo={onSalvarConf} />
+      <CardConferencia conta={conta} reg={reg} compId={compId} usuario={usuario} saldoAjuste={ajNet} composicao={tipoCta !== 'saldo'} onSalvo={onSalvarConf} />
 
       {tipoCta !== 'saldo' && (
         <RelatoriosComposicao conta={conta} emAberto={emAbertoTodos} zerados={zerados} contraDe={contraDe} />
