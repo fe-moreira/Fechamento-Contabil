@@ -37,6 +37,27 @@ Deno.serve(async (req) => {
       return json({ usuarios })
     }
 
+    // Cria o usuário já com uma senha definida pelo admin (sem link, sem expirar).
+    if (acao === "criar_senha") {
+      const senha = String((body as Record<string, unknown>).senha || "")
+      if (!email || !email.includes("@")) return json({ error: "Informe um e-mail válido." }, 400)
+      if (senha.length < 6) return json({ error: "A senha precisa ter ao menos 6 caracteres." }, 400)
+      const { data, error } = await admin.auth.admin.createUser({ email, password: senha, email_confirm: true })
+      if (error) throw error
+      return json({ ok: true, usuario: { id: data.user?.id, email: data.user?.email } })
+    }
+
+    // Define/redefine a senha de um usuário existente (sem link, sem expirar).
+    if (acao === "definir_senha") {
+      const id = String((body as Record<string, unknown>).id || "")
+      const senha = String((body as Record<string, unknown>).senha || "")
+      if (!id) return json({ error: "Informe o usuário." }, 400)
+      if (senha.length < 6) return json({ error: "A senha precisa ter ao menos 6 caracteres." }, 400)
+      const { error } = await admin.auth.admin.updateUserById(id, { password: senha, email_confirm: true })
+      if (error) throw error
+      return json({ ok: true })
+    }
+
     if (acao === "convidar") {
       if (!email || !email.includes("@")) return json({ error: "Informe um e-mail válido." }, 400)
       const { data, error } = await admin.auth.admin.generateLink({
