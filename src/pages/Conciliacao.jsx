@@ -1053,7 +1053,8 @@ function ModalLancamento({ lanc, conta, lab, plano, natCredito, residuo = 0, onC
       // original tocou a conta no lado 'ehDeb' → estorno inverte esse lado.
       conta_debito: ehDeb ? (contraOk ? contra : '') : conta.conta,
       conta_credito: ehDeb ? conta.conta : (contraOk ? contra : ''),
-      historico: `Estorno · ${conta.nome}${lanc.leitura?.nf ? ` · NF ${lanc.leitura.nf}` : ''}`,
+      // Histórico = "ESTORNO REF." + histórico do lançamento original.
+      historico: (lanc.historico || '').trim() ? `ESTORNO REF. ${lanc.historico.trim()}` : `ESTORNO REF. ${conta.nome}`,
     }))
     setTipo('Correção')
   }
