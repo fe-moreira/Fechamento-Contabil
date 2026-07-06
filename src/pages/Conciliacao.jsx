@@ -316,6 +316,14 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, getCompetenc
   const [plano, setPlano] = useState([])   // [{ cod, nome }] para os seletores de conta
   const [partidas, setPartidas] = useState({}) // chave (data|histórico) -> lançamentos da partida (p/ contrapartida)
   const [msg, setMsg] = useState('')
+  const [tratados, setTratados] = useState(new Set()) // razao_ids já corrigidos/estornados/justificados
+
+  async function carregarTratados() {
+    const { data } = await supabase.from('auditoria').select('razao_id')
+      .eq('competencia_id', compId).eq('modulo', 'Conciliação').not('razao_id', 'is', null)
+    setTratados(new Set((data || []).map(a => a.razao_id)))
+  }
+  useEffect(() => { carregarTratados() }, [compId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function carregarLanc() {
     setCarregando(true)
@@ -442,7 +450,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, getCompetenc
   async function registrar(tipo, payload) {
     const id = await getCompetenciaId()
     const item = `${conta.conta} · ${acao?.data || ''} · NF ${acao?.leitura.nf || '—'}`
-    await supabase.from('auditoria').insert({ competencia_id: id, modulo: 'Conciliação', item, tipo, detalhe: payload.detalhe || null, usuario })
+    await supabase.from('auditoria').insert({ competencia_id: id, modulo: 'Conciliação', item, tipo, detalhe: payload.detalhe || null, razao_id: acao?.id || null, usuario })
     let virouLancamento = false
     if (tipo === 'Correção' && payload.lancamento && (payload.lancamento.conta_debito || payload.lancamento.conta_credito)) {
       const L = payload.lancamento
@@ -466,7 +474,9 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, getCompetenc
       ajustouLeitura = true
     }
     setMsg(ajustouLeitura ? 'Leitura ajustada — o sistema vai recruzar.' : virouLancamento ? 'Correção registrada — lançamento enviado para o painel Contabilizar.' : `${tipo} registrada na auditoria.`)
+    if (acao?.id) setTratados(prev => new Set(prev).add(acao.id)) // marca a linha como tratada na hora
     setAcao(null)
+    carregarTratados()
     if (ajustouLeitura) carregarLanc()
   }
 
@@ -607,8 +617,8 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, getCompetenc
                   const contras = contraDe(l)
                   return (
                     <tr key={i} onClick={() => { setMsg(''); setAcao(l) }}
-                      style={{ borderTop: `1px solid ${theme.border}`, cursor: 'pointer', background: semNF ? 'rgba(229,72,77,0.08)' : 'transparent' }}
-                      title={semNF ? 'Baixa com NF que não confere com o título — justifique ou corrija' : 'Justificar ou corrigir este lançamento'}>
+                      style={{ borderTop: `1px solid ${theme.border}`, cursor: 'pointer', opacity: tratados.has(l.id) ? 0.6 : 1, background: tratados.has(l.id) ? 'rgba(48,164,108,0.08)' : semNF ? 'rgba(229,72,77,0.08)' : 'transparent' }}
+                      title={tratados.has(l.id) ? 'Já tratado (corrigido/estornado/justificado) — clique para tratar de novo' : semNF ? 'Baixa com NF que não confere com o título — justifique ou corrija' : 'Justificar ou corrigir este lançamento'}>
                       <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{l.data || '—'}</td>
                       <td style={{ ...td, color: semNF ? theme.red : theme.sub, fontWeight: 600 }}>NF {l.leitura.nf || '—'}</td>
                       <td style={{ ...td, color: theme.sub, fontFamily: 'monospace', fontSize: 11, maxWidth: 280 }}>{l.historico}</td>
@@ -620,11 +630,13 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, getCompetenc
                       <td style={{ ...tdR, color: theme.green }}>{Number(l.debito) ? money(l.debito) : '—'}</td>
                       <td style={{ ...tdR, color: theme.red }}>{Number(l.credito) ? money(l.credito) : '—'}</td>
                       <td style={{ ...td, textAlign: 'center' }}>
-                        {semNF
-                          ? <span title="NF não confere com nenhum título" style={{ color: theme.red, fontSize: 10.5, fontWeight: 700 }}>NF s/ título</span>
-                          : rev
-                            ? <span style={{ color: theme.yellow, fontSize: 11, fontWeight: 600 }}>revisar</span>
-                            : <span style={{ color: theme.green, fontSize: 14 }}><i className="ti ti-circle-check" /></span>}
+                        {tratados.has(l.id)
+                          ? <span title="Já tratado" style={{ color: theme.green, fontSize: 10.5, fontWeight: 700, whiteSpace: 'nowrap' }}><i className="ti ti-arrow-back-up" /> corrigido</span>
+                          : semNF
+                            ? <span title="NF não confere com nenhum título" style={{ color: theme.red, fontSize: 10.5, fontWeight: 700 }}>NF s/ título</span>
+                            : rev
+                              ? <span style={{ color: theme.yellow, fontSize: 11, fontWeight: 600 }}>revisar</span>
+                              : <span style={{ color: theme.green, fontSize: 14 }}><i className="ti ti-circle-check" /></span>}
                       </td>
                     </tr>
                   )
@@ -637,7 +649,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, getCompetenc
       })}
       </>
       ) : (
-        <ListaLancamentos lanc={emAbertoTodos} carregando={carregando} contraDe={contraDe} planoMap={planoMap} onTratar={l => { setMsg(''); setAcao(l) }} />
+        <ListaLancamentos lanc={emAbertoTodos} carregando={carregando} contraDe={contraDe} planoMap={planoMap} tratados={tratados} onTratar={l => { setMsg(''); setAcao(l) }} />
       )}
 
       {acao && (
@@ -651,7 +663,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, getCompetenc
 
 // Lista simples dos lançamentos de uma conta de composição que NÃO é por entidade
 // (ex.: IRRF s/ aplicação): sem nome/NF/agrupamento; cada lançamento é clicável.
-function ListaLancamentos({ lanc, carregando, contraDe, planoMap, onTratar }) {
+function ListaLancamentos({ lanc, carregando, contraDe, planoMap, tratados = new Set(), onTratar }) {
   return (
     <>
       <p style={{ color: theme.sub, fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: .5, margin: '4px 0 10px' }}>Lançamentos da conta</p>
@@ -671,7 +683,7 @@ function ListaLancamentos({ lanc, carregando, contraDe, planoMap, onTratar }) {
             ) : lanc.map((l, i) => {
               const contras = contraDe(l)
               return (
-                <tr key={i} onClick={() => onTratar(l)} style={{ borderTop: `1px solid ${theme.border}`, cursor: 'pointer' }} title="Justificar ou corrigir este lançamento">
+                <tr key={i} onClick={() => onTratar(l)} style={{ borderTop: `1px solid ${theme.border}`, cursor: 'pointer', opacity: tratados.has(l.id) ? 0.6 : 1, background: tratados.has(l.id) ? 'rgba(48,164,108,0.08)' : 'transparent' }} title={tratados.has(l.id) ? 'Já tratado (corrigido/estornado/justificado) — clique para tratar de novo' : 'Justificar ou corrigir este lançamento'}>
                   <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{l.data || '—'}</td>
                   <td style={{ ...td, color: theme.sub, fontFamily: 'monospace', fontSize: 11, maxWidth: 320 }}>{l.historico}</td>
                   <td style={{ ...td, fontSize: 11.5, whiteSpace: 'nowrap' }} title={contras.map(c => `${c}${planoMap[c] ? ' · ' + planoMap[c] : ''}`).join('\n')}>
@@ -681,7 +693,9 @@ function ListaLancamentos({ lanc, carregando, contraDe, planoMap, onTratar }) {
                   </td>
                   <td style={{ ...tdR, color: theme.green }}>{Number(l.debito) ? money(l.debito) : '—'}</td>
                   <td style={{ ...tdR, color: theme.red }}>{Number(l.credito) ? money(l.credito) : '—'}</td>
-                  <td style={{ ...td, textAlign: 'center' }}><i className="ti ti-dots" style={{ color: theme.sub }} /></td>
+                  <td style={{ ...td, textAlign: 'center' }}>{tratados.has(l.id)
+                    ? <span title="Já tratado" style={{ color: theme.green, fontSize: 10.5, fontWeight: 700, whiteSpace: 'nowrap' }}><i className="ti ti-arrow-back-up" /> corrigido</span>
+                    : <i className="ti ti-dots" style={{ color: theme.sub }} />}</td>
                 </tr>
               )
             })}
