@@ -692,6 +692,70 @@ function ListaLancamentos({ lanc, carregando, contraDe, planoMap, onTratar }) {
   )
 }
 
+// Quando o extrato NÃO bate com o saldo contábil, sugere o que no razão do banco
+// pode explicar a diferença: lançamentos com valor igual à diferença, ou pares
+// que somam a diferença. Ancorado no razão (dado confiável, já importado).
+function SugestoesDiferenca({ conta, compId, dif }) {
+  const [lancs, setLancs] = useState(null)
+  const [aberto, setAberto] = useState(false)
+  const [carregando, setCarregando] = useState(false)
+  const alvo = Math.round(Math.abs(dif) * 100) / 100
+
+  async function abrir() {
+    setAberto(a => !a)
+    if (lancs != null) return
+    setCarregando(true)
+    const { data } = await supabase.from('razao')
+      .select('id, data, historico, contrapartida, debito, credito')
+      .eq('competencia_id', compId).eq('conta', conta.conta).order('data')
+    setLancs(data || [])
+    setCarregando(false)
+  }
+
+  const val = l => Math.round(((Number(l.debito) || 0) - (Number(l.credito) || 0)) * 100) / 100
+  const exatos = (lancs || []).filter(l => Math.abs(Math.abs(val(l)) - alvo) < 0.005)
+  // Se nenhum lançamento sozinho bate, procura PARES que somam a diferença.
+  const pares = []
+  if (lancs && exatos.length === 0 && alvo > 0.005) {
+    const arr = lancs.map(l => ({ l, v: Math.abs(val(l)) })).filter(o => o.v > 0.005)
+    for (let i = 0; i < arr.length && pares.length < 6; i++)
+      for (let j = i + 1; j < arr.length && pares.length < 6; j++)
+        if (Math.abs(arr[i].v + arr[j].v - alvo) < 0.005) pares.push([arr[i].l, arr[j].l])
+  }
+
+  const Linha = ({ l }) => (
+    <div style={{ display: 'flex', gap: 10, fontSize: 12.5, padding: '4px 0', borderTop: `0.5px solid ${theme.cb}` }}>
+      <span style={{ color: theme.sub, minWidth: 78 }}>{l.data || '—'}</span>
+      <span style={{ flex: 1, minWidth: 0 }}>{l.historico || '(sem histórico)'}{l.contrapartida ? ` · contra ${l.contrapartida}` : ''}</span>
+      <span style={{ fontWeight: 600, whiteSpace: 'nowrap', color: val(l) < 0 ? theme.red : theme.text }}>{money(Math.abs(val(l)))} {val(l) < 0 ? 'C' : 'D'}</span>
+    </div>
+  )
+
+  return (
+    <div style={{ marginTop: 12 }}>
+      <button className="btn btn-ghost" style={{ padding: '5px 11px', fontSize: 12.5 }} onClick={abrir}>
+        <i className={`ti ti-${aberto ? 'chevron-down' : 'search'}`} /> Lançamentos que podem explicar a diferença
+      </button>
+      {aberto && <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 10, padding: 12, marginTop: 10 }}>
+        {carregando ? <p style={{ color: theme.sub, fontSize: 12.5, margin: 0 }}>Buscando no razão…</p> : <>
+          {exatos.length > 0 && <>
+            <p style={{ fontSize: 12.5, fontWeight: 600, margin: '0 0 4px' }}>Lançamento(s) com valor igual à diferença ({money(alvo)}):</p>
+            {exatos.map(l => <Linha key={l.id} l={l} />)}
+            <p style={{ color: theme.sub, fontSize: 11.5, margin: '8px 0 0' }}>Provável causa da diferença — confira e, se preciso, corrija em Contabilizar.</p>
+          </>}
+          {exatos.length === 0 && pares.length > 0 && <>
+            <p style={{ fontSize: 12.5, fontWeight: 600, margin: '0 0 4px' }}>Pares de lançamentos que somam a diferença ({money(alvo)}):</p>
+            {pares.map((par, i) => <div key={i} style={{ marginBottom: 8 }}>{par.map(l => <Linha key={l.id} l={l} />)}</div>)}
+          </>}
+          {exatos.length === 0 && pares.length === 0 && <p style={{ color: theme.sub, fontSize: 12.5, margin: 0 }}>
+            Nenhum lançamento (nem par) do razão bate exatamente com a diferença de {money(alvo)}. A diferença pode estar diluída em vários lançamentos, em transações do extrato ainda não contabilizadas, ou no saldo lido do extrato.
+          </p>}
+        </>}
+      </div>}
+    </div>
+  )
+}
+
 // Card de conferência da conta (toda conta começa VERMELHA):
 // - Verde:   documento suporte importado que BATE com o saldo.
 // - Amarelo: confirmada ("está certo") + justificativa da falta de documento
@@ -840,6 +904,7 @@ function CardConferencia({ conta, reg, compId, usuario, composicao, onSalvo }) {
         {temDoc && <p style={{ color: bate ? theme.green : bateSaldo ? theme.sub : theme.red, fontSize: 12.5, margin: '10px 0 0', fontWeight: 500 }}>
           <i className={`ti ${bate ? 'ti-circle-check' : bateSaldo ? 'ti-cloud-upload' : 'ti-alert-triangle'}`} /> {bate ? 'Arquivo armazenado e bate com o saldo — fica verde.' : bateSaldo ? 'Bate com o saldo — salve para armazenar o arquivo e ficar verde.' : `Diferença de ${money(Math.abs(dif))} entre o saldo e o documento.`}
         </p>}
+        {temDoc && !bateSaldo && Math.abs(dif) > 0.005 && <SugestoesDiferenca conta={conta} compId={compId} dif={dif} />}
       </div>
 
       <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: 16 }}>
