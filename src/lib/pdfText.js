@@ -17,12 +17,24 @@ export async function extrairTextoPdf(file) {
   return texto
 }
 
-// Palpite do saldo do extrato: procura a última menção a "saldo" com um valor
-// monetário perto; senão, pega o último valor monetário do texto.
+// Palpite do saldo do extrato. Prioriza o saldo da CONTA CORRENTE — muitos
+// bancos (ex.: Itaú) mostram também um "saldo final" que SOMA o investimento,
+// e não é o que vai para a conta contábil do banco.
 export function palpiteSaldo(texto) {
   const parse = s => parseFloat(String(s).replace(/\./g, '').replace(',', '.'))
-  const alvos = [...String(texto || '').matchAll(/saldo[^\n]{0,80}?(-?\d{1,3}(?:\.\d{3})*,\d{2})/gi)]
+  const t = String(texto || '')
+  const V = '(-?\\d{1,3}(?:\\.\\d{3})*,\\d{2})'
+  // 1) Saldo em conta corrente (C/C), no último dia — não o "saldo final/total".
+  const prefer = [
+    new RegExp('saldo\\s+em\\s+c\\s*\\/?\\s*c[^\\n]{0,90}?' + V, 'i'),
+    new RegExp('saldo[^\\n]{0,25}?conta\\s+corrente[^\\n]{0,90}?' + V, 'i'),
+    new RegExp('saldo\\s+(?:do\\s+dia|dispon[ií]vel)[^\\n]{0,90}?' + V, 'i'),
+  ]
+  for (const re of prefer) { const m = t.match(re); if (m) return parse(m[1]) }
+  // 2) Última menção a "saldo" com valor.
+  const alvos = [...t.matchAll(new RegExp('saldo[^\\n]{0,90}?' + V, 'gi'))]
   if (alvos.length) return parse(alvos[alvos.length - 1][1])
-  const todos = String(texto || '').match(/-?\d{1,3}(?:\.\d{3})*,\d{2}/g)
+  // 3) Último valor monetário do documento.
+  const todos = t.match(/-?\d{1,3}(?:\.\d{3})*,\d{2}/g)
   return todos && todos.length ? parse(todos[todos.length - 1]) : null
 }
