@@ -57,6 +57,7 @@ export default function Dashboard() {
   const [mode, setMode] = useState(getThemeMode())
   const [agora, setAgora] = useState(new Date())
   const [drill, setDrill] = useState(null) // { titulo, itens:[nomes] } — quem compõe um número
+  const [erroPainel, setErroPainel] = useState(null)
 
   // Competência do painel = mês ANTERIOR ao calendário (a contabilidade fecha um mês depois).
   const hoje = new Date()
@@ -70,6 +71,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     (async () => {
+     try {
       const inicioMes = new Date(hoje.getFullYear(), hoje.getMonth(), 1).toISOString()
       const [{ data: cli }, { data: comps }, { data: ts }] = await Promise.all([
         supabase.from('clientes').select('*'),
@@ -145,7 +147,7 @@ export default function Dashboard() {
       }
       const prazos = dias.map(dia => {
         const lista = diaCli[dia]
-        const entregues = lista.filter(c => statusAlvo[c.id] === 'fechado').length
+        const entregues = lista.filter(c => compAlvo[c.id]?.status === 'fechado').length
         const faltam = lista.length - entregues
         const vencido = hoje.getDate() > dia && faltam > 0
         const prox = !vencido && faltam > 0 && hoje.getDate() <= dia && (dias.filter(x => x >= hoje.getDate())[0] === dia)
@@ -176,6 +178,7 @@ export default function Dashboard() {
       const sistemas = Object.entries(sisMap).map(([nome, n]) => ({ nome, n })).sort((a, b) => b.n - a.n)
 
       setD({ placar, recentes, atrasoLista, atrasoTotal, regime, matrizes, filiais, analistas, tsLista, tsTotal, prazos, dias, semPrazo: semPrazo.length, nomesAnal, matriz, matrizTot, totalClientes: clientes.length, sistemas })
+     } catch (e) { console.error('Dashboard:', e); setErroPainel(String(e?.message || e)) }
     })()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -195,6 +198,7 @@ export default function Dashboard() {
 
   const nomeComp = `${MES[targMes - 1]} / ${targAno}`
 
+  if (erroPainel) return <div style={{ color: theme.red, fontSize: 13 }}><i className="ti ti-alert-triangle" /> Não consegui carregar o painel: {erroPainel}</div>
   if (!d) return <div style={{ color: theme.sub, fontSize: 13 }}>Carregando painel…</div>
 
   return (
