@@ -209,6 +209,9 @@ export default function ImportarRazao() {
         if (error) throw error
       }
 
+      // Razão importado → a competência passa a contar como "em andamento".
+      await supabase.from('competencias').update({ razao_importado: true }).eq('id', competencia_id)
+
       const totDeb = registros.reduce((s, r) => s + r.debito, 0)
       const totCred = registros.reduce((s, r) => s + r.credito, 0)
       setResultado({ lancamentos: registros.length, contas: balancete.length, totDeb, totCred })
