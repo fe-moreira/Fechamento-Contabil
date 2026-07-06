@@ -11,6 +11,11 @@ const cors = {
 const json = (obj: unknown, status = 200) =>
   new Response(JSON.stringify(obj), { status, headers: { ...cors, "Content-Type": "application/json" } })
 
+// Redirect FIXO para produção — não confia na origem do front (evita link apontando
+// para localhost quando o convite é gerado em dev). Pode ser sobrescrito por APP_URL.
+const APP_URL = (Deno.env.get("APP_URL") || "https://fechamento-contabil-eight.vercel.app").replace(/\/+$/, "")
+const REDIRECT = `${APP_URL}/definir-senha`
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors })
   try {
@@ -21,8 +26,6 @@ Deno.serve(async (req) => {
     )
     const body = await req.json().catch(() => ({} as Record<string, unknown>))
     const acao = String((body as Record<string, unknown>).acao || "")
-    const redirectTo = typeof (body as Record<string, unknown>).redirectTo === "string"
-      ? String((body as Record<string, unknown>).redirectTo) : undefined
     const email = String((body as Record<string, unknown>).email || "").trim().toLowerCase()
 
     if (acao === "listar") {
@@ -37,7 +40,7 @@ Deno.serve(async (req) => {
     if (acao === "convidar") {
       if (!email || !email.includes("@")) return json({ error: "Informe um e-mail válido." }, 400)
       const { data, error } = await admin.auth.admin.generateLink({
-        type: "invite", email, options: redirectTo ? { redirectTo } : undefined,
+        type: "invite", email, options: { redirectTo: REDIRECT },
       })
       if (error) throw error
       return json({ ok: true, email, link: data.properties?.action_link || null })
@@ -46,7 +49,7 @@ Deno.serve(async (req) => {
     if (acao === "link_senha") {
       if (!email) return json({ error: "Informe o e-mail." }, 400)
       const { data, error } = await admin.auth.admin.generateLink({
-        type: "recovery", email, options: redirectTo ? { redirectTo } : undefined,
+        type: "recovery", email, options: { redirectTo: REDIRECT },
       })
       if (error) throw error
       return json({ ok: true, email, link: data.properties?.action_link || null })
