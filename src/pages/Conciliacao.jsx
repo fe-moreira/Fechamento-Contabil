@@ -963,6 +963,22 @@ function ModalLancamento({ lanc, conta, lab, plano, natCredito, residuo = 0, onC
     setTipo('Correção')
   }
 
+  // Estorno do lançamento clicado: inverte a partida (D↔C, mesmo valor). O lado
+  // que era a conta conciliada troca; a contrapartida vem do razão (quando houver).
+  function estornarLanc() {
+    const contra = String(lanc.contrapartida || '').trim()
+    const contraOk = contra && !/^0+([.,]0+)?$/.test(contra.replace(/\./g, ''))
+    setForm(f => ({
+      ...f,
+      valor: valorLan,
+      // original tocou a conta no lado 'ehDeb' → estorno inverte esse lado.
+      conta_debito: ehDeb ? (contraOk ? contra : '') : conta.conta,
+      conta_credito: ehDeb ? conta.conta : (contraOk ? contra : ''),
+      historico: `Estorno · ${conta.nome}${lanc.leitura?.nf ? ` · NF ${lanc.leitura.nf}` : ''}`,
+    }))
+    setTipo('Correção')
+  }
+
   const ajusteMudou = ajuste.entidade.trim() !== (lanc.leitura.entidade || '') || ajuste.nf.trim() !== (lanc.leitura.nf || '') || ajuste.historico.trim() !== (lanc.historico || '')
   const partidaOk = form.conta_debito && form.conta_credito && Number(form.valor) > 0
   const podeRegistrar = tipo === 'Justificativa' ? txt.trim() : (ajusteMudou || partidaOk || txt.trim())
@@ -1007,6 +1023,7 @@ function ModalLancamento({ lanc, conta, lab, plano, natCredito, residuo = 0, onC
               <button className="btn btn-ghost" style={{ flex: 1 }} onClick={() => setTipo('Justificativa')}><i className="ti ti-flag" /> Justificar</button>
               <button className="btn" style={{ flex: 1 }} onClick={() => setTipo('Correção')}><i className="ti ti-pencil-bolt" /> Corrigir</button>
             </div>
+            <button className="btn btn-ghost" style={{ width: '100%', marginTop: 10, fontSize: 13 }} onClick={estornarLanc}><i className="ti ti-arrow-back-up" /> Estornar este lançamento (partida inversa)</button>
           </>
         ) : tipo === 'Justificativa' ? (
           <>
@@ -1026,6 +1043,7 @@ function ModalLancamento({ lanc, conta, lab, plano, natCredito, residuo = 0, onC
             <div style={{ borderTop: `1px solid ${theme.border}`, paddingTop: 12, marginTop: 6 }}>
               <p style={{ fontSize: 12.5, color: theme.sub, margin: '0 0 8px' }}>Partida de acerto (opcional) — vai para o Contabilizar. Atalhos:</p>
               <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+                <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={estornarLanc}><i className="ti ti-arrow-back-up" /> Estornar lançamento</button>
                 <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={() => tratarDiferenca('desconto')}><i className="ti ti-discount" /> Desconto financeiro</button>
                 <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={() => tratarDiferenca('juros')}><i className="ti ti-percentage" /> Juros / encargos</button>
               </div>
