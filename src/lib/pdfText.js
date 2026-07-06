@@ -31,6 +31,35 @@ export async function extrairTextoPdf(file) {
   return texto
 }
 
+// OCR: quando o PDF é uma IMAGEM (ex.: "Microsoft Print to PDF" da tela da
+// Caixa), não há texto para extrair. Aqui renderizamos cada página em imagem e
+// lemos com o Tesseract (português). É pesado, então só é chamado quando o PDF
+// não tem texto. Lê da última página para a primeira (o "SALDO DIA" do último
+// dia fica no fim) e para assim que encontra um saldo.
+export async function ocrPdf(file, onProgress) {
+  const { createWorker } = await import('tesseract.js')
+  const doc = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise
+  const worker = await createWorker('por', 1, {
+    logger: m => { if (m.status === 'recognizing text' && onProgress) onProgress(m.progress) },
+  })
+  try {
+    let texto = ''
+    for (let p = doc.numPages; p >= 1; p--) {
+      const page = await doc.getPage(p)
+      const viewport = page.getViewport({ scale: 2 }) // 2x melhora o reconhecimento
+      const canvas = document.createElement('canvas')
+      canvas.width = viewport.width; canvas.height = viewport.height
+      await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise
+      const { data } = await worker.recognize(canvas)
+      texto = data.text + '\n' + texto // mantém a ordem das páginas
+      if (palpiteSaldo(texto) != null) break // achou o saldo — não precisa ler o resto
+    }
+    return texto
+  } finally {
+    await worker.terminate()
+  }
+}
+
 // Palpite do saldo do extrato. Prioriza o saldo da CONTA CORRENTE — muitos
 // bancos (ex.: Itaú) mostram também um "saldo final" que SOMA o investimento,
 // e não é o que vai para a conta contábil do banco.
