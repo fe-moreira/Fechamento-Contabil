@@ -8,9 +8,12 @@ import { apurarVariacoes } from '../lib/variacoes'
 import { theme, money } from '../lib/theme'
 import { abrePdfTimbrado } from '../lib/pdf'
 import { gerarExcelTimbrado } from '../lib/excel'
+import { gerarDominioCSV } from '../lib/dominio'
 import CampoConta from '../components/CampoConta'
 
 const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
+const th = { textAlign: 'left', padding: '10px 12px', fontSize: 11, color: theme.sub, textTransform: 'uppercase', letterSpacing: .3, whiteSpace: 'nowrap' }
+const td = { padding: '9px 12px', fontSize: 13, color: theme.text, verticalAlign: 'top' }
 const INTEGRACOES = [
   { key: 'fiscal', nome: 'Fiscal' },
   { key: 'folha', nome: 'Folha' },
@@ -32,6 +35,7 @@ export default function Status() {
   const [modal, setModal] = useState(null)    // { item, tipo } modal de texto
   const [msg, setMsg] = useState('')
   const [salvando, setSalvando] = useState(false)
+  const [verDominio, setVerDominio] = useState(false) // modal com os lançamentos p/ o Domínio
 
   async function carregar() {
     setSel(null); setMsg('')
@@ -47,7 +51,7 @@ export default function Status() {
       .select('id, status, documentos, integracoes')
       .eq('cliente_id', empresaId).eq('ano', ano).eq('mes', mes).maybeSingle()
 
-    let temRazao = false, docsPendentes = [], contasAbertas = [], integracoes = {}, observacoes = []
+    let temRazao = false, docsPendentes = [], contasAbertas = [], integracoes = {}, observacoes = [], lancamentos = []
     if (comp) {
       setCompId(comp.id); setStatus(comp.status || 'andamento')
       const { count: razaoCount } = await supabase.from('razao')
@@ -57,12 +61,15 @@ export default function Status() {
       const { data: obs } = await supabase.from('auditoria')
         .select('modulo, item, detalhe, created_at').eq('competencia_id', comp.id)
         .eq('tipo', 'Justificativa').order('created_at', { ascending: false })
+      const { data: lancs } = await supabase.from('lancamentos')
+        .select('id, data, conta_debito, conta_credito, valor, historico, origem').eq('competencia_id', comp.id).order('data')
       const docs = Array.isArray(comp.documentos) ? comp.documentos : []
       temRazao = (razaoCount || 0) > 0
       docsPendentes = docs.filter(d => d && d.rec === false)
       contasAbertas = (balancete || []).filter(b => Math.abs(Number(b.saldo_final)) > 0.005)
       integracoes = comp.integracoes || {}
       observacoes = obs || []
+      lancamentos = lancs || []
     } else {
       setCompId(null); setStatus(null)
     }
@@ -71,7 +78,7 @@ export default function Status() {
     const br = await apurarBancoResultado(empresaId, comp?.id)
     const variacoes = await apurarVariacoes(empresaId)
 
-    setDados({ temRazao, docsPendentes, contasAbertas, cargaInicialPendente, dist, br, variacoes, integracoes, observacoes })
+    setDados({ temRazao, docsPendentes, contasAbertas, cargaInicialPendente, dist, br, variacoes, integracoes, observacoes, lancamentos })
     setCarregando(false)
   }
 
@@ -330,6 +337,31 @@ export default function Status() {
         </div>
       </div>
 
+      {/* Arquivo do Domínio: demonstra os lançamentos já gerados pela plataforma;
+          só habilita GERAR quando não há pendências. Clicar em "Ver" mostra a lista. */}
+      <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: '16px 18px', marginBottom: 18, display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+        <div style={{ width: 42, height: 42, borderRadius: 10, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(74,124,255,0.12)', border: `0.5px solid ${theme.cb}` }}>
+          <i className="ti ti-file-download" style={{ fontSize: 20, color: theme.accent }} />
+        </div>
+        <div style={{ flex: 1, minWidth: 200 }}>
+          <p style={{ fontSize: 14, fontWeight: 600, margin: '0 0 3px' }}>Arquivo para importação no Domínio</p>
+          <p style={{ fontSize: 12.5, color: theme.sub, margin: 0 }}>
+            {dados.lancamentos.length
+              ? <>{dados.lancamentos.length} lançamento(s) gerado(s) pela plataforma (estornos e correções). {pronto ? 'Pronto para gerar.' : 'Resolva as pendências para liberar a geração.'}</>
+              : 'Nenhum lançamento gerado ainda nesta competência.'}
+          </p>
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="btn btn-ghost" disabled={!dados.lancamentos.length} style={{ fontSize: 13 }} onClick={() => { setVerDominio(true); setMsg('') }}><i className="ti ti-list-details" /> Ver lançamentos</button>
+          <button className="btn" disabled={!dados.lancamentos.length || !pronto}
+            style={{ fontSize: 13, opacity: (dados.lancamentos.length && pronto) ? 1 : 0.5, cursor: (dados.lancamentos.length && pronto) ? 'pointer' : 'not-allowed' }}
+            title={!pronto ? 'Resolva todas as pendências para gerar o arquivo' : 'Gerar o CSV de importação do Domínio'}
+            onClick={() => { if (pronto && dados.lancamentos.length) gerarDominioCSV(dados.lancamentos, `dominio_${competencia.replace('/', '-')}.csv`) }}>
+            <i className="ti ti-download" /> Gerar arquivo
+          </button>
+        </div>
+      </div>
+
       {/* Gates */}
       <div style={{ display: 'grid', gap: 12 }}>
         {gates.map(g => {
@@ -424,7 +456,81 @@ export default function Status() {
           onConfirmar={(L) => registrarPartida(modal.item.item, L)}
         />
       )}
+
+      {/* Lançamentos gerados pela plataforma (acompanhamento) + gerar Domínio */}
+      {verDominio && (
+        <ModalLancamentosDominio
+          lancamentos={dados.lancamentos}
+          planoMap={planoMap}
+          pronto={pronto}
+          totalPendencias={totalPendencias}
+          onGerar={() => gerarDominioCSV(dados.lancamentos, `dominio_${competencia.replace('/', '-')}.csv`)}
+          onClose={() => setVerDominio(false)}
+        />
+      )}
     </Wrapper>
+  )
+}
+
+// Lista os lançamentos que a plataforma já gerou (estornos/correções) — para o
+// usuário acompanhar — e permite gerar o arquivo do Domínio só quando pronto.
+function ModalLancamentosDominio({ lancamentos, planoMap, pronto, totalPendencias, onGerar, onClose }) {
+  const nomeConta = c => { const p = planoMap[String(c)]; return `${c || '—'}${p?.nome ? ' · ' + p.nome : ''}` }
+  const origemLabel = { correcao: 'Correção/Estorno', sugestao: 'Sugestão', documento: 'Documento', manual: 'Manual' }
+  const total = lancamentos.reduce((s, l) => s + (Number(l.valor) || 0), 0)
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 60 }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 'min(760px,96vw)', maxHeight: '88vh', overflow: 'auto', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+          <h2 style={{ fontSize: 17, margin: 0, display: 'flex', alignItems: 'center', gap: 9 }}><i className="ti ti-file-download" style={{ color: theme.accent }} /> Lançamentos para o Domínio</h2>
+          <span onClick={onClose} style={{ cursor: 'pointer', color: theme.sub, fontSize: 20, lineHeight: 1 }}><i className="ti ti-x" /></span>
+        </div>
+        <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 14px' }}>
+          {lancamentos.length} lançamento(s) gerado(s) pela plataforma nesta competência (débito, crédito e histórico). Ao importar no Domínio, entram na contabilidade.
+        </p>
+
+        <div style={{ overflowX: 'auto', border: `0.5px solid ${theme.cb}`, borderRadius: 10 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 640 }}>
+            <thead>
+              <tr style={{ background: theme.input }}>
+                <th style={th}>Data</th><th style={th}>Débito</th><th style={th}>Crédito</th>
+                <th style={{ ...th, textAlign: 'right' }}>Valor</th><th style={th}>Histórico</th><th style={th}>Origem</th>
+              </tr>
+            </thead>
+            <tbody>
+              {lancamentos.map(l => (
+                <tr key={l.id} style={{ borderTop: `1px solid ${theme.border}` }}>
+                  <td style={{ ...td, color: theme.sub, fontSize: 11.5, whiteSpace: 'nowrap' }}>{l.data ? l.data.split('-').reverse().join('/') : '—'}</td>
+                  <td style={{ ...td, fontSize: 12 }}>{nomeConta(l.conta_debito)}</td>
+                  <td style={{ ...td, fontSize: 12 }}>{nomeConta(l.conta_credito)}</td>
+                  <td style={{ ...td, textAlign: 'right', whiteSpace: 'nowrap', fontWeight: 600 }}>{money(l.valor)}</td>
+                  <td style={{ ...td, color: theme.sub, fontSize: 11.5, maxWidth: 240 }}>{l.historico}</td>
+                  <td style={{ ...td, fontSize: 11.5 }}><span style={{ color: theme.accent }}>{origemLabel[l.origem] || l.origem || '—'}</span></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p style={{ textAlign: 'right', fontSize: 12.5, color: theme.sub, margin: '8px 2px 0' }}>Total: <b style={{ color: theme.text }}>{money(total)}</b></p>
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 18 }}>
+          <p style={{ fontSize: 12, color: pronto ? theme.green : theme.yellow, margin: 0 }}>
+            {pronto
+              ? <><i className="ti ti-circle-check" /> Sem pendências — geração liberada.</>
+              : <><i className="ti ti-lock" /> {totalPendencias} pendência(s) em aberto — resolva para liberar a geração.</>}
+          </p>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn btn-ghost" onClick={onClose}>Fechar</button>
+            <button className="btn" disabled={!pronto || !lancamentos.length}
+              style={{ opacity: (pronto && lancamentos.length) ? 1 : 0.5, cursor: (pronto && lancamentos.length) ? 'pointer' : 'not-allowed' }}
+              title={!pronto ? 'Resolva todas as pendências para gerar o arquivo' : 'Gerar o CSV de importação do Domínio'}
+              onClick={() => { if (pronto && lancamentos.length) onGerar() }}>
+              <i className="ti ti-download" /> Gerar arquivo
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   )
 }
 
