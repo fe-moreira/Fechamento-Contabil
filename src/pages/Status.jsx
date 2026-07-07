@@ -65,7 +65,9 @@ export default function Status() {
         .select('id, data, conta_debito, conta_credito, valor, historico, origem').eq('competencia_id', comp.id).order('data')
       const docs = Array.isArray(comp.documentos) ? comp.documentos : []
       temRazao = (razaoCount || 0) > 0
-      docsPendentes = docs.filter(d => d && d.rec === false)
+      // Só documento indeciso (pendente) bloqueia. "Não tem" e "Não enviou" não
+      // bloqueiam o Status (o "não enviou" vai para o relatório de pendências).
+      docsPendentes = docs.filter(d => { const s = d?.situacao ?? (d?.rec ? 'recebido' : ''); return s === '' })
       contasAbertas = (balancete || []).filter(b => Math.abs(Number(b.saldo_final)) > 0.005)
       integracoes = comp.integracoes || {}
       observacoes = obs || []

@@ -6,8 +6,27 @@ import { theme } from '../lib/theme'
 // Lista padrão (só nomes — sem separação por departamento).
 const PADRAO = ['Extratos bancários', 'Notas fiscais de entrada', 'Notas fiscais de saída', 'Folha de pagamento', 'Guias de impostos (DARF/GPS/DAS)', 'Razão do Domínio']
 const hojeCurto = () => new Date().toLocaleDateString('pt-BR').slice(0, 5)
-// Converte formato antigo (com cat) para o novo (só name/rec/date).
-const normaliza = (arr) => (arr || []).map(x => ({ name: String(x.name || '').trim(), rec: !!x.rec, date: x.date || '' })).filter(x => x.name)
+
+// Situação do documento:
+// - ''           pendente (aguardando) → é pendência que bloqueia o Status.
+// - 'recebido'   o cliente enviou.
+// - 'nao_tem'    não se aplica no mês (ex.: adiantamento que não houve) → some, sem cobrança.
+// - 'nao_enviou' o cliente não enviou → NÃO bloqueia o Status, mas entra no relatório
+//                de pendências para cobrar o cliente.
+const SIT = {
+  '': { label: 'Pendente', cor: theme.yellow, icon: 'ti-square' },
+  recebido: { label: 'Recebido', cor: theme.green, icon: 'ti-square-check' },
+  nao_tem: { label: 'Não tem', cor: theme.sub, icon: 'ti-square-minus' },
+  nao_enviou: { label: 'Não enviou', cor: theme.red, icon: 'ti-mail-exclamation' },
+}
+const situOf = d => { const s = d?.situacao ?? (d?.rec ? 'recebido' : ''); return SIT[s] ? s : '' }
+const novoDoc = name => ({ name, situacao: '', rec: false, date: '' })
+// Converte formato antigo (rec bool) e novo (situacao) para o mesmo shape.
+const normaliza = (arr) => (arr || []).map(x => {
+  const name = String(x.name || '').trim()
+  const situacao = situOf(x)
+  return { name, situacao, rec: situacao === 'recebido', date: x.date || '' }
+}).filter(x => x.name)
 
 export default function DocumentosRecebidos() {
   const { empresaId, empresaNome, competencia, getCompetenciaId, recalcularPendencias } = useAppData()
@@ -37,7 +56,7 @@ export default function DocumentosRecebidos() {
         // Herda a lista do fechamento anterior mais recente; senão, fica vazio
         // (sem lista-padrão automática — a base é importada por cliente).
         const herdado = await herdarLista(empresaId, ano, mes)
-        setDocs(herdado.map(name => ({ name, rec: false, date: '' })))
+        setDocs(herdado.map(novoDoc))
       }
       setCarregando(false)
     })()
@@ -60,14 +79,22 @@ export default function DocumentosRecebidos() {
     const futuras = (data || []).filter(c => (c.ano > ano || (c.ano === ano && c.mes > mes)) && c.status !== 'fechado')
     for (const c of futuras) {
       const recPorNome = Object.fromEntries(normaliza(c.documentos).map(x => [x.name, x]))
-      const merged = nomes.map(name => recPorNome[name] || { name, rec: false, date: '' })
+      const merged = nomes.map(name => recPorNome[name] || novoDoc(name))
       await supabase.from('competencias').update({ documentos: merged }).eq('id', c.id)
     }
   }
 
-  const toggle = (i) => { if (!ro && editIdx === null) persistir(docs.map((d, j) => j === i ? { ...d, rec: !d.rec, date: !d.rec ? hojeCurto() : '' } : d)) }
+  // Define a situação do documento; clicar na situação já ativa volta para pendente.
+  const setSit = (i, s) => {
+    if (ro || editIdx !== null) return
+    persistir(docs.map((d, j) => {
+      if (j !== i) return d
+      const nova = situOf(d) === s ? '' : s
+      return { ...d, situacao: nova, rec: nova === 'recebido', date: nova === 'recebido' ? hojeCurto() : '' }
+    }))
+  }
   const remover = (i) => { if (ro) return; if (confirm(`Excluir “${docs[i].name}” da lista?`)) persistir(docs.filter((_, j) => j !== i), true) }
-  const incluir = () => { if (ro || !nome.trim()) return; persistir([...docs, { name: nome.trim(), rec: false, date: '' }], true); setNome('') }
+  const incluir = () => { if (ro || !nome.trim()) return; persistir([...docs, novoDoc(nome.trim())], true); setNome('') }
   const abrirEdicao = (i) => { setEditIdx(i); setEditNome(docs[i].name) }
   const salvarEdicao = () => {
     const n = editNome.trim()
@@ -96,7 +123,7 @@ export default function DocumentosRecebidos() {
       const unicos = [...new Set(nomes)]
       if (!unicos.length) { setMsg('Nenhum documento encontrado na planilha (coluna A).'); return }
       if (!confirm(`Importar ${unicos.length} documento(s)? Isso substitui a lista desta competência (em diante).`)) return
-      await persistir(unicos.map(name => ({ name, rec: false, date: '' })), true)
+      await persistir(unicos.map(novoDoc), true)
       setMsg(`${unicos.length} documento(s) importado(s).`)
     } catch (err) { setMsg('Erro ao importar: ' + err.message) }
   }
@@ -105,7 +132,10 @@ export default function DocumentosRecebidos() {
     return <Wrapper><Aviso texto="Selecione uma empresa no menu lateral para conferir os documentos." /></Wrapper>
   }
 
-  const total = docs.length, rec = docs.filter(d => d.rec).length
+  const total = docs.length
+  const cont = { '': 0, recebido: 0, nao_tem: 0, nao_enviou: 0 }
+  for (const d of docs) cont[situOf(d)]++
+  const rec = cont.recebido
   const pct = total ? Math.round(rec / total * 100) : 0
 
   return (
@@ -125,6 +155,12 @@ export default function DocumentosRecebidos() {
         </div>
         <div style={{ height: 8, background: theme.input, borderRadius: 4, overflow: 'hidden' }}>
           <div style={{ width: `${pct}%`, height: '100%', background: pct === 100 ? theme.green : theme.accent }} />
+        </div>
+        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 10, fontSize: 12 }}>
+          <span style={{ color: theme.yellow }}><b>{cont['']}</b> pendente(s)</span>
+          <span style={{ color: theme.green }}><b>{cont.recebido}</b> recebido(s)</span>
+          <span style={{ color: theme.sub }}><b>{cont.nao_tem}</b> não tem</span>
+          <span style={{ color: theme.red }}><b>{cont.nao_enviou}</b> não enviou (vai p/ o relatório de pendências)</span>
         </div>
       </div>
 
@@ -150,28 +186,37 @@ export default function DocumentosRecebidos() {
           <p style={{ padding: 18, color: theme.sub, fontSize: 13 }}>Carregando…</p>
         ) : docs.length === 0 ? (
           <p style={{ padding: 18, color: theme.sub, fontSize: 13 }}>Nenhum documento na lista.{!ro && ' Inclua acima ou importe do Excel.'}</p>
-        ) : docs.map((d, i) => (
-          <div key={i} onClick={() => editIdx === null && toggle(i)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 16px', borderTop: i ? `1px solid ${theme.border}` : 'none', cursor: ro || editIdx !== null ? 'default' : 'pointer', fontSize: 13.5 }}>
-            <i className={`ti ${d.rec ? 'ti-square-check' : 'ti-square'}`} style={{ color: d.rec ? theme.green : theme.sub, fontSize: 20 }} />
+        ) : docs.map((d, i) => {
+          const s = situOf(d)
+          return (
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderTop: i ? `1px solid ${theme.border}` : 'none', fontSize: 13.5, flexWrap: 'wrap' }}>
+            <i className={`ti ${SIT[s].icon}`} style={{ color: SIT[s].cor, fontSize: 20 }} />
             {editIdx === i ? (
-              <input className="input" autoFocus value={editNome} onClick={e => e.stopPropagation()}
+              <input className="input" autoFocus value={editNome}
                 onChange={e => setEditNome(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter') salvarEdicao(); if (e.key === 'Escape') { setEditIdx(null); setEditNome('') } }}
-                onBlur={salvarEdicao} style={{ flex: 1 }} />
+                onBlur={salvarEdicao} style={{ flex: 1, minWidth: 160 }} />
             ) : (
-              <span style={{ flex: 1, color: d.rec ? theme.text : theme.sub }}>{d.name}</span>
+              <span style={{ flex: 1, minWidth: 140, color: s === 'recebido' ? theme.text : theme.sub }}>{d.name}</span>
             )}
-            {editIdx !== i && (d.rec
-              ? <span style={{ color: theme.sub, fontSize: 12 }}>recebido {d.date}</span>
-              : <span style={{ color: theme.yellow, fontSize: 12, fontWeight: 500 }}>pendente</span>)}
+            {editIdx !== i && <span style={{ color: SIT[s].cor, fontSize: 12, fontWeight: 500, minWidth: 76 }}>{SIT[s].label}{s === 'recebido' && d.date ? ` ${d.date}` : ''}</span>}
             {!ro && editIdx !== i && (
               <>
-                <i className="ti ti-pencil" title="Editar nome" onClick={e => { e.stopPropagation(); abrirEdicao(i) }} style={{ color: theme.sub, fontSize: 16, marginLeft: 4, cursor: 'pointer' }} />
-                <i className="ti ti-trash" title="Excluir" onClick={e => { e.stopPropagation(); remover(i) }} style={{ color: theme.sub, fontSize: 16, cursor: 'pointer' }} />
+                <div style={{ display: 'flex', gap: 6 }}>
+                  {['recebido', 'nao_tem', 'nao_enviou'].map(k => (
+                    <button key={k} className={s === k ? 'btn' : 'btn btn-ghost'} title={SIT[k].label}
+                      style={{ fontSize: 12, padding: '5px 9px', ...(s === k ? { background: SIT[k].cor, borderColor: SIT[k].cor } : { color: SIT[k].cor, borderColor: SIT[k].cor }) }}
+                      onClick={() => setSit(i, k)}>
+                      <i className={`ti ${SIT[k].icon}`} /> {SIT[k].label}
+                    </button>
+                  ))}
+                </div>
+                <i className="ti ti-pencil" title="Editar nome" onClick={() => abrirEdicao(i)} style={{ color: theme.sub, fontSize: 16, marginLeft: 2, cursor: 'pointer' }} />
+                <i className="ti ti-trash" title="Excluir" onClick={() => remover(i)} style={{ color: theme.sub, fontSize: 16, cursor: 'pointer' }} />
               </>
             )}
           </div>
-        ))}
+        )})}
       </div>
     </Wrapper>
   )
@@ -191,7 +236,7 @@ function Wrapper({ children }) {
     <div>
       <h1 style={{ fontSize: 22, fontWeight: 500, marginBottom: 4 }}>Documentos Recebidos</h1>
       <p style={{ color: theme.sub, fontSize: 13, marginBottom: 22 }}>
-        Lista de documentos esperados por cliente. Alterações valem desta competência <b style={{ color: theme.text }}>em diante</b> — fechamentos já fechados não mudam. O que faltar vira pendência.
+        Lista de documentos esperados por cliente. Marque cada um como <b style={{ color: theme.green }}>Recebido</b>, <b style={{ color: theme.sub }}>Não tem</b> (não se aplica no mês) ou <b style={{ color: theme.red }}>Não enviou</b> (não bloqueia o fechamento, mas entra no relatório de pendências para cobrar o cliente). O que ficar <b style={{ color: theme.yellow }}>pendente</b> continua bloqueando. Alterações valem desta competência <b style={{ color: theme.text }}>em diante</b>.
       </p>
       {children}
     </div>
