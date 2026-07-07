@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { theme, money } from '../lib/theme'
+import CampoConta from '../components/CampoConta'
 
 const TABS = [['fiscal', 'Fiscal'], ['folha', 'Folha'], ['patrimonio', 'Patrimônio'], ['financeira', 'Financeira']]
 const DESC = {
@@ -23,11 +24,21 @@ function somaNumerica(linhas) {
 }
 
 export default function Integracao() {
-  const { empresas, empresaId, empresaNome, competencia, getCompetenciaId } = useAppData()
+  const { empresas, empresaId, empresaNome, competencia, getCompetenciaId, plano } = useAppData()
   const { user } = useAuth()
   const cliente = empresas.find(e => e.id === empresaId)
   const integ = cliente?.integracao_financeira || 'Não usa'
   const sistema = (cliente?.sistema_financeiro || '').trim()
+  const planoMap = Object.fromEntries((plano || []).map(p => [String(p.cod), p]))
+
+  // Marca a integração financeira como validada na competência (some do Status).
+  async function validarFinanceira(nomeDoc) {
+    const id = await getCompetenciaId()
+    if (!id) return
+    const novo = { ...estado, financeira: { estado: 'validado', doc: nomeDoc, usuario: user?.email || null } }
+    await supabase.from('competencias').update({ integracoes: novo }).eq('id', id)
+    setEstado(novo)
+  }
   const [tab, setTab] = useState('fiscal')
   const [dados, setDados] = useState({}) // { tab: { nome, linhas } }
   const [estado, setEstado] = useState({}) // integrações validadas/sem movimento salvas na competência
@@ -81,7 +92,7 @@ export default function Integracao() {
 
       {tab === 'financeira'
         ? (integ === 'Excel'
-          ? <Financeira dados={dados.financeira} onImport={f => importar('financeira', f)} competencia={competencia} est={estado.financeira} />
+          ? <Financeira competencia={competencia} est={estado.financeira} empresaId={empresaId} planoMap={planoMap} user={user} onValidado={validarFinanceira} />
           : <FinanceiraViaSistema integ={integ} sistema={sistema} />)
         : <Cruzamento tab={tab} dados={dados[tab]} onImport={f => importar(tab, f)} est={estado[tab]} />}
     </Wrapper>
@@ -116,23 +127,146 @@ function Cruzamento({ tab, dados, onImport, est }) {
   )
 }
 
-function Financeira({ dados, onImport, competencia, est }) {
+function Financeira({ competencia, est, empresaId, planoMap, user, onValidado }) {
+  const [contas, setContas] = useState([])       // [{ conta_contabil, agencia, conta }]
+  const [carregReg, setCarregReg] = useState(true)
+  const [novo, setNovo] = useState({ conta_contabil: '', agencia: '', conta: '' })
+  const [modo, setModo] = useState('porBanco')   // 'porBanco' | 'combinado'
+  const [bancoSel, setBancoSel] = useState('')    // conta_contabil escolhida (modo por banco)
+  const [dados, setDados] = useState(null)        // { nome, linhas:[{cells, conta_contabil}], naoIdent }
+  const [erro, setErro] = useState('')
+  const [msg, setMsg] = useState('')
+
+  const nomeBanco = cod => planoMap[String(cod)]?.nome || (cod ? `Conta ${cod}` : '—')
+
+  useEffect(() => {
+    setCarregReg(true); setDados(null); setBancoSel('')
+    supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'contas_bancarias')
+      .order('created_at', { ascending: false }).limit(1).maybeSingle()
+      .then(({ data }) => { setContas(Array.isArray(data?.dados) ? data.dados : []); setCarregReg(false) })
+  }, [empresaId])
+
+  async function salvarContas(arr) {
+    setContas(arr)
+    await supabase.from('cargas_cadastro').delete().eq('cliente_id', empresaId).eq('tipo', 'contas_bancarias')
+    await supabase.from('cargas_cadastro').insert({ cliente_id: empresaId, tipo: 'contas_bancarias', vigencia: competencia, dados: arr, usuario: user?.email || null, obs: 'Contas bancárias' })
+  }
+  function addConta() {
+    const cod = String(novo.conta_contabil || '').trim()
+    if (!cod) return
+    if (contas.some(c => String(c.conta_contabil).trim() === cod)) { setErro('Essa conta já está cadastrada.'); return }
+    setErro(''); salvarContas([...contas, { conta_contabil: cod, agencia: novo.agencia.trim(), conta: novo.conta.trim() }])
+    setNovo({ conta_contabil: '', agencia: '', conta: '' })
+  }
+  const removeConta = i => salvarContas(contas.filter((_, j) => j !== i))
+
+  async function importar(file) {
+    if (!file) return
+    setErro(''); setMsg('')
+    try {
+      const XLSX = await import('xlsx')
+      const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true })
+      const arr = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' })
+      const linhasRaw = arr.slice(1).filter(r => r.some(c => c !== '' && c != null)).slice(0, 1000)
+      const codigos = new Set(contas.map(c => String(c.conta_contabil).trim()))
+      let linhas = [], naoIdent = 0
+      if (modo === 'porBanco') {
+        if (!bancoSel) { setErro('Selecione a conta bancária deste arquivo antes de importar.'); return }
+        linhas = linhasRaw.map(cells => ({ cells, conta_contabil: bancoSel }))
+      } else {
+        if (!codigos.size) { setErro('Cadastre as contas bancárias antes de importar uma planilha combinada.'); return }
+        for (const cells of linhasRaw) {
+          let cod = ''
+          for (const c of cells) { const v = String(c ?? '').trim(); if (codigos.has(v)) { cod = v; break } }
+          linhas.push({ cells, conta_contabil: cod }); if (!cod) naoIdent++
+        }
+      }
+      setDados({ nome: file.name, linhas, naoIdent })
+      setMsg(`${linhas.length} linha(s) importada(s)${naoIdent ? ` · ${naoIdent} sem conta identificada` : ''}.`)
+      onValidado(file.name)
+    } catch (e) { setErro('Não consegui ler: ' + e.message) }
+  }
+
   function gerar() {
-    const linhas = dados?.linhas || []
-    const csv = '﻿' + linhas.map(r => r.map(c => `"${String(c ?? '').replace(/"/g, '""')}"`).join(';')).join('\r\n')
+    if (!dados) return
+    const rows = [['Conta contábil', 'Banco (plano)', 'Extrato…'].join(';')]
+    for (const l of dados.linhas) {
+      const campos = [l.conta_contabil || '(não identificado)', nomeBanco(l.conta_contabil), ...l.cells]
+      rows.push(campos.map(c => `"${String(c ?? '').replace(/"/g, '""')}"`).join(';'))
+    }
     const a = document.createElement('a')
-    a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }))
+    a.href = URL.createObjectURL(new Blob(['﻿' + rows.join('\r\n')], { type: 'text/csv;charset=utf-8;' }))
     a.download = `financeiro_${competencia.replace('/', '-')}.csv`
     a.click(); URL.revokeObjectURL(a.href)
   }
+
+  // Agrupa as linhas importadas por conta bancária identificada.
+  const grupos = {}
+  for (const l of (dados?.linhas || [])) { const k = l.conta_contabil || ''; (grupos[k] = grupos[k] || []).push(l.cells) }
+
   return (
     <>
       <div><EstadoBadge est={est} /></div>
-      <ImpCard titulo="Importar extrato financeiro" desc="Importe o extrato; o que a plataforma identificar é contabilizado automaticamente, o resto fica para classificar." onImport={onImport} nome={dados?.nome} qtd={dados?.linhas.length} />
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginTop: 16 }}>
-        <Balde titulo="Contabilizado automaticamente" cor={theme.green} icon="ti-circle-check" linhas={[]} vazio="A classificação automática (de/para) entra na próxima onda." />
-        <Balde titulo="Não identificado" cor={theme.yellow} icon="ti-alert-triangle" linhas={dados?.linhas || []} vazio="Importe um extrato para listar os lançamentos a classificar." />
+
+      {/* Cadastro das contas bancárias do cliente */}
+      <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: 18, marginBottom: 16 }}>
+        <p style={{ fontSize: 14, fontWeight: 600, margin: '0 0 4px' }}>Contas bancárias do cliente</p>
+        <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 12px' }}>Informe a <b style={{ color: theme.text }}>conta contábil</b> de cada banco (o nome vem do plano de contas). É essa conta que entra no lançamento do extrato. <span style={{ color: theme.accent }}>F4</span> abre o plano.</p>
+        {carregReg ? <p style={{ color: theme.sub, fontSize: 12.5 }}>Carregando…</p> : (
+          <>
+            {contas.length > 0 && (
+              <div style={{ marginBottom: 12 }}>
+                {contas.map((c, i) => (
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderTop: i ? `1px solid ${theme.border}` : 'none', fontSize: 13 }}>
+                    <i className="ti ti-building-bank" style={{ color: theme.accent }} />
+                    <span style={{ fontWeight: 600, minWidth: 70 }}>{c.conta_contabil}</span>
+                    <span style={{ flex: 1, color: theme.sub }}>{nomeBanco(c.conta_contabil)}{(c.agencia || c.conta) ? ` · ag ${c.agencia || '—'} / cc ${c.conta || '—'}` : ''}</span>
+                    <i className="ti ti-trash" title="Remover" onClick={() => removeConta(i)} style={{ color: theme.sub, cursor: 'pointer' }} />
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+              <div style={{ minWidth: 170 }}><label>Conta contábil</label><CampoConta value={novo.conta_contabil} onChange={v => setNovo(n => ({ ...n, conta_contabil: v }))} /></div>
+              <div><label>Agência (opc.)</label><input className="input" style={{ maxWidth: 120 }} value={novo.agencia} onChange={e => setNovo(n => ({ ...n, agencia: e.target.value }))} /></div>
+              <div><label>Conta (opc.)</label><input className="input" style={{ maxWidth: 130 }} value={novo.conta} onChange={e => setNovo(n => ({ ...n, conta: e.target.value }))} /></div>
+              <button className="btn" onClick={addConta}><i className="ti ti-plus" /> Adicionar</button>
+            </div>
+          </>
+        )}
       </div>
+
+      {/* Como o extrato vem */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+        <button className={modo === 'porBanco' ? 'btn' : 'btn btn-ghost'} style={{ fontSize: 13 }} onClick={() => setModo('porBanco')}><i className="ti ti-file" /> Um arquivo por banco</button>
+        <button className={modo === 'combinado' ? 'btn' : 'btn btn-ghost'} style={{ fontSize: 13 }} onClick={() => setModo('combinado')}><i className="ti ti-files" /> Planilha combinada</button>
+      </div>
+
+      {modo === 'porBanco' ? (
+        <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: 12 }}>
+          <div><label>Conta bancária deste arquivo</label>
+            <select className="input" style={{ padding: '9px 12px' }} value={bancoSel} onChange={e => setBancoSel(e.target.value)}>
+              <option value="">Selecione…</option>
+              {contas.map(c => <option key={c.conta_contabil} value={c.conta_contabil}>{c.conta_contabil} · {nomeBanco(c.conta_contabil)}</option>)}
+            </select>
+          </div>
+        </div>
+      ) : (
+        <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 12px' }}>A planilha traz todos os bancos juntos — cada linha deve ter a <b style={{ color: theme.text }}>conta contábil</b> numa das colunas. A plataforma casa com o cadastro acima e separa por banco.</p>
+      )}
+
+      <ImpCard titulo="Importar extrato financeiro" desc="Importe o extrato do cliente (Excel/CSV)." onImport={importar} nome={dados?.nome} qtd={dados?.linhas.length} />
+      {erro && <p style={{ color: theme.red, fontSize: 12.5, margin: '10px 0 0' }}>{erro}</p>}
+      {msg && <p style={{ color: theme.green, fontSize: 12.5, margin: '10px 0 0' }}><i className="ti ti-circle-check" /> {msg}</p>}
+
+      {dados && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(280px,1fr))', gap: 12, marginTop: 16 }}>
+          {Object.keys(grupos).sort().map(cod => (
+            <Balde key={cod || 'x'} titulo={cod ? `${cod} · ${nomeBanco(cod)}` : 'Não identificado (sem conta contábil)'} cor={cod ? theme.green : theme.yellow} icon={cod ? 'ti-building-bank' : 'ti-alert-triangle'} linhas={grupos[cod]} vazio="—" />
+          ))}
+        </div>
+      )}
+
       <button className="btn btn-ghost" disabled={!dados} onClick={gerar} style={{ marginTop: 18, fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 8 }}>
         <i className="ti ti-file-export" /> Gerar arquivo financeiro
       </button>
