@@ -10,6 +10,7 @@ import { abrePdfTimbrado } from '../lib/pdf'
 export default function RelatoriosMassa() {
   const { empresas, competencia, competencias } = useAppData()
   const [comp, setComp] = useState(competencia)
+  const [cli, setCli] = useState('todos') // 'todos' ou id de um cliente
   const [gerando, setGerando] = useState(false)
   const [res, setRes] = useState(null)  // { rows:[[cliente, doc]], nClientes, semFechamento }
   const [erro, setErro] = useState('')
@@ -25,7 +26,8 @@ export default function RelatoriosMassa() {
       const rows = []
       const clientesPend = new Set()
       let semFechamento = 0
-      const ordenadas = [...(empresas || [])].sort((a, b) => String(a.razao_social).localeCompare(String(b.razao_social), 'pt-BR'))
+      const base = cli === 'todos' ? (empresas || []) : (empresas || []).filter(e => e.id === cli)
+      const ordenadas = [...base].sort((a, b) => String(a.razao_social).localeCompare(String(b.razao_social), 'pt-BR'))
       for (const emp of ordenadas) {
         const c = byCli[emp.id]
         if (!c) { semFechamento++; continue }
@@ -38,7 +40,8 @@ export default function RelatoriosMassa() {
 
   function exportar(fmt) {
     if (!res?.rows.length) return
-    const titulo = `Pendências de documentação — competência ${comp}`
+    const nomeCli = cli === 'todos' ? '' : ((empresas || []).find(e => e.id === cli)?.razao_social || '')
+    const titulo = `Pendências de documentação — competência ${comp}${nomeCli ? ` — ${nomeCli}` : ''}`
     const sub = `${res.nClientes} cliente(s) com pendência · ${res.rows.length} documento(s)`
     if (fmt === 'excel') {
       gerarExcelTimbrado({
@@ -77,6 +80,13 @@ export default function RelatoriosMassa() {
             <label>Competência</label>
             <select className="input" style={{ width: 'auto', padding: '9px 12px' }} value={comp} onChange={e => { setComp(e.target.value); setRes(null) }}>
               {(competencias || []).map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+          <div style={{ minWidth: 220, flex: '1 1 260px' }}>
+            <label>Cliente</label>
+            <select className="input" style={{ padding: '9px 12px' }} value={cli} onChange={e => { setCli(e.target.value); setRes(null) }}>
+              <option value="todos">Todos os clientes</option>
+              {[...(empresas || [])].sort((a, b) => String(a.razao_social).localeCompare(String(b.razao_social), 'pt-BR')).map(e => <option key={e.id} value={e.id}>{e.razao_social}</option>)}
             </select>
           </div>
           <button className="btn" disabled={gerando} onClick={gerar}>
