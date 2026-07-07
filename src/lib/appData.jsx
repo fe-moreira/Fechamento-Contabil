@@ -62,7 +62,8 @@ export function AppDataProvider({ children }) {
     if (!comp) { setPendencias(p + 1); return } // razão ainda não importado
     const { count } = await supabase.from('razao').select('id', { count: 'exact', head: true }).eq('competencia_id', comp.id)
     if (!count) p += 1
-    p += (Array.isArray(comp.documentos) ? comp.documentos : []).filter(d => d && d.rec === false).length
+    // Só documento indeciso (pendente) conta; "não tem"/"não enviou" não bloqueiam.
+    p += (Array.isArray(comp.documentos) ? comp.documentos : []).filter(d => (d?.situacao ?? (d?.rec ? 'recebido' : '')) === '').length
     const { data: bal } = await supabase.from('balancete').select('saldo_final').eq('competencia_id', comp.id)
     p += (bal || []).filter(b => Math.abs(Number(b.saldo_final)) > 0.005).length
     // Integrações não validadas (mesma régua do gate no Status).

@@ -31,8 +31,10 @@ export default function RelatoriosMassa() {
       for (const emp of ordenadas) {
         const c = byCli[emp.id]
         if (!c) { semFechamento++; continue }
-        const docs = Array.isArray(c.documentos) ? c.documentos.filter(d => d && d.rec === false) : []
-        for (const d of docs) { rows.push([emp.razao_social, d.name || '(sem nome)']); clientesPend.add(emp.id) }
+        const situ = d => d?.situacao ?? (d?.rec ? 'recebido' : '')
+        // Pendências para cobrar: "não enviou" (marcado) e "pendente" (indeciso). "Não tem" e "recebido" ficam de fora.
+        const docs = (Array.isArray(c.documentos) ? c.documentos : []).filter(d => d && ['nao_enviou', ''].includes(situ(d)))
+        for (const d of docs) { rows.push([emp.razao_social, d.name || '(sem nome)', situ(d) === 'nao_enviou' ? 'Não enviou' : 'Pendente']); clientesPend.add(emp.id) }
       }
       setRes({ rows, nClientes: clientesPend.size, semFechamento })
     } catch (e) { setErro(String(e?.message || e)) } finally { setGerando(false) }
@@ -46,11 +48,11 @@ export default function RelatoriosMassa() {
     if (fmt === 'excel') {
       gerarExcelTimbrado({
         titulo, sub,
-        colunas: [{ nome: 'Cliente', largura: 42 }, { nome: 'Documento pendente', largura: 52, wrap: true }],
+        colunas: [{ nome: 'Cliente', largura: 42 }, { nome: 'Documento pendente', largura: 48, wrap: true }, { nome: 'Situação', largura: 16 }],
         linhas: res.rows, totais: null, arquivo: `pendencias_documentacao_${comp.replace('/', '-')}.xlsx`, aba: 'Documentação',
       })
     } else {
-      abrePdfTimbrado({ titulo, sub, colunas: [{ nome: 'Cliente' }, { nome: 'Documento pendente' }], linhas: res.rows })
+      abrePdfTimbrado({ titulo, sub, colunas: [{ nome: 'Cliente' }, { nome: 'Documento pendente' }, { nome: 'Situação' }], linhas: res.rows })
     }
   }
 
@@ -117,7 +119,7 @@ export default function RelatoriosMassa() {
                 <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 560 }}>
                   <thead>
                     <tr style={{ background: theme.input }}>
-                      <th style={thS}>Cliente</th><th style={thS}>Documento pendente</th>
+                      <th style={thS}>Cliente</th><th style={thS}>Documento pendente</th><th style={thS}>Situação</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -125,6 +127,7 @@ export default function RelatoriosMassa() {
                       <tr key={i} style={{ borderTop: `1px solid ${theme.border}` }}>
                         <td style={{ ...tdS, fontWeight: 600 }}>{r[0]}</td>
                         <td style={{ ...tdS, color: theme.sub }}>{r[1]}</td>
+                        <td style={{ ...tdS, color: r[2] === 'Não enviou' ? theme.red : theme.yellow, fontWeight: 500, whiteSpace: 'nowrap' }}>{r[2]}</td>
                       </tr>
                     ))}
                   </tbody>
