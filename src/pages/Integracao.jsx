@@ -679,6 +679,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
             <span style={{ flex: 1 }} />
             <span style={{ fontSize: 12, color: theme.sub }}>Aplicar às selecionadas:</span>
             <CampoConta value={lote} onChange={setLote} onEnter={aplicarLote} placeholder="Conta (F4)" style={{ width: 190 }} />
+            {lote.trim() && <span style={{ fontSize: 11.5, maxWidth: 220, color: planoMap[String(lote).trim()]?.nome ? theme.green : theme.red }}>{planoMap[String(lote).trim()]?.nome || 'conta não encontrada'}</span>}
             <button className="btn" style={{ fontSize: 12, padding: '5px 10px' }} disabled={!sel.size} onClick={aplicarLote}><i className="ti ti-wand" /> Aplicar ({sel.size})</button>
           </div>
 
