@@ -326,10 +326,16 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
         if (h && c) novas.push({ historico: h, conta: c })
       }
       if (!novas.length) { setErro('Não achei as colunas Histórico e Conta na planilha.'); return }
-      if (!window.confirm(`Importar ${novas.length} histórico(s) para a memória do financeiro deste cliente? Confira antes de confirmar.`)) return
-      const mem = aprender(memoria, novas)
+      // A memória casa pelo TEXTO do histórico (sem datas/números). Linhas cujo
+      // histórico é só número/código não geram termo — descarta e avisa (antes,
+      // a tela dizia "N importados" mas gravava 0).
+      const validas = novas.filter(n => normHist(n.historico))
+      if (!validas.length) { setErro(`Li ${novas.length} linha(s), mas a coluna de histórico parece ter só números/códigos — não há texto para a memória aprender. Confira se as colunas Histórico e Conta não estão trocadas.`); return }
+      if (!window.confirm(`Importar ${validas.length} histórico(s) para a memória do financeiro deste cliente? Confira antes de confirmar.`)) return
+      const mem = aprender(memoria, validas)
+      if (!mem.length) { setErro('Nada para gravar na memória.'); return }
       await salvarMemoria(mem, { nomeArquivo: file.name, semCarga: false })
-      setMsg(`Memória atualizada — ${novas.length} histórico(s) importado(s) (arquivo: ${file.name}).`)
+      setMsg(`Memória atualizada — ${mem.length} histórico(s) na memória (${validas.length} do arquivo ${file.name}).`)
     } catch (e) { setErro('Não consegui ler: ' + e.message) }
   }
 

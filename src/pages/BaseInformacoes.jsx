@@ -114,7 +114,7 @@ function extrairConta(obj) {
 }
 
 export default function BaseInformacoes() {
-  const { empresaId, empresaNome, recalcularPendencias } = useAppData()
+  const { empresaId, empresaNome, recalcularPendencias, recarregarPlano } = useAppData()
   const { user } = useAuth()
 
   const [particularidades, setParticularidades] = useState([])
@@ -304,7 +304,7 @@ export default function BaseInformacoes() {
       {/* Modais */}
       {modal?.tipo === 'carga' && (
         <ModalCarga carga={modal.carga} historico={cargas[modal.carga.tipo] || []} empresaId={empresaId} usuario={user?.email}
-          onClose={() => setModal(null)} onImportado={carregarCargas} />
+          onClose={() => setModal(null)} onImportado={() => { carregarCargas(); recarregarPlano() }} />
       )}
       {modal?.tipo === 'partic' && (
         <ModalTexto titulo={modal.idx == null ? 'Nova particularidade' : 'Editar particularidade'} valorInicial={modal.valor || ''}
