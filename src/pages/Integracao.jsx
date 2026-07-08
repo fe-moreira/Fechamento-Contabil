@@ -94,7 +94,7 @@ export default function Integracao() {
 
       {tab === 'financeira'
         ? (integ === 'Excel'
-          ? <Financeira competencia={competencia} est={estado.financeira || {}} empresaId={empresaId} planoMap={planoMap} user={user} onEstado={salvarFinanceira} isAdmin={isAdmin} />
+          ? <Financeira competencia={competencia} est={estado.financeira || {}} empresaId={empresaId} planoMap={planoMap} user={user} onEstado={salvarFinanceira} isAdmin={isAdmin} usaCC={!!cliente?.usa_centro_custo} />
           : <FinanceiraViaSistema integ={integ} sistema={sistema} />)
         : <Cruzamento tab={tab} dados={dados[tab]} onImport={f => importar(tab, f)} est={estado[tab]} />}
     </Wrapper>
@@ -152,7 +152,7 @@ function validarCompetencia(linhas, mapa, comp) {
   return ''
 }
 
-function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isAdmin }) {
+function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isAdmin, usaCC }) {
   const [contas, setContas] = useState([])       // [{ conta_contabil, agencia, conta }]
   const [memoria, setMemoria] = useState([])     // [{ termo, conta }]
   const [memMeta, setMemMeta] = useState({ nomeArquivo: '', semCarga: false })
@@ -307,7 +307,9 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     setMsg(`Memória atualizada — ${novas.length} classificação(ões) aprendida(s).`)
   }
 
-  // Semeia/complementa a memória a partir de uma planilha (Histórico | Conta contrapartida).
+  // Semeia/complementa a memória a partir do layout de lançamentos do Domínio
+  // (Complemento Histórico + contas de débito/crédito). A contrapartida é o lado
+  // que NÃO é o banco. Aceita também uma planilha simples "Histórico | Conta".
   async function importarMemoria(file) {
     if (!file) return
     setErro('')
@@ -316,21 +318,45 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
       const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' })
       const arr = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' })
       const header = arr[0] || []
-      const iH = achaColuna(header, /hist|descri|memo/)
-      const iC = achaColuna(header, /conta|contrapart|codigo/)
-      const rows = (iH >= 0 && iC >= 0) ? arr.slice(1) : arr
+      const iCompl = achaColuna(header, /complement/)
+      const iDeb = achaColuna(header, /conta.*debito/)
+      const iCred = achaColuna(header, /conta.*credito/)
       const novas = []
-      for (const r of rows) {
-        const h = String((iH >= 0 ? r[iH] : r[0]) ?? '').trim()
-        const c = String((iC >= 0 ? r[iC] : r[1]) ?? '').trim()
-        if (h && c) novas.push({ historico: h, conta: c })
+      if (iCompl >= 0 && iDeb >= 0 && iCred >= 0) {
+        // Layout do Domínio: descobre o banco (contas cadastradas; se não houver,
+        // infere pelo código de conta mais frequente — o banco aparece em quase
+        // toda linha) e aprende histórico → contrapartida (o lado não-banco).
+        const rows = arr.slice(1).filter(r => r.some(c => c !== '' && c != null))
+        let bancos = new Set(contas.map(c => String(c.conta_contabil).trim()))
+        if (!bancos.size) {
+          const freq = {}
+          for (const r of rows) for (const i of [iDeb, iCred]) { const v = String(r[i] ?? '').trim(); if (v) freq[v] = (freq[v] || 0) + 1 }
+          const top = Object.entries(freq).sort((a, b) => b[1] - a[1])[0]
+          if (top) bancos = new Set([top[0]])
+        }
+        for (const r of rows) {
+          const compl = String(r[iCompl] ?? '').trim()
+          const d = String(r[iDeb] ?? '').trim(), c = String(r[iCred] ?? '').trim()
+          if (!compl) continue
+          const contra = bancos.has(d) ? c : bancos.has(c) ? d : ''
+          if (contra) novas.push({ historico: compl, conta: contra })
+        }
+      } else {
+        // Planilha simples: Histórico | Conta contrapartida.
+        const iH = achaColuna(header, /hist|descri|memo/)
+        const iC = achaColuna(header, /conta|contrapart|codigo/)
+        const rows = (iH >= 0 && iC >= 0) ? arr.slice(1) : arr
+        for (const r of rows) {
+          const h = String((iH >= 0 ? r[iH] : r[0]) ?? '').trim()
+          const c = String((iC >= 0 ? r[iC] : r[1]) ?? '').trim()
+          if (h && c) novas.push({ historico: h, conta: c })
+        }
       }
-      if (!novas.length) { setErro('Não achei as colunas Histórico e Conta na planilha.'); return }
+      if (!novas.length) { setErro('Não reconheci o layout. Baixe o modelo e use as mesmas colunas (Complemento Histórico e as contas de débito/crédito).'); return }
       // A memória casa pelo TEXTO do histórico (sem datas/números). Linhas cujo
-      // histórico é só número/código não geram termo — descarta e avisa (antes,
-      // a tela dizia "N importados" mas gravava 0).
+      // histórico é só número/código não geram termo — descarta e avisa.
       const validas = novas.filter(n => normHist(n.historico))
-      if (!validas.length) { setErro(`Li ${novas.length} linha(s), mas a coluna de histórico parece ter só números/códigos — não há texto para a memória aprender. Confira se as colunas Histórico e Conta não estão trocadas.`); return }
+      if (!validas.length) { setErro(`Li ${novas.length} linha(s), mas o histórico (Complemento) parece ter só números/códigos — não há texto para a memória aprender. Confira o arquivo.`); return }
       if (!window.confirm(`Importar ${validas.length} histórico(s) para a memória do financeiro deste cliente? Confira antes de confirmar.`)) return
       const mem = aprender(memoria, validas)
       if (!mem.length) { setErro('Nada para gravar na memória.'); return }
@@ -339,19 +365,20 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     } catch (e) { setErro('Não consegui ler: ' + e.message) }
   }
 
-  // Modelo da memória: planilha com as 2 colunas que a importação espera.
+  // Modelo no layout de lançamentos do Domínio — com as 2 colunas de centro de
+  // custo para clientes que usam, e sem elas (igual Aço e Ferro) para os demais.
   async function baixarModeloMemoria() {
     const XLSX = await import('xlsx')
-    const ws = XLSX.utils.aoa_to_sheet([
-      ['Histórico', 'Conta'],
-      ['PAGAMENTO CPFL ENERGIA', '4.1.1.001'],
-      ['TARIFA BANCARIA PACOTE DE SERVICOS', '4.2.1.010'],
-      ['RECEBIMENTO CLIENTE RGE SUL', '1.1.2.001'],
-    ])
-    ws['!cols'] = [{ wch: 44 }, { wch: 16 }]
+    const base = ['Data', 'Cód. Conta Débito', 'Cód. Conta Crédito', 'Valor', 'Cód. Histórico', 'Complemento Histórico', 'Código Matriz/Filial']
+    const head = usaCC ? [...base, 'Centro de Custo Débito', 'Centro de Custo Crédito'] : base
+    const ex1 = ['04/05/2026', '204', '14', '3.696,00', '10', 'PGTO. COMPRA DE MERCADORIA - FORNECEDOR EXEMPLO', '6091']
+    const ex2 = ['05/05/2026', '763', '14', '48,16', '10', 'PGTO. DESPESAS BANCARIAS', '6091']
+    const rows = usaCC ? [head, [...ex1, '', ''], [...ex2, '1', '']] : [head, ex1, ex2]
+    const ws = XLSX.utils.aoa_to_sheet(rows)
+    ws['!cols'] = head.map((_, i) => ({ wch: i === 5 ? 48 : 16 }))
     const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, ws, 'Memória')
-    XLSX.writeFile(wb, 'modelo_memoria_financeiro.xlsx')
+    XLSX.utils.book_append_sheet(wb, ws, 'Lançamentos')
+    XLSX.writeFile(wb, `modelo_financeiro_${usaCC ? 'com' : 'sem'}_centro_custo.xlsx`)
   }
 
   // Gera a partida completa para o Domínio (banco + contrapartida, por entrada/saída).
@@ -418,7 +445,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
               </p>
             </div>
           </div>
-          <p style={{ fontSize: 11.5, color: theme.sub, margin: '8px 0 0' }}>A planilha precisa de duas colunas: <b style={{ color: theme.text }}>Histórico</b> (o texto do lançamento) e <b style={{ color: theme.text }}>Conta</b> (a contrapartida). Use o modelo para não errar as colunas.</p>
+          <p style={{ fontSize: 11.5, color: theme.sub, margin: '8px 0 0' }}>Use o <b style={{ color: theme.text }}>layout do Domínio</b> ({usaCC ? 'com' : 'sem'} centro de custo — este cliente {usaCC ? 'usa' : 'não usa'}). A memória aprende pelo <b style={{ color: theme.text }}>Complemento Histórico</b> e pela contrapartida (o lado que não é o banco). Baixe o modelo para acertar as colunas.</p>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
             <label className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', cursor: 'pointer' }}>
               <i className="ti ti-upload" /> {memAtiva ? 'Complementar' : 'Importar carga inicial'}
