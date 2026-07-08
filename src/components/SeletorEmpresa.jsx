@@ -25,10 +25,14 @@ export default function SeletorEmpresa() {
   const filtradas = empresas.filter(e => {
     if (!q.trim()) return true
     const t = norm(q)
+    const qd = q.replace(/\D/g, '')
     return norm(e.razao_social).includes(t) || norm(e.codigo_dominio).includes(t)
+      || (qd.length >= 2 && String(e.cnpj || '').replace(/\D/g, '').includes(qd))
   })
 
   function escolher(id) { setEmpresaId(id); setAberto(false) }
+
+  const empSel = empresas.find(e => e.id === empresaId)
 
   return (
     <div ref={boxRef} style={{ position: 'relative' }}>
@@ -37,7 +41,9 @@ export default function SeletorEmpresa() {
         style={{ background: '#222B3D', borderRadius: 10, padding: '9px 12px', display: 'flex', alignItems: 'center', gap: 11, cursor: 'pointer' }}>
         <i className="ti ti-building" style={{ color: '#8A9BBE', fontSize: 20, flexShrink: 0 }} />
         <div style={{ flex: 1, minWidth: 0 }}>
-          <p style={{ color: '#8A9BBE', fontSize: 11, margin: 0, lineHeight: 1.2 }}>Empresa</p>
+          <p style={{ color: '#8A9BBE', fontSize: 11, margin: 0, lineHeight: 1.2 }}>
+            Empresa{empSel && <>{' · '}{empSel.codigo_dominio || '—'}{empSel.tipo === 'Filial' ? ' · Filial' : ''}</>}
+          </p>
           <p style={{ color: '#fff', fontSize: 14, fontWeight: 500, margin: '1px 0 0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {empresaNome || (empresas.length ? 'Selecione…' : 'Nenhum cliente ainda')}
           </p>
@@ -63,12 +69,19 @@ export default function SeletorEmpresa() {
               const sel = e.id === empresaId
               return (
                 <div key={e.id} onClick={() => escolher(e.id)}
-                  style={{ padding: '9px 12px', cursor: 'pointer', display: 'flex', gap: 9, alignItems: 'center', background: sel ? 'rgba(74,124,255,0.16)' : 'transparent' }}
+                  style={{ padding: '9px 12px', cursor: 'pointer', display: 'flex', gap: 9, alignItems: 'flex-start', background: sel ? 'rgba(74,124,255,0.16)' : 'transparent' }}
                   onMouseEnter={ev => { ev.currentTarget.style.background = '#2A3758' }}
                   onMouseLeave={ev => { ev.currentTarget.style.background = sel ? 'rgba(74,124,255,0.16)' : 'transparent' }}>
-                  <span style={{ color: '#8A9BBE', fontSize: 11.5, fontVariantNumeric: 'tabular-nums', minWidth: 40, flexShrink: 0 }}>{e.codigo_dominio || '—'}</span>
-                  <span style={{ color: '#E8EAF0', fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.razao_social}</span>
-                  {sel && <i className="ti ti-check" style={{ color: '#4A7CFF', fontSize: 15, marginLeft: 'auto' }} />}
+                  <span style={{ color: '#8A9BBE', fontSize: 11.5, fontVariantNumeric: 'tabular-nums', minWidth: 40, flexShrink: 0, marginTop: 1 }}>{e.codigo_dominio || '—'}</span>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <span style={{ color: '#E8EAF0', fontSize: 13, display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.razao_social}</span>
+                    {(e.cnpj || e.tipo === 'Filial') && (
+                      <span style={{ color: '#8A9BBE', fontSize: 11, display: 'block', marginTop: 1 }}>
+                        {e.tipo === 'Filial' ? 'Filial' : 'Matriz'}{e.cnpj ? ` · ${e.cnpj}` : ''}
+                      </span>
+                    )}
+                  </div>
+                  {sel && <i className="ti ti-check" style={{ color: '#4A7CFF', fontSize: 15, marginLeft: 'auto', flexShrink: 0 }} />}
                 </div>
               )
             })}
