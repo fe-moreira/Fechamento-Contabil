@@ -381,8 +381,11 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     const cod = String(lote || '').trim()
     if (!cod) { setMsg('Informe a conta para aplicar em lote.'); return }
     if (!sel.size) { setMsg('Selecione as linhas (caixas à esquerda) para aplicar a conta.'); return }
+    const n = sel.size
     setLinhas(ls => ls.map((l, j) => sel.has(j) ? { ...l, contra: cod } : l))
-    setMsg(`Conta ${cod} aplicada em ${sel.size} linha(s) selecionada(s).`)
+    // Volta ao estado original para a próxima aplicação: limpa filtro, seleção e conta.
+    setSel(new Set()); setLote(''); setFSem(false); setFHist(''); setFData('')
+    setMsg(`Conta ${cod} aplicada em ${n} linha(s). Pronto para a próxima seleção.`)
   }
 
   // Aprende: guarda credor/devedor → contrapartida das linhas classificadas
