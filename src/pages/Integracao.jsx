@@ -261,6 +261,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onValidado })
         if (h && c) novas.push({ historico: h, conta: c })
       }
       if (!novas.length) { setErro('Não achei as colunas Histórico e Conta na planilha.'); return }
+      if (!window.confirm(`Importar ${novas.length} histórico(s) para a memória do financeiro deste cliente? Confira antes de confirmar.`)) return
       const mem = aprender(memoria, novas)
       setMemoria(mem); await salvarCarga('memoria_financeira', mem, 'Memória do financeiro')
       setMsg(`Memória semeada — ${novas.length} histórico(s) importado(s).`)

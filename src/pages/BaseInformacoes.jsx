@@ -417,6 +417,7 @@ function ModalCarga({ carga, historico, empresaId, usuario, onClose, onImportado
   const [planoIdx, setPlanoIdx] = useState(null) // { porRed, porNum, mascara } p/ puxar nome pelo código
   const [hist, setHist] = useState(historico || []) // cargas (vigências) já salvas — recarrega ao salvar
   const [msgOk, setMsgOk] = useState('')
+  const [pendente, setPendente] = useState(null) // { dados, nome } aguardando confirmação
   const vigOk = /^\d{2}\/\d{4}$/.test(vigencia)
 
   async function recarregar() {
@@ -472,22 +473,32 @@ function ModalCarga({ carga, historico, empresaId, usuario, onClose, onImportado
     return true
   }
 
-  // Escolher/arrastar o arquivo já importa na hora (a vigência precisa estar preenchida antes).
+  // Escolher/arrastar o arquivo faz a LEITURA e mostra a prévia; só grava ao confirmar.
   async function importarArquivo(file) {
     if (!file) return
     if (!vigOk) { setErro('Informe a vigência (MM/AAAA) antes de escolher o arquivo.'); return }
-    setErro(''); setSalvando(true)
+    setErro(''); setMsgOk('')
     try {
       const XLSX = await import('xlsx')
       const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' })
       const dados = lerPlanilha(XLSX, wb.Sheets[wb.SheetNames[0]])
-      if (!dados.length) { setErro('Planilha vazia.'); setSalvando(false); return }
+      if (!dados.length) { setErro('Planilha vazia.'); return }
+      setPendente({ dados, nome: file.name }) // aguarda confirmação (conferir antes de gravar)
+    } catch (err) { setErro('Erro ao ler o arquivo: ' + err.message) }
+  }
+
+  // Confirma a importação lida (grava de fato).
+  async function confirmarImport() {
+    if (!pendente) return
+    setErro(''); setSalvando(true)
+    try {
       if (!(await sobreporSeMesma())) { setSalvando(false); return }
       const { error } = await supabase.from('cargas_cadastro').insert({
-        cliente_id: empresaId, tipo: carga.tipo, vigencia, dados, usuario, obs: file.name,
+        cliente_id: empresaId, tipo: carga.tipo, vigencia, dados: pendente.dados, usuario, obs: pendente.nome,
       })
       if (error) throw error
-      await recarregar(); onImportado(); setSalvando(false); setMsgOk(`Importado · vigência ${vigencia}.`)
+      await recarregar(); onImportado(); setSalvando(false)
+      setMsgOk(`Importado · vigência ${vigencia} (${pendente.dados.length} linha(s)).`); setPendente(null)
     } catch (err) { setErro('Erro ao importar: ' + err.message); setSalvando(false) }
   }
 
@@ -581,9 +592,28 @@ function ModalCarga({ carga, historico, empresaId, usuario, onClose, onImportado
       {modo === 'arquivo' ? (
         <>
           <label>2. Arquivo</label>
-          <DropZone onArquivo={importarArquivo} disabled={!vigOk || salvando}
-            hint={vigOk ? 'Arraste ou clique · .xlsx, .xls ou .csv' : 'Informe a vigência primeiro'} />
-          {salvando && <p style={{ color: theme.accent, fontSize: 12, marginTop: 8 }}><i className="ti ti-loader" /> Importando…</p>}
+          {!pendente ? (
+            <DropZone onArquivo={importarArquivo} disabled={!vigOk || salvando}
+              hint={vigOk ? 'Arraste ou clique · .xlsx, .xls ou .csv' : 'Informe a vigência primeiro'} />
+          ) : (
+            <div style={{ border: `1px solid ${theme.accent}`, borderRadius: 10, padding: 14, marginTop: 4 }}>
+              <p style={{ fontSize: 13, fontWeight: 600, margin: '0 0 4px' }}><i className="ti ti-eye" style={{ color: theme.accent }} /> Confira antes de importar</p>
+              <p style={{ fontSize: 12.5, color: theme.sub, margin: '0 0 10px' }}>{pendente.nome} · <b style={{ color: theme.text }}>{pendente.dados.length}</b> linha(s) · vigência {vigencia}</p>
+              <div style={{ overflowX: 'auto', border: `0.5px solid ${theme.cb}`, borderRadius: 8, maxHeight: 240 }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 420 }}>
+                  <thead><tr style={{ background: theme.input }}>{Object.keys(pendente.dados[0] || {}).map(c => <th key={c} style={{ textAlign: 'left', padding: '7px 10px', fontSize: 11, color: theme.sub, textTransform: 'uppercase', letterSpacing: .3, whiteSpace: 'nowrap' }}>{c}</th>)}</tr></thead>
+                  <tbody>{pendente.dados.slice(0, 8).map((row, i) => (
+                    <tr key={i} style={{ borderTop: `1px solid ${theme.border}` }}>{Object.keys(pendente.dados[0] || {}).map(c => <td key={c} style={{ padding: '6px 10px', fontSize: 12.5, color: theme.text }}>{String(row[c] ?? '')}</td>)}</tr>
+                  ))}</tbody>
+                </table>
+              </div>
+              {pendente.dados.length > 8 && <p style={{ fontSize: 11.5, color: theme.sub, margin: '6px 0 0' }}>… e mais {pendente.dados.length - 8} linha(s).</p>}
+              <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+                <button className="btn" disabled={salvando} onClick={confirmarImport}><i className="ti ti-check" /> {salvando ? 'Importando…' : 'Confirmar importação'}</button>
+                <button className="btn btn-ghost" disabled={salvando} onClick={() => setPendente(null)}>Cancelar</button>
+              </div>
+            </div>
+          )}
         </>
       ) : (
         <>
