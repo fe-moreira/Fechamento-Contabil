@@ -21,6 +21,8 @@ const SIT = {
 }
 const situOf = d => { const s = d?.situacao ?? (d?.rec ? 'recebido' : ''); return SIT[s] ? s : '' }
 const novoDoc = name => ({ name, situacao: '', rec: false, date: '' })
+// Mantém a lista sempre em ordem alfabética (inclusive itens novos).
+const ordenar = arr => [...(arr || [])].sort((a, b) => String(a.name).localeCompare(String(b.name), 'pt-BR', { sensitivity: 'base' }))
 // Converte formato antigo (rec bool) e novo (situacao) para o mesmo shape.
 const normaliza = (arr) => (arr || []).map(x => {
   const name = String(x.name || '').trim()
@@ -51,12 +53,12 @@ export default function DocumentosRecebidos() {
       setStatus(comp?.status || null)
       const d = comp?.documentos
       if (Array.isArray(d) && d.length) {
-        setDocs(normaliza(d))
+        setDocs(ordenar(normaliza(d)))
       } else {
         // Herda a lista do fechamento anterior mais recente; senão, fica vazio
         // (sem lista-padrão automática — a base é importada por cliente).
         const herdado = await herdarLista(empresaId, ano, mes)
-        setDocs(herdado.map(novoDoc))
+        setDocs(ordenar(herdado.map(novoDoc)))
       }
       setCarregando(false)
     })()
@@ -64,7 +66,8 @@ export default function DocumentosRecebidos() {
 
   // Grava na competência atual e, para mudanças de estrutura, propaga a lista de
   // nomes para os fechamentos ABERTOS dali pra frente (fechados nunca mudam).
-  async function persistir(novo, propagar = false) {
+  async function persistir(lista, propagar = false) {
+    const novo = ordenar(lista) // sempre em ordem alfabética
     setDocs(novo)
     const id = await getCompetenciaId()
     if (id) await supabase.from('competencias').update({ documentos: novo }).eq('id', id)
