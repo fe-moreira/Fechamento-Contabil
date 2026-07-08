@@ -33,11 +33,11 @@ export default function Integracao() {
   const sistema = (cliente?.sistema_financeiro || '').trim()
   const planoMap = Object.fromEntries((plano || []).map(p => [String(p.cod), p]))
 
-  // Marca a integração financeira como validada na competência (some do Status).
-  async function validarFinanceira(nomeDoc) {
+  // Persiste o estado da integração financeira (por banco) na competência.
+  async function salvarFinanceira(novoFin) {
     const id = await getCompetenciaId()
     if (!id) return
-    const novo = { ...estado, financeira: { estado: 'validado', doc: nomeDoc, usuario: user?.email || null } }
+    const novo = { ...estado, financeira: novoFin }
     await supabase.from('competencias').update({ integracoes: novo }).eq('id', id)
     setEstado(novo)
   }
@@ -94,7 +94,7 @@ export default function Integracao() {
 
       {tab === 'financeira'
         ? (integ === 'Excel'
-          ? <Financeira competencia={competencia} est={estado.financeira} empresaId={empresaId} planoMap={planoMap} user={user} onValidado={validarFinanceira} />
+          ? <Financeira competencia={competencia} est={estado.financeira || {}} empresaId={empresaId} planoMap={planoMap} user={user} onEstado={salvarFinanceira} />
           : <FinanceiraViaSistema integ={integ} sistema={sistema} />)
         : <Cruzamento tab={tab} dados={dados[tab]} onImport={f => importar(tab, f)} est={estado[tab]} />}
     </Wrapper>
@@ -135,29 +135,33 @@ function achaColuna(header, re) {
   return (header || []).findIndex(h => re.test(norm(h)))
 }
 
-function Financeira({ competencia, est, empresaId, planoMap, user, onValidado }) {
+function Financeira({ competencia, est, empresaId, planoMap, user, onEstado }) {
   const [contas, setContas] = useState([])       // [{ conta_contabil, agencia, conta }]
   const [memoria, setMemoria] = useState([])     // [{ termo, conta }]
+  const [memMeta, setMemMeta] = useState({ nomeArquivo: '', semCarga: false })
   const [carregReg, setCarregReg] = useState(true)
   const [novo, setNovo] = useState({ conta_contabil: '', agencia: '', conta: '' })
   const [modo, setModo] = useState('porBanco')   // 'porBanco' | 'combinado'
-  const [bancoSel, setBancoSel] = useState('')
-  const [raw, setRaw] = useState(null)           // { nome, header, linhasRaw }
+  const [raw, setRaw] = useState(null)           // { nome, header, linhasRaw, banco }
   const [map, setMap] = useState({ hist: -1, valor: -1, data: -1 })
   const [linhas, setLinhas] = useState([])       // classificação: [{ banco, historico, valor, entrada, contra, data }]
   const [erro, setErro] = useState('')
   const [msg, setMsg] = useState('')
 
   const nomeBanco = cod => planoMap[String(cod)]?.nome || (cod ? `Conta ${cod}` : '—')
+  const bancosEst = est?.bancos || {}
 
   useEffect(() => {
-    setCarregReg(true); setRaw(null); setLinhas([]); setBancoSel(''); setErro(''); setMsg('')
+    setCarregReg(true); setRaw(null); setLinhas([]); setErro(''); setMsg('')
     Promise.all([
       supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'contas_bancarias').order('created_at', { ascending: false }).limit(1).maybeSingle(),
-      supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'memoria_financeira').order('created_at', { ascending: false }).limit(1).maybeSingle(),
+      supabase.from('cargas_cadastro').select('dados, obs').eq('cliente_id', empresaId).eq('tipo', 'memoria_financeira').order('created_at', { ascending: false }).limit(1).maybeSingle(),
     ]).then(([bc, mem]) => {
       setContas(Array.isArray(bc.data?.dados) ? bc.data.dados : [])
       setMemoria(Array.isArray(mem.data?.dados) ? mem.data.dados : [])
+      let meta = { nomeArquivo: '', semCarga: false }
+      try { const m = JSON.parse(mem.data?.obs || ''); if (m && typeof m === 'object') meta = { nomeArquivo: m.nomeArquivo || '', semCarga: !!m.semCarga } } catch { /* obs antigo em texto */ }
+      setMemMeta(meta)
       setCarregReg(false)
     })
   }, [empresaId])
@@ -176,11 +180,31 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onValidado })
   }
   const removeConta = i => salvarContas(contas.filter((_, j) => j !== i))
 
+  // Memória: grava entradas + metadados (arquivo de origem / marcado "sem carga").
+  async function salvarMemoria(entries, meta) {
+    setMemoria(entries); setMemMeta(meta)
+    await salvarCarga('memoria_financeira', entries, JSON.stringify(meta))
+  }
+  async function excluirMemoria() {
+    if (!window.confirm('Excluir a memória do financeiro deste cliente? As classificações aprendidas serão perdidas.')) return
+    await salvarMemoria([], { nomeArquivo: '', semCarga: false }); setMsg('Memória excluída.')
+  }
+  async function marcarSemCarga() { await salvarMemoria([], { nomeArquivo: '', semCarga: true }); setMsg('Marcado: não tem carga inicial.') }
+
+  // Estado por banco na competência (importado / sem movimento). Vazio = pendente.
+  function marcarBanco(conta, estadoB, doc) {
+    const bancos = { ...(est?.bancos || {}) }
+    if (estadoB) bancos[conta] = { estado: estadoB, doc: doc || null, usuario: user?.email || null }
+    else delete bancos[conta]
+    onEstado({ ...est, bancos })
+  }
+  function marcarCombinado(doc) { onEstado({ ...est, combinado: { estado: 'validado', doc, usuario: user?.email || null } }) }
+
   // Reconstroi a classificação a partir do arquivo cru + mapa de colunas + memória.
-  function classificar(rawX, mapX, memX) {
+  function classificar(rawX, mapX, memX, bancoFixo) {
     const codigos = new Set(contas.map(c => String(c.conta_contabil).trim()))
     return rawX.linhasRaw.map(cells => {
-      let banco = bancoSel
+      let banco = bancoFixo || ''
       if (modo === 'combinado') { banco = ''; for (const c of cells) { const v = String(c ?? '').trim(); if (codigos.has(v)) { banco = v; break } } }
       const historico = mapX.hist >= 0 ? String(cells[mapX.hist] ?? '').trim() : ''
       const valor = mapX.valor >= 0 ? parseValor(cells[mapX.valor]) : 0
@@ -189,11 +213,10 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onValidado })
     })
   }
 
-  async function importar(file) {
+  async function importar(file, bancoFixo) {
     if (!file) return
     setErro(''); setMsg('')
     try {
-      if (modo === 'porBanco' && !bancoSel) { setErro('Selecione a conta bancária deste arquivo antes de importar.'); return }
       if (modo === 'combinado' && !contas.length) { setErro('Cadastre as contas bancárias antes de importar uma planilha combinada.'); return }
       const XLSX = await import('xlsx')
       const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true })
@@ -204,7 +227,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onValidado })
       let hist = achaColuna(header, /hist|descri|lancament|memo|complemento/)
       let valor = achaColuna(header, /valor|montante|r\$|credito|debito/)
       const data = achaColuna(header, /^data|\bdata\b|dt\b/)
-      if (hist < 0) { // coluna de texto mais "longa" em média
+      if (hist < 0) {
         let melhor = -1, best = 0
         for (let j = 0; j < (header.length || (linhasRaw[0]?.length || 0)); j++) {
           const avg = linhasRaw.reduce((s, r) => s + (typeof r[j] === 'string' ? r[j].length : 0), 0) / (linhasRaw.length || 1)
@@ -212,24 +235,25 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onValidado })
         }
         hist = melhor
       }
-      if (valor < 0) { // primeira coluna majoritariamente numérica
+      if (valor < 0) {
         for (let j = 0; j < (header.length || 0); j++) { if (linhasRaw.filter(r => typeof r[j] === 'number' || parseValor(r[j])).length > linhasRaw.length / 2) { valor = j; break } }
       }
       const mapa = { hist, valor, data }
-      const novoRaw = { nome: file.name, header, linhasRaw }
+      const novoRaw = { nome: file.name, header, linhasRaw, banco: bancoFixo || '' }
       setRaw(novoRaw); setMap(mapa)
-      const cl = classificar(novoRaw, mapa, memoria)
+      const cl = classificar(novoRaw, mapa, memoria, bancoFixo)
       setLinhas(cl)
       const casadas = cl.filter(l => l.contra).length
       setMsg(`${cl.length} linha(s) · ${casadas} já classificada(s) pela memória.`)
-      onValidado(file.name)
+      if (modo === 'combinado') marcarCombinado(file.name)
+      else if (bancoFixo) marcarBanco(bancoFixo, 'validado', file.name)
     } catch (e) { setErro('Não consegui ler: ' + e.message) }
   }
 
   function trocarCol(campo, idx) {
     const mapa = { ...map, [campo]: idx }
     setMap(mapa)
-    if (raw) setLinhas(classificar(raw, mapa, memoria))
+    if (raw) setLinhas(classificar(raw, mapa, memoria, raw.banco))
   }
   const setLinha = (i, patch) => setLinhas(ls => ls.map((l, j) => j === i ? { ...l, ...patch } : l))
 
@@ -238,11 +262,11 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onValidado })
     const novas = linhas.filter(l => l.contra && l.historico).map(l => ({ historico: l.historico, conta: l.contra }))
     if (!novas.length) { setMsg('Classifique ao menos uma linha (contrapartida) antes de salvar.'); return }
     const mem = aprender(memoria, novas)
-    setMemoria(mem); await salvarCarga('memoria_financeira', mem, 'Memória do financeiro')
+    await salvarMemoria(mem, { nomeArquivo: memMeta.nomeArquivo, semCarga: false })
     setMsg(`Memória atualizada — ${novas.length} classificação(ões) aprendida(s).`)
   }
 
-  // Semeia a memória a partir de uma planilha (colunas Histórico | Conta contrapartida).
+  // Semeia/complementa a memória a partir de uma planilha (Histórico | Conta contrapartida).
   async function importarMemoria(file) {
     if (!file) return
     setErro('')
@@ -263,16 +287,16 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onValidado })
       if (!novas.length) { setErro('Não achei as colunas Histórico e Conta na planilha.'); return }
       if (!window.confirm(`Importar ${novas.length} histórico(s) para a memória do financeiro deste cliente? Confira antes de confirmar.`)) return
       const mem = aprender(memoria, novas)
-      setMemoria(mem); await salvarCarga('memoria_financeira', mem, 'Memória do financeiro')
-      setMsg(`Memória semeada — ${novas.length} histórico(s) importado(s).`)
+      await salvarMemoria(mem, { nomeArquivo: file.name, semCarga: false })
+      setMsg(`Memória atualizada — ${novas.length} histórico(s) importado(s) (arquivo: ${file.name}).`)
     } catch (e) { setErro('Não consegui ler: ' + e.message) }
   }
 
   // Gera a partida completa para o Domínio (banco + contrapartida, por entrada/saída).
   function gerar() {
-    const prontas = linhas.filter(l => l.banco && l.contra && l.valor > 0)
-    if (!prontas.length) { setErro('Nenhuma linha com banco e contrapartida para gerar.'); return }
-    const lanc = prontas.map(l => ({
+    const prontasL = linhas.filter(l => l.banco && l.contra && l.valor > 0)
+    if (!prontasL.length) { setErro('Nenhuma linha com banco e contrapartida para gerar.'); return }
+    const lanc = prontasL.map(l => ({
       data: l.data || null,
       conta_debito: l.entrada ? l.banco : l.contra,   // entrada: D banco; saída: D contrapartida
       conta_credito: l.entrada ? l.contra : l.banco,
@@ -284,15 +308,14 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onValidado })
 
   const prontas = linhas.filter(l => l.banco && l.contra && l.valor > 0).length
   const semContra = linhas.filter(l => !l.contra).length
+  const memAtiva = memoria.length > 0
 
   return (
     <>
-      <div><EstadoBadge est={est} /></div>
-
       {/* Cadastro das contas bancárias do cliente */}
       <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: 18, marginBottom: 16 }}>
         <p style={{ fontSize: 14, fontWeight: 600, margin: '0 0 4px' }}>Contas bancárias do cliente</p>
-        <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 12px' }}>Informe a <b style={{ color: theme.text }}>conta contábil</b> de cada banco (o nome vem do plano de contas). <span style={{ color: theme.accent }}>F4</span> abre o plano.</p>
+        <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 12px' }}>Informe a <b style={{ color: theme.text }}>conta contábil</b> de cada banco (o nome vem do plano). Cada banco cadastrado vira um slot de importação abaixo. <span style={{ color: theme.accent }}>F4</span> abre o plano.</p>
         {carregReg ? <p style={{ color: theme.sub, fontSize: 12.5 }}>Carregando…</p> : (
           <>
             {contas.length > 0 && (
@@ -313,16 +336,35 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onValidado })
               <div><label>Conta (opc.)</label><input className="input" style={{ maxWidth: 130 }} value={novo.conta} onChange={e => setNovo(n => ({ ...n, conta: e.target.value }))} /></div>
               <button className="btn" onClick={addConta}><i className="ti ti-plus" /> Adicionar</button>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', margin: '10px 0 0' }}>
-              <p style={{ color: theme.sub, fontSize: 11.5, margin: 0 }}><i className="ti ti-brain" style={{ color: theme.accent }} /> Memória do financeiro: <b style={{ color: theme.text }}>{memoria.length}</b> histórico(s) aprendido(s) para classificar a contrapartida automaticamente.</p>
-              <label className="btn btn-ghost" style={{ fontSize: 11.5, padding: '4px 10px', cursor: 'pointer' }}>
-                <i className="ti ti-upload" /> Importar memória inicial
-                <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={e => importarMemoria(e.target.files?.[0])} />
-              </label>
-            </div>
           </>
         )}
       </div>
+
+      {/* Memória do financeiro — verde (ativa) / pendente / sem carga */}
+      {!carregReg && (
+        <div style={{ background: theme.card, border: `1px solid ${memAtiva ? 'rgba(48,164,108,0.5)' : memMeta.semCarga ? theme.cb : 'rgba(245,166,35,0.5)'}`, borderRadius: 12, padding: 16, marginBottom: 16 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <i className="ti ti-brain" style={{ fontSize: 20, color: memAtiva ? theme.green : memMeta.semCarga ? theme.sub : theme.yellow }} />
+            <div style={{ flex: 1, minWidth: 200 }}>
+              <p style={{ fontSize: 13.5, fontWeight: 600, margin: 0 }}>Memória do financeiro (histórico → contrapartida)</p>
+              <p style={{ fontSize: 12, margin: '2px 0 0', color: memAtiva ? theme.green : memMeta.semCarga ? theme.sub : theme.yellow }}>
+                {memAtiva ? <><i className="ti ti-circle-check" /> <b>Ativa</b> · {memoria.length} histórico(s){memMeta.nomeArquivo ? ` · arquivo: ${memMeta.nomeArquivo}` : ''}</>
+                  : memMeta.semCarga ? <><i className="ti ti-circle-minus" /> Sem carga inicial (marcado)</>
+                    : <><i className="ti ti-alert-triangle" /> Pendente — importe a carga inicial ou marque que não tem</>}
+              </p>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
+            <label className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', cursor: 'pointer' }}>
+              <i className="ti ti-upload" /> {memAtiva ? 'Complementar' : 'Importar carga inicial'}
+              <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={e => importarMemoria(e.target.files?.[0])} />
+            </label>
+            {memAtiva && <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', color: theme.red, borderColor: theme.red }} onClick={excluirMemoria}><i className="ti ti-trash" /> Excluir memória</button>}
+            {!memAtiva && !memMeta.semCarga && <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={marcarSemCarga}><i className="ti ti-circle-minus" /> Não tem carga inicial</button>}
+            {!memAtiva && memMeta.semCarga && <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => salvarMemoria([], { nomeArquivo: '', semCarga: false })}><i className="ti ti-rotate" /> Desfazer</button>}
+          </div>
+        </div>
+      )}
 
       {/* Como o extrato vem */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
@@ -331,19 +373,41 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onValidado })
       </div>
 
       {modo === 'porBanco' ? (
-        <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: 12 }}>
-          <div><label>Conta bancária deste arquivo</label>
-            <select className="input" style={{ padding: '9px 12px' }} value={bancoSel} onChange={e => setBancoSel(e.target.value)}>
-              <option value="">Selecione…</option>
-              {contas.map(c => <option key={c.conta_contabil} value={c.conta_contabil}>{c.conta_contabil} · {nomeBanco(c.conta_contabil)}</option>)}
-            </select>
-          </div>
-        </div>
+        contas.length === 0
+          ? <p style={{ color: theme.yellow, fontSize: 12.5, margin: '0 0 12px' }}>Cadastre as contas bancárias acima para liberar um slot de importação por banco.</p>
+          : (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(280px,1fr))', gap: 12, marginBottom: 14 }}>
+              {contas.map(c => {
+                const s = bancosEst[c.conta_contabil]
+                const cor = s?.estado === 'validado' ? theme.green : s?.estado === 'sem_movimento' ? theme.sub : theme.red
+                const txt = s?.estado === 'validado' ? `Importado${s.doc ? ` · ${s.doc}` : ''}` : s?.estado === 'sem_movimento' ? 'Sem movimento no mês' : 'Pendente'
+                return (
+                  <div key={c.conta_contabil} style={{ background: theme.card, border: `1px solid ${s?.estado === 'sem_movimento' ? theme.cb : cor}`, borderRadius: 12, padding: 14 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                      <i className="ti ti-building-bank" style={{ color: theme.accent }} />
+                      <span style={{ fontWeight: 600, fontSize: 13 }}>{c.conta_contabil} · {nomeBanco(c.conta_contabil)}</span>
+                    </div>
+                    <p style={{ fontSize: 12, color: cor, margin: '0 0 10px', fontWeight: 500 }}><i className={`ti ${s?.estado === 'validado' ? 'ti-circle-check' : s?.estado === 'sem_movimento' ? 'ti-circle-minus' : 'ti-alert-triangle'}`} /> {txt}</p>
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      <label className="btn" style={{ fontSize: 12, padding: '5px 10px', cursor: 'pointer' }}>
+                        <i className="ti ti-cloud-upload" /> {s?.estado === 'validado' ? 'Reimportar' : 'Importar extrato'}
+                        <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={e => importar(e.target.files?.[0], c.conta_contabil)} />
+                      </label>
+                      <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => marcarBanco(c.conta_contabil, 'sem_movimento')}><i className="ti ti-circle-minus" /> Sem movimento</button>
+                      {s?.estado && <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', color: theme.sub }} onClick={() => marcarBanco(c.conta_contabil, null)}>limpar</button>}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )
       ) : (
-        <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 12px' }}>A planilha traz todos os bancos juntos — cada linha deve ter a <b style={{ color: theme.text }}>conta contábil</b> numa das colunas. A plataforma casa com o cadastro e separa por banco.</p>
+        <>
+          <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 8px' }}>A planilha traz todos os bancos juntos — cada linha deve ter a <b style={{ color: theme.text }}>conta contábil</b> numa das colunas. A plataforma casa com o cadastro e separa por banco.</p>
+          <ImpCard titulo="Importar planilha combinada" desc="Importe o extrato com todos os bancos (Excel/CSV)." onImport={f => importar(f)} nome={raw?.nome} qtd={linhas.length} />
+        </>
       )}
 
-      <ImpCard titulo="Importar extrato financeiro" desc="Importe o extrato do cliente (Excel/CSV)." onImport={importar} nome={raw?.nome} qtd={linhas.length} />
       {erro && <p style={{ color: theme.red, fontSize: 12.5, margin: '10px 0 0' }}>{erro}</p>}
       {msg && <p style={{ color: theme.green, fontSize: 12.5, margin: '10px 0 0' }}><i className="ti ti-circle-check" /> {msg}</p>}
 

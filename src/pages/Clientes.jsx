@@ -8,7 +8,7 @@ const REGIMES = ['SIMPLES NACIONAL', 'LUCRO PRESUMIDO', 'LUCRO REAL', 'LUCRO REA
 
 const vazio = {
   codigo_dominio: '', tipo: 'Matriz', codigo_matriz: '', razao_social: '',
-  nome_fantasia: '', cnpj: '', regime_tributario: 'SIMPLES NACIONAL', tipo_fechamento: '',
+  nome_fantasia: '', cnpj: '', regime_tributario: 'SIMPLES NACIONAL',
   competencia_inicio: '', sistema_financeiro: '', integracao_financeira: 'Não usa',
   analista: '', observacoes: '', prazo_entrega: '', tipo_fechamento: 'Consolidado',
 }
