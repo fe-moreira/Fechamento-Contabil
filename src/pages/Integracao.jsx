@@ -135,6 +135,23 @@ function achaColuna(header, re) {
   return (header || []).findIndex(h => re.test(norm(h)))
 }
 
+// Trava de competência: toda data do extrato precisa cair no mês do fechamento.
+// Retorna a mensagem de erro (string vazia = ok).
+function validarCompetencia(linhas, mapa, comp) {
+  const [mm, yyyy] = String(comp || '').split('/')
+  if (!mm || !yyyy) return ''
+  const alvo = `${yyyy}-${mm.padStart(2, '0')}`
+  if (mapa.data < 0) return `Não identifiquei a coluna de Data no arquivo. Selecione a coluna "Data" abaixo — o extrato precisa ser todo de ${comp}.`
+  const fora = linhas.filter(l => l.data && l.data.slice(0, 7) !== alvo)
+  if (fora.length) {
+    const ex = [...new Set(fora.map(l => l.data.split('-').reverse().join('/')))].slice(0, 3).join(', ')
+    return `O extrato tem ${fora.length} lançamento(s) fora de ${comp} (ex.: ${ex}). Importe apenas o extrato da competência ${comp}.`
+  }
+  const semData = linhas.filter(l => !l.data).length
+  if (semData) return `${semData} linha(s) sem data reconhecida. Confira a coluna de Data — todas precisam ser de ${comp}.`
+  return ''
+}
+
 function Financeira({ competencia, est, empresaId, planoMap, user, onEstado }) {
   const [contas, setContas] = useState([])       // [{ conta_contabil, agencia, conta }]
   const [memoria, setMemoria] = useState([])     // [{ termo, conta }]
@@ -243,8 +260,11 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado }) {
       setRaw(novoRaw); setMap(mapa)
       const cl = classificar(novoRaw, mapa, memoria, bancoFixo)
       setLinhas(cl)
+      // Trava de competência: se houver data fora do mês, mostra a prévia mas NÃO sobe.
+      const erroComp = validarCompetencia(cl, mapa, competencia)
+      if (erroComp) { setErro(erroComp); return }
       const casadas = cl.filter(l => l.contra).length
-      setMsg(`${cl.length} linha(s) · ${casadas} já classificada(s) pela memória.`)
+      setMsg(`${cl.length} linha(s) · ${casadas} já classificada(s) pela memória · competência ${competencia} conferida.`)
       if (modo === 'combinado') marcarCombinado(file.name)
       else if (bancoFixo) marcarBanco(bancoFixo, 'validado', file.name)
     } catch (e) { setErro('Não consegui ler: ' + e.message) }
@@ -253,7 +273,17 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado }) {
   function trocarCol(campo, idx) {
     const mapa = { ...map, [campo]: idx }
     setMap(mapa)
-    if (raw) setLinhas(classificar(raw, mapa, memoria, raw.banco))
+    if (!raw) return
+    const cl = classificar(raw, mapa, memoria, raw.banco)
+    setLinhas(cl)
+    // Reconfere a competência ao trocar a coluna de data (ex.: quando não foi auto-detectada).
+    const erroComp = validarCompetencia(cl, mapa, competencia)
+    setErro(erroComp)
+    if (!erroComp && campo === 'data') {
+      if (modo === 'combinado') marcarCombinado(raw.nome)
+      else if (raw.banco) marcarBanco(raw.banco, 'validado', raw.nome)
+      setMsg(`${cl.length} linha(s) · competência ${competencia} conferida.`)
+    }
   }
   const setLinha = (i, patch) => setLinhas(ls => ls.map((l, j) => j === i ? { ...l, ...patch } : l))
 
