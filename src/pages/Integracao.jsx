@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
@@ -166,6 +166,11 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   const [msg, setMsg] = useState('')
   const [perfil, setPerfil] = useState(null)     // perfil de leitura do extrato deste cliente
   const [cfg, setCfg] = useState(null)           // { raw, banco, perfil } — painel de mapeamento aberto
+  const [fSem, setFSem] = useState(false)        // filtro: só linhas sem contrapartida
+  const [fHist, setFHist] = useState('')         // filtro por histórico
+  const [fData, setFData] = useState('')         // filtro por data (dd/mm)
+  const [lote, setLote] = useState('')           // conta para preencher em lote nos filtrados
+  const refsContra = useRef({})                  // foco: Enter pula para a próxima linha
 
   const nomeBanco = cod => planoMap[String(cod)]?.nome || (cod ? `Conta ${cod}` : '—')
   const bancosEst = est?.bancos || {}
@@ -348,6 +353,24 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   }
   const setLinha = (i, patch) => setLinhas(ls => ls.map((l, j) => j === i ? { ...l, ...patch } : l))
 
+  // Filtros da tabela de classificação + preenchimento em lote.
+  const dataBR = iso => iso ? iso.split('-').reverse().join('/') : ''
+  const normTxt = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+  function linhaVisivel(l) {
+    if (fSem && l.contra) return false
+    if (fHist && !normTxt(l.historico).includes(normTxt(fHist))) return false
+    if (fData && !dataBR(l.data).includes(fData.trim())) return false
+    return true
+  }
+  function aplicarLote() {
+    const cod = String(lote || '').trim()
+    if (!cod) { setMsg('Informe a conta para aplicar em lote.'); return }
+    const alvo = new Set(linhas.map((l, i) => linhaVisivel(l) ? i : -1).filter(i => i >= 0))
+    if (!alvo.size) { setMsg('Nenhuma linha filtrada para aplicar.'); return }
+    setLinhas(ls => ls.map((l, j) => alvo.has(j) ? { ...l, contra: cod } : l))
+    setMsg(`Conta ${cod} aplicada em ${alvo.size} linha(s) filtrada(s).`)
+  }
+
   // Aprende: guarda credor/devedor → contrapartida das linhas classificadas
   // (casa pelo nome da empresa; cai no histórico montado se não houver credor).
   async function aprenderSalvar() {
@@ -449,6 +472,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
 
   const prontas = linhas.filter(l => l.banco && l.contra && l.valor > 0).length
   const semContra = linhas.filter(l => !l.contra).length
+  const visiveis = linhas.map((l, i) => ({ l, i })).filter(({ l }) => linhaVisivel(l))
   const memAtiva = memoria.length > 0
 
   return (
@@ -579,29 +603,46 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
             </div>
           )}
 
-          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 12.5, margin: '6px 0 10px' }}>
+          {/* Filtros + preenchimento em lote */}
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', margin: '6px 0 8px' }}>
+            <button className={fSem ? 'btn' : 'btn btn-ghost'} style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => setFSem(v => !v)}><i className="ti ti-filter" /> Só sem contrapartida</button>
+            <input className="input" style={{ maxWidth: 220, fontSize: 12, padding: '6px 10px' }} placeholder="Filtrar histórico…" value={fHist} onChange={e => setFHist(e.target.value)} />
+            <input className="input" style={{ maxWidth: 130, fontSize: 12, padding: '6px 10px' }} placeholder="Data (dd/mm)" value={fData} onChange={e => setFData(e.target.value)} />
+            {(fSem || fHist || fData) && <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', color: theme.sub }} onClick={() => { setFSem(false); setFHist(''); setFData('') }}>limpar filtros</button>}
+            <span style={{ flex: 1 }} />
+            <span style={{ fontSize: 12, color: theme.sub }}>Aplicar em lote nos filtrados:</span>
+            <CampoConta value={lote} onChange={setLote} onEnter={aplicarLote} placeholder="Conta (F4)" style={{ width: 190 }} />
+            <button className="btn" style={{ fontSize: 12, padding: '5px 10px' }} onClick={aplicarLote}><i className="ti ti-wand" /> Aplicar ({visiveis.length})</button>
+          </div>
+
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 12.5, margin: '0 0 10px' }}>
             <span style={{ color: theme.green }}><b>{prontas}</b> pronta(s) p/ contabilizar</span>
             <span style={{ color: theme.yellow }}><b>{semContra}</b> sem contrapartida</span>
+            <span style={{ color: theme.sub }}>mostrando <b>{visiveis.length}</b> de {linhas.length}</span>
           </div>
 
           {/* Tabela de classificação */}
           <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'auto', maxHeight: 460 }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 820 }}>
               <thead>
                 <tr style={{ background: theme.input, position: 'sticky', top: 0 }}>
-                  <th style={fth}>Banco</th><th style={fth}>Histórico</th><th style={{ ...fth, textAlign: 'right' }}>Valor</th><th style={fth}>E/S</th><th style={fth}>Contrapartida</th><th style={fth}>Conta (nome)</th>
+                  <th style={fth}>Data</th><th style={fth}>Banco</th><th style={fth}>Histórico</th><th style={{ ...fth, textAlign: 'right' }}>Valor</th><th style={fth}>E/S</th><th style={fth}>Contrapartida</th><th style={fth}>Conta (nome)</th>
                 </tr>
               </thead>
               <tbody>
-                {linhas.map((l, i) => (
+                {visiveis.map(({ l, i }, pos) => (
                   <tr key={i} style={{ borderTop: `1px solid ${theme.border}`, background: !l.banco ? 'rgba(245,166,35,0.06)' : 'transparent' }}>
+                    <td style={{ ...ftd, fontSize: 11.5, whiteSpace: 'nowrap', color: theme.sub }}>{dataBR(l.data) || '—'}</td>
                     <td style={{ ...ftd, fontSize: 11.5 }}>{l.banco ? `${l.banco} · ${nomeBanco(l.banco)}` : <span style={{ color: theme.yellow }}>sem banco</span>}</td>
                     <td style={{ ...ftd, color: theme.sub, fontSize: 11.5, maxWidth: 260 }}>{l.historico || '—'}</td>
                     <td style={{ ...ftd, textAlign: 'right', whiteSpace: 'nowrap' }}>{money(l.valor)}</td>
                     <td style={{ ...ftd }}>
                       <button className="btn btn-ghost" style={{ fontSize: 11, padding: '3px 8px', color: l.entrada ? theme.green : theme.red, borderColor: l.entrada ? theme.green : theme.red }} onClick={() => setLinha(i, { entrada: !l.entrada })}>{l.entrada ? 'Entrada' : 'Saída'}</button>
                     </td>
-                    <td style={{ ...ftd, minWidth: 180 }}><CampoConta value={l.contra} onChange={v => setLinha(i, { contra: v })} /></td>
+                    <td style={{ ...ftd, minWidth: 180 }}>
+                      <CampoConta value={l.contra} onChange={v => setLinha(i, { contra: v })}
+                        inputRef={el => { refsContra.current[pos] = el }} onEnter={() => refsContra.current[pos + 1]?.focus()} />
+                    </td>
                     <td style={{ ...ftd, fontSize: 11.5, maxWidth: 220 }}>
                       {!l.contra ? <span style={{ color: theme.sub }}>—</span>
                         : planoMap[String(l.contra)]?.nome
@@ -610,6 +651,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
                     </td>
                   </tr>
                 ))}
+                {!visiveis.length && <tr><td colSpan={7} style={{ ...ftd, color: theme.sub, fontSize: 12 }}>Nenhuma linha com os filtros atuais.</td></tr>}
               </tbody>
             </table>
           </div>
