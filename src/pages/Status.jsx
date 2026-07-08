@@ -127,13 +127,20 @@ export default function Status() {
       detalhe: 'Cadastre os bancos do cliente na Integração Financeira para liberar a importação dos extratos.',
       finPendente: true,
     }]
+    // Resolvido só quando concluído (validado) ou sem movimento. Rascunho (em
+    // andamento) continua pendente até concluir.
     return contas
-      .filter(c => !fin.bancos?.[String(c.conta_contabil)]?.estado)
-      .map(c => ({
-        item: `Integração Financeira — ${nomeBanco(c.conta_contabil)} pendente`,
-        detalhe: 'Extrato ainda não importado. Importe o extrato ou marque “Não houve movimentação” na Integração Financeira.',
-        finPendente: true,
-      }))
+      .filter(c => { const e = fin.bancos?.[String(c.conta_contabil)]?.estado; return e !== 'validado' && e !== 'sem_movimento' })
+      .map(c => {
+        const e = fin.bancos?.[String(c.conta_contabil)]?.estado
+        return {
+          item: `Integração Financeira — ${nomeBanco(c.conta_contabil)} ${e === 'rascunho' ? 'em andamento' : 'pendente'}`,
+          detalhe: e === 'rascunho'
+            ? 'Extrato importado, mas ainda não concluído. Finalize a classificação e clique em “Concluir banco”.'
+            : 'Extrato ainda não importado. Importe o extrato ou marque “Não houve movimentação” na Integração Financeira.',
+          finPendente: true,
+        }
+      })
   }
 
   const gates = [
