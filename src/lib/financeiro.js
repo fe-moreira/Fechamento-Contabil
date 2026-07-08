@@ -79,6 +79,14 @@ export function extrairEntidade(s) {
   return normHist(e)
 }
 
+// Um termo só serve para semear a memória a partir de texto livre se parecer um
+// NOME DE EMPRESA — evita casar por palavras genéricas curtas ("ME", "IPI", "REDES").
+export function ehEmpresa(t) {
+  const s = String(t || '').trim()
+  const palavras = s.split(' ').filter(Boolean).length
+  return (palavras >= 2 && s.length >= 12) || /(LTDA|SPE|EPP|S A|S S|SA)$/.test(s)
+}
+
 // ----- Perfil de importação por cliente (cada cliente exporta diferente) -----
 // Normaliza qualquer extrato para um layout único. O histórico sai no padrão do
 // Domínio ("VALOR REFERENTE A PAGAMENTO/RECEBIMENTO" + credor + documento),
