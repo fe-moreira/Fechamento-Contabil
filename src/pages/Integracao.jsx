@@ -26,7 +26,7 @@ function somaNumerica(linhas) {
 }
 
 export default function Integracao() {
-  const { empresas, empresaId, empresaNome, competencia, getCompetenciaId, plano } = useAppData()
+  const { empresas, empresaId, empresaNome, competencia, getCompetenciaId, plano, isAdmin } = useAppData()
   const { user } = useAuth()
   const cliente = empresas.find(e => e.id === empresaId)
   const integ = cliente?.integracao_financeira || 'Não usa'
@@ -94,7 +94,7 @@ export default function Integracao() {
 
       {tab === 'financeira'
         ? (integ === 'Excel'
-          ? <Financeira competencia={competencia} est={estado.financeira || {}} empresaId={empresaId} planoMap={planoMap} user={user} onEstado={salvarFinanceira} />
+          ? <Financeira competencia={competencia} est={estado.financeira || {}} empresaId={empresaId} planoMap={planoMap} user={user} onEstado={salvarFinanceira} isAdmin={isAdmin} />
           : <FinanceiraViaSistema integ={integ} sistema={sistema} />)
         : <Cruzamento tab={tab} dados={dados[tab]} onImport={f => importar(tab, f)} est={estado[tab]} />}
     </Wrapper>
@@ -152,7 +152,7 @@ function validarCompetencia(linhas, mapa, comp) {
   return ''
 }
 
-function Financeira({ competencia, est, empresaId, planoMap, user, onEstado }) {
+function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isAdmin }) {
   const [contas, setContas] = useState([])       // [{ conta_contabil, agencia, conta }]
   const [memoria, setMemoria] = useState([])     // [{ termo, conta }]
   const [memMeta, setMemMeta] = useState({ nomeArquivo: '', semCarga: false })
@@ -201,6 +201,12 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado }) {
     setNovo({ conta_contabil: '', agencia: '', conta: '' })
   }
   const removeConta = i => salvarContas(contas.filter((_, j) => j !== i))
+  // Excluir banco do cadastro (só admin): tira o slot e limpa o estado da competência.
+  async function excluirBanco(c) {
+    if (!window.confirm(`Excluir o banco ${c.conta_contabil} · ${nomeBanco(c.conta_contabil)} do cadastro? Ele deixa de exigir integração nesta e nas próximas competências.`)) return
+    marcarBanco(c.conta_contabil, null)
+    await salvarContas(contas.filter(x => String(x.conta_contabil) !== String(c.conta_contabil)))
+  }
 
   // Memória: grava entradas + metadados (arquivo de origem / marcado "sem carga").
   async function salvarMemoria(entries, meta) {
@@ -360,7 +366,9 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado }) {
                     <i className="ti ti-building-bank" style={{ color: theme.accent }} />
                     <span style={{ fontWeight: 600, minWidth: 70 }}>{c.conta_contabil}</span>
                     <span style={{ flex: 1, color: theme.sub }}>{nomeBanco(c.conta_contabil)}{(c.agencia || c.conta) ? ` · ag ${c.agencia || '—'} / cc ${c.conta || '—'}` : ''}</span>
-                    <i className="ti ti-trash" title="Remover" onClick={() => removeConta(i)} style={{ color: theme.sub, cursor: 'pointer' }} />
+                    {isAdmin
+                      ? <i className="ti ti-trash" title="Excluir banco (admin)" onClick={() => excluirBanco(c)} style={{ color: theme.sub, cursor: 'pointer' }} />
+                      : <i className="ti ti-lock" title="Só administradores excluem bancos" style={{ color: theme.border }} />}
                   </div>
                 ))}
               </div>
@@ -430,6 +438,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado }) {
                       </label>
                       <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => marcarBanco(c.conta_contabil, 'sem_movimento')}><i className="ti ti-circle-minus" /> Sem movimento</button>
                       {s?.estado && <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', color: theme.sub }} onClick={() => marcarBanco(c.conta_contabil, null)}>limpar</button>}
+                      {isAdmin && <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', color: theme.red, borderColor: theme.red }} onClick={() => excluirBanco(c)}><i className="ti ti-trash" /> Excluir banco</button>}
                     </div>
                   </div>
                 )
