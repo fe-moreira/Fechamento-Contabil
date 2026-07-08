@@ -173,6 +173,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   const [fES, setFES] = useState('')             // filtro entrada/saída ('' | 'entrada' | 'saida')
   const [lote, setLote] = useState('')           // conta para preencher em lote nas selecionadas
   const [sel, setSel] = useState(() => new Set())// linhas selecionadas (índice original)
+  const [quebra, setQuebra] = useState(null)      // { i, linha } divisão de um lançamento
   const refsContra = useRef({})                  // foco: Enter pula para a próxima linha
 
   const nomeBanco = cod => planoMap[String(cod)]?.nome || (cod ? `Conta ${cod}` : '—')
@@ -419,6 +420,14 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     return true
   }
   const toggleUm = i => setSel(prev => { const n = new Set(prev); n.has(i) ? n.delete(i) : n.add(i); return n })
+  // Divide um lançamento em vários (ex.: 1 DARF → 3 lançamentos contábeis).
+  function confirmarQuebra(i, partes) {
+    const base = linhas[i]
+    const novas = partes.map(p => ({ ...base, valor: Math.abs(Number(p.valor) || 0), contra: String(p.contra || '').trim() }))
+    setLinhas(ls => [...ls.slice(0, i), ...novas, ...ls.slice(i + 1)])
+    setSel(new Set()); setQuebra(null)
+    setMsg(`Lançamento dividido em ${novas.length}.`)
+  }
   function aplicarLote() {
     const cod = String(lote || '').trim()
     if (!cod) { setMsg('Informe a conta para aplicar em lote.'); return }
@@ -718,8 +727,11 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
                       <button className="btn btn-ghost" style={{ fontSize: 11, padding: '3px 8px', color: l.entrada ? theme.green : theme.red, borderColor: l.entrada ? theme.green : theme.red }} onClick={() => setLinha(i, { entrada: !l.entrada })}>{l.entrada ? 'Entrada' : 'Saída'}</button>
                     </td>
                     <td style={{ ...ftd, minWidth: 180 }}>
-                      <CampoConta value={l.contra} onChange={v => setLinha(i, { contra: v })}
-                        inputRef={el => { refsContra.current[pos] = el }} onEnter={() => refsContra.current[pos + 1]?.focus()} />
+                      <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                        <CampoConta value={l.contra} onChange={v => setLinha(i, { contra: v })} style={{ flex: 1 }}
+                          inputRef={el => { refsContra.current[pos] = el }} onEnter={() => refsContra.current[pos + 1]?.focus()} />
+                        <i className="ti ti-arrows-split-2" title="Dividir em vários lançamentos" onClick={() => setQuebra({ i, linha: l })} style={{ color: theme.sub, cursor: 'pointer', fontSize: 16, flexShrink: 0 }} />
+                      </div>
                     </td>
                     <td style={{ ...ftd, fontSize: 11.5, maxWidth: 220 }}>
                       {!l.contra ? <span style={{ color: theme.sub }}>—</span>
@@ -744,6 +756,11 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
         </>
       )}
 
+      {quebra && (
+        <ModalQuebra linha={quebra.linha} nomeBanco={nomeBanco} planoMap={planoMap}
+          onClose={() => setQuebra(null)} onConfirmar={partes => confirmarQuebra(quebra.i, partes)} />
+      )}
+
       {cfg && (
         <PerfilExtratoCfg
           arr={cfg.arr} catByRow={cfg.catByRow} nome={cfg.nome} bancoNome={nomeBanco(cfg.banco)} perfilInicial={cfg.perfil} memoria={memoria}
@@ -752,6 +769,50 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
         />
       )}
     </>
+  )
+}
+
+// Divide um lançamento em várias partes (ex.: 1 DARF → 3 lançamentos contábeis).
+// A soma das partes precisa fechar com o valor original.
+function ModalQuebra({ linha, nomeBanco, planoMap, onClose, onConfirmar }) {
+  const [partes, setPartes] = useState([{ valor: linha.valor, contra: linha.contra || '' }, { valor: 0, contra: '' }])
+  const set = (i, patch) => setPartes(ps => ps.map((p, j) => j === i ? { ...p, ...patch } : p))
+  const add = () => setPartes(ps => [...ps, { valor: 0, contra: '' }])
+  const rem = i => setPartes(ps => ps.length > 2 ? ps.filter((_, j) => j !== i) : ps)
+  const soma = partes.reduce((s, p) => s + (Number(p.valor) || 0), 0)
+  const dif = Math.round((linha.valor - soma) * 100) / 100
+  const ok = Math.abs(dif) < 0.005 && partes.every(p => Number(p.valor) > 0 && String(p.contra).trim())
+  const nomeC = c => planoMap[String(c).trim()]?.nome || ''
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 16, zIndex: 60 }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 'min(640px,96vw)', maxHeight: '90vh', overflow: 'auto', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 22 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+          <h2 style={{ fontSize: 16, margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}><i className="ti ti-arrows-split-2" style={{ color: theme.accent }} /> Dividir lançamento</h2>
+          <span onClick={onClose} style={{ cursor: 'pointer', color: theme.sub, fontSize: 20 }}><i className="ti ti-x" /></span>
+        </div>
+        <p style={{ color: theme.sub, fontSize: 12, margin: '0 0 2px' }}>{linha.banco} · {nomeBanco(linha.banco)} · {linha.entrada ? 'Entrada' : 'Saída'}</p>
+        <p style={{ color: theme.sub, fontSize: 11.5, margin: '0 0 10px' }}>{linha.historico}</p>
+        <p style={{ fontSize: 13, margin: '0 0 12px' }}>Valor original: <b style={{ color: theme.text }}>{money(linha.valor)}</b></p>
+        <div style={{ display: 'grid', gap: 8 }}>
+          {partes.map((p, i) => (
+            <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <input className="input" type="number" step="0.01" style={{ width: 130, fontSize: 12 }} value={p.valor} onChange={e => set(i, { valor: e.target.value })} placeholder="Valor" />
+              <div style={{ flex: 1, minWidth: 170 }}><CampoConta value={p.contra} onChange={v => set(i, { contra: v })} placeholder="Contrapartida (F4)" /></div>
+              <span style={{ fontSize: 11, color: nomeC(p.contra) ? theme.green : theme.sub, minWidth: 110, maxWidth: 160 }}>{nomeC(p.contra)}</span>
+              {partes.length > 2 && <i className="ti ti-trash" onClick={() => rem(i)} style={{ color: theme.sub, cursor: 'pointer' }} />}
+            </div>
+          ))}
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12, flexWrap: 'wrap', gap: 8 }}>
+          <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={add}><i className="ti ti-plus" /> Adicionar parte</button>
+          <span style={{ fontSize: 12.5, color: Math.abs(dif) < 0.005 ? theme.green : theme.red }}>Soma {money(soma)} · {Math.abs(dif) < 0.005 ? 'confere' : `diferença ${money(dif)}`}</span>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
+          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+          <button className="btn" disabled={!ok} onClick={() => onConfirmar(partes)}><i className="ti ti-check" /> Dividir</button>
+        </div>
+      </div>
+    </div>
   )
 }
 
