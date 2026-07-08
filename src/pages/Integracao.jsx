@@ -183,9 +183,14 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado }) {
     })
   }, [empresaId])
 
+  // Cadastro de bancos e memória valem para todas as competências (o cliente
+  // cadastra uma vez). Por isso é lido sempre pelo registro mais recente, sem
+  // filtro de mês, e persiste para os próximos meses.
   async function salvarCarga(tipo, arr, obs) {
     await supabase.from('cargas_cadastro').delete().eq('cliente_id', empresaId).eq('tipo', tipo)
-    await supabase.from('cargas_cadastro').insert({ cliente_id: empresaId, tipo, vigencia: competencia, dados: arr, usuario: user?.email || null, obs })
+    const { error } = await supabase.from('cargas_cadastro').insert({ cliente_id: empresaId, tipo, vigencia: competencia, dados: arr, usuario: user?.email || null, obs })
+    if (error) setErro('Não consegui gravar: ' + error.message)
+    return error
   }
   async function salvarContas(arr) { setContas(arr); await salvarCarga('contas_bancarias', arr, 'Contas bancárias') }
   function addConta() {
