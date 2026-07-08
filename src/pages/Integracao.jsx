@@ -339,6 +339,21 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     } catch (e) { setErro('Não consegui ler: ' + e.message) }
   }
 
+  // Modelo da memória: planilha com as 2 colunas que a importação espera.
+  async function baixarModeloMemoria() {
+    const XLSX = await import('xlsx')
+    const ws = XLSX.utils.aoa_to_sheet([
+      ['Histórico', 'Conta'],
+      ['PAGAMENTO CPFL ENERGIA', '4.1.1.001'],
+      ['TARIFA BANCARIA PACOTE DE SERVICOS', '4.2.1.010'],
+      ['RECEBIMENTO CLIENTE RGE SUL', '1.1.2.001'],
+    ])
+    ws['!cols'] = [{ wch: 44 }, { wch: 16 }]
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Memória')
+    XLSX.writeFile(wb, 'modelo_memoria_financeiro.xlsx')
+  }
+
   // Gera a partida completa para o Domínio (banco + contrapartida, por entrada/saída).
   function gerar() {
     const prontasL = linhas.filter(l => l.banco && l.contra && l.valor > 0)
@@ -403,11 +418,13 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
               </p>
             </div>
           </div>
+          <p style={{ fontSize: 11.5, color: theme.sub, margin: '8px 0 0' }}>A planilha precisa de duas colunas: <b style={{ color: theme.text }}>Histórico</b> (o texto do lançamento) e <b style={{ color: theme.text }}>Conta</b> (a contrapartida). Use o modelo para não errar as colunas.</p>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
             <label className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', cursor: 'pointer' }}>
               <i className="ti ti-upload" /> {memAtiva ? 'Complementar' : 'Importar carga inicial'}
               <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={e => importarMemoria(e.target.files?.[0])} />
             </label>
+            <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={baixarModeloMemoria}><i className="ti ti-download" /> Baixar modelo</button>
             {memAtiva && <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', color: theme.red, borderColor: theme.red }} onClick={excluirMemoria}><i className="ti ti-trash" /> Excluir memória</button>}
             {!memAtiva && !memMeta.semCarga && <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={marcarSemCarga}><i className="ti ti-circle-minus" /> Não tem carga inicial</button>}
             {!memAtiva && memMeta.semCarga && <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => salvarMemoria([], { nomeArquivo: '', semCarga: false })}><i className="ti ti-rotate" /> Desfazer</button>}
