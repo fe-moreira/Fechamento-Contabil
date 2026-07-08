@@ -17,8 +17,12 @@ const COMPETENCIAS = Array.from({ length: 12 }, (_, i) => `${String(i + 1).padSt
 
 export function AppDataProvider({ children }) {
   const [empresas, setEmpresas] = useState([])
-  const [empresaId, setEmpresaId] = useState('')
-  const [competencia, setCompetencia] = useState('06/2026')
+  // Seleção persiste no navegador — ao atualizar a página, o cliente e a
+  // competência escolhidos continuam ativos (não precisa reselecionar).
+  const [empresaId, setEmpresaId] = useState(() => localStorage.getItem('empresaId') || '')
+  const [competencia, setCompetencia] = useState(() => localStorage.getItem('competencia') || '06/2026')
+  useEffect(() => { if (empresaId) localStorage.setItem('empresaId', empresaId); else localStorage.removeItem('empresaId') }, [empresaId])
+  useEffect(() => { if (competencia) localStorage.setItem('competencia', competencia) }, [competencia])
   const [pendencias, setPendencias] = useState(null)
   // Fechamento ativo: as funções só liberam com um fechamento aberto/criado.
   const [fechamentoAtivo, setFechamentoAtivo] = useState(false)
@@ -31,15 +35,16 @@ export function AppDataProvider({ children }) {
 
   // Plano de contas do cliente (para o seletor de conta com F4).
   const [plano, setPlano] = useState([])
-  useEffect(() => {
-    if (!empresaId) { setPlano([]); return }
-    supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'plano')
+  // Recarrega o plano do cliente. Exposto no contexto para que, ao importar um
+  // plano novo, a plataforma atualize tudo na hora — sem precisar dar refresh.
+  async function recarregarPlano(id = empresaId) {
+    if (!id) { setPlano([]); return }
+    const { data } = await supabase.from('cargas_cadastro').select('dados').eq('cliente_id', id).eq('tipo', 'plano')
       .order('created_at', { ascending: false }).limit(1).maybeSingle()
-      .then(({ data }) => {
-        const mask = parsePlano(data?.dados).find(p => p.mascara)?.mascara || '9.9.9.999.9999'
-        setPlano(parsePlano(data?.dados).map(p => ({ cod: p.reduzido, nome: p.nome, classif: applyMask(p.classif, mask), sintetica: p.sintetica })).filter(p => p.cod))
-      })
-  }, [empresaId])
+    const mask = parsePlano(data?.dados).find(p => p.mascara)?.mascara || '9.9.9.999.9999'
+    setPlano(parsePlano(data?.dados).map(p => ({ cod: p.reduzido, nome: p.nome, classif: applyMask(p.classif, mask), sintetica: p.sintetica })).filter(p => p.cod))
+  }
+  useEffect(() => { recarregarPlano() }, [empresaId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function carregarEmpresas() {
     const { data } = await supabase
@@ -146,7 +151,7 @@ export function AppDataProvider({ children }) {
     empresaNome, getCompetenciaId, carregarEmpresas,
     pendencias, recalcularPendencias, isAdmin,
     fechamentoAtivo, setFechamentoAtivo, abrirFechamento,
-    plano,
+    plano, recarregarPlano,
   }
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }
