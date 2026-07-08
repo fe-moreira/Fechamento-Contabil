@@ -589,7 +589,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
             <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
               <thead>
                 <tr style={{ background: theme.input, position: 'sticky', top: 0 }}>
-                  <th style={fth}>Banco</th><th style={fth}>Histórico</th><th style={{ ...fth, textAlign: 'right' }}>Valor</th><th style={fth}>E/S</th><th style={fth}>Contrapartida</th>
+                  <th style={fth}>Banco</th><th style={fth}>Histórico</th><th style={{ ...fth, textAlign: 'right' }}>Valor</th><th style={fth}>E/S</th><th style={fth}>Contrapartida</th><th style={fth}>Conta (nome)</th>
                 </tr>
               </thead>
               <tbody>
@@ -602,6 +602,12 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
                       <button className="btn btn-ghost" style={{ fontSize: 11, padding: '3px 8px', color: l.entrada ? theme.green : theme.red, borderColor: l.entrada ? theme.green : theme.red }} onClick={() => setLinha(i, { entrada: !l.entrada })}>{l.entrada ? 'Entrada' : 'Saída'}</button>
                     </td>
                     <td style={{ ...ftd, minWidth: 180 }}><CampoConta value={l.contra} onChange={v => setLinha(i, { contra: v })} /></td>
+                    <td style={{ ...ftd, fontSize: 11.5, maxWidth: 220 }}>
+                      {!l.contra ? <span style={{ color: theme.sub }}>—</span>
+                        : planoMap[String(l.contra)]?.nome
+                          ? <span style={{ color: theme.green }}>{planoMap[String(l.contra)].nome}</span>
+                          : <span style={{ color: theme.red }}><i className="ti ti-alert-triangle" /> conta não encontrada no plano</span>}
+                    </td>
                   </tr>
                 ))}
               </tbody>
