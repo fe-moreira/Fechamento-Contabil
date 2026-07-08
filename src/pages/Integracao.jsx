@@ -289,13 +289,20 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   // Aplica o perfil já salvo a um extrato por banco e segue (marca o banco).
   function aplicarEProsseguir(arr, nome, bancoFixo, perf, catByRow) {
     const norm = aplicarPerfil(arr, perf, memoria, catByRow).map(l => ({ ...l, banco: bancoFixo }))
+    // Reimport do mesmo arquivo: preserva as contrapartidas já preenchidas no
+    // rascunho (mesmo arquivo → mesma ordem), atualizando histórico/valor/data.
+    const prev = (est?.bancos || {})[bancoFixo]?.draft
+    let mantidas = 0
+    if (Array.isArray(prev) && prev.length === norm.length) {
+      norm.forEach((l, i) => { if (prev[i]?.contra) { l.contra = prev[i].contra; mantidas++ } })
+    }
     setRaw({ nome, banco: bancoFixo, viaPerfil: true, arr, catByRow })
     setLinhas(norm); setSel(new Set())
     if (!norm.length) { setErro('O perfil de leitura não encontrou lançamentos. Clique em “Ajustar leitura” e revise o mapeamento.'); return }
     const erroComp = validarCompetencia(norm, { data: (perf.colData != null && perf.colData >= 0) ? 0 : -1 }, competencia)
     if (erroComp) { setErro(erroComp); return }
     const casadas = norm.filter(l => l.contra).length
-    setMsg(`${norm.length} linha(s) · ${casadas} classificada(s) pela memória. Rascunho salvo — conclua quando tudo estiver contabilizado.`)
+    setMsg(`${norm.length} linha(s) · ${casadas} classificada(s)${mantidas ? ` · ${mantidas} do rascunho preservada(s)` : ' pela memória'}. Rascunho salvo — conclua quando tudo estiver contabilizado.`)
     // Salva como rascunho (em andamento); só vira "concluído" ao clicar Concluir.
     salvarBancoDraft(bancoFixo, 'rascunho', nome, norm)
   }
