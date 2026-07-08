@@ -21,6 +21,7 @@ create table if not exists public.clientes (
   coleta_razao      boolean default false,
   sistema_financeiro text,
   integracao_financeira text default 'Não usa',  -- 'Sistema' | 'Excel' | 'Não usa'
+  usa_centro_custo  boolean not null default false, -- financeiro com centro de custo
   analista          text,
   observacoes       text,
   ativo             boolean default true,

@@ -10,6 +10,7 @@ const vazio = {
   codigo_dominio: '', tipo: 'Matriz', codigo_matriz: '', razao_social: '',
   nome_fantasia: '', cnpj: '', regime_tributario: 'SIMPLES NACIONAL',
   competencia_inicio: '', sistema_financeiro: '', integracao_financeira: 'Não usa',
+  usa_centro_custo: false,
   analista: '', observacoes: '', prazo_entrega: '', tipo_fechamento: 'Consolidado',
 }
 
@@ -367,6 +368,11 @@ export default function Clientes() {
               <Campo label="Sistema financeiro" req={form.integracao_financeira !== 'Não usa'}>
                 <input className="input" value={form.sistema_financeiro || ''} onChange={set('sistema_financeiro')} placeholder="Ex.: Conta Azul"
                   required={form.integracao_financeira !== 'Não usa'} disabled={form.integracao_financeira === 'Não usa'} />
+              </Campo>
+              <Campo label="Usa centro de custo?">
+                <select className="input" value={form.usa_centro_custo ? 'Sim' : 'Não'} onChange={e => setForm(f => ({ ...f, usa_centro_custo: e.target.value === 'Sim' }))}>
+                  <option>Não</option><option>Sim</option>
+                </select>
               </Campo>
               <Campo label="Analista" req><input className="input" value={form.analista || ''} onChange={set('analista')} required /></Campo>
               <Campo label="Observações" full><textarea className="input" rows={2} value={form.observacoes || ''} onChange={set('observacoes')} /></Campo>
