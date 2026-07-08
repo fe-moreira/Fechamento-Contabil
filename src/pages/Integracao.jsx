@@ -171,6 +171,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   const [fMode, setFMode] = useState('contem')   // 'contem' | 'exato'
   const [fData, setFData] = useState('')         // filtro por data (dd/mm)
   const [fES, setFES] = useState('')             // filtro entrada/saída ('' | 'entrada' | 'saida')
+  const [fConta, setFConta] = useState('')       // filtro por conta de contrapartida
   const [lote, setLote] = useState('')           // conta para preencher em lote nas selecionadas
   const [sel, setSel] = useState(() => new Set())// linhas selecionadas (índice original)
   const [quebra, setQuebra] = useState(null)      // { i, linha } divisão de um lançamento
@@ -336,7 +337,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     if (raw?.viaPerfil && raw.banco) marcarBanco(raw.banco, null)
     else if (modo === 'combinado') { const e = { ...est }; delete e.combinado; onEstado(e) }
     setRaw(null); setLinhas([]); setSel(new Set())
-    setFSem(false); setFHist(''); setFData(''); setFES(''); setLote('')
+    setFSem(false); setFHist(''); setFData(''); setFES(''); setFConta(''); setLote('')
     setErro(''); setMsg('Importação desfeita — pode iniciar uma nova.')
   }
 
@@ -417,6 +418,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     }
     if (fData && !dataBR(l.data).includes(fData.trim())) return false
     if (fES && (fES === 'entrada') !== !!l.entrada) return false
+    if (fConta && String(l.contra || '').trim() !== String(fConta).trim()) return false
     return true
   }
   const toggleUm = i => setSel(prev => { const n = new Set(prev); n.has(i) ? n.delete(i) : n.add(i); return n })
@@ -435,7 +437,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     const n = sel.size
     setLinhas(ls => ls.map((l, j) => sel.has(j) ? { ...l, contra: cod } : l))
     // Volta ao estado original para a próxima aplicação: limpa filtro, seleção e conta.
-    setSel(new Set()); setLote(''); setFSem(false); setFHist(''); setFData(''); setFES('')
+    setSel(new Set()); setLote(''); setFSem(false); setFHist(''); setFData(''); setFES(''); setFConta('')
     setMsg(`Conta ${cod} aplicada em ${n} linha(s). Pronto para a próxima seleção.`)
   }
 
@@ -691,7 +693,8 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
             <select className="input" style={{ maxWidth: 120, fontSize: 12, padding: '6px 8px' }} value={fES} onChange={e => setFES(e.target.value)}>
               <option value="">Entrada/Saída</option><option value="entrada">Só entradas</option><option value="saida">Só saídas</option>
             </select>
-            {(fSem || fHist || fData || fES) && <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', color: theme.sub }} onClick={() => { setFSem(false); setFHist(''); setFData(''); setFES('') }}>limpar filtros</button>}
+            <CampoConta value={fConta} onChange={setFConta} placeholder="Filtrar conta (F4)" style={{ width: 170 }} />
+            {(fSem || fHist || fData || fES || fConta) && <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', color: theme.sub }} onClick={() => { setFSem(false); setFHist(''); setFData(''); setFES(''); setFConta('') }}>limpar filtros</button>}
             <span style={{ flex: 1 }} />
             <span style={{ fontSize: 12, color: theme.sub }}>Aplicar às selecionadas:</span>
             <CampoConta value={lote} onChange={setLote} onEnter={aplicarLote} placeholder="Conta (F4)" style={{ width: 190 }} />
