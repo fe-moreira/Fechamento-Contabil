@@ -270,7 +270,6 @@ export default function BaseInformacoes() {
               ? { txt: 'carga pendente', cor: theme.yellow, bg: 'rgba(245,166,35,0.15)' }
               : { txt: `início ${periodo}`, cor: theme.green, bg: 'rgba(48,164,108,0.15)' }}
           onClick={() => setModal({ tipo: 'periodo' })} />
-        <CargaCard {...CARGAS[3]} ultima={cargas.financeiro?.at(-1)} onClick={() => setModal({ tipo: 'carga', carga: CARGAS[3] })} />
         <CargaCard {...CARGAS[4]} ultima={cargas.bancoresult?.at(-1)} onClick={() => setModal({ tipo: 'carga', carga: CARGAS[4] })} />
         <SimplesCard icon="ti-users" title="Distribuição de lucros" sub="Limite, alíquota e sócios (IRRF 2026)"
           badge={dist ? { txt: 'configurado', cor: theme.green, bg: 'rgba(48,164,108,0.15)' } : null}

@@ -43,8 +43,15 @@ export default function Status() {
     setCarregando(true)
 
     const { data: cli } = await supabase.from('clientes')
-      .select('carga_saldos, carga_inicial_feita').eq('id', empresaId).maybeSingle()
+      .select('carga_saldos, carga_inicial_feita, integracao_financeira').eq('id', empresaId).maybeSingle()
     const cargaInicialPendente = !!(cli?.carga_saldos && !cli?.carga_inicial_feita)
+    const integracaoFin = cli?.integracao_financeira || 'Não usa'
+
+    // Contas bancárias cadastradas (uma importação por banco na Integração Financeira).
+    const { data: bc } = await supabase.from('cargas_cadastro')
+      .select('dados').eq('cliente_id', empresaId).eq('tipo', 'contas_bancarias')
+      .order('created_at', { ascending: false }).limit(1).maybeSingle()
+    const contasBancarias = Array.isArray(bc?.dados) ? bc.dados : []
 
     const [mes, ano] = competencia.split('/').map(Number)
     const { data: comp } = await supabase.from('competencias')
@@ -80,7 +87,7 @@ export default function Status() {
     const br = await apurarBancoResultado(empresaId, comp?.id)
     const variacoes = await apurarVariacoes(empresaId)
 
-    setDados({ temRazao, docsPendentes, contasAbertas, cargaInicialPendente, dist, br, variacoes, integracoes, observacoes, lancamentos })
+    setDados({ temRazao, docsPendentes, contasAbertas, cargaInicialPendente, integracaoFin, contasBancarias, dist, br, variacoes, integracoes, observacoes, lancamentos })
     setCarregando(false)
   }
 
@@ -97,6 +104,36 @@ export default function Status() {
   }
   if (!dados) {
     return <Wrapper nome={empresaNome} comp={competencia}><p style={{ color: theme.sub, fontSize: 13 }}>Carregando…</p></Wrapper>
+  }
+
+  const nomeBanco = cod => planoMap[String(cod)]?.nome || (cod ? `Conta ${cod}` : '—')
+
+  // Integração Financeira: cliente por Excel valida um extrato por banco (ou uma
+  // planilha combinada que cobre todos). Enquanto um banco não for importado nem
+  // marcado "sem movimento" na Integração, ele fica pendente aqui no Status.
+  function itensFinanceira() {
+    const fin = dados.integracoes?.financeira || {}
+    if (dados.integracaoFin !== 'Excel') {
+      return fin.estado ? [] : [{
+        item: 'Integração Financeira não validada',
+        detalhe: 'Nenhum documento importado. Importe em Integração ou marque “Não tem movimento”.',
+        integracao: 'financeira',
+      }]
+    }
+    if (fin.combinado?.estado === 'validado') return []
+    const contas = dados.contasBancarias || []
+    if (!contas.length) return [{
+      item: 'Integração Financeira — cadastre as contas bancárias',
+      detalhe: 'Cadastre os bancos do cliente na Integração Financeira para liberar a importação dos extratos.',
+      finPendente: true,
+    }]
+    return contas
+      .filter(c => !fin.bancos?.[String(c.conta_contabil)]?.estado)
+      .map(c => ({
+        item: `Integração Financeira — ${nomeBanco(c.conta_contabil)} pendente`,
+        detalhe: 'Extrato ainda não importado. Importe o extrato ou marque “Não houve movimentação” na Integração Financeira.',
+        finPendente: true,
+      }))
   }
 
   const gates = [
@@ -181,11 +218,16 @@ export default function Status() {
       nome: 'Integrações validadas',
       icon: 'ti-plug-connected',
       descricao: 'Fiscal, Folha, Patrimônio e Financeira: documento importado ou marcado sem movimento.',
-      itens: INTEGRACOES.filter(ig => !dados.integracoes?.[ig.key]?.estado).map(ig => ({
-        item: `Integração ${ig.nome} não validada`,
-        detalhe: 'Nenhum documento importado. Importe em Integração ou marque “Não tem movimento”.',
-        integracao: ig.key,
-      })),
+      itens: [
+        ...INTEGRACOES.filter(ig => ig.key !== 'financeira')
+          .filter(ig => !dados.integracoes?.[ig.key]?.estado)
+          .map(ig => ({
+            item: `Integração ${ig.nome} não validada`,
+            detalhe: 'Nenhum documento importado. Importe em Integração ou marque “Não tem movimento”.',
+            integracao: ig.key,
+          })),
+        ...itensFinanceira(),
+      ],
     },
     {
       key: 'observacoes',
@@ -571,7 +613,12 @@ function PainelGate({ gate, onClose, onJustificar, onCorrigir, onSemMovimento, o
                 {it.sub && <p style={{ fontSize: 11.5, color: theme.accent, margin: '3px 0 0' }}>{it.sub}</p>}
                 <p style={{ fontSize: 12, color: theme.sub, margin: '3px 0 0' }}>{it.detalhe}</p>
               </div>
-              {gate.informativo ? null : it.integracao ? (
+              {gate.informativo ? null : it.finPendente ? (
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <span style={{ fontSize: 11.5, color: theme.sub }}>Resolva na Integração Financeira</span>
+                  <button className="btn btn-ghost" style={{ fontSize: 13 }} onClick={() => onJustificar(it)}><i className="ti ti-flag" /> Justificar</button>
+                </div>
+              ) : it.integracao ? (
                 <div style={{ display: 'flex', gap: 8 }}>
                   <button className="btn" style={{ fontSize: 13 }} onClick={() => onSemMovimento(it.integracao)}><i className="ti ti-circle-minus" /> Não tem movimento</button>
                 </div>
