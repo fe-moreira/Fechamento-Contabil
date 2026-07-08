@@ -5,6 +5,7 @@ import { useAuth } from '../components/AuthProvider'
 import { theme, money } from '../lib/theme'
 import CampoConta from '../components/CampoConta'
 import { normHist, casarHistorico, aprender, parseValor, dataISO, aplicarPerfil, extrairEntidade, ehEmpresa, catByRowDeMerges } from '../lib/financeiro'
+import { gerarExcelTimbrado } from '../lib/excel'
 import { gerarDominioCSV } from '../lib/dominio'
 
 const TABS = [['fiscal', 'Fiscal'], ['folha', 'Folha'], ['patrimonio', 'Patrimônio'], ['financeira', 'Financeira']]
@@ -532,6 +533,24 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     XLSX.writeFile(wb, `modelo_financeiro_${usaCC ? 'com' : 'sem'}_centro_custo.xlsx`)
   }
 
+  // Exporta a classificação atual para Excel (para conferência/validação).
+  async function exportarExcel() {
+    if (!linhas.length) { setMsg('Nada para exportar.'); return }
+    const cols = [
+      { nome: 'Data', largura: 12 }, { nome: 'Banco', largura: 34 }, { nome: 'Histórico', largura: 60, wrap: true },
+      { nome: 'Valor', largura: 15 }, { nome: 'E/S', largura: 9 }, { nome: 'Contrapartida', largura: 13 }, { nome: 'Conta (nome)', largura: 40 },
+    ]
+    const rows = linhas.map(l => [
+      l.data ? l.data.split('-').reverse().join('/') : '', `${l.banco || ''} ${nomeBanco(l.banco)}`.trim(),
+      l.historico || '', Number(l.valor) || 0, l.entrada ? 'Entrada' : 'Saída',
+      l.contra || '', planoMap[String(l.contra)]?.nome || (l.contra ? '(fora do plano)' : ''),
+    ])
+    await gerarExcelTimbrado({
+      titulo: `Financeiro classificado · ${competencia}`, sub: `${linhas.length} lançamento(s)`,
+      colunas: cols, linhas: rows, totais: null, arquivo: `financeiro_classificado_${competencia.replace('/', '-')}.xlsx`, aba: 'Lançamentos',
+    })
+  }
+
   // Gera a partida completa para o Domínio (banco + contrapartida, por entrada/saída).
   function gerar() {
     const prontasL = linhas.filter(l => l.banco && l.contra && l.valor > 0)
@@ -548,6 +567,9 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
 
   const prontas = linhas.filter(l => l.banco && l.contra && l.valor > 0).length
   const semContra = linhas.filter(l => !l.contra).length
+  const totEnt = linhas.filter(l => l.entrada).reduce((s, l) => s + (l.valor || 0), 0)
+  const totSai = linhas.filter(l => !l.entrada).reduce((s, l) => s + (l.valor || 0), 0)
+  const saldoBanco = totEnt - totSai
   const visiveis = linhas.map((l, i) => ({ l, i })).filter(({ l }) => linhaVisivel(l))
   const visIdx = visiveis.map(v => v.i)
   const todosSel = visIdx.length > 0 && visIdx.every(i => sel.has(i))
@@ -708,11 +730,16 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
             <button className="btn" style={{ fontSize: 12, padding: '5px 10px' }} disabled={!sel.size} onClick={aplicarLote}><i className="ti ti-wand" /> Aplicar ({sel.size})</button>
           </div>
 
-          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 12.5, margin: '0 0 10px' }}>
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 12.5, margin: '0 0 6px' }}>
             <span style={{ color: theme.green }}><b>{prontas}</b> pronta(s) p/ contabilizar</span>
             <span style={{ color: theme.yellow }}><b>{semContra}</b> sem contrapartida</span>
             <span style={{ color: theme.sub }}>mostrando <b>{visiveis.length}</b> de {linhas.length}{sel.size ? ` · ${sel.size} selecionada(s)` : ''}</span>
             {sel.size > 0 && <button className="btn btn-ghost" style={{ fontSize: 11.5, padding: '3px 8px', color: theme.sub }} onClick={() => setSel(new Set())}>limpar seleção</button>}
+          </div>
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 12.5, margin: '0 0 10px', padding: '8px 12px', background: theme.input, borderRadius: 8 }}>
+            <span style={{ color: theme.green }}>Entradas: <b>{money(totEnt)}</b></span>
+            <span style={{ color: theme.red }}>Saídas: <b>{money(totSai)}</b></span>
+            <span style={{ color: theme.text }}>Saldo do banco {raw.banco ? `(${raw.banco} · ${nomeBanco(raw.banco)})` : ''}: <b style={{ color: saldoBanco >= 0 ? theme.green : theme.red }}>{money(saldoBanco)}</b></span>
           </div>
 
           {/* Tabela de classificação */}
@@ -759,6 +786,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
             {raw.banco && <button className="btn btn-ghost" onClick={salvarRascunho}><i className="ti ti-device-floppy" /> Salvar e continuar depois</button>}
             <button className="btn" onClick={aprenderSalvar}><i className="ti ti-brain" /> Aprender e salvar</button>
             {raw.banco && <button className="btn btn-ghost" style={{ color: theme.green, borderColor: theme.green }} onClick={concluirBanco}><i className="ti ti-circle-check" /> Concluir banco</button>}
+            <button className="btn btn-ghost" onClick={exportarExcel}><i className="ti ti-file-spreadsheet" /> Exportar Excel</button>
             <button className="btn btn-ghost" disabled={!prontas} onClick={gerar}><i className="ti ti-file-export" /> Gerar arquivo do Domínio ({prontas})</button>
           </div>
           <p style={{ color: theme.sub, fontSize: 11.5, margin: '10px 0 0' }}>Preencha a contrapartida das linhas que faltam e clique em <b style={{ color: theme.text }}>Aprender e salvar</b> — no próximo mês elas já vêm classificadas. Entrada = D banco / C contrapartida; Saída = D contrapartida / C banco.</p>
