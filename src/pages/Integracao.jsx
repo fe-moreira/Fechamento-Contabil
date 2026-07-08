@@ -179,6 +179,8 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
 
   const nomeBanco = cod => planoMap[String(cod)]?.nome || (cod ? `Conta ${cod}` : '—')
   const bancosEst = est?.bancos || {}
+  // Contas de adiantamento (nome contém "adiant") — usadas para a regra: com nota não é adiantamento.
+  const adiantContas = new Set(Object.entries(planoMap).filter(([, pl]) => /adiant/i.test(pl?.nome || '')).map(([cod]) => cod))
 
   useEffect(() => {
     setCarregReg(true); setRaw(null); setLinhas([]); setErro(''); setMsg('')
@@ -290,7 +292,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
 
   // Aplica o perfil já salvo a um extrato por banco e segue (marca o banco).
   function aplicarEProsseguir(arr, nome, bancoFixo, perf, catByRow) {
-    const norm = aplicarPerfil(arr, perf, memoria, catByRow).map(l => ({ ...l, banco: bancoFixo }))
+    const norm = aplicarPerfil(arr, perf, memoria, catByRow, adiantContas).map(l => ({ ...l, banco: bancoFixo }))
     // Reimport do mesmo arquivo: preserva as contrapartidas já preenchidas no
     // rascunho (mesmo arquivo → mesma ordem), atualizando histórico/valor/data.
     const prev = (est?.bancos || {})[bancoFixo]?.draft
@@ -484,7 +486,11 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
           if (!compl) continue
           const contra = bancos.has(d) ? c : bancos.has(c) ? d : ''
           const ent = extrairEntidade(compl)
-          if (contra && ent && ehEmpresa(ent)) novas.push({ historico: ent, conta: contra })
+          // Não aprende credor→adiantamento: adiantamento é contextual (sem nota),
+          // não é regra fixa do credor. Pula pela conta (nome "adiant") e pela
+          // categoria da linha (trecho antes do " - " no complemento).
+          const catBase = String(compl).split(/\s-\s/)[0]
+          if (contra && ent && ehEmpresa(ent) && !adiantContas.has(String(contra)) && !/adiant/i.test(catBase)) novas.push({ historico: ent, conta: contra })
         }
       } else {
         // Planilha simples: Histórico | Conta contrapartida.
@@ -766,7 +772,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
 
       {cfg && (
         <PerfilExtratoCfg
-          arr={cfg.arr} catByRow={cfg.catByRow} nome={cfg.nome} bancoNome={nomeBanco(cfg.banco)} perfilInicial={cfg.perfil} memoria={memoria}
+          arr={cfg.arr} catByRow={cfg.catByRow} adiantContas={adiantContas} nome={cfg.nome} bancoNome={nomeBanco(cfg.banco)} perfilInicial={cfg.perfil} memoria={memoria}
           onCancelar={() => setCfg(null)}
           onSalvar={async (perf) => { await salvarPerfil(perf); setCfg(null); aplicarEProsseguir(cfg.arr, cfg.nome, cfg.banco, perf, cfg.catByRow) }}
         />
@@ -821,7 +827,7 @@ function ModalQuebra({ linha, nomeBanco, planoMap, onClose, onConfirmar }) {
 
 // Painel de mapeamento por cliente: define como ler o extrato (linha de início,
 // colunas, entrada/saída) e monta o histórico no padrão do Domínio. Prévia ao vivo.
-function PerfilExtratoCfg({ arr, catByRow, nome, bancoNome, perfilInicial, memoria, onCancelar, onSalvar }) {
+function PerfilExtratoCfg({ arr, catByRow, adiantContas, nome, bancoNome, perfilInicial, memoria, onCancelar, onSalvar }) {
   const [p, setP] = useState(perfilInicial)
   const set = patch => setP(x => ({ ...x, ...patch }))
   const nc = (arr || []).reduce((m, r) => Math.max(m, (r || []).length), 0)
@@ -834,7 +840,7 @@ function PerfilExtratoCfg({ arr, catByRow, nome, bancoNome, perfilInicial, memor
       {cols.map(c => <option key={c.j} value={c.j}>{c.label}</option>)}
     </select>
   )
-  const todas = aplicarPerfil(arr, p, memoria, catByRow)
+  const todas = aplicarPerfil(arr, p, memoria, catByRow, adiantContas)
   const prev = todas.slice(0, 6)
   const total = todas.length
   const casadas = todas.filter(l => l.contra).length

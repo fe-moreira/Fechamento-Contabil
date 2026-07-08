@@ -132,8 +132,9 @@ export function catByRowDeMerges(merges, arr) {
 // [{ historico, credor, valor, entrada, data, contra }] classificado pela memória
 // (casando pelo credor/devedor). Se houver coluna de categoria (mesclada), ela é
 // arrastada pra baixo (forward-fill) e entra no histórico.
-export function aplicarPerfil(arr, perfil, memoria, catByRow) {
+export function aplicarPerfil(arr, perfil, memoria, catByRow, adiantContas) {
   const p = perfil || {}
+  const temAdiant = adiantContas && adiantContas.size > 0
   const ini = Number.isInteger(p.linhaInicio) ? p.linhaInicio : 1
   const histCols = (p.histCols && p.histCols.length ? p.histCols : [p.colCredor, p.colDoc]).filter(c => c != null && c >= 0)
   const temCat = p.colCategoria != null && p.colCategoria >= 0
@@ -158,7 +159,12 @@ export function aplicarPerfil(arr, perfil, memoria, catByRow) {
     const valor = Math.abs(parseValor(r[p.colValor]))
     if (!valor) continue
     const data = p.colData != null && p.colData >= 0 ? dataISO(r[p.colData]) : ''
-    out.push({ historico, credor, valor, entrada, data, contra: casarHistorico(credor || historico, memoria) })
+    const doc = p.colDoc != null && p.colDoc >= 0 ? String(r[p.colDoc] ?? '').trim() : ''
+    let contra = casarHistorico(credor || historico, memoria)
+    // Regra: se a linha tem nota/documento, não é adiantamento (adiantamento é
+    // quando ainda não há nota). Evita "adiantamento a fornecedor/cliente" errado.
+    if (doc && contra && temAdiant && adiantContas.has(String(contra))) contra = ''
+    out.push({ historico, credor, valor, entrada, data, contra })
   }
   return out
 }
