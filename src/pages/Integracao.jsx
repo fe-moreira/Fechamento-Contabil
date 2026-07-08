@@ -4,7 +4,7 @@ import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { theme, money } from '../lib/theme'
 import CampoConta from '../components/CampoConta'
-import { normHist, casarHistorico, aprender, parseValor, dataISO, aplicarPerfil, extrairEntidade, ehEmpresa } from '../lib/financeiro'
+import { normHist, casarHistorico, aprender, parseValor, dataISO, aplicarPerfil, extrairEntidade, ehEmpresa, catByRowDeMerges } from '../lib/financeiro'
 import { gerarDominioCSV } from '../lib/dominio'
 
 const TABS = [['fiscal', 'Fiscal'], ['folha', 'Folha'], ['patrimonio', 'Patrimônio'], ['financeira', 'Financeira']]
@@ -170,6 +170,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   const [fHist, setFHist] = useState('')         // filtro por histórico
   const [fMode, setFMode] = useState('contem')   // 'contem' | 'exato'
   const [fData, setFData] = useState('')         // filtro por data (dd/mm)
+  const [fES, setFES] = useState('')             // filtro entrada/saída ('' | 'entrada' | 'saida')
   const [lote, setLote] = useState('')           // conta para preencher em lote nas selecionadas
   const [sel, setSel] = useState(() => new Set())// linhas selecionadas (índice original)
   const refsContra = useRef({})                  // foco: Enter pula para a próxima linha
@@ -241,6 +242,13 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     else delete bancos[conta]
     onEstado({ ...est, bancos })
   }
+  // Salva o banco com o rascunho da classificação (linhas), para continuar depois.
+  // estado 'rascunho' = em andamento (ainda pendente no Status); 'validado' = concluído.
+  function salvarBancoDraft(conta, estadoB, doc, draftLinhas) {
+    const bancos = { ...(est?.bancos || {}) }
+    bancos[conta] = { estado: estadoB, doc: doc || null, usuario: user?.email || null, draft: draftLinhas || null }
+    onEstado({ ...est, bancos })
+  }
   function marcarCombinado(doc) { onEstado({ ...est, combinado: { estado: 'validado', doc, usuario: user?.email || null } }) }
 
   // Reconstroi a classificação a partir do arquivo cru + mapa de colunas + memória.
@@ -279,16 +287,40 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   }
 
   // Aplica o perfil já salvo a um extrato por banco e segue (marca o banco).
-  function aplicarEProsseguir(arr, nome, bancoFixo, perf) {
-    const norm = aplicarPerfil(arr, perf, memoria).map(l => ({ ...l, banco: bancoFixo }))
-    setRaw({ nome, banco: bancoFixo, viaPerfil: true, arr })
+  function aplicarEProsseguir(arr, nome, bancoFixo, perf, catByRow) {
+    const norm = aplicarPerfil(arr, perf, memoria, catByRow).map(l => ({ ...l, banco: bancoFixo }))
+    setRaw({ nome, banco: bancoFixo, viaPerfil: true, arr, catByRow })
     setLinhas(norm); setSel(new Set())
     if (!norm.length) { setErro('O perfil de leitura não encontrou lançamentos. Clique em “Ajustar leitura” e revise o mapeamento.'); return }
     const erroComp = validarCompetencia(norm, { data: (perf.colData != null && perf.colData >= 0) ? 0 : -1 }, competencia)
     if (erroComp) { setErro(erroComp); return }
     const casadas = norm.filter(l => l.contra).length
-    setMsg(`${norm.length} linha(s) · ${casadas} classificada(s) pela memória · competência ${competencia} conferida.`)
-    marcarBanco(bancoFixo, 'validado', nome)
+    setMsg(`${norm.length} linha(s) · ${casadas} classificada(s) pela memória. Rascunho salvo — conclua quando tudo estiver contabilizado.`)
+    // Salva como rascunho (em andamento); só vira "concluído" ao clicar Concluir.
+    salvarBancoDraft(bancoFixo, 'rascunho', nome, norm)
+  }
+
+  // Salva o progresso atual (rascunho) sem concluir.
+  function salvarRascunho() {
+    if (!raw?.banco) return
+    salvarBancoDraft(raw.banco, 'rascunho', raw.nome, linhas)
+    setMsg('Rascunho salvo — você pode fechar e continuar depois.')
+  }
+  // Conclui o banco (marca como contabilizado) — some do pendente no Status.
+  function concluirBanco() {
+    if (!raw?.banco) return
+    const faltam = linhas.filter(l => !l.contra).length
+    if (faltam && !window.confirm(`Ainda há ${faltam} linha(s) sem contrapartida. Concluir assim mesmo?`)) return
+    salvarBancoDraft(raw.banco, 'validado', raw.nome, linhas)
+    setMsg('Banco concluído — lançamentos contabilizados.')
+  }
+  // Continua um rascunho salvo (carrega as linhas para a tela).
+  function continuarRascunho(conta) {
+    const s = (est?.bancos || {})[conta]
+    if (!s?.draft) return
+    setRaw({ nome: s.doc || 'Rascunho', banco: conta, viaPerfil: true, resumo: true })
+    setLinhas(s.draft); setSel(new Set()); setErro('')
+    setMsg(`Rascunho carregado — ${s.draft.length} linha(s). Continue de onde parou.`)
   }
 
   // Desfaz a importação atual: limpa a prévia/filtros e volta o banco a pendente.
@@ -296,7 +328,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     if (raw?.viaPerfil && raw.banco) marcarBanco(raw.banco, null)
     else if (modo === 'combinado') { const e = { ...est }; delete e.combinado; onEstado(e) }
     setRaw(null); setLinhas([]); setSel(new Set())
-    setFSem(false); setFHist(''); setFData(''); setLote('')
+    setFSem(false); setFHist(''); setFData(''); setFES(''); setLote('')
     setErro(''); setMsg('Importação desfeita — pode iniciar uma nova.')
   }
 
@@ -307,12 +339,14 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
       if (modo === 'combinado' && !contas.length) { setErro('Cadastre as contas bancárias antes de importar uma planilha combinada.'); return }
       const XLSX = await import('xlsx')
       const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true })
-      const arr = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' })
+      const ws = wb.Sheets[wb.SheetNames[0]]
+      const arr = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
+      const catByRow = catByRowDeMerges(ws['!merges'], arr)
       // Extrato por banco: cada cliente exporta diferente → usa o perfil salvo;
       // se ainda não houver, abre o mapeamento (uma vez por cliente).
       if (modo === 'porBanco' && bancoFixo) {
-        if (perfil) return aplicarEProsseguir(arr, file.name, bancoFixo, perfil)
-        setCfg({ arr, nome: file.name, banco: bancoFixo, perfil: perfilPadrao(arr) })
+        if (perfil) return aplicarEProsseguir(arr, file.name, bancoFixo, perfil, catByRow)
+        setCfg({ arr, catByRow, nome: file.name, banco: bancoFixo, perfil: perfilPadrao(arr) })
         return
       }
       const header = arr[0] || []
@@ -374,6 +408,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
       if (fMode === 'exato' ? h !== q : !h.includes(q)) return false
     }
     if (fData && !dataBR(l.data).includes(fData.trim())) return false
+    if (fES && (fES === 'entrada') !== !!l.entrada) return false
     return true
   }
   const toggleUm = i => setSel(prev => { const n = new Set(prev); n.has(i) ? n.delete(i) : n.add(i); return n })
@@ -384,7 +419,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     const n = sel.size
     setLinhas(ls => ls.map((l, j) => sel.has(j) ? { ...l, contra: cod } : l))
     // Volta ao estado original para a próxima aplicação: limpa filtro, seleção e conta.
-    setSel(new Set()); setLote(''); setFSem(false); setFHist(''); setFData('')
+    setSel(new Set()); setLote(''); setFSem(false); setFHist(''); setFData(''); setFES('')
     setMsg(`Conta ${cod} aplicada em ${n} linha(s). Pronto para a próxima seleção.`)
   }
 
@@ -568,18 +603,20 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(280px,1fr))', gap: 12, marginBottom: 14 }}>
               {contas.map(c => {
                 const s = bancosEst[c.conta_contabil]
-                const cor = s?.estado === 'validado' ? theme.green : s?.estado === 'sem_movimento' ? theme.sub : theme.red
-                const txt = s?.estado === 'validado' ? `Importado${s.doc ? ` · ${s.doc}` : ''}` : s?.estado === 'sem_movimento' ? 'Sem movimento no mês' : 'Pendente'
+                const cor = s?.estado === 'validado' ? theme.green : s?.estado === 'sem_movimento' ? theme.sub : s?.estado === 'rascunho' ? theme.yellow : theme.red
+                const txt = s?.estado === 'validado' ? `Concluído${s.doc ? ` · ${s.doc}` : ''}` : s?.estado === 'sem_movimento' ? 'Sem movimento no mês' : s?.estado === 'rascunho' ? `Em andamento${s.draft ? ` · ${s.draft.length} lançto(s)` : ''}` : 'Pendente'
+                const icon = s?.estado === 'validado' ? 'ti-circle-check' : s?.estado === 'sem_movimento' ? 'ti-circle-minus' : s?.estado === 'rascunho' ? 'ti-progress' : 'ti-alert-triangle'
                 return (
                   <div key={c.conta_contabil} style={{ background: theme.card, border: `1px solid ${s?.estado === 'sem_movimento' ? theme.cb : cor}`, borderRadius: 12, padding: 14 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
                       <i className="ti ti-building-bank" style={{ color: theme.accent }} />
                       <span style={{ fontWeight: 600, fontSize: 13 }}>{c.conta_contabil} · {nomeBanco(c.conta_contabil)}</span>
                     </div>
-                    <p style={{ fontSize: 12, color: cor, margin: '0 0 10px', fontWeight: 500 }}><i className={`ti ${s?.estado === 'validado' ? 'ti-circle-check' : s?.estado === 'sem_movimento' ? 'ti-circle-minus' : 'ti-alert-triangle'}`} /> {txt}</p>
+                    <p style={{ fontSize: 12, color: cor, margin: '0 0 10px', fontWeight: 500 }}><i className={`ti ${icon}`} /> {txt}</p>
                     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                      <label className="btn" style={{ fontSize: 12, padding: '5px 10px', cursor: 'pointer' }}>
-                        <i className="ti ti-cloud-upload" /> {s?.estado === 'validado' ? 'Reimportar' : 'Importar extrato'}
+                      {s?.draft && <button className="btn" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => continuarRascunho(c.conta_contabil)}><i className="ti ti-player-play" /> Continuar</button>}
+                      <label className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', cursor: 'pointer' }}>
+                        <i className="ti ti-cloud-upload" /> {(s?.estado === 'validado' || s?.estado === 'rascunho') ? 'Reimportar' : 'Importar extrato'}
                         <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={e => importar(e.target.files?.[0], c.conta_contabil)} />
                       </label>
                       <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => marcarBanco(c.conta_contabil, 'sem_movimento')}><i className="ti ti-circle-minus" /> Sem movimento</button>
@@ -611,7 +648,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
           {raw.viaPerfil ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', margin: '14px 0 6px' }}>
               <span style={{ fontSize: 12, color: theme.sub }}><i className="ti ti-adjustments" style={{ color: theme.accent }} /> Extrato normalizado pelo perfil de leitura deste cliente.</span>
-              <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => setCfg({ arr: raw.arr, nome: raw.nome, banco: raw.banco, perfil: perfil || perfilPadrao(raw.arr) })}><i className="ti ti-adjustments" /> Ajustar leitura</button>
+              <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => setCfg({ arr: raw.arr, catByRow: raw.catByRow, nome: raw.nome, banco: raw.banco, perfil: perfil || perfilPadrao(raw.arr) })}><i className="ti ti-adjustments" /> Ajustar leitura</button>
             </div>
           ) : (
             /* Mapa de colunas (auto-detectado, ajustável) — modo combinado/legado */
@@ -635,7 +672,10 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
               <option value="contem">Contém</option><option value="exato">Exato</option>
             </select>
             <input className="input" style={{ maxWidth: 130, fontSize: 12, padding: '6px 10px' }} placeholder="Data (dd/mm)" value={fData} onChange={e => setFData(e.target.value)} />
-            {(fSem || fHist || fData) && <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', color: theme.sub }} onClick={() => { setFSem(false); setFHist(''); setFData('') }}>limpar filtros</button>}
+            <select className="input" style={{ maxWidth: 120, fontSize: 12, padding: '6px 8px' }} value={fES} onChange={e => setFES(e.target.value)}>
+              <option value="">Entrada/Saída</option><option value="entrada">Só entradas</option><option value="saida">Só saídas</option>
+            </select>
+            {(fSem || fHist || fData || fES) && <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', color: theme.sub }} onClick={() => { setFSem(false); setFHist(''); setFData(''); setFES('') }}>limpar filtros</button>}
             <span style={{ flex: 1 }} />
             <span style={{ fontSize: 12, color: theme.sub }}>Aplicar às selecionadas:</span>
             <CampoConta value={lote} onChange={setLote} onEnter={aplicarLote} placeholder="Conta (F4)" style={{ width: 190 }} />
@@ -687,7 +727,9 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
           </div>
 
           <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
+            {raw.banco && <button className="btn btn-ghost" onClick={salvarRascunho}><i className="ti ti-device-floppy" /> Salvar e continuar depois</button>}
             <button className="btn" onClick={aprenderSalvar}><i className="ti ti-brain" /> Aprender e salvar</button>
+            {raw.banco && <button className="btn btn-ghost" style={{ color: theme.green, borderColor: theme.green }} onClick={concluirBanco}><i className="ti ti-circle-check" /> Concluir banco</button>}
             <button className="btn btn-ghost" disabled={!prontas} onClick={gerar}><i className="ti ti-file-export" /> Gerar arquivo do Domínio ({prontas})</button>
           </div>
           <p style={{ color: theme.sub, fontSize: 11.5, margin: '10px 0 0' }}>Preencha a contrapartida das linhas que faltam e clique em <b style={{ color: theme.text }}>Aprender e salvar</b> — no próximo mês elas já vêm classificadas. Entrada = D banco / C contrapartida; Saída = D contrapartida / C banco.</p>
@@ -696,9 +738,9 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
 
       {cfg && (
         <PerfilExtratoCfg
-          arr={cfg.arr} nome={cfg.nome} bancoNome={nomeBanco(cfg.banco)} perfilInicial={cfg.perfil} memoria={memoria}
+          arr={cfg.arr} catByRow={cfg.catByRow} nome={cfg.nome} bancoNome={nomeBanco(cfg.banco)} perfilInicial={cfg.perfil} memoria={memoria}
           onCancelar={() => setCfg(null)}
-          onSalvar={async (perf) => { await salvarPerfil(perf); setCfg(null); aplicarEProsseguir(cfg.arr, cfg.nome, cfg.banco, perf) }}
+          onSalvar={async (perf) => { await salvarPerfil(perf); setCfg(null); aplicarEProsseguir(cfg.arr, cfg.nome, cfg.banco, perf, cfg.catByRow) }}
         />
       )}
     </>
@@ -707,7 +749,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
 
 // Painel de mapeamento por cliente: define como ler o extrato (linha de início,
 // colunas, entrada/saída) e monta o histórico no padrão do Domínio. Prévia ao vivo.
-function PerfilExtratoCfg({ arr, nome, bancoNome, perfilInicial, memoria, onCancelar, onSalvar }) {
+function PerfilExtratoCfg({ arr, catByRow, nome, bancoNome, perfilInicial, memoria, onCancelar, onSalvar }) {
   const [p, setP] = useState(perfilInicial)
   const set = patch => setP(x => ({ ...x, ...patch }))
   const nc = (arr || []).reduce((m, r) => Math.max(m, (r || []).length), 0)
@@ -720,9 +762,10 @@ function PerfilExtratoCfg({ arr, nome, bancoNome, perfilInicial, memoria, onCanc
       {cols.map(c => <option key={c.j} value={c.j}>{c.label}</option>)}
     </select>
   )
-  const prev = aplicarPerfil(arr, p, memoria).slice(0, 6)
-  const total = aplicarPerfil(arr, p, memoria).length
-  const casadas = aplicarPerfil(arr, p, memoria).filter(l => l.contra).length
+  const todas = aplicarPerfil(arr, p, memoria, catByRow)
+  const prev = todas.slice(0, 6)
+  const total = todas.length
+  const casadas = todas.filter(l => l.contra).length
   return (
     <div onClick={onCancelar} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 16, zIndex: 60 }}>
       <div onClick={e => e.stopPropagation()} style={{ width: 'min(900px,97vw)', maxHeight: '92vh', overflow: 'auto', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 22 }}>

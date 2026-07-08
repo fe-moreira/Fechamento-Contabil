@@ -114,24 +114,46 @@ function limparCategoria(s) {
   return String(s || '').replace(/^[\d.\s]+/, '').replace(/\s+total\s*$/i, '').trim()
 }
 
+// Mapa linha→categoria a partir das células mescladas da coluna 0. Usa só as
+// faixas de categoria (mescla estreita, cols 0..~6), ignorando as linhas-total
+// de largura total e o sufixo "Total". Corrige o layout hierárquico do Sisloc.
+export function catByRowDeMerges(merges, arr) {
+  const map = []
+  for (const m of (merges || [])) {
+    if (m.s?.c === 0 && (m.e.c - m.s.c) <= 10) {
+      const val = String((arr[m.s.r] || [])[0] ?? '').trim()
+      if (val && !/total\s*$/i.test(val)) for (let r = m.s.r; r <= m.e.r; r++) map[r] = val
+    }
+  }
+  return map
+}
+
 // Aplica um perfil a uma planilha crua (matriz de linhas). Retorna
 // [{ historico, credor, valor, entrada, data, contra }] classificado pela memória
 // (casando pelo credor/devedor). Se houver coluna de categoria (mesclada), ela é
 // arrastada pra baixo (forward-fill) e entra no histórico.
-export function aplicarPerfil(arr, perfil, memoria) {
+export function aplicarPerfil(arr, perfil, memoria, catByRow) {
   const p = perfil || {}
   const ini = Number.isInteger(p.linhaInicio) ? p.linhaInicio : 1
   const histCols = (p.histCols && p.histCols.length ? p.histCols : [p.colCredor, p.colDoc]).filter(c => c != null && c >= 0)
   const temCat = p.colCategoria != null && p.colCategoria >= 0
+  const rows = arr || []
   let catAtual = ''
   const out = []
-  for (const r of (arr || []).slice(ini)) {
-    if (temCat) { const v = String(r[p.colCategoria] ?? '').trim(); if (v && !/total\s*$/i.test(v)) catAtual = v }
+  for (let idx = ini; idx < rows.length; idx++) {
+    const r = rows[idx] || []
+    // Categoria: se o arquivo trouxe as faixas de células mescladas (catByRow),
+    // usa a faixa (correto p/ layout hierárquico do Sisloc); senão, arrasta pra baixo.
+    let categoria = ''
+    if (temCat) {
+      if (catByRow && catByRow[idx]) categoria = catByRow[idx]
+      else { const v = String(r[p.colCategoria] ?? '').trim(); if (v && !/total\s*$/i.test(v)) catAtual = v; categoria = catAtual }
+    }
     if (!r || !r.some(c => c !== '' && c != null)) continue
     if (p.filtro?.pularVazio && p.filtro.col != null && p.filtro.col >= 0 && !String(r[p.filtro.col] ?? '').trim()) continue
     const entrada = decidirEntrada(r, p)
     const credor = p.colCredor != null && p.colCredor >= 0 ? String(r[p.colCredor] ?? '').trim() : ''
-    const partes = temCat ? [limparCategoria(catAtual), ...histCols.map(c => r[c])] : histCols.map(c => r[c])
+    const partes = temCat ? [limparCategoria(categoria), ...histCols.map(c => r[c])] : histCols.map(c => r[c])
     const historico = montarHistorico(entrada, partes)
     const valor = Math.abs(parseValor(r[p.colValor]))
     if (!valor) continue
