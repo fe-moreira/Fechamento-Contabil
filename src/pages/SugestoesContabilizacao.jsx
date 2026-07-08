@@ -23,11 +23,13 @@ export default function SugestoesContabilizacao() {
     const { data: comp } = await supabase.from('competencias').select('id')
       .eq('cliente_id', empresaId).eq('ano', ano).eq('mes', mes).maybeSingle()
     if (!comp) { setRows([]); setLoading(false); return }
+    // Só sugestões PENDENTES geradas pela plataforma (análise do razão: fiscal,
+    // contábil, folha). Correções que o usuário já executou na Conciliação/Status
+    // já viraram lançamento e constam no Status → Domínio — não entram aqui (senão
+    // confirmar duplicaria o lançamento).
     const { data } = await supabase.from('auditoria').select('id, modulo, item, tipo, detalhe, competencia_id')
-      .eq('competencia_id', comp.id).eq('tipo', 'Correção').order('id', { ascending: false })
-    // Ajuste de leitura (NF/nome/histórico) resolve-se na Conciliação e só vai para o
-    // relatório de correções — não entra como sugestão de lançamento.
-    setRows((data || []).filter(r => !/^ajuste de leitura/i.test(String(r.detalhe || '')))); setLoading(false)
+      .eq('competencia_id', comp.id).eq('tipo', 'Sugestão').order('id', { ascending: false })
+    setRows(data || []); setLoading(false)
   }
   useEffect(() => { if (!empresaId) { setRows([]); setLoading(false); return } setTratadas(new Set()); carregar() }, [empresaId, competencia]) // eslint-disable-line
 
@@ -45,7 +47,7 @@ export default function SugestoesContabilizacao() {
     <div>
       <h1 style={{ fontSize: 22, fontWeight: 500, marginBottom: 4 }}>Sugestões de Contabilização</h1>
       <p style={{ color: theme.sub, fontSize: 13, marginBottom: 18, maxWidth: 820 }}>
-        A plataforma aponta, a partir das correções do fechamento, o que precisa ser lançado. O que você confirmar vira lançamento e alimenta o Status → Domínio.
+        A plataforma sugere contabilizações a partir da análise do razão (fiscal, contábil e folha). O que você confirmar vira lançamento e alimenta o Status → Domínio. Correções que você já fez na Conciliação ou no Status não aparecem aqui — elas já estão lançadas.
         {empresaNome && <> · <b style={{ color: theme.text }}>{empresaNome}</b> · {competencia}</>}
       </p>
 
@@ -56,7 +58,7 @@ export default function SugestoesContabilizacao() {
       ) : ativos.length === 0 ? (
         <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: 12, padding: '28px 24px', display: 'flex', alignItems: 'center', gap: 14, maxWidth: 640 }}>
           <i className="ti ti-bulb" style={{ fontSize: 24, color: theme.yellow }} />
-          <p style={{ fontSize: 13.5, color: theme.text, margin: 0 }}>Nenhuma sugestão nesta competência. As sugestões aparecem conforme a plataforma identifica correções e ajustes no fechamento (Conciliação, Comparativo, Status).</p>
+          <p style={{ fontSize: 13.5, color: theme.text, margin: 0 }}>Nenhuma sugestão nesta competência. Aqui aparecem apenas contabilizações que a plataforma sugere a partir da análise do razão (fiscal, contábil e folha). Correções que você já fez na Conciliação ou no Status já estão lançadas e não são repetidas aqui.</p>
         </div>
       ) : (
         <div style={{ display: 'grid', gap: 12 }}>
