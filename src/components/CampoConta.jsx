@@ -6,15 +6,15 @@ const baixa = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-�
 
 // Campo de conta com seletor do plano de contas. Aperte F4 (ou clique na lupa) para
 // abrir o plano e escolher a conta. value = código; onChange(cod); onPick(conta) opcional.
-export default function CampoConta({ value, onChange, onPick, placeholder = 'Código (F4 = plano)', autoFocus, style }) {
+export default function CampoConta({ value, onChange, onPick, placeholder = 'Código (F4 = plano)', autoFocus, style, onEnter, inputRef }) {
   const { plano } = useAppData()
   const [aberto, setAberto] = useState(false)
   return (
     <div style={{ position: 'relative', ...style }}>
       <input
-        className="input" value={value || ''} autoFocus={autoFocus}
+        className="input" value={value || ''} autoFocus={autoFocus} ref={inputRef}
         onChange={e => onChange(e.target.value)}
-        onKeyDown={e => { if (e.key === 'F4') { e.preventDefault(); setAberto(true) } }}
+        onKeyDown={e => { if (e.key === 'F4') { e.preventDefault(); setAberto(true) } else if (e.key === 'Enter' && onEnter) { e.preventDefault(); onEnter() } }}
         placeholder={placeholder}
         style={{ paddingRight: 30 }}
       />
