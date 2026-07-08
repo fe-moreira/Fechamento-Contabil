@@ -176,6 +176,8 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   const [lote, setLote] = useState('')           // conta para preencher em lote nas selecionadas
   const [sel, setSel] = useState(() => new Set())// linhas selecionadas (índice original)
   const [quebra, setQuebra] = useState(null)      // { i, linha } divisão de um lançamento
+  const [saldoAnterior, setSaldoAnterior] = useState(null) // saldo do banco no balancete (abertura)
+  const [saldoExtrato, setSaldoExtrato] = useState('')     // saldo do extrato informado pelo usuário
   const refsContra = useRef({})                  // foco: Enter pula para a próxima linha
 
   const nomeBanco = cod => planoMap[String(cod)]?.nome || (cod ? `Conta ${cod}` : '—')
@@ -425,6 +427,15 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     return true
   }
   const toggleUm = i => setSel(prev => { const n = new Set(prev); n.has(i) ? n.delete(i) : n.add(i); return n })
+  // Saldo de abertura do banco (balancete da competência) para conferência do extrato.
+  async function carregarSaldoAnterior(banco) {
+    const [mes, ano] = (competencia || '').split('/').map(Number)
+    const { data: comp } = await supabase.from('competencias').select('id').eq('cliente_id', empresaId).eq('ano', ano).eq('mes', mes).maybeSingle()
+    if (!comp) { setSaldoAnterior(null); return }
+    const { data: bal } = await supabase.from('balancete').select('saldo_inicial').eq('competencia_id', comp.id).eq('conta', String(banco)).limit(1).maybeSingle()
+    setSaldoAnterior(bal ? Number(bal.saldo_inicial) : null)
+  }
+  useEffect(() => { if (raw?.banco) carregarSaldoAnterior(raw.banco); else { setSaldoAnterior(null); setSaldoExtrato('') } }, [raw?.banco, competencia]) // eslint-disable-line react-hooks/exhaustive-deps
   // Divide um lançamento em vários (ex.: 1 DARF → 3 lançamentos contábeis).
   function confirmarQuebra(i, partes) {
     const base = linhas[i]
@@ -569,7 +580,9 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   const semContra = linhas.filter(l => !l.contra).length
   const totEnt = linhas.filter(l => l.entrada).reduce((s, l) => s + (l.valor || 0), 0)
   const totSai = linhas.filter(l => !l.entrada).reduce((s, l) => s + (l.valor || 0), 0)
-  const saldoBanco = totEnt - totSai
+  const saldoFinal = (saldoAnterior || 0) + totEnt - totSai
+  const temExtrato = String(saldoExtrato).trim() !== ''
+  const difSaldo = Math.round((saldoFinal - parseValor(saldoExtrato)) * 100) / 100
   const visiveis = linhas.map((l, i) => ({ l, i })).filter(({ l }) => linhaVisivel(l))
   const visIdx = visiveis.map(v => v.i)
   const todosSel = visIdx.length > 0 && visIdx.every(i => sel.has(i))
@@ -736,11 +749,20 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
             <span style={{ color: theme.sub }}>mostrando <b>{visiveis.length}</b> de {linhas.length}{sel.size ? ` · ${sel.size} selecionada(s)` : ''}</span>
             {sel.size > 0 && <button className="btn btn-ghost" style={{ fontSize: 11.5, padding: '3px 8px', color: theme.sub }} onClick={() => setSel(new Set())}>limpar seleção</button>}
           </div>
-          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 12.5, margin: '0 0 10px', padding: '8px 12px', background: theme.input, borderRadius: 8 }}>
-            <span style={{ color: theme.green }}>Entradas: <b>{money(totEnt)}</b></span>
-            <span style={{ color: theme.red }}>Saídas: <b>{money(totSai)}</b></span>
-            <span style={{ color: theme.text }}>Saldo do banco {raw.banco ? `(${raw.banco} · ${nomeBanco(raw.banco)})` : ''}: <b style={{ color: saldoBanco >= 0 ? theme.green : theme.red }}>{money(saldoBanco)}</b></span>
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center', fontSize: 12.5, margin: '0 0 10px', padding: '10px 12px', background: theme.input, borderRadius: 8 }}>
+            <span style={{ color: theme.sub }}>Saldo anterior {raw.banco ? `(${raw.banco} · ${nomeBanco(raw.banco)})` : ''}: <b style={{ color: theme.text }}>{saldoAnterior == null ? '—' : money(saldoAnterior)}</b></span>
+            <span style={{ color: theme.green }}>+ Entradas: <b>{money(totEnt)}</b></span>
+            <span style={{ color: theme.red }}>− Saídas: <b>{money(totSai)}</b></span>
+            <span style={{ color: theme.text }}>= Saldo final: <b>{money(saldoFinal)}</b></span>
+            <span style={{ flex: 1 }} />
+            <label style={{ color: theme.sub, display: 'flex', alignItems: 'center', gap: 6 }}>Saldo do extrato:
+              <input className="input" style={{ width: 130, fontSize: 12, padding: '5px 8px' }} value={saldoExtrato} onChange={e => setSaldoExtrato(e.target.value)} placeholder="0,00" />
+            </label>
+            {temExtrato && (Math.abs(difSaldo) < 0.005
+              ? <span style={{ color: theme.green, fontWeight: 600 }}><i className="ti ti-circle-check" /> confere</span>
+              : <span style={{ color: theme.red, fontWeight: 600 }}><i className="ti ti-alert-triangle" /> diferença {money(difSaldo)}</span>)}
           </div>
+          {saldoAnterior == null && <p style={{ color: theme.yellow, fontSize: 11.5, margin: '-4px 0 10px' }}>Saldo anterior indisponível (balancete da competência não importado) — o saldo final considera abertura zero.</p>}
 
           {/* Tabela de classificação */}
           <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'auto', maxHeight: 460 }}>
