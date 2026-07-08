@@ -4,7 +4,7 @@ import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { theme, money } from '../lib/theme'
 import CampoConta from '../components/CampoConta'
-import { normHist, casarHistorico, aprender, parseValor, dataISO } from '../lib/financeiro'
+import { normHist, casarHistorico, aprender, parseValor, dataISO, aplicarPerfil, extrairEntidade } from '../lib/financeiro'
 import { gerarDominioCSV } from '../lib/dominio'
 
 const TABS = [['fiscal', 'Fiscal'], ['folha', 'Folha'], ['patrimonio', 'Patrimônio'], ['financeira', 'Financeira']]
@@ -159,11 +159,13 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   const [carregReg, setCarregReg] = useState(true)
   const [novo, setNovo] = useState({ conta_contabil: '', agencia: '', conta: '' })
   const [modo, setModo] = useState('porBanco')   // 'porBanco' | 'combinado'
-  const [raw, setRaw] = useState(null)           // { nome, header, linhasRaw, banco }
+  const [raw, setRaw] = useState(null)           // { nome, header, linhasRaw, banco, viaPerfil }
   const [map, setMap] = useState({ hist: -1, valor: -1, data: -1 })
   const [linhas, setLinhas] = useState([])       // classificação: [{ banco, historico, valor, entrada, contra, data }]
   const [erro, setErro] = useState('')
   const [msg, setMsg] = useState('')
+  const [perfil, setPerfil] = useState(null)     // perfil de leitura do extrato deste cliente
+  const [cfg, setCfg] = useState(null)           // { raw, banco, perfil } — painel de mapeamento aberto
 
   const nomeBanco = cod => planoMap[String(cod)]?.nome || (cod ? `Conta ${cod}` : '—')
   const bancosEst = est?.bancos || {}
@@ -171,10 +173,13 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   useEffect(() => {
     setCarregReg(true); setRaw(null); setLinhas([]); setErro(''); setMsg('')
     Promise.all([
-      supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'contas_bancarias').order('created_at', { ascending: false }).limit(1).maybeSingle(),
+      supabase.from('cargas_cadastro').select('dados, obs').eq('cliente_id', empresaId).eq('tipo', 'contas_bancarias').order('created_at', { ascending: false }).limit(1).maybeSingle(),
       supabase.from('cargas_cadastro').select('dados, obs').eq('cliente_id', empresaId).eq('tipo', 'memoria_financeira').order('created_at', { ascending: false }).limit(1).maybeSingle(),
     ]).then(([bc, mem]) => {
       setContas(Array.isArray(bc.data?.dados) ? bc.data.dados : [])
+      let perf = null
+      try { const o = JSON.parse(bc.data?.obs || ''); if (o && typeof o === 'object' && o.perfil) perf = o.perfil } catch { /* obs antigo em texto */ }
+      setPerfil(perf); setCfg(null)
       setMemoria(Array.isArray(mem.data?.dados) ? mem.data.dados : [])
       let meta = { nomeArquivo: '', semCarga: false }
       try { const m = JSON.parse(mem.data?.obs || ''); if (m && typeof m === 'object') meta = { nomeArquivo: m.nomeArquivo || '', semCarga: !!m.semCarga } } catch { /* obs antigo em texto */ }
@@ -192,7 +197,10 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     if (error) setErro('Não consegui gravar: ' + error.message)
     return error
   }
-  async function salvarContas(arr) { setContas(arr); await salvarCarga('contas_bancarias', arr, 'Contas bancárias') }
+  // O perfil de leitura do extrato vive no obs da carga de contas bancárias
+  // (uma vez por cliente, vale para todos os meses).
+  async function salvarContas(arr, perf = perfil) { setContas(arr); await salvarCarga('contas_bancarias', arr, JSON.stringify({ perfil: perf || null })) }
+  async function salvarPerfil(perf) { setPerfil(perf); await salvarCarga('contas_bancarias', contas, JSON.stringify({ perfil: perf || null })) }
   function addConta() {
     const cod = String(novo.conta_contabil || '').trim()
     if (!cod) return
@@ -241,6 +249,41 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     })
   }
 
+  // Palpite inicial do perfil (o usuário confere/ajusta no painel de mapeamento).
+  function perfilPadrao(arr) {
+    let ini = 1
+    for (let i = 0; i < Math.min(arr.length, 40); i++) {
+      const r = arr[i] || []
+      const filled = r.filter(c => c !== '' && c != null).length
+      const hasNum = r.some(c => typeof c === 'number' || parseValor(c) > 1)
+      if (filled >= 3 && hasNum) { ini = i; break }
+    }
+    const rows = arr.slice(ini, ini + 60)
+    const nc = arr.reduce((m, r) => Math.max(m, (r || []).length), 0)
+    let colValor = -1, colData = -1, colCredor = -1, best = 0, bestLen = 0
+    for (let j = 0; j < nc; j++) {
+      const nums = rows.filter(r => { const v = parseValor(r?.[j]); return v && Math.abs(v) >= 1 }).length
+      if (nums > best) { best = nums; colValor = j }
+      if (colData < 0 && rows.filter(r => dataISO(r?.[j])).length > rows.length / 3) colData = j
+      const avg = rows.reduce((s, r) => { const t = String(r?.[j] ?? ''); return s + (/[A-Za-z]{3,}/.test(t) ? t.length : 0) }, 0) / (rows.length || 1)
+      if (avg > bestLen) { bestLen = avg; colCredor = j }
+    }
+    return { linhaInicio: ini, colValor, colData, colCredor, colDoc: -1, histCols: [], es: { modo: 'sinal', col: -1, entrada: [] }, filtro: { col: -1, pularVazio: false } }
+  }
+
+  // Aplica o perfil já salvo a um extrato por banco e segue (marca o banco).
+  function aplicarEProsseguir(arr, nome, bancoFixo, perf) {
+    const norm = aplicarPerfil(arr, perf, memoria).map(l => ({ ...l, banco: bancoFixo }))
+    setRaw({ nome, banco: bancoFixo, viaPerfil: true, arr })
+    setLinhas(norm)
+    if (!norm.length) { setErro('O perfil de leitura não encontrou lançamentos. Clique em “Ajustar leitura” e revise o mapeamento.'); return }
+    const erroComp = validarCompetencia(norm, { data: (perf.colData != null && perf.colData >= 0) ? 0 : -1 }, competencia)
+    if (erroComp) { setErro(erroComp); return }
+    const casadas = norm.filter(l => l.contra).length
+    setMsg(`${norm.length} linha(s) · ${casadas} classificada(s) pela memória · competência ${competencia} conferida.`)
+    marcarBanco(bancoFixo, 'validado', nome)
+  }
+
   async function importar(file, bancoFixo) {
     if (!file) return
     setErro(''); setMsg('')
@@ -249,6 +292,13 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
       const XLSX = await import('xlsx')
       const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true })
       const arr = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' })
+      // Extrato por banco: cada cliente exporta diferente → usa o perfil salvo;
+      // se ainda não houver, abre o mapeamento (uma vez por cliente).
+      if (modo === 'porBanco' && bancoFixo) {
+        if (perfil) return aplicarEProsseguir(arr, file.name, bancoFixo, perfil)
+        setCfg({ arr, nome: file.name, banco: bancoFixo, perfil: perfilPadrao(arr) })
+        return
+      }
       const header = arr[0] || []
       const linhasRaw = arr.slice(1).filter(r => r.some(c => c !== '' && c != null)).slice(0, 1000)
       // Auto-detecta as colunas de histórico, valor e data.
@@ -298,9 +348,10 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   }
   const setLinha = (i, patch) => setLinhas(ls => ls.map((l, j) => j === i ? { ...l, ...patch } : l))
 
-  // Aprende: guarda histórico → contrapartida das linhas classificadas.
+  // Aprende: guarda credor/devedor → contrapartida das linhas classificadas
+  // (casa pelo nome da empresa; cai no histórico montado se não houver credor).
   async function aprenderSalvar() {
-    const novas = linhas.filter(l => l.contra && l.historico).map(l => ({ historico: l.historico, conta: l.contra }))
+    const novas = linhas.filter(l => l.contra && (l.credor || l.historico)).map(l => ({ historico: l.credor || l.historico, conta: l.contra }))
     if (!novas.length) { setMsg('Classifique ao menos uma linha (contrapartida) antes de salvar.'); return }
     const mem = aprender(memoria, novas)
     await salvarMemoria(mem, { nomeArquivo: memMeta.nomeArquivo, semCarga: false })
@@ -339,7 +390,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
           const d = String(r[iDeb] ?? '').trim(), c = String(r[iCred] ?? '').trim()
           if (!compl) continue
           const contra = bancos.has(d) ? c : bancos.has(c) ? d : ''
-          if (contra) novas.push({ historico: compl, conta: contra })
+          if (contra) novas.push({ historico: extrairEntidade(compl), conta: contra })
         }
       } else {
         // Planilha simples: Histórico | Conta contrapartida.
@@ -507,17 +558,25 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
 
       {raw && (
         <>
-          {/* Mapa de colunas (auto-detectado, ajustável) */}
-          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', margin: '14px 0 6px' }}>
-            {[['hist', 'Histórico'], ['valor', 'Valor'], ['data', 'Data (opc.)']].map(([campo, lab]) => (
-              <div key={campo}><label>{lab}</label>
-                <select className="input" style={{ padding: '8px 10px', fontSize: 12.5 }} value={map[campo]} onChange={e => trocarCol(campo, Number(e.target.value))}>
-                  <option value={-1}>—</option>
-                  {(raw.header || []).map((h, j) => <option key={j} value={j}>{String(h || `Coluna ${j + 1}`)}</option>)}
-                </select>
-              </div>
-            ))}
-          </div>
+          {/* Extrato lido pelo perfil do cliente: layout único, sem mapa manual. */}
+          {raw.viaPerfil ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', margin: '14px 0 6px' }}>
+              <span style={{ fontSize: 12, color: theme.sub }}><i className="ti ti-adjustments" style={{ color: theme.accent }} /> Extrato normalizado pelo perfil de leitura deste cliente.</span>
+              <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => setCfg({ arr: raw.arr, nome: raw.nome, banco: raw.banco, perfil: perfil || perfilPadrao(raw.arr) })}><i className="ti ti-adjustments" /> Ajustar leitura</button>
+            </div>
+          ) : (
+            /* Mapa de colunas (auto-detectado, ajustável) — modo combinado/legado */
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', margin: '14px 0 6px' }}>
+              {[['hist', 'Histórico'], ['valor', 'Valor'], ['data', 'Data (opc.)']].map(([campo, lab]) => (
+                <div key={campo}><label>{lab}</label>
+                  <select className="input" style={{ padding: '8px 10px', fontSize: 12.5 }} value={map[campo]} onChange={e => trocarCol(campo, Number(e.target.value))}>
+                    <option value={-1}>—</option>
+                    {(raw.header || []).map((h, j) => <option key={j} value={j}>{String(h || `Coluna ${j + 1}`)}</option>)}
+                  </select>
+                </div>
+              ))}
+            </div>
+          )}
 
           <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 12.5, margin: '6px 0 10px' }}>
             <span style={{ color: theme.green }}><b>{prontas}</b> pronta(s) p/ contabilizar</span>
@@ -555,7 +614,97 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
           <p style={{ color: theme.sub, fontSize: 11.5, margin: '10px 0 0' }}>Preencha a contrapartida das linhas que faltam e clique em <b style={{ color: theme.text }}>Aprender e salvar</b> — no próximo mês elas já vêm classificadas. Entrada = D banco / C contrapartida; Saída = D contrapartida / C banco.</p>
         </>
       )}
+
+      {cfg && (
+        <PerfilExtratoCfg
+          arr={cfg.arr} nome={cfg.nome} bancoNome={nomeBanco(cfg.banco)} perfilInicial={cfg.perfil} memoria={memoria}
+          onCancelar={() => setCfg(null)}
+          onSalvar={async (perf) => { await salvarPerfil(perf); setCfg(null); aplicarEProsseguir(cfg.arr, cfg.nome, cfg.banco, perf) }}
+        />
+      )}
     </>
+  )
+}
+
+// Painel de mapeamento por cliente: define como ler o extrato (linha de início,
+// colunas, entrada/saída) e monta o histórico no padrão do Domínio. Prévia ao vivo.
+function PerfilExtratoCfg({ arr, nome, bancoNome, perfilInicial, memoria, onCancelar, onSalvar }) {
+  const [p, setP] = useState(perfilInicial)
+  const set = patch => setP(x => ({ ...x, ...patch }))
+  const nc = (arr || []).reduce((m, r) => Math.max(m, (r || []).length), 0)
+  const ini = Number.isInteger(p.linhaInicio) ? p.linhaInicio : 1
+  const amostra = (j) => { for (const r of arr.slice(ini, ini + 60)) { const v = String(r?.[j] ?? '').trim(); if (v) return v } return '' }
+  const cols = Array.from({ length: nc }, (_, j) => ({ j, label: `Col ${j + 1} · ${amostra(j).slice(0, 26) || '—'}` }))
+  const Sel = ({ val, on, vazio = '—' }) => (
+    <select className="input" style={{ padding: '7px 9px', fontSize: 12 }} value={val ?? -1} onChange={e => on(Number(e.target.value))}>
+      <option value={-1}>{vazio}</option>
+      {cols.map(c => <option key={c.j} value={c.j}>{c.label}</option>)}
+    </select>
+  )
+  const prev = aplicarPerfil(arr, p, memoria).slice(0, 6)
+  const total = aplicarPerfil(arr, p, memoria).length
+  const casadas = aplicarPerfil(arr, p, memoria).filter(l => l.contra).length
+  return (
+    <div onClick={onCancelar} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 16, zIndex: 60 }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 'min(900px,97vw)', maxHeight: '92vh', overflow: 'auto', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 22 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+          <h2 style={{ fontSize: 16, margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}><i className="ti ti-adjustments" style={{ color: theme.accent }} /> Perfil de leitura — {bancoNome}</h2>
+          <span onClick={onCancelar} style={{ cursor: 'pointer', color: theme.sub, fontSize: 20 }}><i className="ti ti-x" /></span>
+        </div>
+        <p style={{ color: theme.sub, fontSize: 12, margin: '0 0 14px' }}>Diga como ler <b style={{ color: theme.text }}>{nome}</b>. Salvo no cliente — nos próximos meses o extrato entra sozinho, no layout do Domínio.</p>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 10 }}>
+          <div><label>Linha de início (dados)</label><input className="input" type="number" min="1" style={{ fontSize: 12 }} value={ini + 1} onChange={e => set({ linhaInicio: Math.max(0, (Number(e.target.value) || 1) - 1) })} /></div>
+          <div><label>Valor</label><Sel val={p.colValor} on={v => set({ colValor: v })} /></div>
+          <div><label>Data</label><Sel val={p.colData} on={v => set({ colData: v })} /></div>
+          <div><label>Credor/Devedor (contrapartida)</label><Sel val={p.colCredor} on={v => set({ colCredor: v })} /></div>
+          <div><label>Documento (opc.)</label><Sel val={p.colDoc} on={v => set({ colDoc: v })} /></div>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))', gap: 10, marginTop: 12, alignItems: 'end' }}>
+          <div>
+            <label>Entrada × Saída</label>
+            <select className="input" style={{ fontSize: 12 }} value={p.es?.modo || 'sinal'} onChange={e => set({ es: { ...(p.es || {}), modo: e.target.value } })}>
+              <option value="sinal">Pelo sinal do valor</option>
+              <option value="coluna">Por uma coluna</option>
+            </select>
+          </div>
+          {p.es?.modo === 'coluna' && <div><label>Coluna do indicador</label><Sel val={p.es?.col} on={v => set({ es: { ...(p.es || {}), col: v } })} /></div>}
+          {p.es?.modo === 'coluna' && <div><label>Valores que são ENTRADA (vírgula)</label><input className="input" style={{ fontSize: 12 }} placeholder="ex.: CAR, LAN" value={(p.es?.entrada || []).join(', ')} onChange={e => set({ es: { ...(p.es || {}), entrada: e.target.value.split(',').map(s => s.trim()).filter(Boolean) } })} /></div>}
+          <div>
+            <label>Ignorar linha quando esta coluna estiver vazia</label>
+            <Sel val={p.filtro?.col} on={v => set({ filtro: { col: v, pularVazio: v >= 0 } })} vazio="não filtrar" />
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 12.5, margin: '14px 0 6px' }}>
+          <span style={{ color: theme.text }}><b>{total}</b> lançamento(s)</span>
+          <span style={{ color: theme.green }}><b>{casadas}</b> classificada(s) pela memória</span>
+        </div>
+        <div style={{ border: `0.5px solid ${theme.cb}`, borderRadius: 10, overflow: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 640 }}>
+            <thead><tr style={{ background: theme.input }}><th style={fth}>E/S</th><th style={{ ...fth, textAlign: 'right' }}>Valor</th><th style={fth}>Data</th><th style={fth}>Histórico montado</th><th style={fth}>Contrap.</th></tr></thead>
+            <tbody>
+              {prev.map((l, i) => (
+                <tr key={i} style={{ borderTop: `1px solid ${theme.border}` }}>
+                  <td style={{ ...ftd, fontSize: 11, color: l.entrada ? theme.green : theme.red }}>{l.entrada ? 'Entrada' : 'Saída'}</td>
+                  <td style={{ ...ftd, textAlign: 'right', whiteSpace: 'nowrap' }}>{money(l.valor)}</td>
+                  <td style={{ ...ftd, fontSize: 11, color: theme.sub, whiteSpace: 'nowrap' }}>{l.data ? l.data.split('-').reverse().join('/') : '—'}</td>
+                  <td style={{ ...ftd, fontSize: 11, color: theme.sub, maxWidth: 320 }}>{l.historico || '—'}</td>
+                  <td style={{ ...ftd, fontSize: 11.5 }}>{l.contra || '—'}</td>
+                </tr>
+              ))}
+              {!prev.length && <tr><td colSpan={5} style={{ ...ftd, color: theme.yellow, fontSize: 12 }}>Nenhum lançamento com este mapeamento. Ajuste a linha de início e a coluna de valor.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
+          <button className="btn btn-ghost" onClick={onCancelar}>Cancelar</button>
+          <button className="btn" disabled={!total} onClick={() => onSalvar(p)}><i className="ti ti-check" /> Salvar perfil e importar</button>
+        </div>
+      </div>
+    </div>
   )
 }
 
