@@ -4,7 +4,7 @@ import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { theme, money } from '../lib/theme'
 import CampoConta from '../components/CampoConta'
-import { normHist, casarHistorico, aprender, parseValor, dataISO, aplicarPerfil, extrairEntidade } from '../lib/financeiro'
+import { normHist, casarHistorico, aprender, parseValor, dataISO, aplicarPerfil, extrairEntidade, ehEmpresa } from '../lib/financeiro'
 import { gerarDominioCSV } from '../lib/dominio'
 
 const TABS = [['fiscal', 'Fiscal'], ['folha', 'Folha'], ['patrimonio', 'Patrimônio'], ['financeira', 'Financeira']]
@@ -390,7 +390,8 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
           const d = String(r[iDeb] ?? '').trim(), c = String(r[iCred] ?? '').trim()
           if (!compl) continue
           const contra = bancos.has(d) ? c : bancos.has(c) ? d : ''
-          if (contra) novas.push({ historico: extrairEntidade(compl), conta: contra })
+          const ent = extrairEntidade(compl)
+          if (contra && ent && ehEmpresa(ent)) novas.push({ historico: ent, conta: contra })
         }
       } else {
         // Planilha simples: Histórico | Conta contrapartida.
