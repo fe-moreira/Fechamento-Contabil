@@ -178,6 +178,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   const [quebra, setQuebra] = useState(null)      // { i, linha } divisão de um lançamento
   const [saldoAnterior, setSaldoAnterior] = useState(null) // saldo do banco no balancete (abertura)
   const [saldoExtrato, setSaldoExtrato] = useState('')     // saldo do extrato informado pelo usuário
+  const [cruza, setCruza] = useState(null)                 // resultado do cruzamento por dia com o extrato
   const refsContra = useRef({})                  // foco: Enter pula para a próxima linha
 
   const nomeBanco = cod => planoMap[String(cod)]?.nome || (cod ? `Conta ${cod}` : '—')
@@ -253,7 +254,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   // estado 'rascunho' = em andamento (ainda pendente no Status); 'validado' = concluído.
   function salvarBancoDraft(conta, estadoB, doc, draftLinhas) {
     const bancos = { ...(est?.bancos || {}) }
-    bancos[conta] = { estado: estadoB, doc: doc || null, usuario: user?.email || null, draft: draftLinhas || null }
+    bancos[conta] = { estado: estadoB, doc: doc || null, usuario: user?.email || null, draft: draftLinhas || null, saldoExtrato: saldoExtrato || null }
     onEstado({ ...est, bancos })
   }
   function marcarCombinado(doc) { onEstado({ ...est, combinado: { estado: 'validado', doc, usuario: user?.email || null } }) }
@@ -298,11 +299,13 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     const norm = aplicarPerfil(arr, perf, memoria, catByRow, adiantContas).map(l => ({ ...l, banco: bancoFixo }))
     // Reimport do mesmo arquivo: preserva as contrapartidas já preenchidas no
     // rascunho (mesmo arquivo → mesma ordem), atualizando histórico/valor/data.
-    const prev = (est?.bancos || {})[bancoFixo]?.draft
+    const prevBanco = (est?.bancos || {})[bancoFixo]
+    const prev = prevBanco?.draft
     let mantidas = 0
     if (Array.isArray(prev) && prev.length === norm.length) {
       norm.forEach((l, i) => { if (prev[i]?.contra) { l.contra = prev[i].contra; mantidas++ } })
     }
+    if (prevBanco?.saldoExtrato) setSaldoExtrato(prevBanco.saldoExtrato)
     setRaw({ nome, banco: bancoFixo, viaPerfil: true, arr, catByRow })
     setLinhas(norm); setSel(new Set())
     if (!norm.length) { setErro('O perfil de leitura não encontrou lançamentos. Clique em “Ajustar leitura” e revise o mapeamento.'); return }
@@ -333,7 +336,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     const s = (est?.bancos || {})[conta]
     if (!s?.draft) return
     setRaw({ nome: s.doc || 'Rascunho', banco: conta, viaPerfil: true, resumo: true })
-    setLinhas(s.draft); setSel(new Set()); setErro('')
+    setLinhas(s.draft); setSel(new Set()); setErro(''); setSaldoExtrato(s.saldoExtrato || '')
     setMsg(`Rascunho carregado — ${s.draft.length} linha(s). Continue de onde parou.`)
   }
 
@@ -435,7 +438,50 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     const { data: bal } = await supabase.from('balancete').select('saldo_inicial').eq('competencia_id', comp.id).eq('conta', String(banco)).limit(1).maybeSingle()
     setSaldoAnterior(bal ? Number(bal.saldo_inicial) : null)
   }
-  useEffect(() => { if (raw?.banco) carregarSaldoAnterior(raw.banco); else { setSaldoAnterior(null); setSaldoExtrato('') } }, [raw?.banco, competencia]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (raw?.banco) carregarSaldoAnterior(raw.banco); else { setSaldoAnterior(null); setSaldoExtrato(''); setCruza(null) } }, [raw?.banco, competencia]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Cruza os lançamentos classificados com o extrato do banco (saldos diários) para
+  // achar o dia onde começa a diferença. O sinal é a MUDANÇA da diferença de um dia
+  // para o outro (independe do saldo de abertura estar alinhado).
+  async function cruzarSaldos(file) {
+    if (!file) return
+    setErro('')
+    try {
+      const XLSX = await import('xlsx')
+      const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true })
+      const ws = wb.Sheets[wb.SheetNames[0]]
+      const arr = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
+      const header = arr[0] || []
+      const rows = arr.slice(1).filter(r => r.some(c => c !== '' && c != null))
+      const iData = achaColuna(header, /^data|\bdata\b|dt\b/)
+      let iSaldo = achaColuna(header, /saldo|balance/)
+      if (iSaldo < 0) { // última coluna com números na maioria das linhas
+        for (let j = (header.length || (rows[0]?.length || 0)) - 1; j >= 0; j--) {
+          if (rows.filter(r => typeof r[j] === 'number' || parseValor(r[j])).length > rows.length / 2) { iSaldo = j; break }
+        }
+      }
+      if (iData < 0 || iSaldo < 0) { setErro('Não identifiquei as colunas de Data e Saldo no extrato.'); return }
+      // extrato: saldo de fim de dia (último por data, assumindo ordem cronológica)
+      const extratoDia = new Map()
+      for (const r of rows) { const d = dataISO(r[iData]); if (d) extratoDia.set(d, parseValor(r[iSaldo])) }
+      // movimento por dia a partir da classificação
+      const movDia = {}
+      for (const l of linhas) { if (!l.data) continue; movDia[l.data] = (movDia[l.data] || 0) + (l.entrada ? l.valor : -l.valor) }
+      const dias = [...new Set([...extratoDia.keys(), ...Object.keys(movDia)])].sort()
+      let corrente = saldoAnterior || 0, prevDif = null, primeiroDiv = null
+      const out = []
+      for (const d of dias) {
+        corrente += (movDia[d] || 0)
+        const ext = extratoDia.has(d) ? extratoDia.get(d) : null
+        const dif = ext == null ? null : Math.round((corrente - ext) * 100) / 100
+        const delta = (dif == null || prevDif == null) ? null : Math.round((dif - prevDif) * 100) / 100
+        if (delta != null && Math.abs(delta) >= 0.005 && !primeiroDiv) primeiroDiv = d
+        out.push({ data: d, mov: movDia[d] || 0, calc: corrente, ext, dif, delta })
+        if (dif != null) prevDif = dif
+      }
+      setCruza({ dias: out, primeiroDiv })
+    } catch (e) { setErro('Não consegui ler o extrato: ' + e.message) }
+  }
   // Divide um lançamento em vários (ex.: 1 DARF → 3 lançamentos contábeis).
   function confirmarQuebra(i, partes) {
     const base = linhas[i]
@@ -756,11 +802,16 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
             <span style={{ color: theme.text }}>= Saldo final: <b>{money(saldoFinal)}</b></span>
             <span style={{ flex: 1 }} />
             <label style={{ color: theme.sub, display: 'flex', alignItems: 'center', gap: 6 }}>Saldo do extrato:
-              <input className="input" style={{ width: 130, fontSize: 12, padding: '5px 8px' }} value={saldoExtrato} onChange={e => setSaldoExtrato(e.target.value)} placeholder="0,00" />
+              <input className="input" style={{ width: 130, fontSize: 12, padding: '5px 8px' }} value={saldoExtrato} onChange={e => setSaldoExtrato(e.target.value)}
+                onBlur={() => { if (raw.banco) salvarBancoDraft(raw.banco, bancosEst[raw.banco]?.estado || 'rascunho', raw.nome, linhas) }} placeholder="0,00" />
             </label>
             {temExtrato && (Math.abs(difSaldo) < 0.005
               ? <span style={{ color: theme.green, fontWeight: 600 }}><i className="ti ti-circle-check" /> confere</span>
               : <span style={{ color: theme.red, fontWeight: 600 }}><i className="ti ti-alert-triangle" /> diferença {money(difSaldo)}</span>)}
+            <label className="btn btn-ghost" style={{ fontSize: 11.5, padding: '4px 9px', cursor: 'pointer' }} title="Importar o extrato do banco (com saldos diários) para achar o dia da diferença">
+              <i className="ti ti-file-search" /> Achar diferença por dia
+              <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={e => cruzarSaldos(e.target.files?.[0])} />
+            </label>
           </div>
           {saldoAnterior == null && <p style={{ color: theme.yellow, fontSize: 11.5, margin: '-4px 0 10px' }}>Saldo anterior indisponível (balancete da competência não importado) — o saldo final considera abertura zero.</p>}
 
@@ -811,7 +862,9 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
             <button className="btn" onClick={aprenderSalvar}><i className="ti ti-brain" /> Aprender e salvar</button>
             {raw.banco && <button className="btn btn-ghost" style={{ color: theme.green, borderColor: theme.green }} onClick={concluirBanco}><i className="ti ti-circle-check" /> Concluir banco</button>}
             <button className="btn btn-ghost" onClick={exportarExcel}><i className="ti ti-file-spreadsheet" /> Exportar Excel</button>
-            <button className="btn btn-ghost" disabled={!prontas} onClick={gerar}><i className="ti ti-file-export" /> Gerar arquivo do Domínio ({prontas})</button>
+            <button className="btn btn-ghost" disabled={!prontas || (temExtrato && Math.abs(difSaldo) >= 0.005)}
+              title={temExtrato && Math.abs(difSaldo) >= 0.005 ? 'O saldo do extrato ainda não confere — zere a diferença antes de gerar.' : ''}
+              onClick={gerar}><i className="ti ti-file-export" /> Gerar arquivo do Domínio ({prontas})</button>
           </div>
           <p style={{ color: theme.sub, fontSize: 11.5, margin: '10px 0 0' }}>Preencha a contrapartida das linhas que faltam e clique em <b style={{ color: theme.text }}>Aprender e salvar</b> — no próximo mês elas já vêm classificadas. Entrada = D banco / C contrapartida; Saída = D contrapartida / C banco.</p>
         </>
@@ -822,6 +875,8 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
           onClose={() => setQuebra(null)} onConfirmar={partes => confirmarQuebra(quebra.i, partes)} />
       )}
 
+      {cruza && <ModalCruzaSaldo cruza={cruza} onClose={() => setCruza(null)} />}
+
       {cfg && (
         <PerfilExtratoCfg
           arr={cfg.arr} catByRow={cfg.catByRow} adiantContas={adiantContas} nome={cfg.nome} bancoNome={nomeBanco(cfg.banco)} perfilInicial={cfg.perfil} memoria={memoria}
@@ -830,6 +885,47 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
         />
       )}
     </>
+  )
+}
+
+// Resultado do cruzamento do saldo diário calculado vs o saldo do extrato do banco.
+function ModalCruzaSaldo({ cruza, onClose }) {
+  const brd = iso => iso ? iso.split('-').reverse().join('/') : '—'
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 16, zIndex: 60 }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 'min(680px,96vw)', maxHeight: '90vh', overflow: 'auto', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 22 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+          <h2 style={{ fontSize: 16, margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}><i className="ti ti-file-search" style={{ color: theme.accent }} /> Diferença por dia (extrato × classificado)</h2>
+          <span onClick={onClose} style={{ cursor: 'pointer', color: theme.sub, fontSize: 20 }}><i className="ti ti-x" /></span>
+        </div>
+        <p style={{ fontSize: 13, margin: '0 0 12px', color: cruza.primeiroDiv ? theme.red : theme.green }}>
+          {cruza.primeiroDiv
+            ? <><i className="ti ti-alert-triangle" /> A diferença começa em <b>{brd(cruza.primeiroDiv)}</b> — confira os lançamentos desse dia.</>
+            : <><i className="ti ti-circle-check" /> Nenhuma divergência de movimento entre os dias. Se ainda há diferença, é no saldo de abertura.</>}
+        </p>
+        <div style={{ border: `0.5px solid ${theme.cb}`, borderRadius: 10, overflow: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 560 }}>
+            <thead><tr style={{ background: theme.input }}><th style={fth}>Data</th><th style={{ ...fth, textAlign: 'right' }}>Movimento</th><th style={{ ...fth, textAlign: 'right' }}>Saldo calc.</th><th style={{ ...fth, textAlign: 'right' }}>Saldo extrato</th><th style={{ ...fth, textAlign: 'right' }}>Dif. do dia</th></tr></thead>
+            <tbody>
+              {cruza.dias.map((d, i) => {
+                const marca = cruza.primeiroDiv === d.data || (d.delta != null && Math.abs(d.delta) >= 0.005)
+                return (
+                  <tr key={i} style={{ borderTop: `1px solid ${theme.border}`, background: marca ? 'rgba(229,72,77,0.10)' : 'transparent' }}>
+                    <td style={{ ...ftd, fontSize: 11.5, whiteSpace: 'nowrap' }}>{brd(d.data)}</td>
+                    <td style={{ ...ftd, textAlign: 'right', fontSize: 11.5, whiteSpace: 'nowrap', color: theme.sub }}>{money(d.mov)}</td>
+                    <td style={{ ...ftd, textAlign: 'right', whiteSpace: 'nowrap' }}>{money(d.calc)}</td>
+                    <td style={{ ...ftd, textAlign: 'right', whiteSpace: 'nowrap' }}>{d.ext == null ? '—' : money(d.ext)}</td>
+                    <td style={{ ...ftd, textAlign: 'right', whiteSpace: 'nowrap', color: (d.delta && Math.abs(d.delta) >= 0.005) ? theme.red : theme.sub }}>{d.delta == null ? '—' : money(d.delta)}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+        <p style={{ color: theme.sub, fontSize: 11, margin: '10px 0 0' }}>"Dif. do dia" é a mudança da diferença de um dia para o outro — onde ela salta, falta ou sobra um lançamento naquele dia.</p>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14 }}><button className="btn" onClick={onClose}>Fechar</button></div>
+      </div>
+    </div>
   )
 }
 
