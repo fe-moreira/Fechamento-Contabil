@@ -108,20 +108,31 @@ function decidirEntrada(r, p) {
   return parseValor(r[p.colValor]) >= 0
 }
 
+// Limpa a categoria (coluna mesclada): tira o código contábil do começo e o
+// sufixo "Total" dos subtotais.
+function limparCategoria(s) {
+  return String(s || '').replace(/^[\d.\s]+/, '').replace(/\s+total\s*$/i, '').trim()
+}
+
 // Aplica um perfil a uma planilha crua (matriz de linhas). Retorna
 // [{ historico, credor, valor, entrada, data, contra }] classificado pela memória
-// (casando pelo credor/devedor).
+// (casando pelo credor/devedor). Se houver coluna de categoria (mesclada), ela é
+// arrastada pra baixo (forward-fill) e entra no histórico.
 export function aplicarPerfil(arr, perfil, memoria) {
   const p = perfil || {}
   const ini = Number.isInteger(p.linhaInicio) ? p.linhaInicio : 1
   const histCols = (p.histCols && p.histCols.length ? p.histCols : [p.colCredor, p.colDoc]).filter(c => c != null && c >= 0)
+  const temCat = p.colCategoria != null && p.colCategoria >= 0
+  let catAtual = ''
   const out = []
   for (const r of (arr || []).slice(ini)) {
+    if (temCat) { const v = String(r[p.colCategoria] ?? '').trim(); if (v && !/total\s*$/i.test(v)) catAtual = v }
     if (!r || !r.some(c => c !== '' && c != null)) continue
     if (p.filtro?.pularVazio && p.filtro.col != null && p.filtro.col >= 0 && !String(r[p.filtro.col] ?? '').trim()) continue
     const entrada = decidirEntrada(r, p)
     const credor = p.colCredor != null && p.colCredor >= 0 ? String(r[p.colCredor] ?? '').trim() : ''
-    const historico = montarHistorico(entrada, histCols.map(c => r[c]))
+    const partes = temCat ? [limparCategoria(catAtual), ...histCols.map(c => r[c])] : histCols.map(c => r[c])
+    const historico = montarHistorico(entrada, partes)
     const valor = Math.abs(parseValor(r[p.colValor]))
     if (!valor) continue
     const data = p.colData != null && p.colData >= 0 ? dataISO(r[p.colData]) : ''
