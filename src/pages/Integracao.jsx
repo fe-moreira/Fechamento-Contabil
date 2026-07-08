@@ -275,7 +275,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
       const avg = rows.reduce((s, r) => { const t = String(r?.[j] ?? ''); return s + (/[A-Za-z]{3,}/.test(t) ? t.length : 0) }, 0) / (rows.length || 1)
       if (avg > bestLen) { bestLen = avg; colCredor = j }
     }
-    return { linhaInicio: ini, colValor, colData, colCredor, colDoc: -1, histCols: [], es: { modo: 'sinal', col: -1, entrada: [] }, filtro: { col: -1, pularVazio: false } }
+    return { linhaInicio: ini, colValor, colData, colCredor, colDoc: -1, colCategoria: -1, histCols: [], es: { modo: 'sinal', col: -1, entrada: [] }, filtro: { col: -1, pularVazio: false } }
   }
 
   // Aplica o perfil já salvo a um extrato por banco e segue (marca o banco).
@@ -722,6 +722,7 @@ function PerfilExtratoCfg({ arr, nome, bancoNome, perfilInicial, memoria, onCanc
           <div><label>Data</label><Sel val={p.colData} on={v => set({ colData: v })} /></div>
           <div><label>Credor/Devedor (contrapartida)</label><Sel val={p.colCredor} on={v => set({ colCredor: v })} /></div>
           <div><label>Documento (opc.)</label><Sel val={p.colDoc} on={v => set({ colDoc: v })} /></div>
+          <div><label>Categoria (coluna mesclada, opc.)</label><Sel val={p.colCategoria} on={v => set({ colCategoria: v })} /></div>
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))', gap: 10, marginTop: 12, alignItems: 'end' }}>
