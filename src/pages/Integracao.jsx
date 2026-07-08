@@ -451,16 +451,23 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
       const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true })
       const ws = wb.Sheets[wb.SheetNames[0]]
       const arr = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
-      const header = arr[0] || []
-      const rows = arr.slice(1).filter(r => r.some(c => c !== '' && c != null))
-      const iData = achaColuna(header, /^data|\bdata\b|dt\b/)
-      let iSaldo = achaColuna(header, /saldo|balance/)
-      if (iSaldo < 0) { // última coluna com números na maioria das linhas
-        for (let j = (header.length || (rows[0]?.length || 0)) - 1; j >= 0; j--) {
+      // Acha a linha de cabeçalho (a que tem Data e Saldo) — extratos costumam ter
+      // várias linhas de topo (nome, agência, período) antes da tabela.
+      let hIdx = 0, iData = -1, iSaldo = -1
+      for (let i = 0; i < Math.min(arr.length, 40); i++) {
+        const hd = arr[i] || []
+        const d = achaColuna(hd, /^data|\bdata\b|dt\b/)
+        const s = achaColuna(hd, /saldo|balance/)
+        if (d >= 0 && s >= 0) { hIdx = i; iData = d; iSaldo = s; break }
+      }
+      const rows = arr.slice(hIdx + 1).filter(r => r.some(c => c !== '' && c != null))
+      if (iData < 0) iData = achaColuna(arr[hIdx] || [], /^data|\bdata\b|dt\b/)
+      if (iSaldo < 0) { // fallback: última coluna com números na maioria das linhas
+        for (let j = ((arr[hIdx] || []).length || (rows[0]?.length || 0)) - 1; j >= 0; j--) {
           if (rows.filter(r => typeof r[j] === 'number' || parseValor(r[j])).length > rows.length / 2) { iSaldo = j; break }
         }
       }
-      if (iData < 0 || iSaldo < 0) { setErro('Não identifiquei as colunas de Data e Saldo no extrato.'); return }
+      if (iData < 0 || iSaldo < 0) { setErro('Não identifiquei as colunas de Data e Saldo no extrato. Confira se há uma coluna Data e uma Saldo.'); return }
       // extrato: saldo de fim de dia (último por data, assumindo ordem cronológica)
       const extratoDia = new Map()
       for (const r of rows) { const d = dataISO(r[iData]); if (d) extratoDia.set(d, parseValor(r[iSaldo])) }
