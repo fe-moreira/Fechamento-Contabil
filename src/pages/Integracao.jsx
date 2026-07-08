@@ -788,8 +788,8 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
                     </td>
                     <td style={{ ...ftd, minWidth: 180 }}>
                       <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                        <CampoConta value={l.contra} onChange={v => setLinha(i, { contra: v })} style={{ flex: 1 }}
-                          inputRef={el => { refsContra.current[pos] = el }} onEnter={() => refsContra.current[pos + 1]?.focus()} />
+                        <div style={{ flex: 1 }}><ContraCell value={l.contra} onCommit={v => setLinha(i, { contra: v })}
+                          inputRef={el => { refsContra.current[pos] = el }} onEnter={() => refsContra.current[pos + 1]?.focus()} /></div>
                         <i className="ti ti-arrows-split-2" title="Dividir em vários lançamentos" onClick={() => setQuebra({ i, linha: l })} style={{ color: theme.sub, cursor: 'pointer', fontSize: 16, flexShrink: 0 }} />
                       </div>
                     </td>
@@ -830,6 +830,20 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
         />
       )}
     </>
+  )
+}
+
+// Campo da contrapartida na tabela: só confirma (grava na linha) ao apertar Enter,
+// sair do campo ou escolher pelo F4 — enquanto digita não é interpretado como lançado.
+function ContraCell({ value, onCommit, onEnter, inputRef }) {
+  const [v, setV] = useState(value ?? '')
+  useEffect(() => { setV(value ?? '') }, [value])
+  const commit = val => { const s = String(val ?? '').trim(); if (s !== String(value ?? '')) onCommit(s) }
+  return (
+    <CampoConta value={v} onChange={setV} inputRef={inputRef}
+      onPick={p => { setV(p.cod); onCommit(p.cod) }}
+      onEnter={() => { commit(v); onEnter && onEnter() }}
+      onBlur={() => commit(v)} />
   )
 }
 
