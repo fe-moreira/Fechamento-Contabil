@@ -168,8 +168,10 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   const [cfg, setCfg] = useState(null)           // { raw, banco, perfil } — painel de mapeamento aberto
   const [fSem, setFSem] = useState(false)        // filtro: só linhas sem contrapartida
   const [fHist, setFHist] = useState('')         // filtro por histórico
+  const [fMode, setFMode] = useState('contem')   // 'contem' | 'exato'
   const [fData, setFData] = useState('')         // filtro por data (dd/mm)
-  const [lote, setLote] = useState('')           // conta para preencher em lote nos filtrados
+  const [lote, setLote] = useState('')           // conta para preencher em lote nas selecionadas
+  const [sel, setSel] = useState(() => new Set())// linhas selecionadas (índice original)
   const refsContra = useRef({})                  // foco: Enter pula para a próxima linha
 
   const nomeBanco = cod => planoMap[String(cod)]?.nome || (cod ? `Conta ${cod}` : '—')
@@ -280,7 +282,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   function aplicarEProsseguir(arr, nome, bancoFixo, perf) {
     const norm = aplicarPerfil(arr, perf, memoria).map(l => ({ ...l, banco: bancoFixo }))
     setRaw({ nome, banco: bancoFixo, viaPerfil: true, arr })
-    setLinhas(norm)
+    setLinhas(norm); setSel(new Set())
     if (!norm.length) { setErro('O perfil de leitura não encontrou lançamentos. Clique em “Ajustar leitura” e revise o mapeamento.'); return }
     const erroComp = validarCompetencia(norm, { data: (perf.colData != null && perf.colData >= 0) ? 0 : -1 }, competencia)
     if (erroComp) { setErro(erroComp); return }
@@ -358,17 +360,20 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   const normTxt = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
   function linhaVisivel(l) {
     if (fSem && l.contra) return false
-    if (fHist && !normTxt(l.historico).includes(normTxt(fHist))) return false
+    if (fHist) {
+      const h = normTxt(l.historico), q = normTxt(fHist)
+      if (fMode === 'exato' ? h !== q : !h.includes(q)) return false
+    }
     if (fData && !dataBR(l.data).includes(fData.trim())) return false
     return true
   }
+  const toggleUm = i => setSel(prev => { const n = new Set(prev); n.has(i) ? n.delete(i) : n.add(i); return n })
   function aplicarLote() {
     const cod = String(lote || '').trim()
     if (!cod) { setMsg('Informe a conta para aplicar em lote.'); return }
-    const alvo = new Set(linhas.map((l, i) => linhaVisivel(l) ? i : -1).filter(i => i >= 0))
-    if (!alvo.size) { setMsg('Nenhuma linha filtrada para aplicar.'); return }
-    setLinhas(ls => ls.map((l, j) => alvo.has(j) ? { ...l, contra: cod } : l))
-    setMsg(`Conta ${cod} aplicada em ${alvo.size} linha(s) filtrada(s).`)
+    if (!sel.size) { setMsg('Selecione as linhas (caixas à esquerda) para aplicar a conta.'); return }
+    setLinhas(ls => ls.map((l, j) => sel.has(j) ? { ...l, contra: cod } : l))
+    setMsg(`Conta ${cod} aplicada em ${sel.size} linha(s) selecionada(s).`)
   }
 
   // Aprende: guarda credor/devedor → contrapartida das linhas classificadas
@@ -473,6 +478,9 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   const prontas = linhas.filter(l => l.banco && l.contra && l.valor > 0).length
   const semContra = linhas.filter(l => !l.contra).length
   const visiveis = linhas.map((l, i) => ({ l, i })).filter(({ l }) => linhaVisivel(l))
+  const visIdx = visiveis.map(v => v.i)
+  const todosSel = visIdx.length > 0 && visIdx.every(i => sel.has(i))
+  const toggleTodos = () => setSel(prev => { const n = new Set(prev); if (todosSel) visIdx.forEach(i => n.delete(i)); else visIdx.forEach(i => n.add(i)); return n })
   const memAtiva = memoria.length > 0
 
   return (
@@ -606,19 +614,23 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
           {/* Filtros + preenchimento em lote */}
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', margin: '6px 0 8px' }}>
             <button className={fSem ? 'btn' : 'btn btn-ghost'} style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => setFSem(v => !v)}><i className="ti ti-filter" /> Só sem contrapartida</button>
-            <input className="input" style={{ maxWidth: 220, fontSize: 12, padding: '6px 10px' }} placeholder="Filtrar histórico…" value={fHist} onChange={e => setFHist(e.target.value)} />
+            <input className="input" style={{ maxWidth: 200, fontSize: 12, padding: '6px 10px' }} placeholder="Filtrar histórico…" value={fHist} onChange={e => setFHist(e.target.value)} />
+            <select className="input" style={{ maxWidth: 110, fontSize: 12, padding: '6px 8px' }} value={fMode} onChange={e => setFMode(e.target.value)}>
+              <option value="contem">Contém</option><option value="exato">Exato</option>
+            </select>
             <input className="input" style={{ maxWidth: 130, fontSize: 12, padding: '6px 10px' }} placeholder="Data (dd/mm)" value={fData} onChange={e => setFData(e.target.value)} />
             {(fSem || fHist || fData) && <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', color: theme.sub }} onClick={() => { setFSem(false); setFHist(''); setFData('') }}>limpar filtros</button>}
             <span style={{ flex: 1 }} />
-            <span style={{ fontSize: 12, color: theme.sub }}>Aplicar em lote nos filtrados:</span>
+            <span style={{ fontSize: 12, color: theme.sub }}>Aplicar às selecionadas:</span>
             <CampoConta value={lote} onChange={setLote} onEnter={aplicarLote} placeholder="Conta (F4)" style={{ width: 190 }} />
-            <button className="btn" style={{ fontSize: 12, padding: '5px 10px' }} onClick={aplicarLote}><i className="ti ti-wand" /> Aplicar ({visiveis.length})</button>
+            <button className="btn" style={{ fontSize: 12, padding: '5px 10px' }} disabled={!sel.size} onClick={aplicarLote}><i className="ti ti-wand" /> Aplicar ({sel.size})</button>
           </div>
 
           <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 12.5, margin: '0 0 10px' }}>
             <span style={{ color: theme.green }}><b>{prontas}</b> pronta(s) p/ contabilizar</span>
             <span style={{ color: theme.yellow }}><b>{semContra}</b> sem contrapartida</span>
-            <span style={{ color: theme.sub }}>mostrando <b>{visiveis.length}</b> de {linhas.length}</span>
+            <span style={{ color: theme.sub }}>mostrando <b>{visiveis.length}</b> de {linhas.length}{sel.size ? ` · ${sel.size} selecionada(s)` : ''}</span>
+            {sel.size > 0 && <button className="btn btn-ghost" style={{ fontSize: 11.5, padding: '3px 8px', color: theme.sub }} onClick={() => setSel(new Set())}>limpar seleção</button>}
           </div>
 
           {/* Tabela de classificação */}
@@ -626,12 +638,14 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
             <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 820 }}>
               <thead>
                 <tr style={{ background: theme.input, position: 'sticky', top: 0 }}>
+                  <th style={{ ...fth, width: 34, textAlign: 'center' }}><input type="checkbox" checked={todosSel} onChange={toggleTodos} title="Selecionar os visíveis" /></th>
                   <th style={fth}>Data</th><th style={fth}>Banco</th><th style={fth}>Histórico</th><th style={{ ...fth, textAlign: 'right' }}>Valor</th><th style={fth}>E/S</th><th style={fth}>Contrapartida</th><th style={fth}>Conta (nome)</th>
                 </tr>
               </thead>
               <tbody>
                 {visiveis.map(({ l, i }, pos) => (
-                  <tr key={i} style={{ borderTop: `1px solid ${theme.border}`, background: !l.banco ? 'rgba(245,166,35,0.06)' : 'transparent' }}>
+                  <tr key={i} style={{ borderTop: `1px solid ${theme.border}`, background: sel.has(i) ? 'rgba(74,124,255,0.10)' : !l.banco ? 'rgba(245,166,35,0.06)' : 'transparent' }}>
+                    <td style={{ ...ftd, textAlign: 'center' }}><input type="checkbox" checked={sel.has(i)} onChange={() => toggleUm(i)} /></td>
                     <td style={{ ...ftd, fontSize: 11.5, whiteSpace: 'nowrap', color: theme.sub }}>{dataBR(l.data) || '—'}</td>
                     <td style={{ ...ftd, fontSize: 11.5 }}>{l.banco ? `${l.banco} · ${nomeBanco(l.banco)}` : <span style={{ color: theme.yellow }}>sem banco</span>}</td>
                     <td style={{ ...ftd, color: theme.sub, fontSize: 11.5, maxWidth: 260 }}>{l.historico || '—'}</td>
@@ -651,7 +665,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
                     </td>
                   </tr>
                 ))}
-                {!visiveis.length && <tr><td colSpan={7} style={{ ...ftd, color: theme.sub, fontSize: 12 }}>Nenhuma linha com os filtros atuais.</td></tr>}
+                {!visiveis.length && <tr><td colSpan={8} style={{ ...ftd, color: theme.sub, fontSize: 12 }}>Nenhuma linha com os filtros atuais.</td></tr>}
               </tbody>
             </table>
           </div>
