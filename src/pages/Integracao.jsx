@@ -291,6 +291,15 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     marcarBanco(bancoFixo, 'validado', nome)
   }
 
+  // Desfaz a importação atual: limpa a prévia/filtros e volta o banco a pendente.
+  function desfazerImport() {
+    if (raw?.viaPerfil && raw.banco) marcarBanco(raw.banco, null)
+    else if (modo === 'combinado') { const e = { ...est }; delete e.combinado; onEstado(e) }
+    setRaw(null); setLinhas([]); setSel(new Set())
+    setFSem(false); setFHist(''); setFData(''); setLote('')
+    setErro(''); setMsg('Importação desfeita — pode iniciar uma nova.')
+  }
+
   async function importar(file, bancoFixo) {
     if (!file) return
     setErro(''); setMsg('')
@@ -591,6 +600,10 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
 
       {raw && (
         <>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', margin: '14px 0 4px' }}>
+            <span style={{ fontSize: 12.5, color: theme.text }}><i className="ti ti-file-spreadsheet" style={{ color: theme.accent }} /> {raw.nome || 'Extrato importado'} · {linhas.length} linha(s)</span>
+            <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', color: theme.red, borderColor: theme.red }} onClick={desfazerImport}><i className="ti ti-arrow-back-up" /> Desfazer / nova importação</button>
+          </div>
           {/* Extrato lido pelo perfil do cliente: layout único, sem mapa manual. */}
           {raw.viaPerfil ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', margin: '14px 0 6px' }}>
