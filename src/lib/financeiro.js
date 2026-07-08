@@ -1,3 +1,5 @@
+import { historicoDominio } from './dominio'
+
 // Memória do financeiro: aprende "histórico do extrato → conta de contrapartida"
 // por cliente. A chave é o histórico normalizado (sem datas/números/pontuação),
 // para casar o mesmo tipo de lançamento em meses diferentes.
@@ -64,4 +66,58 @@ export function aprender(memoria, novas) {
     map.set(termo, { termo, conta: c })
   }
   return [...map.values()]
+}
+
+// Extrai o credor/devedor (a "entidade") de um texto de histórico livre — pega o
+// trecho após " - " e corta em CF/NF/Nº/REF. Usado para semear a memória a partir
+// de uma base de lançamentos, casando pelo nome da empresa (sinal da contrapartida).
+export function extrairEntidade(s) {
+  let e = String(s ?? '')
+  const parts = e.split(/\s-\s/)
+  if (parts.length > 1) e = parts[parts.length - 1]
+  e = e.replace(/\bC[F]?\.?\s*NF.*/i, '').replace(/\bNF.*/i, '').replace(/\bN[ºo°]\.?.*/i, '').replace(/\bREF\.?.*/i, '')
+  return normHist(e)
+}
+
+// ----- Perfil de importação por cliente (cada cliente exporta diferente) -----
+// Normaliza qualquer extrato para um layout único. O histórico sai no padrão do
+// Domínio ("VALOR REFERENTE A PAGAMENTO/RECEBIMENTO" + credor + documento),
+// sempre sem acento/caractere especial.
+export function montarHistorico(entrada, partes) {
+  const prefixo = entrada ? 'VALOR REFERENTE A RECEBIMENTO' : 'VALOR REFERENTE A PAGAMENTO'
+  const txt = [prefixo, ...(partes || []).map(p => String(p ?? '').trim()).filter(Boolean)].join(' ')
+  return historicoDominio(txt)
+}
+
+// Entrada (recebimento) x saída (pagamento): por uma coluna indicadora
+// (ex.: Origem = CAR/CAP) ou pelo sinal do valor.
+function decidirEntrada(r, p) {
+  const es = p.es || { modo: 'sinal' }
+  if (es.modo === 'coluna' && es.col != null && es.col >= 0) {
+    const v = String(r[es.col] ?? '').trim().toUpperCase()
+    return (es.entrada || []).map(x => String(x).toUpperCase()).includes(v)
+  }
+  return parseValor(r[p.colValor]) >= 0
+}
+
+// Aplica um perfil a uma planilha crua (matriz de linhas). Retorna
+// [{ historico, credor, valor, entrada, data, contra }] classificado pela memória
+// (casando pelo credor/devedor).
+export function aplicarPerfil(arr, perfil, memoria) {
+  const p = perfil || {}
+  const ini = Number.isInteger(p.linhaInicio) ? p.linhaInicio : 1
+  const histCols = (p.histCols && p.histCols.length ? p.histCols : [p.colCredor, p.colDoc]).filter(c => c != null && c >= 0)
+  const out = []
+  for (const r of (arr || []).slice(ini)) {
+    if (!r || !r.some(c => c !== '' && c != null)) continue
+    if (p.filtro?.pularVazio && p.filtro.col != null && p.filtro.col >= 0 && !String(r[p.filtro.col] ?? '').trim()) continue
+    const entrada = decidirEntrada(r, p)
+    const credor = p.colCredor != null && p.colCredor >= 0 ? String(r[p.colCredor] ?? '').trim() : ''
+    const historico = montarHistorico(entrada, histCols.map(c => r[c]))
+    const valor = Math.abs(parseValor(r[p.colValor]))
+    if (!valor) continue
+    const data = p.colData != null && p.colData >= 0 ? dataISO(r[p.colData]) : ''
+    out.push({ historico, credor, valor, entrada, data, contra: casarHistorico(credor || historico, memoria) })
+  }
+  return out
 }
