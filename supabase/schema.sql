@@ -180,7 +180,7 @@ create table if not exists public.despesas_apropriar (
   vigencia_inicio date, vigencia_fim date,
   num_parcelas int default 1, valor_parcela numeric(16,2) default 0,
   conta_despesa text, conta_apropriar text, conta_pagar text,
-  saldo_inicial boolean default false, usuario text,
+  saldo_inicial boolean default false, arquivo text, usuario text,
   created_at timestamptz default now(), updated_at timestamptz default now()
 );
 create index if not exists despesas_apropriar_cliente_idx on public.despesas_apropriar(cliente_id);

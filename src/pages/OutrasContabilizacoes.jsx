@@ -2,9 +2,16 @@ import { useEffect, useState } from 'react'
 import { theme, money } from '../lib/theme'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
-import { listar, inserir, remover, gerarLancamento, enviarSaldoInicialContrato } from '../lib/outras'
+import { listar, inserir, remover, gerarLancamento, enviarSaldoInicialContrato, anexarArquivoContrato, urlArquivoContrato, removerArquivoContrato } from '../lib/outras'
 import ObservacoesConciliacao from '../components/ObservacoesConciliacao'
 import LeitorIA from '../components/LeitorIA'
+import CampoConta from '../components/CampoConta'
+
+// Campo de conta contábil que guarda SEMPRE o código reduzido (não a
+// classificação) — é a chave usada pela conciliação e pelo saldo inicial.
+function CampoContaForm({ valor, set }) {
+  return <CampoConta value={valor} onChange={set} onPick={p => set(p.cod)} placeholder="Código (F4)" />
+}
 
 const ACC = { seguro: '#4A7CFF', despesa: '#33B4C6', importacao: '#2FB6A8', emprestimo: '#9A7CF0', parcelamento: '#E8923B', equivalencia: '#E06C9F', outros: '#7C89A6' }
 const BLOCOS = [
@@ -173,12 +180,31 @@ function useLista(tabela, clienteId) {
 function GerarBtn({ onClick, children = 'Gerar lançamento' }) { return <button className="btn" style={{ fontSize: 12, padding: '5px 10px' }} onClick={onClick}><i className="ti ti-file-plus" /> {children}</button> }
 function SaldoIniBtn({ onClick }) { return <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={onClick} title="Calcula o que falta apropriar na abertura e envia à carga inicial"><i className="ti ti-arrow-bar-to-up" /> Saldo inicial</button> }
 function DelBtn({ onClick }) { return <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={onClick}>excluir</button> }
+// Anexar/ver/excluir o documento do contrato (apólice, carnê…), salvo no Storage.
+function AnexoContrato({ tabela, row, onChange }) {
+  const [busy, setBusy] = useState(false)
+  async function anexar(file) { if (!file) return; setBusy(true); try { await anexarArquivoContrato(tabela, row.id, file); onChange() } catch (e) { alert(e.message) } finally { setBusy(false) } }
+  async function ver() { try { window.open(await urlArquivoContrato(row.arquivo), '_blank', 'noopener') } catch (e) { alert(e.message) } }
+  async function remover() { if (!confirm('Excluir o arquivo anexado?')) return; setBusy(true); try { await removerArquivoContrato(tabela, row.id, row.arquivo); onChange() } catch (e) { alert(e.message) } finally { setBusy(false) } }
+  if (row.arquivo) return (
+    <>
+      <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', color: theme.green, borderColor: theme.green }} onClick={ver} title="Ver / baixar o documento anexado"><i className="ti ti-eye" /> Ver arquivo</button>{' '}
+      <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 8px', color: theme.sub }} disabled={busy} onClick={remover} title="Excluir arquivo">×</button>
+    </>
+  )
+  return (
+    <label className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', cursor: 'pointer', color: theme.yellow, borderColor: theme.yellow }} title="Anexar o documento (apólice, carnê…)">
+      <i className="ti ti-paperclip" /> {busy ? 'Enviando…' : 'Anexar'}
+      <input type="file" accept=".pdf,.xlsx,.xls,.csv,.png,.jpg,.jpeg" style={{ display: 'none' }} onChange={e => anexar(e.target.files?.[0])} />
+    </label>
+  )
+}
 function Vazio({ colSpan, texto }) { return <tr><td colSpan={colSpan} style={{ padding: 18, color: theme.sub, fontSize: 13 }}>{texto}</td></tr> }
 
 // ================= SEGURO =================
 function PaneSeguro({ clienteId, user, competencia, abrirGerar, enviarSaldoInicial }) {
   const { rows, loading, erro, recarregar, excluir } = useLista('seguros', clienteId)
-  const [f, on, reset, setF] = useForm({ seguradora: '', apolice: '', ramo: '', vigencia_inicio: '', vigencia_fim: '', premio_total: '', num_parcelas: '12', valor_parcela: '', conta_despesa: '4.1.2.18', conta_apropriar: '1.1.3.02', conta_pagar: '2.1.1.05', saldo_inicial: false })
+  const [f, on, reset, setF] = useForm({ seguradora: '', apolice: '', ramo: '', vigencia_inicio: '', vigencia_fim: '', premio_total: '', num_parcelas: '12', valor_parcela: '', conta_despesa: '', conta_apropriar: '', conta_pagar: '', saldo_inicial: false })
   const [sav, setSav] = useState(false)
   async function salvar(e) { e.preventDefault(); setSav(true); try { await inserir('seguros', { cliente_id: clienteId, seguradora: f.seguradora, apolice: f.apolice, ramo: f.ramo, vigencia_inicio: f.vigencia_inicio || null, vigencia_fim: f.vigencia_fim || null, premio_total: num(f.premio_total), num_parcelas: Number(f.num_parcelas) || null, valor_parcela: num(f.valor_parcela), conta_despesa: f.conta_despesa, conta_apropriar: f.conta_apropriar, conta_pagar: f.conta_pagar, saldo_inicial: !!f.saldo_inicial, usuario: user?.email }); reset(); recarregar() } catch (er) { alert(er.message) } finally { setSav(false) } }
   return (
@@ -196,9 +222,9 @@ function PaneSeguro({ clienteId, user, competencia, abrirGerar, enviarSaldoInici
           <Field label="Vigência fim"><input className="input" type="date" value={f.vigencia_fim} onChange={on('vigencia_fim')} /></Field>
           <Field label="Nº parcelas"><input className="input" value={f.num_parcelas} onChange={on('num_parcelas')} /></Field>
           <Field label="Valor parcela"><input className="input" value={f.valor_parcela} onChange={on('valor_parcela')} placeholder="0,00" /></Field>
-          <Field label="Conta despesa (D)"><input className="input" value={f.conta_despesa} onChange={on('conta_despesa')} /></Field>
-          <Field label="Conta a apropriar / ativo"><input className="input" value={f.conta_apropriar} onChange={on('conta_apropriar')} /></Field>
-          <Field label="Conta a pagar / passivo"><input className="input" value={f.conta_pagar} onChange={on('conta_pagar')} /></Field>
+          <Field label="Conta despesa (D)"><CampoContaForm valor={f.conta_despesa} set={v => setF(x => ({ ...x, conta_despesa: v }))} /></Field>
+          <Field label="Conta a apropriar / ativo"><CampoContaForm valor={f.conta_apropriar} set={v => setF(x => ({ ...x, conta_apropriar: v }))} /></Field>
+          <Field label="Conta a pagar / passivo"><CampoContaForm valor={f.conta_pagar} set={v => setF(x => ({ ...x, conta_pagar: v }))} /></Field>
           <Field label="É saldo inicial?"><label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12.5, cursor: 'pointer', height: 38, color: theme.text }} title="Marque se o contrato começou ANTES do início do cliente — alimenta só o ativo (a apropriar) na abertura"><input type="checkbox" checked={!!f.saldo_inicial} onChange={e => setF(x => ({ ...x, saldo_inicial: e.target.checked }))} /> contrato anterior à abertura</label></Field>
           <div style={{ gridColumn: 'span 4', display: 'flex', alignItems: 'flex-end' }}><button className="btn" disabled={sav}>{sav ? 'Salvando…' : '＋ Salvar contrato'}</button></div>
         </form>
@@ -216,6 +242,7 @@ function PaneSeguro({ clienteId, user, competencia, abrirGerar, enviarSaldoInici
                 {r.saldo_inicial
                   ? <SaldoIniBtn onClick={() => enviarSaldoInicial('seguro', r)} />
                   : <GerarBtn onClick={() => abrirGerar({ data: dataComp(competencia), conta_debito: r.conta_apropriar, conta_credito: r.conta_pagar, valor: r.premio_total, historico: `Contrato seguro ${r.seguradora} ${r.apolice || ''}`.trim(), origem: 'seguro', documento: r.apolice }, `Contrato — ${r.seguradora}`)}>Contabilizar contrato</GerarBtn>}{' '}
+                <AnexoContrato tabela="seguros" row={r} onChange={recarregar} />{' '}
                 <DelBtn onClick={() => excluir(r.id)} />
               </td>
             </tr>
@@ -253,9 +280,9 @@ function PaneDespesaApropriar({ clienteId, user, competencia, abrirGerar, enviar
           <Field label="Vigência fim"><input className="input" type="date" value={f.vigencia_fim} onChange={on('vigencia_fim')} /></Field>
           <Field label="Nº parcelas"><input className="input" value={f.num_parcelas} onChange={on('num_parcelas')} /></Field>
           <Field label="Valor parcela"><input className="input" value={f.valor_parcela} onChange={on('valor_parcela')} placeholder="0,00" /></Field>
-          <Field label="Conta despesa (D)"><input className="input" value={f.conta_despesa} onChange={on('conta_despesa')} placeholder="4.x…" /></Field>
-          <Field label="Conta a apropriar / ativo"><input className="input" value={f.conta_apropriar} onChange={on('conta_apropriar')} placeholder="1.1.3…" /></Field>
-          <Field label="Conta a pagar / passivo"><input className="input" value={f.conta_pagar} onChange={on('conta_pagar')} placeholder="2.1…" /></Field>
+          <Field label="Conta despesa (D)"><CampoContaForm valor={f.conta_despesa} set={v => setF(x => ({ ...x, conta_despesa: v }))} /></Field>
+          <Field label="Conta a apropriar / ativo"><CampoContaForm valor={f.conta_apropriar} set={v => setF(x => ({ ...x, conta_apropriar: v }))} /></Field>
+          <Field label="Conta a pagar / passivo"><CampoContaForm valor={f.conta_pagar} set={v => setF(x => ({ ...x, conta_pagar: v }))} /></Field>
           <Field label="É saldo inicial?"><label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12.5, cursor: 'pointer', height: 38, color: theme.text }} title="Marque se começou ANTES do início do cliente — alimenta só o ativo (a apropriar) na abertura"><input type="checkbox" checked={!!f.saldo_inicial} onChange={e => setF(x => ({ ...x, saldo_inicial: e.target.checked }))} /> contrato anterior à abertura</label></Field>
           <div style={{ gridColumn: 'span 4', display: 'flex', alignItems: 'flex-end' }}><button className="btn" disabled={sav}>{sav ? 'Salvando…' : '＋ Salvar despesa'}</button></div>
         </form>
@@ -273,6 +300,7 @@ function PaneDespesaApropriar({ clienteId, user, competencia, abrirGerar, enviar
                 {r.saldo_inicial
                   ? <SaldoIniBtn onClick={() => enviarSaldoInicial('despesa', r)} />
                   : <GerarBtn onClick={() => abrirGerar({ data: dataComp(competencia), conta_debito: r.conta_apropriar, conta_credito: r.conta_pagar, valor: r.valor_total, historico: `Contrato ${r.tipo} ${r.descricao || ''}`.trim(), origem: 'despesa', documento: r.documento }, `Contrato — ${r.tipo}`)}>Contabilizar contrato</GerarBtn>}{' '}
+                <AnexoContrato tabela="despesas_apropriar" row={r} onChange={recarregar} />{' '}
                 <DelBtn onClick={() => excluir(r.id)} />
               </td>
             </tr>
