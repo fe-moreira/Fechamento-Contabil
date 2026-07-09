@@ -73,7 +73,8 @@ async function carregarIndiceFiscal(empresaId, competencia) {
   const { data: comp } = await supabase.from('competencias').select('id')
     .eq('cliente_id', empresaId).eq('ano', ano).eq('mes', mes).maybeSingle()
   const byAcum = {}
-  if (!comp) return { byAcum }
+  if (!comp) return { byAcum, compId: null }
+  const compId = comp.id
   const add = (hist, valor, data) => {
     const acum = acumDoHistorico(hist); if (!acum) return
     ;(byAcum[acum] ||= []).push({ valor, hist: hist || '', nfs: nfsDoHistorico(hist), data: data || '' })
@@ -87,7 +88,7 @@ async function carregarIndiceFiscal(empresaId, competencia) {
   for (const r of (rz || [])) add(ajuste[r.id] || r.historico, (Number(r.debito) || 0) + (Number(r.credito) || 0), r.data)
   const { data: lc } = await supabase.from('lancamentos').select('data, historico, valor').eq('competencia_id', comp.id)
   for (const l of (lc || [])) add(l.historico, Math.abs(Number(l.valor) || 0), l.data)
-  return { byAcum }
+  return { byAcum, compId }
 }
 
 // Cruza as linhas do arquivo (acumulador) com o índice → resumo por acumulador.
@@ -102,6 +103,21 @@ function cruzarFiscal(rows, idx) {
   return Object.values(porAcum)
     .map(a => ({ ...a, dif: Math.round((a.docTotal - a.idTotal) * 100) / 100 }))
     .sort((x, y) => Math.abs(y.dif) - Math.abs(x.dif) || Number(x.acum) - Number(y.acum))
+}
+
+// Lê o arquivo do acumulador (colunas fixas K/N/R/U/AH) → linhas normalizadas.
+async function parseAcumulador(file) {
+  const XLSX = await import('xlsx')
+  const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true })
+  const arr = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' })
+  const col = { nf: XLSX.utils.decode_col('K'), data: XLSX.utils.decode_col('N'), acum: XLSX.utils.decode_col('R'), forn: XLSX.utils.decode_col('U'), valor: XLSX.utils.decode_col('AH') }
+  const rows = []
+  for (const r of arr) {
+    const valor = numFis(r[col.valor]); const acum = normAcum(r[col.acum])
+    if (!acum || !valor) continue // pula cabeçalho e linhas sem acumulador/valor
+    rows.push({ nf: String(r[col.nf] ?? '').trim(), data: dataISO(r[col.data]), acum, forn: String(r[col.forn] ?? '').trim(), valor })
+  }
+  return rows
 }
 
 export default function Integracao() {
@@ -225,7 +241,8 @@ function Cruzamento({ tab, dados, onImport, est }) {
 // clicando numa linha com diferença, mostra as NFs do acumulador que não achei no razão.
 function Fiscal({ competencia, empresaId, user, est, onEstado }) {
   const [sub, setSub] = useState('entradas')
-  const [razIdx, setRazIdx] = useState(null)   // { byNf:{nf:[row]}, all:[row] }
+  const [razIdx, setRazIdx] = useState(null)   // { byAcum, compId }
+  const [compId, setCompId] = useState(null)
   const [carregando, setCarregando] = useState(true)
   const [erro, setErro] = useState('')
   const [busy, setBusy] = useState(false)
@@ -234,12 +251,16 @@ function Fiscal({ competencia, empresaId, user, est, onEstado }) {
   const tipos = est?.tipos || {}
   const atual = tipos[sub]
   const nomeLabel = sub === 'entradas' ? 'Fornecedor' : 'Cliente'
+  // Resumo recalculado AO VIVO com o índice atual (razão + lançamentos + ajustes) — assim
+  // atualiza sozinho ao abrir, sem reimportar. Se o arquivo foi importado numa versão antiga
+  // (sem as linhas guardadas), cai no resumo salvo.
+  const resumoAtual = (atual?.rows && razIdx) ? cruzarFiscal(atual.rows, razIdx) : (atual?.resumo || [])
 
   // Índice do razão + lançamentos ajustados da competência, para cruzar o arquivo.
   useEffect(() => {
     let ativo = true
     setCarregando(true); setRazIdx(null); setExpand(null)
-    carregarIndiceFiscal(empresaId, competencia).then(idx => { if (ativo) { setRazIdx(idx); setCarregando(false) } })
+    carregarIndiceFiscal(empresaId, competencia).then(idx => { if (ativo) { setRazIdx(idx); setCompId(idx.compId); setCarregando(false) } })
     return () => { ativo = false }
   }, [empresaId, competencia])
 
@@ -247,50 +268,63 @@ function Fiscal({ competencia, empresaId, user, est, onEstado }) {
     if (!file || !razIdx) return
     setErro(''); setBusy(true); setExpand(null)
     try {
-      const XLSX = await import('xlsx')
-      const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true })
-      const arr = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' })
-      const col = { nf: XLSX.utils.decode_col('K'), data: XLSX.utils.decode_col('N'), acum: XLSX.utils.decode_col('R'), forn: XLSX.utils.decode_col('U'), valor: XLSX.utils.decode_col('AH') }
-      const rows = []
-      for (const r of arr) {
-        const valor = numFis(r[col.valor]); const acum = normAcum(r[col.acum])
-        if (!acum || !valor) continue // pula cabeçalho e linhas sem acumulador/valor
-        rows.push({ nf: String(r[col.nf] ?? '').trim(), data: dataISO(r[col.data]), acum, forn: String(r[col.forn] ?? '').trim(), valor })
-      }
+      const rows = await parseAcumulador(file)
       if (!rows.length) { setErro('Não encontrei linhas com Acumulador (coluna R) e Valor (coluna AH). Confira o arquivo/colunas.'); setBusy(false); return }
-      const novoTipos = { ...tipos, [sub]: { doc: file.name, rows, resumo: cruzarFiscal(rows, razIdx) } }
+      // Guarda o arquivo no Storage — assim qualquer usuário pode extrair/atualizar depois.
+      let path = tipos[sub]?.path || ''
+      if (compId) {
+        const ext = (file.name.match(/\.[a-z0-9]+$/i) || ['.xlsx'])[0].toLowerCase()
+        path = `fiscal/${compId}/${sub}${ext}`
+        const { error: eUp } = await supabase.storage.from('extratos').upload(path, file, { upsert: true, contentType: file.type || undefined })
+        if (eUp) { setErro('Li o arquivo, mas não consegui guardá-lo p/ extrair depois: ' + eUp.message); path = '' }
+      }
+      const novoTipos = { ...tipos, [sub]: { doc: file.name, path, rows, resumo: cruzarFiscal(rows, razIdx) } }
       const done = CHAVES_FISCAL.every(k => novoTipos[k])
       await onEstado({ ...est, tipos: novoTipos, estado: done ? 'validado' : null, doc: done ? 'Fiscal · 3 tipos importados' : null, usuario: user?.email || null })
     } catch (e) { setErro('Não consegui ler: ' + e.message) }
     setBusy(false)
   }
 
-  // Relê razão + lançamentos ajustados e re-cruza os arquivos já importados (sem
-  // precisar subir de novo). Assim, ao corrigir o acumulador no sistema, é só clicar.
+  // Relê razão + lançamentos + ajustes e re-cruza os arquivos já importados. Para arquivos
+  // guardados no Storage, rebaixa e reprocessa (mesmo importados por outro usuário/versão).
   async function atualizar() {
     setErro(''); setBusy(true); setExpand(null)
     try {
       const idx = await carregarIndiceFiscal(empresaId, competencia)
-      setRazIdx(idx)
+      setRazIdx(idx); setCompId(idx.compId)
       const novoTipos = { ...tipos }
       let algum = false
       for (const k of CHAVES_FISCAL) {
-        if (novoTipos[k]?.rows) { novoTipos[k] = { ...novoTipos[k], resumo: cruzarFiscal(novoTipos[k].rows, idx) }; algum = true }
+        const t = novoTipos[k]; if (!t) continue
+        let rows = t.rows
+        if (!rows && t.path) {
+          try { const { data } = await supabase.storage.from('extratos').download(t.path); if (data) rows = await parseAcumulador(new File([data], t.doc || 'acumulador.xlsx')) } catch { /* ignore */ }
+        }
+        if (rows) { novoTipos[k] = { ...t, rows, resumo: cruzarFiscal(rows, idx) }; algum = true }
       }
-      if (!algum) { setErro('Nada para atualizar — reimporte o acumulador uma vez para habilitar o Atualizar.'); setBusy(false); return }
+      if (!algum) { setErro('Nada para atualizar — reimporte o acumulador uma vez (o arquivo passa a ficar salvo).'); setBusy(false); return }
       const done = CHAVES_FISCAL.every(k => novoTipos[k])
       await onEstado({ ...est, tipos: novoTipos, estado: done ? 'validado' : null, doc: done ? 'Fiscal · 3 tipos importados' : null, usuario: user?.email || null })
     } catch (e) { setErro('Não consegui atualizar: ' + e.message) }
     setBusy(false)
   }
 
+  // Extrair (baixar) o arquivo que foi importado — inclusive por outro usuário.
+  async function extrairArquivo() {
+    const t = tipos[sub]
+    if (!t?.path) { setErro('Este acumulador foi importado numa versão anterior e o arquivo não ficou salvo. Reimporte uma vez para poder extrair.'); return }
+    const { data, error } = await supabase.storage.from('extratos').createSignedUrl(t.path, 300)
+    if (error) { setErro('Não consegui abrir o arquivo: ' + error.message); return }
+    window.open(data.signedUrl, '_blank', 'noopener')
+  }
+
   if (carregando) return <p style={{ color: theme.sub, fontSize: 13 }}>Carregando razão…</p>
 
-  const totDoc = (atual?.resumo || []).reduce((s, a) => s + a.docTotal, 0)
-  const totId = (atual?.resumo || []).reduce((s, a) => s + a.idTotal, 0)
+  const totDoc = resumoAtual.reduce((s, a) => s + a.docTotal, 0)
+  const totId = resumoAtual.reduce((s, a) => s + a.idTotal, 0)
   const totDif = Math.round((totDoc - totId) * 100) / 100
-  const totQtd = (atual?.resumo || []).reduce((s, a) => s + a.qtd, 0)
-  const totQtdId = (atual?.resumo || []).reduce((s, a) => s + a.qtdId, 0)
+  const totQtd = resumoAtual.reduce((s, a) => s + a.qtd, 0)
+  const totQtdId = resumoAtual.reduce((s, a) => s + a.qtdId, 0)
 
   return (
     <>
@@ -307,26 +341,27 @@ function Fiscal({ competencia, empresaId, user, est, onEstado }) {
 
       <ImpCard titulo={`Importar acumulador — ${TIPOS_FISCAL.find(t => t[0] === sub)[1]}`}
         desc={`Colunas: NF (K), Data (N), Acumulador (R), ${nomeLabel} (U), Valor (AH). Cruza NF a NF com o razão.`}
-        onImport={importar} nome={atual?.doc} qtd={atual ? atual.resumo.reduce((s, a) => s + a.qtd, 0) : undefined} />
+        onImport={importar} nome={atual?.doc} qtd={atual ? resumoAtual.reduce((s, a) => s + a.qtd, 0) : undefined} />
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '10px 0 0', flexWrap: 'wrap' }}>
-        {(atual?.rows || CHAVES_FISCAL.some(k => tipos[k]?.rows)) && <button className="btn btn-ghost" style={{ fontSize: 12.5 }} disabled={busy} onClick={atualizar} title="Relê o razão e os lançamentos ajustados e cruza de novo (sem subir o arquivo)"><i className="ti ti-refresh" /> Atualizar cruzamento</button>}
-        {busy && <span style={{ color: theme.sub, fontSize: 12.5 }}><i className="ti ti-loader" /> Cruzando com o razão + lançamentos…</span>}
+        <button className="btn btn-ghost" style={{ fontSize: 12.5 }} disabled={busy} onClick={atualizar} title="Relê o razão, os lançamentos e os ajustes e cruza de novo (sem subir o arquivo)"><i className="ti ti-refresh" /> Atualizar cruzamento</button>
+        {atual?.path && <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={extrairArquivo} title="Baixar o arquivo do acumulador importado"><i className="ti ti-download" /> Extrair arquivo</button>}
+        {busy && <span style={{ color: theme.sub, fontSize: 12.5 }}><i className="ti ti-loader" /> Cruzando com razão + lançamentos + ajustes…</span>}
       </div>
 
       {atual && <>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(180px,1fr))', gap: 12, margin: '16px 0' }}>
           <Metric label="Total do documento" valor={money(totDoc)} icon="ti-receipt" />
-          <Metric label="Identificado no razão" valor={money(totId)} icon="ti-checks" cor={theme.green} />
+          <Metric label="Razão / contabilidade" valor={money(totId)} icon="ti-checks" cor={theme.green} />
           <Metric label="Diferença" valor={money(totDif)} icon="ti-arrows-diff" cor={Math.abs(totDif) < 0.005 ? theme.green : theme.red} sub={Math.abs(totDif) < 0.005 ? 'tudo identificado' : 'clique no acumulador p/ ver'} />
         </div>
 
         <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'auto' }}>
           <table style={{ width: '100%', minWidth: 640, borderCollapse: 'collapse' }}>
             <thead><tr style={{ background: theme.input }}>
-              <th style={FS.th}>Acumulador</th><th style={FS.th}>NFs</th><th style={FS.thR}>Total documento</th><th style={FS.thR}>Identificado</th><th style={FS.thR}>Diferença</th><th style={FS.th}></th>
+              <th style={FS.th}>Acumulador</th><th style={FS.th}>NFs</th><th style={FS.thR}>Total documento</th><th style={FS.thR}>Razão</th><th style={FS.thR}>Diferença</th><th style={FS.th}></th>
             </tr></thead>
             <tbody>
-              {atual.resumo.map((a, i) => {
+              {resumoAtual.map((a, i) => {
                 const bate = Math.abs(a.dif) < 0.005
                 const aberto = expand === a.acum
                 return (
