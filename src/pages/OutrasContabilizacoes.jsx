@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { theme, money } from '../lib/theme'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
-import { listar, inserir, remover, atualizar, gerarLancamento, enviarSaldoInicialContrato, anexarArquivoContrato, urlArquivoContrato, removerArquivoContrato, competenciaInicioCliente } from '../lib/outras'
+import { listar, inserir, remover, atualizar, gerarLancamento, enviarSaldoInicialContrato, anexarArquivoContrato, urlArquivoContrato, removerArquivoContrato, competenciaInicioCliente, apropriacoesDoMes } from '../lib/outras'
 import { gerarExcelTimbrado } from '../lib/excel'
 import { abrePdfTimbrado } from '../lib/pdf'
 import ObservacoesConciliacao from '../components/ObservacoesConciliacao'
@@ -143,14 +143,15 @@ const colunasRelApropriacao = origem => [
   { nome: 'Valor total', alinhar: 'right', moeda: true },
   { nome: 'Apropriado no mês', alinhar: 'right', moeda: true },
   { nome: 'Apropriado acum.', alinhar: 'right', moeda: true },
-  { nome: 'Saldo a apropriar', alinhar: 'right', moeda: true },
+  { nome: 'Saldo final (ativo)', alinhar: 'right', moeda: true },
 ]
 
 // Gera o relatório de apropriação em PDF (timbrado, dá pra arrastar na conciliação) ou Excel.
 function gerarRelatorioApropriacao({ formato, origem, rows, competencia, empresaNome, planoMap }) {
   const { grupos, geral } = dadosRelatorioApropriacao(rows, origem, competencia, planoMap)
   const titulo = origem === 'seguro' ? 'Seguros a Apropriar — Saldo por Apólice' : 'Despesas a Apropriar — Saldo por Contrato'
-  const sub = `${empresaNome || ''} · Competência ${competencia} · o saldo a apropriar de cada conta bate com a conciliação`
+  const posicao = brDataRel(dataComp(competencia)) || competencia
+  const sub = `${empresaNome || ''} · Posição em ${posicao} · o "Saldo final (ativo)" de cada conta bate com a conciliação`
   const colunas = colunasRelApropriacao(origem)
   const label = g => `Conta ${g.conta}${g.nome ? ' · ' + g.nome : ''}`
   const arquivo = `${origem === 'seguro' ? 'seguros' : 'despesas'}_a_apropriar_${String(competencia).replace('/', '-')}.${formato === 'excel' ? 'xlsx' : 'pdf'}`
@@ -172,6 +173,39 @@ function BotoesRelatorio({ origem, rows, competencia, empresaNome, planoMap }) {
       <button className="btn btn-ghost" style={{ fontSize: 12, padding: '6px 12px', borderColor: theme.accent, color: theme.accent }} disabled={dis} onClick={() => gerarRelatorioApropriacao({ formato: 'excel', origem, rows, competencia, empresaNome, planoMap })} title="Relatório do saldo a apropriar (Excel)"><i className="ti ti-file-spreadsheet" /> Excel</button>
     </div>
   )
+}
+
+// Um contrato já foi apropriado nesta competência? Casa pelo documento (apólice/doc)
+// e, sem documento, pelo identificador no histórico do lançamento de apropriação.
+function contratoApropriado(contrato, apropriacoes, origem) {
+  if (!apropriacoes?.length) return false
+  const doc = String((origem === 'seguro' ? contrato.apolice : contrato.documento) || '').trim()
+  const chave = String((origem === 'seguro' ? contrato.seguradora : contrato.tipo) || '').trim().toLowerCase()
+  const aux = String((origem === 'seguro' ? contrato.apolice : contrato.descricao) || '').trim().toLowerCase()
+  return apropriacoes.some(l => {
+    if (doc && String(l.documento || '').trim() === doc) return true
+    const h = String(l.historico || '').toLowerCase()
+    if (!chave) return false
+    return h.includes(chave) && (!aux || h.includes(aux))
+  })
+}
+
+// Carrega as apropriações já lançadas no mês (recarrega quando `versao` muda, ou seja,
+// logo após confirmar um lançamento) — para marcar cada contrato como "Apropriado".
+function useApropriacoes(clienteId, competencia, origem, versao) {
+  const [aprops, setAprops] = useState([])
+  useEffect(() => {
+    let ativo = true
+    if (!clienteId) { setAprops([]); return }
+    apropriacoesDoMes(clienteId, competencia, origem).then(a => { if (ativo) setAprops(a || []) })
+    return () => { ativo = false }
+  }, [clienteId, competencia, origem, versao])
+  return aprops
+}
+
+// Selo verde "Apropriado" (mês) exibido no contrato assim que o lançamento é confirmado.
+function SeloApropriado({ competencia }) {
+  return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700, color: theme.green, background: 'rgba(48,164,108,0.12)', border: `1px solid ${theme.green}`, borderRadius: 20, padding: '2px 9px', whiteSpace: 'nowrap' }}><i className="ti ti-circle-check" /> Apropriado {competencia}</span>
 }
 
 // Data do último dia da competência (MM/AAAA) em ISO.
@@ -222,6 +256,7 @@ export default function OutrasContabilizacoes() {
   const { user } = useAuth()
   const [tab, setTab] = useState('seguro')
   const [gerar, setGerar] = useState(null) // {campos, titulo}
+  const [versao, setVersao] = useState(0)  // incrementa após gerar lançamento → recarrega status "Apropriado"
   const [msg, setMsg] = useState('')
   const [compInicio, setCompInicio] = useState('') // competência de início do cliente (abertura)
   useEffect(() => { if (empresaId) competenciaInicioCliente(empresaId).then(setCompInicio); else setCompInicio('') }, [empresaId])
@@ -237,7 +272,7 @@ export default function OutrasContabilizacoes() {
       const competencia_id = await getCompetenciaId()
       if (!competencia_id) { setMsg('Selecione uma empresa e abra um fechamento.'); return }
       await gerarLancamento({ competencia_id, ...g, usuario: user?.email })
-      setGerar(null); setMsg('Lançamento gerado e enviado ao Status → Domínio.')
+      setGerar(null); setVersao(v => v + 1); setMsg('Lançamento gerado e enviado ao Status → Domínio.')
       setTimeout(() => setMsg(''), 4000)
     } catch (e) { setMsg('Erro: ' + e.message) }
   }
@@ -256,7 +291,7 @@ export default function OutrasContabilizacoes() {
 
   if (!empresaId) return <Aviso texto="Selecione uma empresa no menu lateral." />
 
-  const props = { clienteId: empresaId, user, competencia, abrirGerar, enviarSaldoInicial, compInicio, empresaNome, planoMap }
+  const props = { clienteId: empresaId, user, competencia, abrirGerar, enviarSaldoInicial, compInicio, empresaNome, planoMap, versao }
   const Pane = { seguro: PaneSeguro, despesa: PaneDespesaApropriar, importacao: PaneImportacao, emprestimo: PaneEmprestimo, parcelamento: PaneParcelamento, equivalencia: PaneEquivalencia, outros: PaneOutros }[tab]
 
   return (
@@ -430,8 +465,9 @@ function ModalCronograma({ contrato, origem, compInicio, onClose }) {
 }
 
 // ================= SEGURO =================
-function PaneSeguro({ clienteId, user, competencia, abrirGerar, enviarSaldoInicial, compInicio, empresaNome, planoMap }) {
+function PaneSeguro({ clienteId, user, competencia, abrirGerar, enviarSaldoInicial, compInicio, empresaNome, planoMap, versao }) {
   const { rows, loading, erro, recarregar, excluir } = useLista('seguros', clienteId)
+  const aprops = useApropriacoes(clienteId, competencia, 'seguro', versao)
   const [cron, setCron] = useState(null)
   const [f, on, reset, setF] = useForm({ seguradora: '', apolice: '', ramo: '', vigencia_inicio: '', vigencia_fim: '', premio_total: '', num_parcelas: '12', valor_parcela: '', conta_despesa: '', conta_apropriar: '', conta_pagar: '', saldo_inicial: false, por_dia: false })
   const [sav, setSav] = useState(false)
@@ -485,14 +521,16 @@ function PaneSeguro({ clienteId, user, competencia, abrirGerar, enviarSaldoInici
         </div>
         {erro && <p style={{ color: theme.red, fontSize: 13 }}>{erro}</p>}
         <div style={{ overflowX: 'auto' }}><table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }}><thead><tr>{['Seguradora', 'Apólice', 'Ramo', 'Prêmio', 'Parcela', ''].map((h, i) => <th key={i} style={th}>{h}</th>)}</tr></thead><tbody>
-          {loading ? <Vazio colSpan={6} texto="Carregando…" /> : rows.length === 0 ? <Vazio colSpan={6} texto="Nenhum contrato cadastrado ainda." /> : rows.map(r => (
+          {loading ? <Vazio colSpan={6} texto="Carregando…" /> : rows.length === 0 ? <Vazio colSpan={6} texto="Nenhum contrato cadastrado ainda." /> : rows.map(r => {
+            const apropriado = contratoApropriado(r, aprops, 'seguro')
+            return (
             <tr key={r.id}>
-              <td style={td}><b>{r.seguradora}</b></td><td style={td}>{r.apolice}</td><td style={td}>{r.ramo}</td>
+              <td style={td}><b>{r.seguradora}</b>{apropriado && <div style={{ marginTop: 4 }}><SeloApropriado competencia={competencia} /></div>}</td><td style={td}>{r.apolice}</td><td style={td}>{r.ramo}</td>
               <td style={{ ...td, textAlign: 'right' }}>{money(r.premio_total)}</td><td style={{ ...td, textAlign: 'right' }}>{money(r.valor_parcela)}</td>
               <td style={{ ...td, whiteSpace: 'nowrap', textAlign: 'right' }}>
                 <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => editar(r)} title="Editar contrato"><i className="ti ti-pencil" /> Editar</button>{' '}
                 <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => setCron(r)} title="Ver o cronograma de apropriações"><i className="ti ti-list-check" /> Apropriações</button>{' '}
-                <GerarBtn onClick={() => abrirGerar({ data: dataComp(competencia), conta_debito: r.conta_despesa, conta_credito: r.conta_apropriar, valor: valorApropriacaoMes(r, competencia), historico: `Apropriação seguro ${r.seguradora} ${r.apolice || ''}`.trim(), origem: 'seguro', documento: r.apolice }, `Apropriação — ${r.seguradora}`)}>Apropriação do mês</GerarBtn>{' '}
+                <GerarBtn onClick={() => abrirGerar({ data: dataComp(competencia), conta_debito: r.conta_despesa, conta_credito: r.conta_apropriar, valor: valorApropriacaoMes(r, competencia), historico: `Apropriação seguro ${r.seguradora} ${r.apolice || ''}`.trim(), origem: 'seguro', documento: r.apolice }, `Apropriação — ${r.seguradora}`)}>{apropriado ? 'Apropriar de novo' : 'Apropriação do mês'}</GerarBtn>{' '}
                 {r.saldo_inicial
                   ? <SaldoIniBtn onClick={() => enviarSaldoInicial('seguro', r)} />
                   : <GerarBtn onClick={() => abrirGerar({ data: dataComp(competencia), conta_debito: r.conta_apropriar, conta_credito: r.conta_pagar, valor: r.premio_total, historico: `Contrato seguro ${r.seguradora} ${r.apolice || ''}`.trim(), origem: 'seguro', documento: r.apolice }, `Contrato — ${r.seguradora}`)}>Contabilizar contrato</GerarBtn>}{' '}
@@ -500,7 +538,7 @@ function PaneSeguro({ clienteId, user, competencia, abrirGerar, enviarSaldoInici
                 <DelBtn onClick={() => excluir(r.id)} />
               </td>
             </tr>
-          ))}
+          )})}
         </tbody></table></div>
       </Card>
       {cron && <ModalCronograma contrato={cron} origem="seguro" compInicio={compInicio} onClose={() => setCron(null)} />}
@@ -510,8 +548,9 @@ function PaneSeguro({ clienteId, user, competencia, abrirGerar, enviarSaldoInici
 
 // ================= DESPESA A APROPRIAR =================
 // Funciona como o seguro, mas genérico: IPVA, IPTU, aluguel antecipado, etc.
-function PaneDespesaApropriar({ clienteId, user, competencia, abrirGerar, enviarSaldoInicial, compInicio, empresaNome, planoMap }) {
+function PaneDespesaApropriar({ clienteId, user, competencia, abrirGerar, enviarSaldoInicial, compInicio, empresaNome, planoMap, versao }) {
   const { rows, loading, erro, recarregar, excluir } = useLista('despesas_apropriar', clienteId)
+  const aprops = useApropriacoes(clienteId, competencia, 'despesa', versao)
   const [cron, setCron] = useState(null)
   const [f, on, reset, setF] = useForm({ tipo: '', descricao: '', documento: '', valor_total: '', vigencia_inicio: '', vigencia_fim: '', num_parcelas: '12', valor_parcela: '', conta_despesa: '', conta_apropriar: '', conta_pagar: '', saldo_inicial: false, por_dia: false })
   const [sav, setSav] = useState(false)
@@ -563,14 +602,16 @@ function PaneDespesaApropriar({ clienteId, user, competencia, abrirGerar, enviar
         </div>
         {erro && <p style={{ color: theme.red, fontSize: 13 }}>{erro}</p>}
         <div style={{ overflowX: 'auto' }}><table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}><thead><tr>{['Tipo', 'Descrição', 'Total', 'Parcela', ''].map((h, i) => <th key={i} style={th}>{h}</th>)}</tr></thead><tbody>
-          {loading ? <Vazio colSpan={5} texto="Carregando…" /> : rows.length === 0 ? <Vazio colSpan={5} texto="Nenhuma despesa cadastrada ainda." /> : rows.map(r => (
+          {loading ? <Vazio colSpan={5} texto="Carregando…" /> : rows.length === 0 ? <Vazio colSpan={5} texto="Nenhuma despesa cadastrada ainda." /> : rows.map(r => {
+            const apropriado = contratoApropriado(r, aprops, 'despesa')
+            return (
             <tr key={r.id}>
-              <td style={td}><b>{r.tipo}</b></td><td style={td}>{r.descricao}</td>
+              <td style={td}><b>{r.tipo}</b>{apropriado && <div style={{ marginTop: 4 }}><SeloApropriado competencia={competencia} /></div>}</td><td style={td}>{r.descricao}</td>
               <td style={{ ...td, textAlign: 'right' }}>{money(r.valor_total)}</td><td style={{ ...td, textAlign: 'right' }}>{money(r.valor_parcela)}</td>
               <td style={{ ...td, whiteSpace: 'nowrap', textAlign: 'right' }}>
                 <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => editar(r)} title="Editar despesa"><i className="ti ti-pencil" /> Editar</button>{' '}
                 <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => setCron(r)} title="Ver o cronograma de apropriações"><i className="ti ti-list-check" /> Apropriações</button>{' '}
-                <GerarBtn onClick={() => abrirGerar({ data: dataComp(competencia), conta_debito: r.conta_despesa, conta_credito: r.conta_apropriar, valor: valorApropriacaoMes(r, competencia), historico: `Apropriação ${r.tipo} ${r.descricao || ''}`.trim(), origem: 'despesa', documento: r.documento }, `Apropriação — ${r.tipo}`)}>Apropriação do mês</GerarBtn>{' '}
+                <GerarBtn onClick={() => abrirGerar({ data: dataComp(competencia), conta_debito: r.conta_despesa, conta_credito: r.conta_apropriar, valor: valorApropriacaoMes(r, competencia), historico: `Apropriação ${r.tipo} ${r.descricao || ''}`.trim(), origem: 'despesa', documento: r.documento }, `Apropriação — ${r.tipo}`)}>{apropriado ? 'Apropriar de novo' : 'Apropriação do mês'}</GerarBtn>{' '}
                 {r.saldo_inicial
                   ? <SaldoIniBtn onClick={() => enviarSaldoInicial('despesa', r)} />
                   : <GerarBtn onClick={() => abrirGerar({ data: dataComp(competencia), conta_debito: r.conta_apropriar, conta_credito: r.conta_pagar, valor: r.valor_total, historico: `Contrato ${r.tipo} ${r.descricao || ''}`.trim(), origem: 'despesa', documento: r.documento }, `Contrato — ${r.tipo}`)}>Contabilizar contrato</GerarBtn>}{' '}
@@ -578,7 +619,7 @@ function PaneDespesaApropriar({ clienteId, user, competencia, abrirGerar, enviar
                 <DelBtn onClick={() => excluir(r.id)} />
               </td>
             </tr>
-          ))}
+          )})}
         </tbody></table></div>
       </Card>
       {cron && <ModalCronograma contrato={cron} origem="despesa" compInicio={compInicio} onClose={() => setCron(null)} />}

@@ -138,6 +138,19 @@ export async function removerArquivoContrato(tabela, id, path) {
   await supabase.from(tabela).update({ arquivo: null }).eq('id', id)
 }
 
+// Apropriações (lançamentos) já geradas nesta competência para uma origem (seguro/despesa).
+// Usado para marcar cada contrato como "Apropriado" na lista assim que o lançamento é feito.
+export async function apropriacoesDoMes(clienteId, competencia, origem) {
+  const [m, a] = String(competencia || '').split('/').map(Number)
+  if (!m || !a) return []
+  const { data: comp } = await supabase.from('competencias').select('id')
+    .eq('cliente_id', clienteId).eq('ano', a).eq('mes', m).maybeSingle()
+  if (!comp) return []
+  const { data } = await supabase.from('lancamentos')
+    .select('documento, historico, valor, conta_debito, conta_credito').eq('competencia_id', comp.id).eq('origem', origem)
+  return (data || []).filter(l => /apropria/i.test(l.historico || ''))
+}
+
 // Gera um lançamento real na fila que alimenta o Status / arquivo do Domínio.
 export async function gerarLancamento(l) {
   const { error } = await supabase.from('lancamentos').insert({
