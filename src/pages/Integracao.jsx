@@ -30,12 +30,13 @@ function somaNumerica(linhas) {
 // ---- Integração FISCAL: cruzamento acumulador × razão ----------------------
 const TIPOS_FISCAL = [['entradas', 'Entradas', 'ti-arrow-down-left'], ['saidas', 'Saídas', 'ti-arrow-up-right'], ['servicos', 'Serviços prestados', 'ti-briefcase']]
 const CHAVES_FISCAL = TIPOS_FISCAL.map(t => t[0])
-// Colunas do arquivo do acumulador por tipo (letras da planilha). O acumulador muda de
-// coluna conforme o relatório: Entradas=R, Saídas=AC, Serviços=Q.
+// Colunas do arquivo do acumulador por tipo (letras da planilha) e a CHAVE do cruzamento.
+// Entradas cruza NF a NF; Saídas e Serviços cruzam SÓ pelo acumulador (o total entra no
+// resumo). Colunas mudam por relatório.
 const COLS_FISCAL = {
-  entradas: { nf: 'K', data: 'N', acum: 'R', forn: 'U', valor: 'AH' },
-  saidas: { nf: 'K', data: 'N', acum: 'AC', forn: 'U', valor: 'AH' },
-  servicos: { nf: 'K', data: 'N', acum: 'Q', forn: 'U', valor: 'AH' },
+  entradas: { nf: 'K', data: 'N', acum: 'R', forn: 'U', valor: 'AH', chave: 'nf' },
+  saidas: { acum: 'AC', forn: 'W', valor: 'AE', chave: 'acum' },
+  servicos: { nf: 'K', data: 'N', acum: 'Q', forn: 'T', valor: 'AG', chave: 'acum' },
 }
 // NF só com dígitos, sem zeros à esquerda ("05602823" → "5602823").
 const normNF = v => String(v ?? '').replace(/\D/g, '').replace(/^0+/, '')
@@ -64,9 +65,10 @@ function nomeCombina(nome, hist) {
 // que têm "Acum." + número — assim ignora a contrapartida de banco (que não tem
 // acumulador); só entram os lançamentos integrados pela fiscal. Dentro do mesmo
 // acumulador, casa pela NF; sem NF, confirma por valor + nome.
-function achadoNoRazao(row, idx) {
+function achadoNoRazao(row, idx, chave) {
   const cands = idx.byAcum[row.acum] || []
   if (!cands.length) return false
+  if (chave === 'acum') return true // Saídas/Serviços: basta o acumulador existir no razão
   const nf = normNF(row.nf)
   if (nf && cands.some(r => r.nfs.has(nf))) return true
   return cands.some(r => Math.abs(r.valor - row.valor) <= 0.05 && nomeCombina(row.forn, r.hist))
@@ -99,12 +101,12 @@ async function carregarIndiceFiscal(empresaId, competencia) {
 }
 
 // Cruza as linhas do arquivo (acumulador) com o índice → resumo por acumulador.
-function cruzarFiscal(rows, idx) {
+function cruzarFiscal(rows, idx, chave) {
   const porAcum = {}
   for (const row of rows) {
     const a = (porAcum[row.acum] ||= { acum: row.acum, docTotal: 0, idTotal: 0, qtd: 0, qtdId: 0, divs: [] })
     a.qtd++; a.docTotal = Math.round((a.docTotal + row.valor) * 100) / 100
-    if (achadoNoRazao(row, idx)) { a.idTotal = Math.round((a.idTotal + row.valor) * 100) / 100; a.qtdId++ }
+    if (achadoNoRazao(row, idx, chave)) { a.idTotal = Math.round((a.idTotal + row.valor) * 100) / 100; a.qtdId++ }
     else a.divs.push({ nf: row.nf, data: row.data, forn: row.forn, valor: row.valor })
   }
   return Object.values(porAcum)
@@ -112,18 +114,22 @@ function cruzarFiscal(rows, idx) {
     .sort((x, y) => Math.abs(y.dif) - Math.abs(x.dif) || Number(x.acum) - Number(y.acum))
 }
 
-// Lê o arquivo do acumulador (colunas conforme o tipo) → linhas normalizadas.
+// Lê o arquivo do acumulador (colunas conforme o tipo) → linhas normalizadas. NF/Data são
+// opcionais (Saídas não tem) — só entram se a coluna estiver definida no tipo.
 async function parseAcumulador(file, sub) {
   const XLSX = await import('xlsx')
   const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true })
   const arr = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' })
   const c = COLS_FISCAL[sub] || COLS_FISCAL.entradas
-  const col = { nf: XLSX.utils.decode_col(c.nf), data: XLSX.utils.decode_col(c.data), acum: XLSX.utils.decode_col(c.acum), forn: XLSX.utils.decode_col(c.forn), valor: XLSX.utils.decode_col(c.valor) }
+  const col = {
+    acum: XLSX.utils.decode_col(c.acum), forn: XLSX.utils.decode_col(c.forn), valor: XLSX.utils.decode_col(c.valor),
+    nf: c.nf ? XLSX.utils.decode_col(c.nf) : -1, data: c.data ? XLSX.utils.decode_col(c.data) : -1,
+  }
   const rows = []
   for (const r of arr) {
     const valor = numFis(r[col.valor]); const acum = normAcum(r[col.acum])
     if (!acum || !valor) continue // pula cabeçalho e linhas sem acumulador/valor
-    rows.push({ nf: String(r[col.nf] ?? '').trim(), data: dataISO(r[col.data]), acum, forn: String(r[col.forn] ?? '').trim(), valor })
+    rows.push({ nf: col.nf >= 0 ? String(r[col.nf] ?? '').trim() : '', data: col.data >= 0 ? dataISO(r[col.data]) : '', acum, forn: String(r[col.forn] ?? '').trim(), valor })
   }
   return rows
 }
@@ -305,7 +311,7 @@ function Fiscal({ competencia, empresaId, user, est, onEstado }) {
   // Resumo recalculado AO VIVO com o índice atual (razão + lançamentos + ajustes) — assim
   // atualiza sozinho ao abrir, sem reimportar. Se o arquivo foi importado numa versão antiga
   // (sem as linhas guardadas), cai no resumo salvo.
-  const resumoAtual = (atual?.rows && razIdx) ? cruzarFiscal(atual.rows, razIdx) : (atual?.resumo || [])
+  const resumoAtual = (atual?.rows && razIdx && sub !== 'resumo') ? cruzarFiscal(atual.rows, razIdx, COLS_FISCAL[sub].chave) : (atual?.resumo || [])
 
   // Índice do razão + lançamentos ajustados da competência, para cruzar o arquivo.
   useEffect(() => {
@@ -329,7 +335,7 @@ function Fiscal({ competencia, empresaId, user, est, onEstado }) {
         const { error: eUp } = await supabase.storage.from('extratos').upload(path, file, { upsert: true, contentType: file.type || undefined })
         if (eUp) { setErro('Li o arquivo, mas não consegui guardá-lo p/ extrair depois: ' + eUp.message); path = '' }
       }
-      const novoTipos = { ...tipos, [sub]: { doc: file.name, path, rows, resumo: cruzarFiscal(rows, razIdx) } }
+      const novoTipos = { ...tipos, [sub]: { doc: file.name, path, rows, resumo: cruzarFiscal(rows, razIdx, COLS_FISCAL[sub].chave) } }
       const done = CHAVES_FISCAL.every(k => novoTipos[k])
       await onEstado({ ...est, tipos: novoTipos, estado: done ? 'validado' : null, doc: done ? 'Fiscal · 3 tipos importados' : null, usuario: user?.email || null })
     } catch (e) { setErro('Não consegui ler: ' + e.message) }
@@ -384,7 +390,7 @@ function Fiscal({ competencia, empresaId, user, est, onEstado }) {
   const totalImportado = k => {
     const t = tipos[k]
     if (t?.semMovimento) return 0
-    if (t?.rows && razIdx) return cruzarFiscal(t.rows, razIdx).reduce((s, a) => s + a.docTotal, 0)
+    if (t?.rows && razIdx) return cruzarFiscal(t.rows, razIdx, COLS_FISCAL[k]?.chave).reduce((s, a) => s + a.docTotal, 0)
     if (t?.resumo) return t.resumo.reduce((s, a) => s + a.docTotal, 0)
     return null
   }
@@ -419,7 +425,7 @@ function Fiscal({ competencia, empresaId, user, est, onEstado }) {
 
       {sub !== 'resumo' && <>
       <ImpCard titulo={`Importar acumulador — ${TIPOS_FISCAL.find(t => t[0] === sub)[1]}`}
-        desc={`Colunas: NF (${COLS_FISCAL[sub].nf}), Data (${COLS_FISCAL[sub].data}), Acumulador (${COLS_FISCAL[sub].acum}), ${nomeLabel} (${COLS_FISCAL[sub].forn}), Valor (${COLS_FISCAL[sub].valor}). Cruza NF a NF com o razão.`}
+        desc={`Colunas: ${[COLS_FISCAL[sub].nf && `NF (${COLS_FISCAL[sub].nf})`, COLS_FISCAL[sub].data && `Data (${COLS_FISCAL[sub].data})`, `Acumulador (${COLS_FISCAL[sub].acum})`, `${nomeLabel} (${COLS_FISCAL[sub].forn})`, `Valor (${COLS_FISCAL[sub].valor})`].filter(Boolean).join(', ')}. ${COLS_FISCAL[sub].chave === 'nf' ? 'Cruza NF a NF' : 'Cruza pelo acumulador'} com o razão.`}
         onImport={importar} nome={atual?.doc} qtd={atual ? resumoAtual.reduce((s, a) => s + a.qtd, 0) : undefined} />
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '10px 0 0', flexWrap: 'wrap' }}>
         {atual?.path && <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={extrairArquivo} title="Baixar o arquivo do acumulador importado"><i className="ti ti-download" /> Extrair arquivo</button>}
