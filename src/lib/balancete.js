@@ -77,6 +77,22 @@ function saldoSinalAb(valor, dc) {
   return n
 }
 
+// Data de uma célula de planilha em "AAAA-MM-DD": aceita Date, "DD/MM/AAAA" e o
+// número de série do Excel (ex.: 46120 → 2026-04-08). Usada para mostrar a data
+// REAL dos títulos de abertura (jan/fev/mar…), e não "abertura".
+function dataCelulaISO(v) {
+  if (v instanceof Date && !isNaN(v)) return `${v.getFullYear()}-${String(v.getMonth() + 1).padStart(2, '0')}-${String(v.getDate()).padStart(2, '0')}`
+  if (typeof v === 'number' && v > 20000 && v < 90000) {
+    const d = new Date(Math.round((v - 25569) * 86400000)) // 25569 = 1970-01-01 no serial do Excel
+    if (!isNaN(d)) return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`
+  }
+  const s = String(v ?? '').trim()
+  let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/); if (m) return `${m[1]}-${m[2]}-${m[3]}`
+  m = s.match(/^(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{2,4})/)
+  if (m) { let [, d, mo, y] = m; if (y.length === 2) y = '20' + y; return `${y}-${mo.padStart(2, '0')}-${d.padStart(2, '0')}` }
+  return ''
+}
+
 // Normaliza um valor de competência para "MM/AAAA". Aceita "MM/AAAA", "M/AAAA",
 // ISO "AAAA-MM(-DD)", "MM-AAAA" e o número de série de data do Excel (ex.: 46174 → 06/2026,
 // que é como uma célula de data vem da planilha). Retorna '' quando não reconhece.
@@ -142,8 +158,11 @@ export async function composicaoAbertura(empresaId, compId, contaCod, classifRaw
     if (Math.abs(valor) < 0.005) continue
     const cliente = String(campoPor(r, /cliente|fornec|nome|descri|histor/) || '').trim()
     const nf = String(campoPor(r, /\bnf\b|nota|document/) || '').trim()
+    // Data REAL do título (jan/fev/mar…), mesmo sem os meses anteriores fechados.
+    // Tudo isso compõe o saldo inicial (entendido como o último dia antes da abertura).
+    const dt = dataCelulaISO(campoPor(r, /data/))
     out.push({
-      id: `abertura-${i++}`, data: 'abertura', contrapartida: '',
+      id: `abertura-${i++}`, data: dt || 'abertura', contrapartida: '',
       historico: `Saldo anterior · ${cliente}${nf ? ' · NF ' + nf : ''}`,
       debito: valor > 0 ? valor : 0, credito: valor < 0 ? -valor : 0, abertura: true,
       leitura: { nf, entidade: cliente, ident: !!cliente, conf: (cliente && nf) ? 'alta' : cliente ? 'media' : 'baixa', abertura: true },
@@ -203,18 +222,33 @@ export async function montarBalancete(empresaId, compId) {
   // Saldo de ABERTURA (carga inicial) — só na competência inicial do cliente e só nas contas
   // cujo saldo não veio já no balancete importado (evita duplicar).
   if (await ehCompetenciaInicial(empresaId, compId)) {
-    const { saldos } = await carregarCargaInicial(empresaId)
-    if (saldos.length) {
+    const { saldos, composicoes } = await carregarCargaInicial(empresaId)
+    // Saldo de abertura por conta (código): o bloco de saldos; e, para as contas de
+    // COMPOSIÇÃO (clientes, fornecedores, IRRF…), a SOMA dos itens (D − C) — que É o
+    // saldo da conta. Se a conta veio nos dois, o bloco de saldos manda (a composição
+    // apenas confere), para não somar em dobro.
+    const saldoBloco = {}, compBloco = {}
+    for (const r of (saldos || [])) {
+      const cod = String(codConta(r) || '').trim(); if (!cod) continue
+      saldoBloco[cod] = (saldoBloco[cod] || 0) + saldoSinalAb(campoPor(r, /saldo|valor/), campoPor(r, /^d\/?c$|natureza/))
+    }
+    for (const r of (composicoes || [])) {
+      const cod = String(codConta(r) || '').trim(); if (!cod) continue
+      compBloco[cod] = (compBloco[cod] || 0) + saldoSinalAb(campoPor(r, /valor|saldo/), campoPor(r, /^d\/?c$|natureza/))
+    }
+    const saldoPorCod = {}
+    for (const cod of new Set([...Object.keys(saldoBloco), ...Object.keys(compBloco)])) {
+      saldoPorCod[cod] = (cod in saldoBloco) ? saldoBloco[cod] : compBloco[cod]
+    }
+    if (Object.keys(saldoPorCod).length) {
       const byRedDig = {}, byClsDig = {}, byMask = {}
       for (const p of plano) {
         if (p.reduzido) byRedDig[soDig(p.reduzido)] = p
         if (p.classif) { byClsDig[soDig(p.classif)] = p; byMask[applyMask(p.classif, mascara)] = p }
       }
       const jaTinha = new Set(Object.keys(map).filter(k => Math.abs(map[k].saldo_inicial) > 0.005))
-      for (const r of saldos) {
-        const cod = String(codConta(r) || '').trim()
-        const val = saldoSinalAb(campoPor(r, /saldo|valor/), campoPor(r, /^d\/?c$|natureza/))
-        if (!cod || Math.abs(val) < 0.005) continue
+      for (const [cod, val] of Object.entries(saldoPorCod)) {
+        if (Math.abs(val) < 0.005) continue
         const p = porReduzido[cod] || byRedDig[soDig(cod)] || porClassif[cod] || byClsDig[soDig(cod)] || byMask[cod]
         const classif = p ? p.classif : cod
         if (jaTinha.has(classif)) continue
