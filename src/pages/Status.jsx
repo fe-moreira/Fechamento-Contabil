@@ -38,6 +38,7 @@ export default function Status() {
   const [msg, setMsg] = useState('')
   const [salvando, setSalvando] = useState(false)
   const [verDominio, setVerDominio] = useState(false) // modal com os lançamentos p/ o Domínio
+  const [editLanc, setEditLanc] = useState(null)      // lançamento em edição (modal)
 
   async function carregar() {
     setSel(null); setMsg('')
@@ -379,6 +380,16 @@ export default function Status() {
     await carregar(); setMsg('Lançamento desfeito.')
   }
 
+  // Edita um lançamento gerado pela plataforma (data, débito, crédito, valor, histórico).
+  async function salvarEdicaoLancamento(campos) {
+    const { error } = await supabase.from('lancamentos').update({
+      data: campos.data || null, conta_debito: campos.conta_debito || null, conta_credito: campos.conta_credito || null,
+      valor: Number(campos.valor) || 0, historico: campos.historico || null, usuario: user?.email,
+    }).eq('id', editLanc.id)
+    if (error) { setMsg('Erro ao editar: ' + error.message); return }
+    setEditLanc(null); await carregar(); setMsg('Lançamento editado.')
+  }
+
   // Corrigir banco × resultado: grava a partida de acerto (vai para o Contabilizar) + auditoria.
   async function registrarPartida(itemTxt, L) {
     const id = await getCompetenciaId()
@@ -606,8 +617,13 @@ export default function Status() {
           totalPendencias={totalPendencias}
           onGerar={() => gerarDominioCSV(dados.lancamentos, `dominio_${competencia.replace('/', '-')}.csv`)}
           onDesfazer={desfazerLancamento}
+          onEditar={l => setEditLanc(l)}
           onClose={() => setVerDominio(false)}
         />
+      )}
+
+      {editLanc && (
+        <ModalEditarLancamento lanc={editLanc} competencia={competencia} onClose={() => setEditLanc(null)} onSalvar={salvarEdicaoLancamento} />
       )}
     </Wrapper>
   )
@@ -615,7 +631,7 @@ export default function Status() {
 
 // Lista os lançamentos que a plataforma já gerou (estornos/correções) — para o
 // usuário acompanhar — e permite gerar o arquivo do Domínio só quando pronto.
-function ModalLancamentosDominio({ lancamentos, planoMap, pronto, totalPendencias, onGerar, onDesfazer, onClose }) {
+function ModalLancamentosDominio({ lancamentos, planoMap, pronto, totalPendencias, onGerar, onDesfazer, onEditar, onClose }) {
   const nomeConta = c => { const p = planoMap[String(c)]; return `${c || '—'}${p?.nome ? ' · ' + p.nome : ''}` }
   const origemLabel = { correcao: 'Correção/Estorno', sugestao: 'Sugestão', documento: 'Documento', manual: 'Manual' }
   const total = lancamentos.reduce((s, l) => s + (Number(l.valor) || 0), 0)
@@ -648,6 +664,7 @@ function ModalLancamentosDominio({ lancamentos, planoMap, pronto, totalPendencia
                   <td style={{ ...td, color: theme.sub, fontSize: 11.5, maxWidth: 240 }}>{l.historico}</td>
                   <td style={{ ...td, fontSize: 11.5 }}><span style={{ color: theme.accent }}>{origemLabel[l.origem] || l.origem || '—'}</span></td>
                   <td style={{ ...td, whiteSpace: 'nowrap', textAlign: 'right' }}>
+                    {onEditar && <button className="btn btn-ghost" style={{ fontSize: 11.5, padding: '3px 8px', marginRight: 6 }} onClick={() => onEditar(l)} title="Editar este lançamento"><i className="ti ti-pencil" /> Editar</button>}
                     {onDesfazer && <button className="btn btn-ghost" style={{ fontSize: 11.5, padding: '3px 8px', color: theme.red, borderColor: theme.red }} onClick={() => onDesfazer(l.id)} title="Remover este lançamento"><i className="ti ti-arrow-back-up" /> Desfazer</button>}
                   </td>
                 </tr>
@@ -741,6 +758,40 @@ function PainelGate({ gate, onClose, onJustificar, onCorrigir, onSemMovimento, o
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 18 }}>
           <button className="btn btn-ghost" onClick={onClose}>Fechar</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Editar um lançamento já gerado (arquivo do Domínio). Só permite data dentro da
+// competência do fechamento em andamento.
+function ModalEditarLancamento({ lanc, competencia, onClose, onSalvar }) {
+  const [form, setForm] = useState({
+    data: lanc.data || '', valor: lanc.valor ?? '',
+    conta_debito: lanc.conta_debito || '', conta_credito: lanc.conta_credito || '',
+    historico: lanc.historico || '',
+  })
+  const set = k => v => setForm(f => ({ ...f, [k]: v }))
+  const [mm, yyyy] = String(competencia || '').split('/')
+  const dataOk = (() => { const m = /^(\d{4})-(\d{2})/.exec(String(form.data || '')); return !m || !mm || (m[1] === yyyy && m[2] === mm.padStart(2, '0')) })()
+  const ok = form.conta_debito && form.conta_credito && Number(form.valor) > 0 && dataOk
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 60 }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 'min(560px,96vw)', maxHeight: '90vh', overflow: 'auto', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
+        <h2 style={{ fontSize: 17, marginBottom: 4 }}>Editar lançamento</h2>
+        <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 12 }}>Ajuste a partida. Só é possível lançar com data dentro de <b style={{ color: theme.text }}>{competencia}</b>. <span style={{ color: theme.accent }}>F4</span> abre o plano de contas.</p>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <div><label>Data</label><input className="input" type="date" value={form.data} onChange={e => set('data')(e.target.value)} style={!dataOk ? { borderColor: theme.red } : undefined} /></div>
+          <div><label>Valor</label><input className="input" type="number" step="0.01" value={form.valor} onChange={e => set('valor')(e.target.value)} /></div>
+          <div><label>Conta débito</label><CampoConta value={form.conta_debito} onChange={set('conta_debito')} /></div>
+          <div><label>Conta crédito</label><CampoConta value={form.conta_credito} onChange={set('conta_credito')} /></div>
+          <div style={{ gridColumn: '1 / -1' }}><label>Histórico</label><textarea className="input" rows={2} value={form.historico} onChange={e => set('historico')(e.target.value)} /></div>
+        </div>
+        {!dataOk && <p style={{ color: theme.red, fontSize: 12.5, marginTop: 10, fontWeight: 600 }}><i className="ti ti-alert-triangle" /> A data precisa ser de {competencia}.</p>}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 16 }}>
+          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+          <button className="btn" disabled={!ok} onClick={() => onSalvar(form)}>Salvar</button>
         </div>
       </div>
     </div>
