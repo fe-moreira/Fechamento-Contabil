@@ -89,6 +89,9 @@ export function AppDataProvider({ children }) {
   const { user } = useAuth()
   const userRef = useRef(user); userRef.current = user
   const track = useRef({ cliente_id: null, nome: '', start: null })
+  // Timesheet pausa após 10 min sem interação do usuário com o cliente.
+  const lastAtiv = useRef(Date.now())
+  const OCIOSO_TS_MS = 10 * 60 * 1000
 
   function flushTempo(finalizar) {
     const tr = track.current
@@ -109,18 +112,37 @@ export function AppDataProvider({ children }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [empresaId])
 
-  // Persiste a cada 60s, pausa quando a aba fica oculta, e fecha ao sair.
+  // Persiste a cada 60s. Pausa quando a aba fica oculta OU após 10 min sem
+  // interação. Retoma na próxima interação (se houver cliente e a aba visível).
   useEffect(() => {
-    const iv = setInterval(() => flushTempo(false), 60000)
+    const iv = setInterval(() => {
+      const ocioso = Date.now() - lastAtiv.current >= OCIOSO_TS_MS
+      if (ocioso) {
+        // Fecha o tempo acumulado e não conta mais até voltar a interagir.
+        if (track.current.start) flushTempo(true)
+      } else {
+        flushTempo(false)
+      }
+    }, 60000)
+    const onAtiv = () => {
+      lastAtiv.current = Date.now()
+      // Retoma a contagem se estava pausado por inatividade.
+      if (track.current.cliente_id && !track.current.start && document.visibilityState === 'visible') {
+        track.current.start = Date.now()
+      }
+    }
     const onVis = () => {
       if (document.visibilityState === 'hidden') flushTempo(true)
-      else if (track.current.cliente_id) track.current.start = Date.now()
+      else if (track.current.cliente_id) { lastAtiv.current = Date.now(); track.current.start = Date.now() }
     }
     const onUnload = () => flushTempo(true)
+    const eventos = ['mousemove', 'mousedown', 'keydown', 'scroll', 'touchstart', 'click']
+    eventos.forEach(ev => window.addEventListener(ev, onAtiv, { passive: true }))
     document.addEventListener('visibilitychange', onVis)
     window.addEventListener('beforeunload', onUnload)
     return () => {
       clearInterval(iv)
+      eventos.forEach(ev => window.removeEventListener(ev, onAtiv))
       document.removeEventListener('visibilitychange', onVis)
       window.removeEventListener('beforeunload', onUnload)
       flushTempo(true)

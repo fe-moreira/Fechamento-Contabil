@@ -8,4 +8,12 @@ if (!url || !anonKey) {
   console.warn('Supabase: defina VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY no .env.local')
 }
 
-export const supabase = createClient(url, anonKey)
+// Segurança: a sessão fica em sessionStorage (não localStorage). Assim, ao
+// FECHAR a página/aba, a sessão é descartada e o usuário precisa logar de novo.
+export const supabase = createClient(url, anonKey, {
+  auth: {
+    storage: typeof window !== 'undefined' ? window.sessionStorage : undefined,
+    persistSession: true,
+    autoRefreshToken: true,
+  },
+})
