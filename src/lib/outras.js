@@ -103,6 +103,25 @@ export async function enviarSaldoInicialContrato({ clienteId, origem, contrato, 
   return restante
 }
 
+// Anexo do contrato (apólice/documento) no Storage privado, guardado por contrato.
+export async function anexarArquivoContrato(tabela, id, file) {
+  const ext = (file.name.match(/\.[a-z0-9]+$/i) || [''])[0].toLowerCase()
+  const path = `contratos/${tabela}/${id}${ext}`
+  const { error } = await supabase.storage.from('extratos').upload(path, file, { upsert: true, contentType: file.type || undefined })
+  if (error) throw error
+  await supabase.from(tabela).update({ arquivo: path }).eq('id', id)
+  return path
+}
+export async function urlArquivoContrato(path) {
+  const { data, error } = await supabase.storage.from('extratos').createSignedUrl(path, 300)
+  if (error) throw error
+  return data.signedUrl
+}
+export async function removerArquivoContrato(tabela, id, path) {
+  if (path) await supabase.storage.from('extratos').remove([path])
+  await supabase.from(tabela).update({ arquivo: null }).eq('id', id)
+}
+
 // Gera um lançamento real na fila que alimenta o Status / arquivo do Domínio.
 export async function gerarLancamento(l) {
   const { error } = await supabase.from('lancamentos').insert({
