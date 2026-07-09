@@ -1050,26 +1050,39 @@ function CardConferencia({ conta, reg, compId, usuario, saldoAjuste = 0, composi
     let saldoLido = null
     try {
       if (ehPdf) {
-        // Extrato em PDF (ex.: extrato bancário do cliente).
-        const { extrairTextoPdf, palpiteSaldo, ocrPdf } = await import('../lib/pdfText')
-        const texto = await extrairTextoPdf(file)
-        let s = palpiteSaldo(texto, saldo)
+        // Extrato/guia em PDF (ex.: extrato bancário, guia do INSS).
+        const { extrairTextoPdf, palpiteSaldo, ocrPdf, somaDestaquesPdf } = await import('../lib/pdfText')
         setDoc(file.name)
-        if (s != null) { setSaldoDoc(String(s)) }
-        else if (texto.replace(/\s/g, '').length < 20) {
-          // PDF sem texto (imagem/print) → tenta ler por OCR (reconhecimento de imagem).
-          setOcr({ ativo: true, pct: 0 })
-          try {
-            const textoOcr = await ocrPdf(file, pct => setOcr({ ativo: true, pct }))
-            s = palpiteSaldo(textoOcr, saldo)
-            if (s != null) { setSaldoDoc(String(s)); setMsg('Saldo lido por reconhecimento de imagem (OCR) — confira se está correto.') }
-            else setErro('Este PDF é uma imagem e o reconhecimento (OCR) não achou o saldo. Baixe o extrato digital direto do banco — ou digite o saldo abaixo.')
-          } catch (eo) {
-            setErro('Não consegui ler a imagem por OCR (' + eo.message + '). Baixe o extrato digital do banco ou digite o saldo abaixo.')
-          } finally { setOcr({ ativo: false, pct: 0 }) }
+        // 1º) Valores destacados em AMARELO (anotação Highlight): o cliente pinta tudo o
+        //     que compõe o saldo (ex.: guia com vários valores). O saldo = a SOMA deles.
+        let destaque = null
+        try { destaque = await somaDestaquesPdf(file) } catch { destaque = null }
+        let s = null
+        if (destaque && destaque.valores.length) {
+          s = destaque.soma
+          setSaldoDoc(String(s))
+          setMsg(destaque.valores.length > 1
+            ? `Saldo = soma de ${destaque.valores.length} valores destacados em amarelo = ${money(s)}. Confira.`
+            : 'Saldo lido do valor destacado em amarelo — confira se está correto.')
+        } else {
+          const texto = await extrairTextoPdf(file)
+          s = palpiteSaldo(texto, saldo)
+          if (s != null) { setSaldoDoc(String(s)) }
+          else if (texto.replace(/\s/g, '').length < 20) {
+            // PDF sem texto (imagem/print) → tenta ler por OCR (reconhecimento de imagem).
+            setOcr({ ativo: true, pct: 0 })
+            try {
+              const textoOcr = await ocrPdf(file, pct => setOcr({ ativo: true, pct }))
+              s = palpiteSaldo(textoOcr, saldo)
+              if (s != null) { setSaldoDoc(String(s)); setMsg('Saldo lido por reconhecimento de imagem (OCR) — confira se está correto.') }
+              else setErro('Este PDF é uma imagem e o reconhecimento (OCR) não achou o saldo. Baixe o extrato digital direto do banco — ou digite o saldo abaixo.')
+            } catch (eo) {
+              setErro('Não consegui ler a imagem por OCR (' + eo.message + '). Baixe o extrato digital do banco ou digite o saldo abaixo.')
+            } finally { setOcr({ ativo: false, pct: 0 }) }
+          }
+          else
+            setErro('Li o PDF, mas não identifiquei o saldo automaticamente — se for uma guia com vários valores, pinte-os de amarelo (destaque) para eu somar; senão digite o saldo abaixo.')
         }
-        else
-          setErro('Li o PDF, mas não identifiquei o saldo automaticamente — confira e digite o saldo abaixo.')
         saldoLido = s
       } else {
         const XLSX = await import('xlsx')

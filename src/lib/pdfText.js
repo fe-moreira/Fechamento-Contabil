@@ -60,6 +60,58 @@ export async function ocrPdf(file, onProgress) {
   }
 }
 
+// Cor de destaque (anotação Highlight) amarela/dourada? (ex.: 255,193,0). Exclui
+// verde (r baixo), azul (r/g baixos) e branco (b alto demais).
+function ehDestaqueAmarelo(c) {
+  if (!c || c.length < 3) return false
+  const r = c[0], g = c[1], b = c[2]
+  return r > 170 && g > 120 && b < 150 && (r + g) > 2.2 * b
+}
+
+// Soma os valores monetários DESTACADOS EM AMARELO (anotações Highlight) no PDF.
+// Alguns documentos (ex.: guia do INSS) trazem VÁRIOS valores a somar — o cliente
+// pinta de amarelo tudo o que compõe o saldo. Retorna { soma, valores } ou null
+// quando não há destaque amarelo (aí a leitura cai no palpiteSaldo normal).
+export async function somaDestaquesPdf(file) {
+  const doc = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise
+  const parse = s => parseFloat(String(s).replace(/\./g, '').replace(',', '.'))
+  let temDestaque = false, soma = 0
+  const valores = []
+  for (let p = 1; p <= doc.numPages; p++) {
+    const page = await doc.getPage(p)
+    let annots = []
+    try { annots = await page.getAnnotations() } catch { annots = [] }
+    const quads = []
+    for (const a of annots) {
+      if (a.subtype !== 'Highlight' || !ehDestaqueAmarelo(a.color) || !a.quadPoints) continue
+      const q = a.quadPoints
+      if (typeof q[0] === 'object') { // pdfjs mais novo: [{x,y}, ...]
+        for (let i = 0; i + 3 < q.length; i += 4) {
+          const xs = [q[i].x, q[i + 1].x, q[i + 2].x, q[i + 3].x], ys = [q[i].y, q[i + 1].y, q[i + 2].y, q[i + 3].y]
+          quads.push({ minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) })
+        }
+      } else { // formato plano: x1,y1,x2,y2,x3,y3,x4,y4 por quad
+        for (let i = 0; i + 7 < q.length; i += 8) {
+          const xs = [q[i], q[i + 2], q[i + 4], q[i + 6]], ys = [q[i + 1], q[i + 3], q[i + 5], q[i + 7]]
+          quads.push({ minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) })
+        }
+      }
+    }
+    if (!quads.length) continue
+    temDestaque = true
+    const content = await page.getTextContent()
+    for (const it of content.items) {
+      if (!it.str) continue
+      const x = it.transform?.[4] ?? 0, y = it.transform?.[5] ?? 0, w = it.width || 0
+      const cx = x + w / 2
+      if (!quads.some(qd => cx >= qd.minX - 3 && cx <= qd.maxX + 3 && y >= qd.minY - 3 && y <= qd.maxY + 6)) continue
+      for (const m of (it.str.match(/-?\d{1,3}(?:\.\d{3})*,\d{2}/g) || [])) { const n = parse(m); valores.push(n); soma += n }
+    }
+  }
+  if (!temDestaque || !valores.length) return null
+  return { soma: Math.round(soma * 100) / 100, valores }
+}
+
 // Palpite do saldo do extrato. Prioriza o saldo da CONTA CORRENTE — muitos
 // bancos (ex.: Itaú) mostram também um "saldo final" que SOMA o investimento,
 // e não é o que vai para a conta contábil do banco.
