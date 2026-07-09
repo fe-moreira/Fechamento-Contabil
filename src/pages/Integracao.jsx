@@ -491,7 +491,8 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
         out.push({ data: d, mov: movDia[d] || 0, calc: corrente, ext, dif, delta })
         if (dif != null) prevDif = dif
       }
-      setCruza({ dias: out, primeiroDiv }); setCruzaOpen(true)
+      const difTotal = out.filter(d => d.dif != null).slice(-1)[0]?.dif ?? null
+      setCruza({ dias: out, primeiroDiv, difTotal }); setCruzaOpen(true)
     } catch (e) { setErro('Não consegui ler o extrato: ' + e.message) }
   }
   // Divide um lançamento em vários (ex.: 1 DARF → 3 lançamentos contábeis).
@@ -894,7 +895,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
           onClose={() => setQuebra(null)} onConfirmar={partes => confirmarQuebra(quebra.i, partes)} />
       )}
 
-      {cruzaOpen && cruza && <ModalCruzaSaldo cruza={cruza} onClose={() => setCruzaOpen(false)}
+      {cruzaOpen && cruza && <ModalCruzaSaldo cruza={cruza} linhas={linhas} planoMap={planoMap} onClose={() => setCruzaOpen(false)}
         onVerDia={iso => { const p = String(iso).split('-'); setFData(`${p[2]}/${p[1]}`); setCruzaOpen(false) }} />}
 
       {cfg && (
@@ -909,41 +910,103 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
 }
 
 // Resultado do cruzamento do saldo diário calculado vs o saldo do extrato do banco.
-function ModalCruzaSaldo({ cruza, onClose, onVerDia }) {
+// Além de apontar os dias que não bateram, tenta ser ASSERTIVO sobre o erro:
+// casa a diferença do dia com um lançamento (valor exato ou E/S trocada) e
+// detecta lançamento com data trocada (dois dias com diferença oposta e igual).
+function ModalCruzaSaldo({ cruza, linhas, planoMap, onClose, onVerDia }) {
   const brd = iso => iso ? iso.split('-').reverse().join('/') : '—'
-  // Dias que NÃO bateram (mudança da diferença de um dia p/ o outro).
+  const eps = v => Math.abs(v) < 0.005
   const divergentes = cruza.dias.filter(d => d.delta != null && Math.abs(d.delta) >= 0.005)
   const [soDif, setSoDif] = useState(divergentes.length > 0)
-  // Sugestão do que procurar no dia, pelo sinal da diferença.
-  const sugestao = d => d.delta > 0
-    ? `classificado ${money(d.delta)} a MAIS neste dia — falta lançar uma SAÍDA de ${money(d.delta)} (ou há uma entrada a mais).`
-    : `classificado ${money(-d.delta)} a MENOS neste dia — falta lançar uma ENTRADA de ${money(-d.delta)} (ou há uma saída a mais).`
+  const [aberto, setAberto] = useState(() => new Set(divergentes.length === 1 ? [divergentes[0].data] : []))
+  const toggle = data => setAberto(p => { const n = new Set(p); n.has(data) ? n.delete(data) : n.add(data); return n })
+
+  // Possível troca de data: dois dias divergentes com deltas opostos e iguais.
+  const trocaPar = {}
+  for (let a = 0; a < divergentes.length; a++) for (let b = a + 1; b < divergentes.length; b++) {
+    const A = divergentes[a], B = divergentes[b]
+    if (!trocaPar[A.data] && !trocaPar[B.data] && eps(A.delta + B.delta)) { trocaPar[A.data] = B.data; trocaPar[B.data] = A.data }
+  }
+
+  // Análise de um dia divergente: lista os lançamentos do dia e destaca os que
+  // "explicam" a diferença (mesmo valor, ou o dobro = E/S trocada).
+  function analisar(d) {
+    const alvo = d.delta                     // + = classificado a mais; − = a menos
+    const doDia = linhas.filter(l => l.data === d.data)
+    const cand = []
+    for (const l of doDia) {
+      const v = l.valor || 0
+      if (eps(v - Math.abs(alvo))) cand.push({ l, tipo: 'valor' })
+      else if (eps(2 * v - Math.abs(alvo)) && ((alvo > 0 && l.entrada) || (alvo < 0 && !l.entrada))) cand.push({ l, tipo: 'sinal' })
+    }
+    return { doDia, cand }
+  }
+  function frase(d) {
+    if (trocaPar[d.data]) return <>Provável <b>data trocada</b>: um lançamento de <b>{money(Math.abs(d.delta))}</b> aparece aqui, mas o banco o registrou em <b>{brd(trocaPar[d.data])}</b> (um dia sobra, o outro falta o mesmo valor).</>
+    const { cand } = analisar(d)
+    const sinal = cand.find(c => c.tipo === 'sinal')
+    const exato = cand.find(c => c.tipo === 'valor')
+    if (sinal) return <>O lançamento <b>“{sinal.l.historico}”</b> ({money(sinal.l.valor)}) está como <b>{sinal.l.entrada ? 'Entrada' : 'Saída'}</b> — se for <b>{sinal.l.entrada ? 'Saída' : 'Entrada'}</b>, zera a diferença do dia.</>
+    if (exato) return <>Confira o lançamento <b>“{exato.l.historico}”</b> ({money(exato.l.valor)}) — bate <b>exatamente</b> com a diferença do dia.</>
+    return d.delta > 0
+      ? <>Classificado <b>{money(d.delta)} a mais</b> — falta uma <b>Saída</b> de {money(d.delta)} (ou há uma entrada a mais) neste dia.</>
+      : <>Classificado <b>{money(-d.delta)} a menos</b> — falta uma <b>Entrada</b> de {money(-d.delta)} (ou há uma saída a mais) neste dia.</>
+  }
+
   const linhasTabela = soDif ? divergentes : cruza.dias
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 16, zIndex: 60 }}>
-      <div onClick={e => e.stopPropagation()} style={{ width: 'min(680px,96vw)', maxHeight: '90vh', overflow: 'auto', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 22 }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 'min(720px,96vw)', maxHeight: '90vh', overflow: 'auto', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 22 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
           <h2 style={{ fontSize: 16, margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}><i className="ti ti-file-search" style={{ color: theme.accent }} /> Diferença por dia (extrato × classificado)</h2>
           <span onClick={onClose} style={{ cursor: 'pointer', color: theme.sub, fontSize: 20 }}><i className="ti ti-x" /></span>
         </div>
         <p style={{ fontSize: 13, margin: '0 0 12px', color: divergentes.length ? theme.red : theme.green }}>
           {divergentes.length
-            ? <><i className="ti ti-alert-triangle" /> <b>{divergentes.length}</b> dia(s) com diferença. Os que bateram não precisam de conferência — foque nos destacados abaixo.</>
+            ? <><i className="ti ti-alert-triangle" /> Diferença total <b>{cruza.difTotal == null ? '—' : money(cruza.difTotal)}</b> em <b>{divergentes.length}</b> dia(s). Os dias que bateram não aparecem — foque nos de baixo.</>
             : <><i className="ti ti-circle-check" /> Nenhuma divergência de movimento entre os dias. Se ainda há diferença, é no saldo de abertura.</>}
         </p>
 
-        {/* Resumo dos dias que não bateram, com sugestão do que procurar */}
+        {/* Análise por dia que não bateu: sugestão + lançamentos do dia (expandível) */}
         {divergentes.length > 0 && (
           <div style={{ marginBottom: 14 }}>
-            {divergentes.map((d, i) => (
-              <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '9px 11px', borderRadius: 10, background: 'rgba(229,72,77,0.08)', border: `0.5px solid rgba(229,72,77,0.30)`, marginBottom: 8 }}>
-                <i className="ti ti-alert-triangle" style={{ color: theme.red, marginTop: 2 }} />
-                <div style={{ flex: 1, fontSize: 12.5 }}>
-                  <b style={{ color: theme.text }}>{brd(d.data)}</b> · <span style={{ color: theme.sub }}>{sugestao(d)}</span>
+            {divergentes.map((d, i) => {
+              const { doDia, cand } = analisar(d)
+              const isCand = l => cand.some(c => c.l === l)
+              const exp = aberto.has(d.data)
+              return (
+                <div key={i} style={{ borderRadius: 10, background: 'rgba(229,72,77,0.07)', border: `0.5px solid rgba(229,72,77,0.30)`, marginBottom: 8, overflow: 'hidden' }}>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '9px 11px' }}>
+                    <i className="ti ti-alert-triangle" style={{ color: theme.red, marginTop: 2 }} />
+                    <div style={{ flex: 1, fontSize: 12.5 }}>
+                      <b style={{ color: theme.text }}>{brd(d.data)}</b> · diferença do dia <b style={{ color: theme.red }}>{money(d.delta)}</b>
+                      <div style={{ color: theme.sub, marginTop: 3 }}>{frase(d)}</div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+                      <button className="btn btn-ghost" style={{ fontSize: 11, padding: '3px 8px', whiteSpace: 'nowrap' }} onClick={() => toggle(d.data)}><i className={`ti ${exp ? 'ti-chevron-up' : 'ti-chevron-down'}`} /> {doDia.length} lançto(s)</button>
+                      {onVerDia && <button className="btn btn-ghost" style={{ fontSize: 11, padding: '3px 8px', whiteSpace: 'nowrap' }} onClick={() => onVerDia(d.data)} title="Filtrar a tabela por este dia"><i className="ti ti-filter" /> na tabela</button>}
+                    </div>
+                  </div>
+                  {exp && (
+                    <div style={{ borderTop: `0.5px solid rgba(229,72,77,0.25)`, background: theme.card }}>
+                      {doDia.length === 0
+                        ? <p style={{ color: theme.sub, fontSize: 11.5, margin: 0, padding: '8px 11px' }}>Nenhum lançamento classificado neste dia — provável lançamento faltando de {money(Math.abs(d.delta))}.</p>
+                        : <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                            <tbody>
+                              {doDia.map((l, j) => (
+                                <tr key={j} style={{ borderTop: j ? `1px solid ${theme.border}` : 'none', background: isCand(l) ? 'rgba(245,166,35,0.14)' : 'transparent' }}>
+                                  <td style={{ ...ftd, fontSize: 11 }}>{isCand(l) && <i className="ti ti-star-filled" style={{ color: theme.yellow, marginRight: 4 }} title="Provável causa da diferença" />}{l.historico}</td>
+                                  <td style={{ ...ftd, fontSize: 11, textAlign: 'right', whiteSpace: 'nowrap', color: l.entrada ? theme.green : theme.red }}>{l.entrada ? '+' : '−'}{money(l.valor)}</td>
+                                  <td style={{ ...ftd, fontSize: 11, whiteSpace: 'nowrap', color: theme.sub }}>{l.contra ? `${l.contra}${planoMap[String(l.contra)]?.nome ? ' · ' + planoMap[String(l.contra)].nome : ''}` : 'sem contrapartida'}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>}
+                    </div>
+                  )}
                 </div>
-                {onVerDia && <button className="btn btn-ghost" style={{ fontSize: 11, padding: '3px 8px', whiteSpace: 'nowrap' }} onClick={() => onVerDia(d.data)}><i className="ti ti-filter" /> ver lançamentos</button>}
-              </div>
-            ))}
+              )
+            })}
           </div>
         )}
 
@@ -972,7 +1035,7 @@ function ModalCruzaSaldo({ cruza, onClose, onVerDia }) {
             </tbody>
           </table>
         </div>
-        <p style={{ color: theme.sub, fontSize: 11, margin: '10px 0 0' }}>"Dif. do dia" é a mudança da diferença de um dia para o outro — onde ela salta, falta ou sobra um lançamento naquele dia. Clique num dia para filtrar os lançamentos.</p>
+        <p style={{ color: theme.sub, fontSize: 11, margin: '10px 0 0' }}>"Dif. do dia" é a mudança da diferença de um dia para o outro. A estrela ⭐ marca o lançamento que provavelmente causa a diferença. Clique num dia para filtrar os lançamentos na tabela.</p>
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14 }}><button className="btn" onClick={onClose}>Fechar</button></div>
       </div>
     </div>
