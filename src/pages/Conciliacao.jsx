@@ -1087,6 +1087,19 @@ function CardConferencia({ conta, reg, compId, usuario, saldoAjuste = 0, composi
     }
   }
 
+  // Relê o documento JÁ ARMAZENADO com a lógica atual (sem precisar subir de novo).
+  // Útil para corrigir saldos lidos por versões antigas do leitor.
+  async function relerDocumento() {
+    if (!path) return
+    setErro(''); setMsg('')
+    const { data, error } = await supabase.storage.from('extratos').download(path)
+    if (error) { setErro('Não consegui baixar o arquivo salvo: ' + error.message); return }
+    const nome = doc || path.split('/').pop() || 'documento'
+    const ehPdf = /\.pdf$/i.test(nome)
+    const file = new File([data], nome, { type: data.type || (ehPdf ? 'application/pdf' : '') })
+    await lerArquivo(file) // relê e regrava o saldo (armazenar no fim)
+  }
+
   // Exclui o arquivo armazenado → a conta volta ao vermelho.
   async function excluirArquivo() {
     if (!path) return
@@ -1162,6 +1175,7 @@ function CardConferencia({ conta, reg, compId, usuario, saldoAjuste = 0, composi
         {doc && <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', margin: '10px 0 0' }}>
           <span style={{ color: theme.sub, fontSize: 12 }}><i className="ti ti-file" /> {doc}{path ? '' : arquivo ? ' (será armazenado ao salvar)' : ''}</span>
           {(path || arquivo) && <button className="btn btn-ghost" style={{ padding: '4px 10px', fontSize: 12 }} onClick={verArquivo}><i className="ti ti-eye" /> Ver arquivo</button>}
+          {path && <button className="btn btn-ghost" style={{ padding: '4px 10px', fontSize: 12 }} disabled={salvando || ocr.ativo} onClick={relerDocumento} title="Relê o arquivo já salvo com a leitura atual (sem precisar subir de novo)"><i className="ti ti-refresh" /> Reler documento</button>}
           {path && <button className="btn btn-ghost" style={{ padding: '4px 10px', fontSize: 12, color: theme.red, borderColor: theme.red }} disabled={salvando} onClick={excluirArquivo}><i className="ti ti-trash" /> Excluir arquivo</button>}
         </div>}
         {temSaldoDoc && <p style={{ color: bate ? theme.green : bateSaldo ? theme.sub : theme.red, fontSize: 12.5, margin: '10px 0 0', fontWeight: 500 }}>
