@@ -2,13 +2,14 @@ import { useEffect, useState } from 'react'
 import { theme, money } from '../lib/theme'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
-import { listar, inserir, remover, gerarLancamento } from '../lib/outras'
+import { listar, inserir, remover, gerarLancamento, enviarSaldoInicialContrato } from '../lib/outras'
 import ObservacoesConciliacao from '../components/ObservacoesConciliacao'
 import LeitorIA from '../components/LeitorIA'
 
-const ACC = { seguro: '#4A7CFF', importacao: '#2FB6A8', emprestimo: '#9A7CF0', parcelamento: '#E8923B', equivalencia: '#E06C9F', outros: '#7C89A6' }
+const ACC = { seguro: '#4A7CFF', despesa: '#33B4C6', importacao: '#2FB6A8', emprestimo: '#9A7CF0', parcelamento: '#E8923B', equivalencia: '#E06C9F', outros: '#7C89A6' }
 const BLOCOS = [
   { key: 'seguro', label: 'Seguro', icon: 'ti-shield-half', sub: 'Apólices & apropriação' },
+  { key: 'despesa', label: 'Despesa a Apropriar', icon: 'ti-calendar-repeat', sub: 'IPVA, IPTU, etc.' },
   { key: 'importacao', label: 'Importação', icon: 'ti-ship', sub: 'Processos de mercadoria' },
   { key: 'emprestimo', label: 'Empréstimo', icon: 'ti-building-bank', sub: 'Contratos & conferência' },
   { key: 'parcelamento', label: 'Parc. Impostos', icon: 'ti-receipt', sub: 'Só juros & multa' },
@@ -72,10 +73,22 @@ export default function OutrasContabilizacoes() {
     } catch (e) { setMsg('Erro: ' + e.message) }
   }
 
+  // Envia o saldo de abertura de um contrato (seguro/despesa a apropriar) para a
+  // carga inicial — o que falta apropriar na abertura vira composição da conta.
+  async function enviarSaldoInicial(origem, contrato) {
+    try {
+      const restante = await enviarSaldoInicialContrato({ clienteId: empresaId, origem, contrato, usuario: user?.email })
+      setMsg(restante > 0.005
+        ? `Saldo de abertura enviado à carga inicial: ${money(restante)} a apropriar (Base de Informações → carga inicial).`
+        : 'Sem saldo a apropriar na abertura — o contrato já estaria encerrado nessa data.')
+      setTimeout(() => setMsg(''), 6000)
+    } catch (e) { setMsg('Erro: ' + e.message) }
+  }
+
   if (!empresaId) return <Aviso texto="Selecione uma empresa no menu lateral." />
 
-  const props = { clienteId: empresaId, user, competencia, abrirGerar }
-  const Pane = { seguro: PaneSeguro, importacao: PaneImportacao, emprestimo: PaneEmprestimo, parcelamento: PaneParcelamento, equivalencia: PaneEquivalencia, outros: PaneOutros }[tab]
+  const props = { clienteId: empresaId, user, competencia, abrirGerar, enviarSaldoInicial }
+  const Pane = { seguro: PaneSeguro, despesa: PaneDespesaApropriar, importacao: PaneImportacao, emprestimo: PaneEmprestimo, parcelamento: PaneParcelamento, equivalencia: PaneEquivalencia, outros: PaneOutros }[tab]
 
   return (
     <div>
@@ -158,11 +171,12 @@ function useLista(tabela, clienteId) {
 }
 
 function GerarBtn({ onClick, children = 'Gerar lançamento' }) { return <button className="btn" style={{ fontSize: 12, padding: '5px 10px' }} onClick={onClick}><i className="ti ti-file-plus" /> {children}</button> }
+function SaldoIniBtn({ onClick }) { return <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={onClick} title="Calcula o que falta apropriar na abertura e envia à carga inicial"><i className="ti ti-arrow-bar-to-up" /> Saldo inicial</button> }
 function DelBtn({ onClick }) { return <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={onClick}>excluir</button> }
 function Vazio({ colSpan, texto }) { return <tr><td colSpan={colSpan} style={{ padding: 18, color: theme.sub, fontSize: 13 }}>{texto}</td></tr> }
 
 // ================= SEGURO =================
-function PaneSeguro({ clienteId, user, competencia, abrirGerar }) {
+function PaneSeguro({ clienteId, user, competencia, abrirGerar, enviarSaldoInicial }) {
   const { rows, loading, erro, recarregar, excluir } = useLista('seguros', clienteId)
   const [f, on, reset, setF] = useForm({ seguradora: '', apolice: '', ramo: '', vigencia_inicio: '', vigencia_fim: '', premio_total: '', num_parcelas: '12', valor_parcela: '', conta_despesa: '4.1.2.18', conta_apropriar: '1.1.3.02', conta_pagar: '2.1.1.05' })
   const [sav, setSav] = useState(false)
@@ -197,6 +211,60 @@ function PaneSeguro({ clienteId, user, competencia, abrirGerar }) {
               <td style={{ ...td, textAlign: 'right' }}>{money(r.premio_total)}</td><td style={{ ...td, textAlign: 'right' }}>{money(r.valor_parcela)}</td>
               <td style={{ ...td, whiteSpace: 'nowrap', textAlign: 'right' }}>
                 <GerarBtn onClick={() => abrirGerar({ data: dataComp(competencia), conta_debito: r.conta_despesa, conta_credito: r.conta_apropriar, valor: r.valor_parcela, historico: `Apropriação seguro ${r.seguradora} ${r.apolice || ''}`.trim(), origem: 'seguro', documento: r.apolice }, `Apropriação — ${r.seguradora}`)}>Apropriação do mês</GerarBtn>{' '}
+                <SaldoIniBtn onClick={() => enviarSaldoInicial('seguro', r)} />{' '}
+                <DelBtn onClick={() => excluir(r.id)} />
+              </td>
+            </tr>
+          ))}
+        </tbody></table></div>
+      </Card>
+    </div>
+  )
+}
+
+// ================= DESPESA A APROPRIAR =================
+// Funciona como o seguro, mas genérico: IPVA, IPTU, aluguel antecipado, etc.
+function PaneDespesaApropriar({ clienteId, user, competencia, abrirGerar, enviarSaldoInicial }) {
+  const { rows, loading, erro, recarregar, excluir } = useLista('despesas_apropriar', clienteId)
+  const [f, on, reset] = useForm({ tipo: '', descricao: '', documento: '', valor_total: '', vigencia_inicio: '', vigencia_fim: '', num_parcelas: '12', valor_parcela: '', conta_despesa: '', conta_apropriar: '' })
+  const [sav, setSav] = useState(false)
+  async function salvar(e) {
+    e.preventDefault(); setSav(true)
+    try {
+      await inserir('despesas_apropriar', { cliente_id: clienteId, tipo: f.tipo, descricao: f.descricao, documento: f.documento, valor_total: num(f.valor_total), vigencia_inicio: f.vigencia_inicio || null, vigencia_fim: f.vigencia_fim || null, num_parcelas: Number(f.num_parcelas) || null, valor_parcela: num(f.valor_parcela), conta_despesa: f.conta_despesa, conta_apropriar: f.conta_apropriar, usuario: user?.email })
+      reset(); recarregar()
+    } catch (er) { alert(er.message) } finally { setSav(false) }
+  }
+  return (
+    <div style={{ display: 'grid', gap: 14 }}>
+      <Card>
+        <SecTitle><i className="ti ti-calendar-repeat" style={{ color: ACC.despesa }} /> Nova despesa a apropriar</SecTitle>
+        <SecSub>IPVA, IPTU, aluguel antecipado, licenças… Cadastre uma vez e gere a apropriação do mês. O saldo que falta apropriar pode ir direto ao saldo inicial.</SecSub>
+        <form onSubmit={salvar} style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10 }}>
+          <Field label="Tipo (IPVA, IPTU…)"><input className="input" value={f.tipo} onChange={on('tipo')} placeholder="IPVA" required /></Field>
+          <Field label="Descrição"><input className="input" value={f.descricao} onChange={on('descricao')} placeholder="Placa ABC1D23 / imóvel matriz" /></Field>
+          <Field label="Documento"><input className="input" value={f.documento} onChange={on('documento')} /></Field>
+          <Field label="Valor total"><input className="input" value={f.valor_total} onChange={on('valor_total')} placeholder="0,00" /></Field>
+          <Field label="Vigência início"><input className="input" type="date" value={f.vigencia_inicio} onChange={on('vigencia_inicio')} /></Field>
+          <Field label="Vigência fim"><input className="input" type="date" value={f.vigencia_fim} onChange={on('vigencia_fim')} /></Field>
+          <Field label="Nº parcelas"><input className="input" value={f.num_parcelas} onChange={on('num_parcelas')} /></Field>
+          <Field label="Valor parcela"><input className="input" value={f.valor_parcela} onChange={on('valor_parcela')} placeholder="0,00" /></Field>
+          <Field label="Conta despesa (D)"><input className="input" value={f.conta_despesa} onChange={on('conta_despesa')} placeholder="4.x…" /></Field>
+          <Field label="Conta a apropriar (C)"><input className="input" value={f.conta_apropriar} onChange={on('conta_apropriar')} placeholder="1.1.3…" /></Field>
+          <div style={{ gridColumn: 'span 2', display: 'flex', alignItems: 'flex-end' }}><button className="btn" disabled={sav}>{sav ? 'Salvando…' : '＋ Salvar despesa'}</button></div>
+        </form>
+      </Card>
+      <Card>
+        <SecTitle>Despesas a apropriar ({rows.length})</SecTitle>
+        {erro && <p style={{ color: theme.red, fontSize: 13 }}>{erro}</p>}
+        <div style={{ overflowX: 'auto' }}><table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}><thead><tr>{['Tipo', 'Descrição', 'Total', 'Parcela', ''].map((h, i) => <th key={i} style={th}>{h}</th>)}</tr></thead><tbody>
+          {loading ? <Vazio colSpan={5} texto="Carregando…" /> : rows.length === 0 ? <Vazio colSpan={5} texto="Nenhuma despesa cadastrada ainda." /> : rows.map(r => (
+            <tr key={r.id}>
+              <td style={td}><b>{r.tipo}</b></td><td style={td}>{r.descricao}</td>
+              <td style={{ ...td, textAlign: 'right' }}>{money(r.valor_total)}</td><td style={{ ...td, textAlign: 'right' }}>{money(r.valor_parcela)}</td>
+              <td style={{ ...td, whiteSpace: 'nowrap', textAlign: 'right' }}>
+                <GerarBtn onClick={() => abrirGerar({ data: dataComp(competencia), conta_debito: r.conta_despesa, conta_credito: r.conta_apropriar, valor: r.valor_parcela, historico: `Apropriação ${r.tipo} ${r.descricao || ''}`.trim(), origem: 'despesa', documento: r.documento }, `Apropriação — ${r.tipo}`)}>Apropriação do mês</GerarBtn>{' '}
+                <SaldoIniBtn onClick={() => enviarSaldoInicial('despesa', r)} />{' '}
                 <DelBtn onClick={() => excluir(r.id)} />
               </td>
             </tr>

@@ -168,6 +168,21 @@ create table if not exists public.seguros (
 );
 create index if not exists seguros_cliente_idx on public.seguros(cliente_id);
 
+-- Despesas a apropriar (IPVA, IPTU, aluguel antecipado…): funciona como o seguro,
+-- mas genérico. Cadastra e gera a apropriação do mês; o saldo a apropriar na
+-- abertura pode alimentar a carga inicial.
+create table if not exists public.despesas_apropriar (
+  id uuid primary key default gen_random_uuid(),
+  cliente_id uuid not null references public.clientes(id) on delete cascade,
+  tipo text, descricao text, documento text,
+  valor_total numeric(16,2) default 0,
+  vigencia_inicio date, vigencia_fim date,
+  num_parcelas int default 1, valor_parcela numeric(16,2) default 0,
+  conta_despesa text, conta_apropriar text, usuario text,
+  created_at timestamptz default now(), updated_at timestamptz default now()
+);
+create index if not exists despesas_apropriar_cliente_idx on public.despesas_apropriar(cliente_id);
+
 create table if not exists public.emprestimos (
   id uuid primary key default gen_random_uuid(),
   cliente_id uuid not null references public.clientes(id) on delete cascade,
@@ -227,6 +242,7 @@ create table if not exists public.adiantamentos_importacao (
 create index if not exists adiant_imp_cliente_idx on public.adiantamentos_importacao(cliente_id);
 
 alter table public.seguros                 enable row level security;
+alter table public.despesas_apropriar      enable row level security;
 alter table public.emprestimos             enable row level security;
 alter table public.parcelamentos           enable row level security;
 alter table public.participacoes           enable row level security;
@@ -235,7 +251,7 @@ alter table public.adiantamentos_importacao enable row level security;
 do $$
 declare t text;
 begin
-  foreach t in array array['seguros','emprestimos','parcelamentos','participacoes','importacoes','adiantamentos_importacao']
+  foreach t in array array['seguros','despesas_apropriar','emprestimos','parcelamentos','participacoes','importacoes','adiantamentos_importacao']
   loop
     execute format('drop policy if exists "auth_all_%1$s" on public.%1$s;', t);
     execute format('create policy "auth_all_%1$s" on public.%1$s for all to authenticated using (true) with check (true);', t);

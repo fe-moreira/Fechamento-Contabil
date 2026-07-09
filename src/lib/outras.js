@@ -1,4 +1,5 @@
 import { supabase } from './supabase'
+import { normalizaCompetencia } from './balancete'
 
 // CRUD genérico das tabelas de Outras Contabilizações (todas por cliente_id).
 export async function listar(tabela, clienteId) {
@@ -38,6 +39,68 @@ export async function lerDocumento(tipo, file) {
     throw new Error(msg)
   }
   return data?.dados || {}
+}
+
+// Saldo que falta apropriar de um contrato (seguro/despesa a apropriar) na
+// ABERTURA — isto é, no início da competência inicial do cliente. É o valor total
+// menos as apropriações mensais já reconhecidas ANTES da competência de início.
+export function saldoApropriarNaAbertura(c, compIni) {
+  const total = Number(c.premio_total ?? c.valor_total) || 0
+  const nParc = Number(c.num_parcelas) || 0
+  const mensal = Number(c.valor_parcela) || (nParc ? total / nParc : 0)
+  if (!total || !mensal) return 0
+  const mi = String(compIni || '').match(/^(\d{2})\/(\d{4})$/)
+  const vi = String(c.vigencia_inicio || '').match(/^(\d{4})-(\d{2})/)
+  if (!mi || !vi) return Math.round(total * 100) / 100 // sem datas, assume tudo a apropriar
+  const mesesAntes = (Number(mi[2]) * 12 + Number(mi[1])) - (Number(vi[1]) * 12 + Number(vi[2]))
+  const apropriadas = Math.max(0, Math.min(mesesAntes, nParc || mesesAntes))
+  return Math.max(0, Math.round((total - apropriadas * mensal) * 100) / 100)
+}
+
+// Data (último dia do mês ANTERIOR à competência de início) em "DD/MM/AAAA".
+function dataAberturaBR(compIni) {
+  const mi = String(compIni || '').match(/^(\d{2})\/(\d{4})$/)
+  if (!mi) return ''
+  let m = Number(mi[1]) - 1, a = Number(mi[2]); if (m < 1) { m = 12; a-- }
+  const dia = new Date(a, m, 0).getDate()
+  return `${String(dia).padStart(2, '0')}/${String(m).padStart(2, '0')}/${a}`
+}
+
+// Envia (ou atualiza) o saldo de abertura de um contrato de apropriação para a
+// CARGA INICIAL do cliente. Idempotente por origem+id: reenviar substitui a linha
+// daquele contrato (não duplica). Grava uma linha de saldo e uma de composição na
+// conta "a apropriar", que se conferem entre si.
+export async function enviarSaldoInicialContrato({ clienteId, origem, contrato, usuario }) {
+  const { data: cli } = await supabase.from('clientes').select('competencia_inicio').eq('id', clienteId).maybeSingle()
+  const compIni = normalizaCompetencia(cli?.competencia_inicio)
+  if (!/^\d{2}\/\d{4}$/.test(compIni)) throw new Error('Defina a competência de início do cliente (Base de Informações) antes de enviar ao saldo inicial.')
+  const conta = contrato.conta_apropriar
+  if (!conta) throw new Error('Informe a conta "a apropriar" do contrato.')
+  const restante = saldoApropriarNaAbertura(contrato, compIni)
+  const dataBR = dataAberturaBR(compIni)
+  const hist = origem === 'seguro'
+    ? `Seguro ${contrato.seguradora || ''} ${contrato.apolice || ''}`.trim()
+    : `${contrato.tipo || 'Despesa a apropriar'} ${contrato.descricao || ''}`.trim()
+
+  const { data: cargas } = await supabase.from('cargas_cadastro').select('id, dados, obs')
+    .eq('cliente_id', clienteId).eq('tipo', 'financeiro').order('created_at', { ascending: false })
+  const iniciais = (cargas || []).filter(c => String(c.obs || '').startsWith('Carga inicial'))
+  const atual = iniciais[0]
+  const base = (atual?.dados && !Array.isArray(atual.dados)) ? atual.dados : {}
+  const tag = `${origem}:${contrato.id}`
+  const saldos = (base.saldos || []).filter(r => r._origem !== tag)
+  const composicoes = (base.composicoes || []).filter(r => r._origem !== tag)
+  if (restante > 0.005) {
+    saldos.push({ Data: dataBR, 'Código': conta, Nome: hist, Saldo: restante, 'D/C': 'D', _origem: tag })
+    composicoes.push({ Data: dataBR, Conta: conta, 'Histórico': hist, 'Competência': contrato.vigencia_fim || '', Valor: restante, 'D/C': 'D', _origem: tag })
+  }
+  const dados = { saldos, composicoes }
+  for (const c of iniciais) await supabase.from('cargas_cadastro').delete().eq('id', c.id)
+  const obs = atual?.obs || 'Carga inicial · contratos'
+  const { error } = await supabase.from('cargas_cadastro').insert({ cliente_id: clienteId, tipo: 'financeiro', vigencia: compIni, dados, usuario, obs })
+  if (error) throw error
+  await supabase.from('clientes').update({ carga_inicial_feita: true }).eq('id', clienteId)
+  return restante
 }
 
 // Gera um lançamento real na fila que alimenta o Status / arquivo do Domínio.
