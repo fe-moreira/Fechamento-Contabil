@@ -248,12 +248,16 @@ export default function Status() {
         : 'Importe a amarração banco × resultado em Base de Informações.',
       itens: (dados.br?.lancamentos || []).map(l => {
         const b = contaInfo(l.banco), r = contaInfo(l.resultado)
+        const nomeB = b.nome || `Conta ${l.banco}`, nomeR = r.nome || `Conta ${l.resultado}`
+        // Direção da partida: mostra quem debitou e quem creditou (pode ser o inverso).
+        const dc = l.bancoDeb ? `D ${nomeB} · C ${nomeR}` : `D ${nomeR} · C ${nomeB}`
         return {
           item: `${l.banco} → ${l.resultado} · ${money(l.valor)}`,
           sub: `Banco: ${[b.classif, b.nome].filter(Boolean).join(' · ') || '—'}  →  Resultado: ${[r.classif, r.nome].filter(Boolean).join(' · ') || '—'}`,
-          detalhe: `${l.historico}${l.despesa ? ' — despesa: classificar dedutível/indedutível (LALUR)' : ''}`,
+          detalhe: `${l.historico} · ${dc}${l.despesa ? ' — classificar dedutível/indedutível (LALUR)' : ''}`,
           lalur: l.despesa,
           tratado: !!l.tratado, pendenciaCliente: !!l.pendenciaCliente,
+          justDetalhe: l.justDetalhe || '', justDedut: l.justDedut || '',
           partida: { data: l.data || '', valor: l.valor, banco: l.banco, resultado: l.resultado, bancoNome: b.nome, resultadoNome: r.nome, historico: l.historico, despesa: l.despesa },
         }
       }),
@@ -591,6 +595,10 @@ export default function Status() {
           alvo={modal.item.item}
           lalur={modal.item.lalur}
           contrato={!!modal.item.contratoDoc}
+          initialTxt={modal.item.justDetalhe || ''}
+          initialDedut={modal.item.justDedut || ''}
+          initialPend={!!modal.item.pendenciaCliente}
+          jaTratado={!!modal.item.tratado}
           onClose={() => setModal(null)}
           onConfirmar={(txt, dedut, pend) => modal.item.contratoDoc ? registrarContrato(modal.item, txt, pend) : registrar(modal.item.item, modal.tipo, txt, dedut, pend)}
         />
@@ -728,6 +736,11 @@ function PainelGate({ gate, onClose, onJustificar, onCorrigir, onSemMovimento, o
                 <p style={{ fontSize: 13.5, fontWeight: 600, margin: 0 }}>{it.item}</p>
                 {it.sub && <p style={{ fontSize: 11.5, color: theme.accent, margin: '3px 0 0' }}>{it.sub}</p>}
                 <p style={{ fontSize: 12, color: theme.sub, margin: '3px 0 0' }}>{it.detalhe}</p>
+                {it.tratado && (it.justDetalhe || it.justDedut) && (
+                  <p style={{ fontSize: 12, color: theme.text, margin: '5px 0 0', background: 'rgba(255,255,255,0.03)', borderRadius: 6, padding: '5px 8px' }}>
+                    <i className="ti ti-message-2" style={{ color: it.pendenciaCliente ? theme.yellow : theme.green }} /> {it.justDetalhe || '(sem texto)'}{it.justDedut ? <b style={{ color: theme.sub }}> · {it.justDedut}</b> : ''}
+                  </p>
+                )}
               </div>
               {gate.informativo ? null : it.tratado ? (
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -854,17 +867,17 @@ function ModalPartida({ item, onClose, onConfirmar }) {
   )
 }
 
-function ModalRegistro({ tipo, alvo, lalur, contrato, onClose, onConfirmar }) {
-  const [txt, setTxt] = useState('')
-  const [dedut, setDedut] = useState('')
-  const [pend, setPend] = useState(false)
+function ModalRegistro({ tipo, alvo, lalur, contrato, initialTxt = '', initialDedut = '', initialPend = false, jaTratado = false, onClose, onConfirmar }) {
+  const [txt, setTxt] = useState(initialTxt)
+  const [dedut, setDedut] = useState(initialDedut)
+  const [pend, setPend] = useState(initialPend)
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 60 }}>
       <div onClick={e => e.stopPropagation()} style={{ width: 'min(480px,96vw)', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
-        <h2 style={{ fontSize: 17, marginBottom: 4 }}>{tipo}</h2>
+        <h2 style={{ fontSize: 17, marginBottom: 4 }}>{jaTratado ? `Editar ${tipo.toLowerCase()}` : tipo}</h2>
         <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 14 }}>
           <b style={{ color: theme.text }}>{alvo}</b><br />
-          Fica registrada na auditoria com seu usuário e a data.
+          {jaTratado ? 'Você está vendo o que já foi registrado — altere e salve para sobrepor.' : 'Fica registrada na auditoria com seu usuário e a data.'}
         </p>
         {lalur && (
           <div style={{ marginBottom: 14 }}>

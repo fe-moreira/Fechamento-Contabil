@@ -46,30 +46,37 @@ export async function apurarBancoResultado(empresaId, compId) {
     .select('data, conta, contrapartida, historico, debito, credito').eq('competencia_id', compId)
 
   const flagged = []
+  // O razão traz os DOIS lados do lançamento (linha do banco + linha da conta de
+  // resultado). Para não duplicar, processamos SÓ a linha do BANCO (cada lançamento tem
+  // exatamente uma) — assim dois lançamentos idênticos ainda contam como dois. bancoDeb =
+  // o banco foi DEBITADO (dinheiro ENTROU → D banco / C resultado, o caso inverso, que
+  // também tem que aparecer). Caso normal: banco creditado (D resultado / C banco).
   for (const l of (razao || [])) {
     const a = String(l.conta || '').trim(), b = String(l.contrapartida || '').trim()
     const ca = classifDe(a), cb = classifDe(b)
-    let banco = null, resultado = null, resultadoCl = null
-    if (bancos.has(ca) && isResultado(cb)) { banco = a; resultado = b; resultadoCl = cb }
-    else if (bancos.has(cb) && isResultado(ca)) { banco = b; resultado = a; resultadoCl = ca }
-    if (resultado && !liberadas.has(resultadoCl)) {
-      flagged.push({
-        data: l.data, banco, resultado, historico: l.historico || '',
-        valor: (Number(l.debito) || 0) + (Number(l.credito) || 0),
-        despesa: /^4/.test(resultadoCl),
-      })
-    }
+    if (!bancos.has(ca) || !isResultado(cb) || liberadas.has(cb)) continue // só a linha do banco → resultado não liberado
+    const valor = (Number(l.debito) || 0) + (Number(l.credito) || 0)
+    flagged.push({
+      data: l.data, banco: a, resultado: b, historico: l.historico || '', valor,
+      bancoDeb: (Number(l.debito) || 0) > 0.005,
+      // Despesa E custo (classif 4 e 5) exigem classificação dedutível/indedutível (LALUR).
+      despesa: /^[45]/.test(cb),
+    })
   }
   // Marca o que já foi tratado (justificado/corrigido) e o que é pendência do cliente —
-  // pela mesma chave do item usada no Status. Assim o item some da CONTAGEM de pendências
-  // mas continua na lista (marcado), e a pendência do cliente sobe no relatório.
-  const { data: aud } = await supabase.from('auditoria').select('item, tipo').eq('competencia_id', compId).eq('modulo', 'Status')
-  const tratados = new Set(), pend = new Set()
-  for (const a of (aud || [])) { if (a.tipo === 'Pendência') pend.add(a.item); else tratados.add(a.item) }
+  // pela mesma chave do item usada no Status. Guarda também o TEXTO da justificativa e o
+  // dedutível/indedutível, para o "editar" pré-preencher e mostrar no próprio item.
+  const { data: aud } = await supabase.from('auditoria').select('item, tipo, detalhe, dedutibilidade').eq('competencia_id', compId).eq('modulo', 'Status')
+  const tratados = new Map(), pend = new Set()
+  for (const a of (aud || [])) { if (a.tipo === 'Pendência') pend.add(a.item); else tratados.set(a.item, a) }
   for (const f of flagged) {
     const chave = `${f.banco} → ${f.resultado} · ${money(f.valor)}`
-    f.tratado = tratados.has(chave)
+    const t = tratados.get(chave)
+    f.tratado = !!t
     f.pendenciaCliente = pend.has(chave)
+    f.justDetalhe = t?.detalhe || ''
+    f.justDedut = t?.dedutibilidade || ''
+    f.justTipo = t?.tipo || ''
   }
   return { temCarga: rows.length > 0, bancos: bancos.size, lancamentos: flagged }
 }
