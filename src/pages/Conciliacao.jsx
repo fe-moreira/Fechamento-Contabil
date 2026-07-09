@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
@@ -204,6 +205,10 @@ export default function Conciliacao() {
   const [acertos, setAcertos] = useState({}) // conta -> ajuste (soma dos lançamentos de acerto pendentes)
   const [carregando, setCarregando] = useState(true)
   const [sel, setSel] = useState(null) // conta selecionada (detalhe)
+  // Clicar em "Conciliação" no menu (mesma rota) volta para a lista, mesmo estando
+  // no detalhe de uma conta — cada navegação gera uma location.key nova.
+  const location = useLocation()
+  useEffect(() => { setSel(null) }, [location.key])
 
   async function carregarConf(cid) {
     const { data } = await supabase.from('conciliacao_conta').select('*').eq('competencia_id', cid)
