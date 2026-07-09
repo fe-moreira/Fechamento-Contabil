@@ -262,7 +262,7 @@ export default function Conciliacao() {
     const reg = conf[c.conta]
     if (!reg) return theme.red
     const docBate = reg.documento_path && reg.saldo_documento != null &&
-      Math.abs(saldoEf(c) - Number(reg.saldo_documento)) < 0.05
+      Math.abs(Math.abs(saldoEf(c)) - Math.abs(Number(reg.saldo_documento))) < 0.05 // só o módulo importa
     if (docBate) return theme.green
     if (reg.conciliada && reg.justificativa) return theme.yellow
     return theme.red
@@ -978,7 +978,10 @@ function CardConferencia({ conta, reg, compId, usuario, saldoAjuste = 0, composi
   const saldo = (Number(conta.saldo_final) || 0) + (Number(saldoAjuste) || 0)
   const temDoc = doc && saldoDoc !== ''
   const temSaldoDoc = saldoDoc !== ''
-  const dif = saldo - (Number(saldoDoc) || 0)
+  // Só o MÓDULO importa: num passivo o documento (guia/relatório) vem POSITIVO,
+  // enquanto o saldo contábil é credor. Se |saldo| == |documento|, está conciliado
+  // (sem diferença) — não importa o sinal. Ex.: FGTS a pagar.
+  const dif = Math.abs(saldo) - Math.abs(Number(saldoDoc) || 0)
   const bateSaldo = temDoc && Math.abs(dif) < 0.05 // até 5 centavos é irrelevante (arredondamento)
   // VERDE só quando o arquivo está armazenado E o saldo bate. Se o arquivo for
   // excluído (path some), volta ao vermelho mesmo que o saldo continue batendo.
@@ -995,7 +998,7 @@ function CardConferencia({ conta, reg, compId, usuario, saldoAjuste = 0, composi
         // Extrato em PDF (ex.: extrato bancário do cliente).
         const { extrairTextoPdf, palpiteSaldo, ocrPdf } = await import('../lib/pdfText')
         const texto = await extrairTextoPdf(file)
-        let s = palpiteSaldo(texto)
+        let s = palpiteSaldo(texto, saldo)
         setDoc(file.name)
         if (s != null) { setSaldoDoc(String(s)) }
         else if (texto.replace(/\s/g, '').length < 20) {
@@ -1003,7 +1006,7 @@ function CardConferencia({ conta, reg, compId, usuario, saldoAjuste = 0, composi
           setOcr({ ativo: true, pct: 0 })
           try {
             const textoOcr = await ocrPdf(file, pct => setOcr({ ativo: true, pct }))
-            s = palpiteSaldo(textoOcr)
+            s = palpiteSaldo(textoOcr, saldo)
             if (s != null) { setSaldoDoc(String(s)); setMsg('Saldo lido por reconhecimento de imagem (OCR) — confira se está correto.') }
             else setErro('Este PDF é uma imagem e o reconhecimento (OCR) não achou o saldo. Baixe o extrato digital direto do banco — ou digite o saldo abaixo.')
           } catch (eo) {
