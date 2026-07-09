@@ -128,6 +128,23 @@ async function parseAcumulador(file, sub) {
   return rows
 }
 
+// Lê os totais por seção (Entradas/Saídas/Serviços) do "Resumo por Acumulador" (PDF com
+// texto): acha cada cabeçalho e pega o "Total:" da seção (Vlr Contábil).
+function totaisResumoPdf(texto) {
+  const t = String(texto || '')
+  const secs = [['entradas', /entradas/i], ['saidas', /sa[ií]das/i], ['servicos', /servi[cç]os/i]]
+  const pos = {}
+  for (const [k, re] of secs) { const m = re.exec(t); if (m) pos[k] = m.index }
+  const keys = Object.keys(pos).sort((a, b) => pos[a] - pos[b])
+  const out = {}
+  for (let i = 0; i < keys.length; i++) {
+    const tr = t.slice(pos[keys[i]], i + 1 < keys.length ? pos[keys[i + 1]] : t.length)
+    const m = /total[^0-9-]*(-?\d{1,3}(?:\.\d{3})*,\d{2})/i.exec(tr)
+    if (m) out[keys[i]] = parseFloat(m[1].replace(/\./g, '').replace(',', '.'))
+  }
+  return out
+}
+
 export default function Integracao() {
   const { empresas, empresaId, empresaNome, competencia, getCompetenciaId, plano, isAdmin } = useAppData()
   const { user } = useAuth()
@@ -344,6 +361,34 @@ function Fiscal({ competencia, empresaId, user, est, onEstado }) {
     await onEstado({ ...est, tipos: novoTipos, estado: done ? 'validado' : null, doc: null, usuario: user?.email || null })
   }
 
+  // Resumo final: importa o "Resumo por Acumulador" (PDF-texto) → totais por tipo.
+  async function importarResumo(file) {
+    if (!file) return
+    setErro(''); setBusy(true)
+    try {
+      if (!/\.pdf$/i.test(file.name)) { setErro('Envie o "Resumo por Acumulador" do Domínio em PDF (com texto).'); setBusy(false); return }
+      const { extrairTextoPdf } = await import('../lib/pdfText')
+      const texto = await extrairTextoPdf(file)
+      const totais = totaisResumoPdf(texto)
+      if (!Object.keys(totais).length) { setErro('Não identifiquei os totais (Entradas/Saídas/Serviços) no resumo. Confira se o PDF tem texto (não é imagem).'); setBusy(false); return }
+      let path = est.resumoPdf?.path || ''
+      if (compId) {
+        path = `fiscal/${compId}/resumo.pdf`
+        await supabase.storage.from('extratos').upload(path, file, { upsert: true, contentType: file.type || 'application/pdf' })
+      }
+      await onEstado({ ...est, resumoPdf: { doc: file.name, path, totais } })
+    } catch (e) { setErro('Não consegui ler o resumo: ' + e.message) }
+    setBusy(false)
+  }
+  // Total importado do acumulador por tipo (null = ainda pendente).
+  const totalImportado = k => {
+    const t = tipos[k]
+    if (t?.semMovimento) return 0
+    if (t?.rows && razIdx) return cruzarFiscal(t.rows, razIdx).reduce((s, a) => s + a.docTotal, 0)
+    if (t?.resumo) return t.resumo.reduce((s, a) => s + a.docTotal, 0)
+    return null
+  }
+
   if (carregando) return <p style={{ color: theme.sub, fontSize: 13 }}>Carregando razão…</p>
   const semMov = atual?.semMovimento
 
@@ -356,7 +401,7 @@ function Fiscal({ competencia, empresaId, user, est, onEstado }) {
   return (
     <>
       <div><EstadoBadge est={est} /></div>
-      {/* seletor dos 3 tipos de movimento */}
+      {/* seletor dos 3 tipos de movimento + resumo final */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
         {TIPOS_FISCAL.map(([k, label, icon]) => (
           <button key={k} onClick={() => { setSub(k); setExpand(null) }} className="btn btn-ghost"
@@ -364,8 +409,15 @@ function Fiscal({ competencia, empresaId, user, est, onEstado }) {
             <i className={`ti ${icon}`} /> {label} {tipos[k]?.semMovimento ? <i className="ti ti-circle-minus" style={{ color: theme.sub }} title="Sem movimento" /> : tipos[k] ? <i className="ti ti-circle-check" style={{ color: theme.green }} /> : <span style={{ color: theme.sub }}>·</span>}
           </button>
         ))}
+        <button onClick={() => { setSub('resumo'); setExpand(null) }} className="btn btn-ghost"
+          style={{ fontSize: 12.5, padding: '6px 12px', display: 'flex', alignItems: 'center', gap: 7, fontWeight: sub === 'resumo' ? 700 : 400, borderColor: sub === 'resumo' ? theme.accent : theme.cb, background: sub === 'resumo' ? 'rgba(74,124,255,0.10)' : 'transparent' }}>
+          <i className="ti ti-clipboard-check" /> Resumo final
+        </button>
       </div>
 
+      {sub === 'resumo' && <ResumoFinal est={est} totalImportado={totalImportado} onImport={importarResumo} busy={busy} />}
+
+      {sub !== 'resumo' && <>
       <ImpCard titulo={`Importar acumulador — ${TIPOS_FISCAL.find(t => t[0] === sub)[1]}`}
         desc={`Colunas: NF (${COLS_FISCAL[sub].nf}), Data (${COLS_FISCAL[sub].data}), Acumulador (${COLS_FISCAL[sub].acum}), ${nomeLabel} (${COLS_FISCAL[sub].forn}), Valor (${COLS_FISCAL[sub].valor}). Cruza NF a NF com o razão.`}
         onImport={importar} nome={atual?.doc} qtd={atual ? resumoAtual.reduce((s, a) => s + a.qtd, 0) : undefined} />
@@ -449,7 +501,59 @@ function Fiscal({ competencia, empresaId, user, est, onEstado }) {
           Cruzamento pelo acumulador (coluna {COLS_FISCAL[sub].acum}) × "Acum." no histórico do razão <b style={{ color: theme.text }}>e dos lançamentos ajustados</b> — atualiza sozinho ao abrir. A fiscal vira <b style={{ color: theme.text }}>validada</b> no Status quando os 3 tipos forem importados.
         </p>
       </>}
+      </>}
       {erro && <p style={{ color: theme.red, fontSize: 13, margin: '12px 0 0' }}>{erro}</p>}
+    </>
+  )
+}
+
+// Tela de Resumo Final: importa o "Resumo por Acumulador" (Domínio) e cruza o total
+// de cada tipo (Entradas/Saídas/Serviços) com o que foi importado do acumulador.
+function ResumoFinal({ est, totalImportado, onImport, busy }) {
+  const totais = est?.resumoPdf?.totais || {}
+  const temResumo = !!est?.resumoPdf
+  const linhas = TIPOS_FISCAL.map(([k, label]) => {
+    const imp = totalImportado(k)          // total importado do acumulador (0 = sem movimento; null = pendente)
+    const ref = totais[k]                  // total do resumo do Domínio
+    const dif = (imp != null && ref != null) ? Math.round((imp - ref) * 100) / 100 : null
+    return { k, label, imp, ref, dif }
+  })
+  const tudoOk = temResumo && linhas.every(l => l.dif != null && Math.abs(l.dif) < 0.005)
+  return (
+    <>
+      <ImpCard titulo="Importar Resumo por Acumulador (Domínio)"
+        desc={'PDF (com texto) do "Resumo por Acumulador". Leio os totais de Entradas, Saídas e Serviços e confiro com o que foi importado.'}
+        onImport={onImport} nome={est?.resumoPdf?.doc} qtd={temResumo ? Object.keys(totais).length : undefined} />
+      {busy && <p style={{ color: theme.sub, fontSize: 12.5, margin: '10px 0 0' }}><i className="ti ti-loader" /> Lendo o resumo…</p>}
+
+      <div style={{ margin: '16px 0', padding: 16, borderRadius: 12, border: `1px solid ${tudoOk ? theme.green : theme.cb}`, background: theme.card }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+          <i className={`ti ${tudoOk ? 'ti-circle-check' : 'ti-clipboard-list'}`} style={{ color: tudoOk ? theme.green : theme.accent, fontSize: 18 }} />
+          <span style={{ fontSize: 14, fontWeight: 700 }}>{tudoOk ? 'Tudo bateu — fiscal conferida' : temResumo ? 'Conferência do resumo × acumulador' : 'Importe o resumo para conferir'}</span>
+        </div>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', minWidth: 560, borderCollapse: 'collapse' }}>
+            <thead><tr style={{ background: theme.input }}>
+              <th style={FS.th}>Tipo</th><th style={FS.thR}>Resumo (Domínio)</th><th style={FS.thR}>Acumulador importado</th><th style={FS.thR}>Diferença</th><th style={{ ...FS.th, textAlign: 'center' }}>Status</th>
+            </tr></thead>
+            <tbody>
+              {linhas.map(l => {
+                const bate = l.dif != null && Math.abs(l.dif) < 0.005
+                return (
+                  <tr key={l.k} style={{ borderTop: `1px solid ${theme.border}` }}>
+                    <td style={FS.td}>{l.label}</td>
+                    <td style={FS.tdR}>{l.ref != null ? money(l.ref) : '—'}</td>
+                    <td style={FS.tdR}>{l.imp != null ? money(l.imp) : <span style={{ color: theme.yellow }}>pendente</span>}</td>
+                    <td style={{ ...FS.tdR, color: l.dif == null ? theme.sub : bate ? theme.sub : theme.red, fontWeight: 600 }}>{l.dif != null ? money(l.dif) : '—'}</td>
+                    <td style={{ ...FS.td, textAlign: 'center' }}>{l.dif == null ? <i className="ti ti-minus" style={{ color: theme.sub }} /> : bate ? <i className="ti ti-circle-check" style={{ color: theme.green }} /> : <i className="ti ti-alert-triangle" style={{ color: theme.red }} />}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+        <p style={{ color: theme.sub, fontSize: 11.5, margin: '10px 2px 0' }}>Compara o total do "Resumo por Acumulador" (Domínio) com o total do acumulador que você importou em cada tipo. Verde quando bate (≤ 5 centavos).</p>
+      </div>
     </>
   )
 }
