@@ -293,7 +293,7 @@ export default function Integracao() {
       {tab === 'financeira'
         ? (integ === 'Excel'
           ? <Financeira competencia={competencia} est={estado.financeira || {}} empresaId={empresaId} planoMap={planoMap} user={user} onEstado={salvarFinanceira} isAdmin={isAdmin} usaCC={!!cliente?.usa_centro_custo} />
-          : <FinanceiraViaSistema integ={integ} sistema={sistema} empresaId={empresaId} competencia={competencia} est={estado.financeira} onEstado={salvarFinanceira} />)
+          : <FinanceiraViaSistema integ={integ} sistema={sistema} empresaId={empresaId} competencia={competencia} planoMap={planoMap} est={estado.financeira} onEstado={salvarFinanceira} />)
         : tab === 'fiscal'
           ? <Fiscal competencia={competencia} empresaId={empresaId} user={user} est={estado.fiscal || {}} onEstado={salvarFiscal} />
           : tab === 'patrimonio'
@@ -1822,32 +1822,39 @@ const ftd = { padding: '7px 12px', fontSize: 12.5, color: theme.text, verticalAl
 // Integração PATRIMÔNIO: cadastra a conta SINTÉTICA (imobilizado − depreciação) e importa o
 // "Resumo da Depreciação Fiscal" (PDF). O saldo da sintética deve bater com o "Saldo a
 // depreciar" (imobilizado líquido) do documento. Bateu → verde.
-function Patrimonio({ empresaId, competencia, est, onEstado, onSemMov }) {
-  const conta = est?.conta || ''
+function Patrimonio({ empresaId, competencia, planoMap = {}, est, onEstado, onSemMov }) {
+  const contas = est?.contas || (est?.conta ? [est.conta] : []) // migra do formato antigo (1 conta)
   const valorDoc = est?.valorDoc
   const semMov = est?.estado === 'sem_movimento'
-  const [novoConta, setNovoConta] = useState(conta)
-  const [saldo, setSaldo] = useState(null)
+  const [novo, setNovo] = useState('')
+  const [linhas, setLinhas] = useState(null) // linhas do balancete montado
   const [busy, setBusy] = useState(false)
   const [erro, setErro] = useState('')
 
-  useEffect(() => { setNovoConta(conta) }, [conta])
-
-  // Saldo da conta sintética cadastrada (do balancete montado).
   useEffect(() => {
-    if (!empresaId || !conta) { setSaldo(null); return }
+    if (!empresaId) { setLinhas(null); return }
     let ativo = true
     ;(async () => {
       const [mes, ano] = (competencia || '').split('/').map(Number)
       const { data: comp } = await supabase.from('competencias').select('id').eq('cliente_id', empresaId).eq('ano', ano).eq('mes', mes).maybeSingle()
-      if (!comp) { if (ativo) setSaldo(null); return }
-      const { linhas } = await montarBalancete(empresaId, comp.id)
-      const dig = s => String(s).replace(/\D/g, '')
-      const l = linhas.find(x => String(x.reduzido) === conta || String(x.classif) === conta || (dig(x.classif) && dig(x.classif) === dig(conta)) || (dig(x.reduzido) && dig(x.reduzido) === dig(conta)))
-      if (ativo) setSaldo(l ? (Number(l.saldo_final) || 0) : null)
+      if (!comp) { if (ativo) setLinhas([]); return }
+      const { linhas: L } = await montarBalancete(empresaId, comp.id)
+      if (ativo) setLinhas(L)
     })()
     return () => { ativo = false }
-  }, [empresaId, competencia, conta])
+  }, [empresaId, competencia])
+
+  const dig = s => String(s).replace(/\D/g, '')
+  const saldoDe = c => {
+    if (!linhas) return null
+    const l = linhas.find(x => String(x.reduzido) === c || String(x.classif) === c || (dig(x.classif) && dig(x.classif) === dig(c)) || (dig(x.reduzido) && dig(x.reduzido) === dig(c)))
+    return l ? (Number(l.saldo_final) || 0) : null
+  }
+  const saldoTotal = (linhas && contas.length) ? contas.reduce((s, c) => { const v = saldoDe(c); return s + (v == null ? 0 : v) }, 0) : null
+
+  function persistContas(cs) { const e = { ...(est || {}), contas: cs }; delete e.conta; onEstado(e) }
+  const addConta = () => { const c = novo.trim(); if (!c || contas.includes(c)) { setNovo(''); return } persistContas([...contas, c]); setNovo('') }
+  const removeConta = i => persistContas(contas.filter((_, j) => j !== i))
 
   async function importarPdf(file) {
     if (!file) return
@@ -1861,7 +1868,7 @@ function Patrimonio({ empresaId, competencia, est, onEstado, onSemMov }) {
       const [mes, ano] = (competencia || '').split('/').map(Number)
       const { data: comp } = await supabase.from('competencias').select('id').eq('cliente_id', empresaId).eq('ano', ano).eq('mes', mes).maybeSingle()
       if (comp) { path = `integracao/${comp.id}/patrimonio.pdf`; try { await supabase.storage.from('extratos').upload(path, file, { upsert: true, contentType: 'application/pdf' }) } catch { path = '' } }
-      onEstado({ ...(est || {}), conta, valorDoc: valor, doc: file.name, path, estado: null })
+      onEstado({ ...(est || {}), contas, valorDoc: valor, doc: file.name, path, estado: null })
     } catch (e) { setErro('Não consegui ler: ' + e.message) }
     setBusy(false)
   }
@@ -1872,14 +1879,13 @@ function Patrimonio({ empresaId, competencia, est, onEstado, onSemMov }) {
     const a = document.createElement('a'); a.href = data.signedUrl; a.download = est.doc || 'depreciacao.pdf'; document.body.appendChild(a); a.click(); a.remove()
   }
 
-  const dif = (saldo != null && valorDoc != null) ? Math.round((Math.abs(saldo) - Math.abs(valorDoc)) * 100) / 100 : null
+  const dif = (saldoTotal != null && valorDoc != null) ? Math.round((Math.abs(saldoTotal) - Math.abs(valorDoc)) * 100) / 100 : null
   const bate = dif != null && Math.abs(dif) < 0.05
-  // Auto-estado: saldo da sintética bateu com o documento → verde.
   useEffect(() => {
     if (semMov) return
     const desired = bate ? 'validado' : null
-    if ((est?.estado || null) !== desired && conta && valorDoc != null && saldo != null) onEstado({ ...(est || {}), estado: desired })
-  }, [bate, saldo, valorDoc]) // eslint-disable-line react-hooks/exhaustive-deps
+    if ((est?.estado || null) !== desired && contas.length && valorDoc != null && saldoTotal != null) onEstado({ ...(est || {}), estado: desired })
+  }, [bate, saldoTotal, valorDoc]) // eslint-disable-line react-hooks/exhaustive-deps
 
   if (semMov) return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
@@ -1891,12 +1897,23 @@ function Patrimonio({ empresaId, competencia, est, onEstado, onSemMov }) {
   return (
     <div style={{ maxWidth: 720 }}>
       <div style={{ background: theme.card, border: `0.5px solid ${bate ? theme.green : theme.cb}`, borderRadius: 12, padding: 18, marginBottom: 14 }}>
-        <p style={{ fontSize: 14, fontWeight: 600, margin: '0 0 4px' }}>Conta sintética do imobilizado (líquido) {bate && <i className="ti ti-circle-check" style={{ color: theme.green }} />}</p>
-        <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 10px', lineHeight: 1.5 }}>Cadastre a conta <b style={{ color: theme.text }}>sintética</b> que agrupa o imobilizado <b style={{ color: theme.text }}>menos a depreciação</b>. O saldo dela tem que bater com o "Saldo a depreciar" do Resumo da Depreciação.</p>
-        <div style={{ display: 'flex', gap: 8, maxWidth: 380 }}>
-          <input className="input" value={novoConta} onChange={e => setNovoConta(e.target.value)} onKeyDown={e => e.key === 'Enter' && onEstado({ ...(est || {}), conta: novoConta.trim() })} placeholder="Código da conta sintética (ex.: 1.2.3)" />
-          <button className="btn" style={{ fontSize: 12.5 }} onClick={() => onEstado({ ...(est || {}), conta: novoConta.trim() })}><i className="ti ti-check" /> Salvar</button>
+        <p style={{ fontSize: 14, fontWeight: 600, margin: '0 0 4px' }}>Conta(s) do imobilizado líquido {bate && <i className="ti ti-circle-check" style={{ color: theme.green }} />}</p>
+        <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 10px', lineHeight: 1.5 }}>Cadastre a <b style={{ color: theme.text }}>conta sintética</b> (imobilizado − depreciação) ou <b style={{ color: theme.text }}>várias contas</b> cuja <b style={{ color: theme.text }}>soma</b> dê o imobilizado líquido. A soma tem que bater com o "Saldo a depreciar" do Resumo da Depreciação. <span style={{ color: theme.accent }}>F4</span> abre o plano.</p>
+        <div style={{ display: 'flex', gap: 8, maxWidth: 440 }}>
+          <CampoConta value={novo} onChange={setNovo} onEnter={addConta} onPick={p => setNovo(p.cod)} style={{ flex: 1 }} />
+          <button className="btn" style={{ fontSize: 12.5 }} onClick={addConta}><i className="ti ti-plus" /> Incluir</button>
         </div>
+        {novo && planoMap[novo] && <p style={{ fontSize: 12, color: theme.accent, margin: '6px 0 0' }}><i className="ti ti-corner-down-right" /> {planoMap[novo].nome}</p>}
+        {contas.length > 0 && <div style={{ marginTop: 10 }}>
+          {contas.map((c, i) => { const v = saldoDe(c); return (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, padding: '5px 0', borderTop: i ? `1px solid ${theme.border}` : 'none' }}>
+              <span style={{ color: theme.text }}>{c}{planoMap[c] ? ` · ${planoMap[c].nome}` : ''}</span>
+              <span style={{ marginLeft: 'auto', color: linhas && v == null ? theme.yellow : theme.sub, fontSize: 12.5 }}>{linhas == null ? '…' : v == null ? 'não achei no razão' : moneyDC(v)}</span>
+              <i className="ti ti-trash" onClick={() => removeConta(i)} style={{ color: theme.sub, cursor: 'pointer' }} />
+            </div>
+          ) })}
+          {contas.length > 1 && saldoTotal != null && <p style={{ textAlign: 'right', fontSize: 12.5, color: theme.text, margin: '6px 0 0' }}>Soma: <b>{money(Math.abs(saldoTotal))}</b></p>}
+        </div>}
       </div>
 
       <ImpCard titulo="Importar Resumo da Depreciação Fiscal (Domínio)"
@@ -1904,12 +1921,12 @@ function Patrimonio({ empresaId, competencia, est, onEstado, onSemMov }) {
         onImport={importarPdf} nome={est?.doc} qtd={valorDoc != null ? 1 : undefined} />
       <div style={{ display: 'flex', gap: 12, margin: '10px 0 0', flexWrap: 'wrap' }}>
         {est?.path && <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={extrair}><i className="ti ti-download" /> Extrair arquivo</button>}
-        {!est?.doc && !valorDoc && <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={onSemMov}><i className="ti ti-circle-minus" /> Marcar sem movimento</button>}
+        {!est?.doc && valorDoc == null && <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={onSemMov}><i className="ti ti-circle-minus" /> Marcar sem movimento</button>}
         {busy && <span style={{ color: theme.sub, fontSize: 12.5 }}><i className="ti ti-loader" /> Lendo o PDF…</span>}
       </div>
 
-      {(conta || valorDoc != null) && <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(190px,1fr))', gap: 12, margin: '16px 0 0' }}>
-        <Metric label="Saldo da sintética (razão)" valor={saldo != null ? money(Math.abs(saldo)) : (conta ? '—' : 'cadastre a conta')} icon="ti-report-money" cor={conta && saldo == null ? theme.yellow : theme.text} />
+      {(contas.length > 0 || valorDoc != null) && <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(190px,1fr))', gap: 12, margin: '16px 0 0' }}>
+        <Metric label="Saldo no razão (soma)" valor={saldoTotal != null ? money(Math.abs(saldoTotal)) : (contas.length ? '—' : 'cadastre a conta')} icon="ti-report-money" cor={contas.length && saldoTotal == null ? theme.yellow : theme.text} />
         <Metric label="Documento (saldo a depreciar)" valor={valorDoc != null ? money(valorDoc) : 'importe o PDF'} icon="ti-file-invoice" cor={valorDoc == null ? theme.yellow : theme.text} />
         <Metric label="Diferença" valor={dif != null ? money(dif) : '—'} icon="ti-arrows-diff" cor={dif == null ? theme.sub : bate ? theme.green : theme.red} sub={dif == null ? '' : bate ? 'bateu' : 'não bateu — verifique'} />
       </div>}
@@ -1921,7 +1938,7 @@ function Patrimonio({ empresaId, competencia, est, onEstado, onSemMov }) {
 // Cliente sem integração por Excel (via sistema): cadastra AQUI as contas bancárias e o
 // sistema verifica na conciliação se cada uma bateu com o extrato (verde). Se todas
 // baterem, fica verde automático — sem precisar confirmar na mão.
-function FinanceiraViaSistema({ integ, sistema, empresaId, competencia, est, onEstado }) {
+function FinanceiraViaSistema({ integ, sistema, empresaId, competencia, planoMap = {}, est, onEstado }) {
   const usaSistema = integ === 'Sistema' || (integ !== 'Excel' && sistema)
   const contas = est?.contas || []
   const [red, setRed] = useState(null) // Set das contas ainda em aberto na conciliação
@@ -1971,11 +1988,12 @@ function FinanceiraViaSistema({ integ, sistema, empresaId, competencia, est, onE
               <p style={{ color: theme.sub, fontSize: 13.5, margin: '6px 0 14px', lineHeight: 1.5 }}>
                 Cliente usa <b style={{ color: theme.text }}>{sistema || 'sistema'}</b> (não importa por Excel). Cadastre as <b style={{ color: theme.text }}>contas bancárias</b> abaixo — quando <b style={{ color: theme.text }}>todas</b> estiverem conciliadas (verdes na Conciliação), o financeiro fica verde sozinho.
               </p>
-              <label style={{ fontSize: 12, color: theme.sub, textTransform: 'uppercase', letterSpacing: .3 }}>Contas bancárias (código reduzido)</label>
-              <div style={{ display: 'flex', gap: 8, margin: '6px 0 10px', maxWidth: 360 }}>
-                <input className="input" value={novo} onChange={e => setNovo(e.target.value)} onKeyDown={e => e.key === 'Enter' && addConta()} placeholder="Ex.: 12" />
+              <label style={{ fontSize: 12, color: theme.sub, textTransform: 'uppercase', letterSpacing: .3 }}>Contas bancárias (código reduzido · F4 = plano)</label>
+              <div style={{ display: 'flex', gap: 8, margin: '6px 0 4px', maxWidth: 420 }}>
+                <CampoConta value={novo} onChange={setNovo} onEnter={addConta} onPick={p => setNovo(p.cod)} style={{ flex: 1 }} />
                 <button className="btn" style={{ fontSize: 12.5 }} onClick={addConta}><i className="ti ti-plus" /> Adicionar</button>
               </div>
+              {novo && planoMap[novo] && <p style={{ fontSize: 12, color: theme.accent, margin: '0 0 10px' }}><i className="ti ti-corner-down-right" /> {planoMap[novo].nome}</p>}
               {contas.length === 0
                 ? <p style={{ color: theme.yellow, fontSize: 12.5, margin: 0 }}>Nenhuma conta cadastrada ainda.</p>
                 : <div>
@@ -1984,7 +2002,7 @@ function FinanceiraViaSistema({ integ, sistema, empresaId, competencia, est, onE
                     return (
                       <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, padding: '5px 0', borderTop: i ? `1px solid ${theme.border}` : 'none' }}>
                         <i className={`ti ${red == null ? 'ti-loader' : ok ? 'ti-circle-check' : 'ti-alert-triangle'}`} style={{ color: red == null ? theme.sub : ok ? theme.green : theme.yellow }} />
-                        <span style={{ color: theme.text }}>Conta {c}</span>
+                        <span style={{ color: theme.text }}>Conta {c}{planoMap[c] ? ` · ${planoMap[c].nome}` : ''}</span>
                         <span style={{ color: theme.sub, fontSize: 12 }}>— {red == null ? 'verificando…' : ok ? 'conciliada (bateu com o extrato)' : 'ainda não conciliada'}</span>
                         <i className="ti ti-trash" onClick={() => removeConta(i)} style={{ color: theme.sub, cursor: 'pointer', marginLeft: 'auto' }} />
                       </div>
