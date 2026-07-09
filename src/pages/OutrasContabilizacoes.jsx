@@ -166,9 +166,10 @@ function gerarRelatorioApropriacao({ formato, origem, rows, competencia, empresa
 function BotoesRelatorio({ origem, rows, competencia, empresaNome, planoMap }) {
   const dis = !rows.length
   return (
-    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-      <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} disabled={dis} onClick={() => gerarRelatorioApropriacao({ formato: 'pdf', origem, rows, competencia, empresaNome, planoMap })} title="Relatório do saldo a apropriar (PDF) — arraste na conciliação para bater o saldo"><i className="ti ti-file-type-pdf" /> Relatório PDF</button>
-      <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} disabled={dis} onClick={() => gerarRelatorioApropriacao({ formato: 'excel', origem, rows, competencia, empresaNome, planoMap })} title="Relatório do saldo a apropriar (Excel)"><i className="ti ti-file-spreadsheet" /> Relatório Excel</button>
+    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+      <span style={{ fontSize: 12, color: theme.sub }}><i className="ti ti-report" /> Emitir relatório do saldo:</span>
+      <button className="btn" style={{ fontSize: 12, padding: '6px 12px' }} disabled={dis} onClick={() => gerarRelatorioApropriacao({ formato: 'pdf', origem, rows, competencia, empresaNome, planoMap })} title="Relatório do saldo a apropriar (PDF) — arraste na conciliação para bater o saldo"><i className="ti ti-file-type-pdf" /> PDF</button>
+      <button className="btn btn-ghost" style={{ fontSize: 12, padding: '6px 12px', borderColor: theme.accent, color: theme.accent }} disabled={dis} onClick={() => gerarRelatorioApropriacao({ formato: 'excel', origem, rows, competencia, empresaNome, planoMap })} title="Relatório do saldo a apropriar (Excel)"><i className="ti ti-file-spreadsheet" /> Excel</button>
     </div>
   )
 }
