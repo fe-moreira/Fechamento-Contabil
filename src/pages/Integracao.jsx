@@ -165,6 +165,84 @@ function totaisResumoPdf(texto) {
   return out
 }
 
+// ---- Integração FOLHA: cruzamento rubrica × razão --------------------------
+// Dois arquivos (folha + adiantamento) unificados. Colunas do relatório do Domínio:
+// V = código do evento (rubrica), W = nome do evento, Z = valor calculado, U = P/D/I.
+const COLS_FOLHA = { cod: 'V', nome: 'W', valor: 'Z', pd: 'U' }
+// Código da rubrica só com dígitos, sem zeros à esquerda.
+const normRub = v => String(v ?? '').replace(/\D/g, '').replace(/^0+/, '')
+// Código da rubrica citado no histórico do razão — padrão "VALOR REF. <código> - <nome>".
+function rubDoHistorico(h) {
+  const m = /valor\s*ref\.?\s*(\d+)\s*-/i.exec(String(h || ''))
+  return m ? m[1].replace(/^0+/, '') : ''
+}
+// Lê um arquivo da folha (folha mensal ou adiantamento) → eventos [{ cod, nome, valor, pd }].
+async function parseFolha(file) {
+  const XLSX = await import('xlsx')
+  const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true })
+  const arr = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' })
+  const cCod = XLSX.utils.decode_col(COLS_FOLHA.cod), cNome = XLSX.utils.decode_col(COLS_FOLHA.nome)
+  const cVal = XLSX.utils.decode_col(COLS_FOLHA.valor), cPd = XLSX.utils.decode_col(COLS_FOLHA.pd)
+  const out = []
+  for (const r of arr) {
+    const cod = normRub(r[cCod]); const valor = numFis(r[cVal])
+    if (!cod || !valor) continue // pula cabeçalho, linhas em branco e linhas sem código/valor
+    out.push({ cod, nome: String(r[cNome] ?? '').trim(), valor, pd: String(r[cPd] ?? '').trim().toUpperCase() })
+  }
+  return out
+}
+// Unifica os eventos dos dois arquivos: agrupa por código somando os valores (a mesma
+// rubrica pode aparecer por funcionário / nos dois arquivos). Mantém o nome do evento.
+function unificarFolha(...listas) {
+  const map = {}
+  for (const ev of listas) for (const e of (ev || [])) {
+    const m = (map[e.cod] ||= { cod: e.cod, nome: e.nome, valor: 0, pd: e.pd })
+    m.valor = Math.round((m.valor + e.valor) * 100) / 100
+    if (!m.nome && e.nome) m.nome = e.nome
+  }
+  return Object.values(map)
+}
+// Índice do razão (+ lançamentos ajustados) por rubrica: valor por código (o maior lado,
+// débito ou crédito — a rubrica entra como partida dobrada) e o conjunto de valores lançados.
+async function carregarIndiceFolha(empresaId, competencia) {
+  const [mes, ano] = (competencia || '').split('/').map(Number)
+  const { data: comp } = await supabase.from('competencias').select('id')
+    .eq('cliente_id', empresaId).eq('ano', ano).eq('mes', mes).maybeSingle()
+  const byCod = {}, valores = new Set()
+  if (!comp) return { byCod, valores, compId: null }
+  const add = (hist, deb, cred) => {
+    const cod = rubDoHistorico(hist); if (!cod) return
+    const b = (byCod[cod] ||= { cod, deb: 0, cred: 0 })
+    b.deb = Math.round((b.deb + (deb || 0)) * 100) / 100
+    b.cred = Math.round((b.cred + (cred || 0)) * 100) / 100
+    for (const v of [deb, cred]) if (v) valores.add(Math.round(v * 100))
+  }
+  const { data: rz } = await supabase.from('razao').select('id, historico, debito, credito').eq('competencia_id', comp.id)
+  const ajuste = {}
+  const { data: aj } = await supabase.from('ajuste_leitura').select('razao_id, historico')
+  for (const a of (aj || [])) if (a.historico) ajuste[a.razao_id] = a.historico
+  for (const r of (rz || [])) add(ajuste[r.id] || r.historico, Number(r.debito) || 0, Number(r.credito) || 0)
+  const { data: lc } = await supabase.from('lancamentos').select('historico, valor').eq('competencia_id', comp.id)
+  for (const l of (lc || [])) { const v = Math.abs(Number(l.valor) || 0); add(l.historico, v, v) }
+  return { byCod, valores, compId: comp.id }
+}
+// Cruza os eventos unificados com o índice do razão. Casa pelo código; se o código não
+// existir (ex.: código do evento diferente do da rubrica), tenta pelo valor. Rubricas
+// justificadas (informativas, ex.: "INF - ...") entram como resolvidas.
+function cruzarFolha(eventos, idx, justif = {}) {
+  return eventos.map(e => {
+    let razao = idx.byCod[e.cod] ? Math.max(idx.byCod[e.cod].deb, idx.byCod[e.cod].cred) : null
+    let via = 'codigo'
+    if (razao == null) {
+      if (idx.valores.has(Math.round(e.valor * 100))) { razao = e.valor; via = 'valor' }
+      else { razao = 0; via = null }
+    }
+    const dif = Math.round((e.valor - razao) * 100) / 100
+    const just = justif[e.cod] || ''
+    return { ...e, razao, dif, via, just, ok: Math.abs(dif) < 0.005 || !!just }
+  }).sort((a, b) => (a.ok === b.ok ? 0 : a.ok ? 1 : -1) || Math.abs(b.dif) - Math.abs(a.dif) || Number(a.cod) - Number(b.cod))
+}
+
 export default function Integracao() {
   const { empresas, empresaId, empresaNome, competencia, getCompetenciaId, plano, isAdmin } = useAppData()
   const { user } = useAuth()
@@ -186,6 +264,14 @@ export default function Integracao() {
     const id = await getCompetenciaId()
     if (!id) return
     const novo = { ...estado, fiscal: novoFis }
+    await supabase.from('competencias').update({ integracoes: novo }).eq('id', id)
+    setEstado(novo)
+  }
+  // Persiste o estado da integração da folha (2 arquivos + cruzamento por rubrica).
+  async function salvarFolha(novoFolha) {
+    const id = await getCompetenciaId()
+    if (!id) return
+    const novo = { ...estado, folha: novoFolha }
     await supabase.from('competencias').update({ integracoes: novo }).eq('id', id)
     setEstado(novo)
   }
@@ -296,9 +382,11 @@ export default function Integracao() {
           : <FinanceiraViaSistema integ={integ} sistema={sistema} empresaId={empresaId} competencia={competencia} planoMap={planoMap} est={estado.financeira} onEstado={salvarFinanceira} />)
         : tab === 'fiscal'
           ? <Fiscal competencia={competencia} empresaId={empresaId} user={user} est={estado.fiscal || {}} onEstado={salvarFiscal} />
-          : tab === 'patrimonio'
-            ? <Patrimonio empresaId={empresaId} competencia={competencia} planoMap={planoMap} est={estado.patrimonio} onEstado={salvarPatrimonio} onSemMov={() => marcarSemMov('patrimonio')} />
-            : <Cruzamento tab={tab} dados={dados[tab]} onImport={f => importar(tab, f)} onSemMov={() => marcarSemMov(tab)} onExtrair={() => extrairIntegracao(tab)} est={estado[tab]} />}
+          : tab === 'folha'
+            ? <Folha competencia={competencia} empresaId={empresaId} user={user} est={estado.folha || {}} onEstado={salvarFolha} onSemMov={() => marcarSemMov('folha')} />
+            : tab === 'patrimonio'
+              ? <Patrimonio empresaId={empresaId} competencia={competencia} planoMap={planoMap} est={estado.patrimonio} onEstado={salvarPatrimonio} onSemMov={() => marcarSemMov('patrimonio')} />
+              : <Cruzamento tab={tab} dados={dados[tab]} onImport={f => importar(tab, f)} onSemMov={() => marcarSemMov(tab)} onExtrair={() => extrairIntegracao(tab)} est={estado[tab]} />}
     </Wrapper>
   )
 }
@@ -660,6 +748,182 @@ const FS = {
 function achaColuna(header, re) {
   const norm = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
   return (header || []).findIndex(h => re.test(norm(h)))
+}
+
+// Integração FOLHA: importa a folha mensal e o adiantamento, unifica por rubrica e cruza
+// com o razão pelo padrão "VALOR REF. <código> - <nome>". Resumo por rubrica com total → zero.
+// Rubricas informativas (ex.: "INF - SEGURO DE VIDA") que não são contabilizadas podem ser
+// justificadas para fechar em zero, do mesmo jeito que a fiscal.
+const ARQ_FOLHA = [['folha', 'Folha mensal', 'ti-users'], ['adiant', 'Adiantamento', 'ti-cash']]
+function Folha({ competencia, empresaId, user, est, onEstado, onSemMov }) {
+  const [idx, setIdx] = useState(null)   // { byCod, valores, compId }
+  const [carregando, setCarregando] = useState(true)
+  const [erro, setErro] = useState('')
+  const [busy, setBusy] = useState('')   // qual arquivo está sendo lido
+  const [justAberto, setJustAberto] = useState(null) // código com justificativa aberta
+  const [justTxt, setJustTxt] = useState('')
+
+  const arquivos = est?.arquivos || {}
+  const justif = est?.justif || {}
+  const semMov = est?.estado === 'sem_movimento'
+
+  useEffect(() => {
+    let ativo = true
+    setCarregando(true); setIdx(null)
+    carregarIndiceFolha(empresaId, competencia).then(x => { if (ativo) { setIdx(x); setCarregando(false) } })
+    return () => { ativo = false }
+  }, [empresaId, competencia])
+
+  // Eventos unificados (folha + adiantamento) e o cruzamento AO VIVO com o razão atual.
+  const eventos = unificarFolha(arquivos.folha?.eventos, arquivos.adiant?.eventos)
+  const resumo = (eventos.length && idx) ? cruzarFolha(eventos, idx, justif) : []
+  const totDoc = resumo.reduce((s, r) => s + r.valor, 0)
+  const totRaz = resumo.reduce((s, r) => s + r.razao, 0)
+  const totDif = Math.round(resumo.filter(r => !r.just).reduce((s, r) => s + r.dif, 0) * 100) / 100
+  const pendentes = resumo.filter(r => !r.ok).length
+
+  async function importar(alvo, file) {
+    if (!file || !idx) return
+    setErro(''); setBusy(alvo)
+    try {
+      const eventos = await parseFolha(file)
+      if (!eventos.length) { setErro(`Não encontrei rubricas (coluna ${COLS_FOLHA.cod}) com valor (coluna ${COLS_FOLHA.valor}) no arquivo. Confira se é o relatório da folha do Domínio.`); setBusy(''); return }
+      let path = arquivos[alvo]?.path || ''
+      if (idx.compId) {
+        const ext = (file.name.match(/\.[a-z0-9]+$/i) || ['.xls'])[0].toLowerCase()
+        path = `folha/${idx.compId}/${alvo}${ext}`
+        const { error: eUp } = await supabase.storage.from('extratos').upload(path, file, { upsert: true, contentType: file.type || undefined })
+        if (eUp) { setErro('Li o arquivo, mas não consegui guardá-lo p/ extrair depois: ' + eUp.message); path = '' }
+      }
+      const novoArq = { ...arquivos, [alvo]: { doc: file.name, path, eventos } }
+      // Folha vira validada no Status quando a folha mensal for importada (adiantamento é opcional).
+      const done = !!novoArq.folha
+      await onEstado({ ...est, arquivos: novoArq, justif, estado: done ? 'validado' : null, doc: done ? 'Folha · rubricas cruzadas' : null, usuario: user?.email || null })
+    } catch (e) { setErro('Não consegui ler: ' + e.message) }
+    setBusy('')
+  }
+
+  async function extrair(alvo) {
+    const a = arquivos[alvo]
+    if (!a?.path) { setErro('Este arquivo foi importado numa versão anterior e não ficou salvo. Reimporte uma vez para poder extrair.'); return }
+    const { data, error } = await supabase.storage.from('extratos').createSignedUrl(a.path, 300, { download: a.doc || `${alvo}.xls` })
+    if (error) { setErro('Não consegui abrir o arquivo: ' + error.message); return }
+    const el = document.createElement('a'); el.href = data.signedUrl; el.download = a.doc || `${alvo}.xls`
+    document.body.appendChild(el); el.click(); el.remove()
+  }
+  async function removerArquivo(alvo) {
+    const novoArq = { ...arquivos }; delete novoArq[alvo]
+    const done = !!novoArq.folha
+    await onEstado({ ...est, arquivos: novoArq, justif, estado: done ? 'validado' : null, doc: done ? 'Folha · rubricas cruzadas' : null, usuario: user?.email || null })
+  }
+  async function salvarJustificativa(cod, texto) {
+    const novo = { ...justif }
+    if (texto && texto.trim()) novo[cod] = texto.trim(); else delete novo[cod]
+    await onEstado({ ...est, arquivos, justif: novo, estado: est.estado, doc: est.doc, usuario: user?.email || null })
+    setJustAberto(null); setJustTxt('')
+  }
+
+  if (carregando) return <p style={{ color: theme.sub, fontSize: 13 }}>Carregando razão…</p>
+
+  if (semMov) return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: theme.sub, background: theme.card, border: `1px solid ${theme.cb}`, borderRadius: 20, padding: '5px 12px' }}><i className="ti ti-circle-minus" /> Folha — sem movimento no período</span>
+      <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={() => onEstado({})}><i className="ti ti-rotate" /> Tem movimento</button>
+    </div>
+  )
+
+  return (
+    <>
+      <div><EstadoBadge est={est} /></div>
+      {/* Dois slots de importação: folha mensal + adiantamento */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(300px,1fr))', gap: 12, marginBottom: 14 }}>
+        {ARQ_FOLHA.map(([k, label, icon]) => {
+          const a = arquivos[k]
+          return (
+            <div key={k} style={{ background: theme.card, border: `1px solid ${a ? theme.green : theme.cb}`, borderRadius: 12, padding: 14 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                <i className={`ti ${icon}`} style={{ color: theme.accent }} />
+                <span style={{ fontWeight: 600, fontSize: 13 }}>{label}</span>
+                {a ? <i className="ti ti-circle-check" style={{ color: theme.green, marginLeft: 'auto' }} /> : <span style={{ marginLeft: 'auto', color: theme.sub, fontSize: 12 }}>{k === 'adiant' ? 'opcional' : 'obrigatório'}</span>}
+              </div>
+              <p style={{ fontSize: 12, color: a ? theme.text : theme.sub, margin: '0 0 10px' }}>{a ? `${a.doc} · ${a.eventos.length} rubrica(s)` : 'Relatório de rubricas do Domínio (colunas V/W/Z).'}</p>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                <label className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', cursor: 'pointer' }}>
+                  <i className="ti ti-cloud-upload" /> {a ? 'Reimportar' : 'Importar'}
+                  <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={e => importar(k, e.target.files?.[0])} />
+                </label>
+                {a?.path && <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => extrair(k)}><i className="ti ti-download" /> Extrair</button>}
+                {a && <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', color: theme.sub }} onClick={() => removerArquivo(k)}>limpar</button>}
+                {busy === k && <span style={{ color: theme.sub, fontSize: 12 }}><i className="ti ti-loader" /> lendo…</span>}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+      {!arquivos.folha && !arquivos.adiant && <button className="btn btn-ghost" style={{ fontSize: 12.5, marginBottom: 12 }} onClick={onSemMov} title="Cliente sem folha no período (fica verde no Status)"><i className="ti ti-circle-minus" /> Marcar sem movimento</button>}
+
+      {eventos.length > 0 && <>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(180px,1fr))', gap: 12, margin: '4px 0 16px' }}>
+          <Metric label="Total das rubricas" valor={money(totDoc)} icon="ti-receipt" />
+          <Metric label="Razão / contabilidade" valor={money(totRaz)} icon="ti-checks" cor={theme.green} />
+          <Metric label="Diferença" valor={money(totDif)} icon="ti-arrows-diff" cor={Math.abs(totDif) < 0.005 ? theme.green : theme.red} sub={Math.abs(totDif) < 0.005 ? 'tudo identificado' : `${pendentes} rubrica(s) a resolver`} />
+        </div>
+
+        <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'auto' }}>
+          <table style={{ width: '100%', minWidth: 640, borderCollapse: 'collapse' }}>
+            <thead><tr style={{ background: theme.input }}>
+              <th style={FS.th}>Rubrica</th><th style={FS.th}>Descrição</th><th style={FS.thR}>Folha</th><th style={FS.thR}>Razão</th><th style={FS.thR}>Diferença</th><th style={{ ...FS.th, textAlign: 'center' }}></th>
+            </tr></thead>
+            <tbody>
+              {resumo.map(r => {
+                const aberto = justAberto === r.cod
+                return (
+                  <Fragment key={r.cod}>
+                    <tr style={{ borderTop: `1px solid ${theme.border}`, background: r.ok ? 'transparent' : 'rgba(229,72,77,0.06)' }}>
+                      <td style={FS.td}>{r.cod}</td>
+                      <td style={FS.td}>{r.nome || '—'}{r.via === 'valor' && <span style={{ color: theme.sub, fontSize: 11 }} title="Identificado pelo valor (código do evento diferente do da rubrica no razão)"> · por valor</span>}{r.just && <span style={{ color: theme.yellow, fontSize: 11 }}> · justificada</span>}</td>
+                      <td style={FS.tdR}>{money(r.valor)}</td>
+                      <td style={{ ...FS.tdR, color: theme.green }}>{money(r.razao)}</td>
+                      <td style={{ ...FS.tdR, color: r.ok ? theme.sub : theme.red, fontWeight: 600 }}>{money(r.dif)}</td>
+                      <td style={{ ...FS.td, textAlign: 'center' }}>
+                        {Math.abs(r.dif) < 0.005
+                          ? <i className="ti ti-circle-check" style={{ color: theme.green }} />
+                          : <button className="btn btn-ghost" style={{ fontSize: 11, padding: '2px 8px' }} onClick={() => { setJustAberto(aberto ? null : r.cod); setJustTxt(justif[r.cod] || '') }} title="Justificar (ex.: rubrica informativa, não contabilizada)"><i className="ti ti-flag" style={{ color: r.just ? theme.yellow : theme.sub }} /> {r.just ? 'editar' : 'justificar'}</button>}
+                      </td>
+                    </tr>
+                    {aberto && (
+                      <tr><td colSpan={6} style={{ padding: '10px 14px', background: theme.input }}>
+                        <label style={{ fontSize: 12, color: theme.sub }}>Justificativa da rubrica {r.cod} — {r.nome} (ex.: evento informativo "INF - ...", não gera lançamento contábil)</label>
+                        <textarea className="input" rows={2} value={justTxt} onChange={e => setJustTxt(e.target.value)} placeholder="Explique por que esta rubrica não precisa bater com o razão…" style={{ marginTop: 6 }} />
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>
+                          {r.just && <button className="btn btn-ghost" style={{ fontSize: 12, color: theme.red, borderColor: theme.red }} onClick={() => salvarJustificativa(r.cod, '')}>remover</button>}
+                          <button className="btn btn-ghost" style={{ fontSize: 12 }} onClick={() => { setJustAberto(null); setJustTxt('') }}>cancelar</button>
+                          <button className="btn" style={{ fontSize: 12 }} disabled={!justTxt.trim()} onClick={() => salvarJustificativa(r.cod, justTxt)}>salvar</button>
+                        </div>
+                      </td></tr>
+                    )}
+                  </Fragment>
+                )
+              })}
+            </tbody>
+            <tfoot>
+              <tr style={{ borderTop: `2px solid ${theme.border}`, background: theme.input, fontWeight: 700 }}>
+                <td style={FS.td} colSpan={2}>Total ({resumo.length} rubrica(s))</td>
+                <td style={FS.tdR}>{money(totDoc)}</td>
+                <td style={{ ...FS.tdR, color: theme.green }}>{money(totRaz)}</td>
+                <td style={{ ...FS.tdR, color: Math.abs(totDif) < 0.005 ? theme.sub : theme.red }}>{money(totDif)}</td>
+                <td style={FS.td}></td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+        <p style={{ color: theme.sub, fontSize: 11.5, margin: '10px 0 0' }}>
+          Unifica folha + adiantamento e cruza cada rubrica com o razão pelo padrão <b style={{ color: theme.text }}>"VALOR REF. &lt;código&gt; - &lt;nome&gt;"</b> (lê também os lançamentos ajustados) — atualiza sozinho ao abrir. Rubricas informativas que não são contabilizadas podem ser <b style={{ color: theme.text }}>justificadas</b> para fechar em zero.
+        </p>
+      </>}
+      {erro && <p style={{ color: theme.red, fontSize: 13, margin: '12px 0 0' }}>{erro}</p>}
+    </>
+  )
 }
 
 // Trava de competência: toda data do extrato precisa cair no mês do fechamento.
