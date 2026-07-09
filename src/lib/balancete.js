@@ -54,6 +54,45 @@ export async function contasConciliacaoAbertas(empresaId, compId) {
   return out
 }
 
+// Confere o BALANCETE importado (exportado do Domínio depois de subir as correções) contra
+// o saldo EFETIVO da conciliação (balancete do razão + acertos pendentes) das contas de
+// Ativo/Passivo. Casa cada conta pelo código reduzido OU pela classificação (tanto faz) e
+// compara em MÓDULO (não depende do sinal/convenção D-C do arquivo). Retorna as divergências.
+// `importado`: [{ cod, classif, saldo }] lido do arquivo do balancete.
+export async function conferirBalanceteEncerramento(empresaId, compId, importado) {
+  const { linhas } = await montarBalancete(empresaId, compId)
+  const { data: lancs } = await supabase.from('lancamentos').select('conta_debito, conta_credito, valor').eq('competencia_id', compId)
+  const aj = {}
+  for (const l of (lancs || [])) {
+    const v = Number(l.valor) || 0
+    if (l.conta_debito) aj[String(l.conta_debito)] = (aj[String(l.conta_debito)] || 0) + v
+    if (l.conta_credito) aj[String(l.conta_credito)] = (aj[String(l.conta_credito)] || 0) - v
+  }
+  const dig = s => String(s || '').replace(/\D/g, '')
+  const porCod = {}, porClassif = {}
+  for (const r of (importado || [])) {
+    if (r.saldo == null) continue
+    if (r.cod) porCod[String(r.cod).trim()] = Number(r.saldo)
+    if (r.classif) porClassif[dig(r.classif)] = Number(r.saldo)
+  }
+  const divergencias = []
+  let verificados = 0
+  for (const l of linhas) {
+    if (l.sintetica) continue
+    const d = dig(l.classifRaw || l.classif)[0]
+    if (d !== '1' && d !== '2') continue // só Ativo/Passivo (escopo da conciliação)
+    const efetivo = Math.round(((Number(l.saldo_final) || 0) + (aj[String(l.reduzido)] || 0)) * 100) / 100
+    if (Math.abs(efetivo) < 0.005) continue // conta zerada não precisa constar
+    verificados++
+    let imp = porCod[String(l.reduzido)]
+    if (imp == null) imp = porClassif[dig(l.classifRaw || l.classif)]
+    if (imp == null) { divergencias.push({ conta: l.reduzido, nome: l.nome, esperado: efetivo, importado: null, dif: efetivo }); continue }
+    const dif = Math.round((Math.abs(efetivo) - Math.abs(imp)) * 100) / 100
+    if (Math.abs(dif) >= 0.05) divergencias.push({ conta: l.reduzido, nome: l.nome, esperado: efetivo, importado: imp, dif })
+  }
+  return { verificados, bate: verificados > 0 && divergencias.length === 0, divergencias }
+}
+
 // Aplica a máscara do Domínio (ex.: "9.9.9.999.9999") a uma classificação sem pontos.
 // "1110010001" → "1.1.1.001.0001"; aceita códigos parciais (sintéticas): "111001" → "1.1.1.001".
 export function applyMask(code, mask) {
