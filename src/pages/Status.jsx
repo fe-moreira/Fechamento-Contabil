@@ -5,7 +5,7 @@ import { useAuth } from '../components/AuthProvider'
 import { apurarDistribuicao } from '../lib/distribuicao'
 import { apurarBancoResultado } from '../lib/bancoResultado'
 import { apurarVariacoes } from '../lib/variacoes'
-import { contasConciliacaoAbertas } from '../lib/balancete'
+import { contasConciliacaoAbertas, conferirBalanceteEncerramento } from '../lib/balancete'
 import { theme, money } from '../lib/theme'
 import { abrePdfTimbrado } from '../lib/pdf'
 import { gerarExcelTimbrado } from '../lib/excel'
@@ -39,6 +39,8 @@ export default function Status() {
   const [salvando, setSalvando] = useState(false)
   const [verDominio, setVerDominio] = useState(false) // modal com os lançamentos p/ o Domínio
   const [editLanc, setEditLanc] = useState(null)      // lançamento em edição (modal)
+  const [balConf, setBalConf] = useState(null)        // conferência do balancete importado (encerramento)
+  const [balBusy, setBalBusy] = useState(false)
 
   async function carregar(silent) {
     setMsg('') // NÃO fecha o painel (sel) — ao justificar/corrigir, recarrega e mantém aberto atualizado
@@ -110,7 +112,7 @@ export default function Status() {
   }
 
   useEffect(() => {
-    setCompId(null); setStatus(null); setDados(null); setSel(null)
+    setCompId(null); setStatus(null); setDados(null); setSel(null); setBalConf(null)
     carregar()
   }, [empresaId, competencia]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -330,7 +332,44 @@ export default function Status() {
     setSalvando(true)
     const { error } = await supabase.from('competencias').update({ status: 'andamento' }).eq('id', compId)
     setSalvando(false)
-    if (!error) { setStatus('andamento'); setMsg('Fechamento reaberto.') }
+    if (!error) { setStatus('andamento'); setMsg('Fechamento reaberto.'); setBalConf(null) }
+  }
+
+  // Importa o balancete (exportado do Domínio) e confere se BATE com a conciliação —
+  // conta a conta, pelo código reduzido OU pela classificação. Só com tudo batendo
+  // o "Encerrar fechamento" é liberado.
+  async function importarBalancete(file) {
+    if (!file || !compId) return
+    setBalBusy(true); setMsg('')
+    try {
+      const XLSX = await import('xlsx')
+      const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' })
+      const arr = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' })
+      let h = 0
+      for (let i = 0; i < Math.min(arr.length, 30); i++) { if ((arr[i] || []).filter(c => String(c ?? '').trim()).length >= 3) { h = i; break } }
+      const norm = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+      const header = (arr[h] || []).map(norm)
+      const col = re => header.findIndex(x => re.test(x))
+      const cCod = col(/reduz|^cod|codigo|^conta/)
+      const cClass = col(/classif/)
+      let cSaldo = col(/saldo.*(atual|final)/); if (cSaldo < 0) cSaldo = col(/saldo/)
+      const cDC = col(/^d\/?c$|natureza|deb.*cred/)
+      if (cSaldo < 0 || (cCod < 0 && cClass < 0)) { setMsg('Não identifiquei as colunas do balancete (preciso de Código ou Classificação e o Saldo). Confira o arquivo.'); setBalBusy(false); return }
+      const parseNum = v => { if (typeof v === 'number') return v; let s = String(v ?? '').replace(/[R$\s]/g, ''); if (!s) return null; s = s.includes(',') ? s.replace(/\./g, '').replace(',', '.') : s; const n = parseFloat(s); return Number.isNaN(n) ? null : n }
+      const importado = []
+      for (const r of arr.slice(h + 1)) {
+        let saldo = parseNum(r[cSaldo]); if (saldo == null) continue
+        if (cDC >= 0 && /c/i.test(String(r[cDC] ?? ''))) saldo = -Math.abs(saldo)
+        const cod = cCod >= 0 ? String(r[cCod] ?? '').trim() : ''
+        const classif = cClass >= 0 ? String(r[cClass] ?? '').trim() : ''
+        if (!cod && !classif) continue
+        importado.push({ cod, classif, saldo })
+      }
+      const res = await conferirBalanceteEncerramento(empresaId, compId, importado)
+      setBalConf({ ...res, nome: file.name })
+      setMsg(res.bate ? 'Balancete confere com a conciliação — pode encerrar.' : `Balancete não bate: ${res.divergencias.length} conta(s) divergente(s).`)
+    } catch (e) { setMsg('Não consegui ler o balancete: ' + e.message) }
+    setBalBusy(false)
   }
 
   // "Não tem movimento": marca a integração como sem movimento → zera a pendência.
@@ -478,8 +517,9 @@ export default function Status() {
               </button>
             </>
           ) : (
-            <button className="btn" disabled={salvando || !pronto} onClick={encerrar}
-              style={{ opacity: pronto ? 1 : 0.5, cursor: pronto ? 'pointer' : 'not-allowed' }}>
+            <button className="btn" disabled={salvando || !pronto || !balConf?.bate} onClick={encerrar}
+              title={!pronto ? 'Resolva as pendências primeiro' : !balConf?.bate ? 'Importe o balancete do Domínio que bate com a conciliação para liberar' : 'Encerrar o fechamento'}
+              style={{ opacity: (pronto && balConf?.bate) ? 1 : 0.5, cursor: (pronto && balConf?.bate) ? 'pointer' : 'not-allowed' }}>
               <i className="ti ti-lock-check" /> Encerrar fechamento
             </button>
           )}
@@ -500,7 +540,7 @@ export default function Status() {
               : 'Nenhum lançamento gerado ainda nesta competência.'}
           </p>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button className="btn btn-ghost" disabled={!dados.lancamentos.length} style={{ fontSize: 13 }} onClick={() => { setVerDominio(true); setMsg('') }}><i className="ti ti-list-details" /> Ver lançamentos</button>
           <button className="btn" disabled={!dados.lancamentos.length || !pronto}
             style={{ fontSize: 13, opacity: (dados.lancamentos.length && pronto) ? 1 : 0.5, cursor: (dados.lancamentos.length && pronto) ? 'pointer' : 'not-allowed' }}
@@ -508,8 +548,46 @@ export default function Status() {
             onClick={() => { if (pronto && dados.lancamentos.length) gerarDominioCSV(dados.lancamentos, `dominio_${competencia.replace('/', '-')}.csv`) }}>
             <i className="ti ti-download" /> Gerar arquivo
           </button>
+          <label className="btn btn-ghost" style={{ fontSize: 13, cursor: pronto ? 'pointer' : 'not-allowed', opacity: pronto ? 1 : 0.5 }} title="Importe o balancete exportado do Domínio — tem que bater com a conciliação para liberar o encerramento">
+            <i className="ti ti-file-import" /> {balBusy ? 'Conferindo…' : 'Importar balancete'}
+            <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} disabled={!pronto || balBusy} onChange={e => importarBalancete(e.target.files?.[0])} />
+          </label>
         </div>
       </div>
+
+      {/* Conferência do balancete importado × conciliação (libera o encerramento) */}
+      {balConf && (
+        <div style={{ background: theme.card, border: `1px solid ${balConf.bate ? theme.green : theme.red}`, borderRadius: 12, padding: '14px 18px', marginBottom: 18 }}>
+          <p style={{ fontSize: 13.5, fontWeight: 600, margin: 0, display: 'flex', alignItems: 'center', gap: 8, color: balConf.bate ? theme.green : theme.red }}>
+            <i className={`ti ${balConf.bate ? 'ti-circle-check' : 'ti-alert-triangle'}`} />
+            {balConf.bate
+              ? `Balancete confere com a conciliação (${balConf.verificados} conta(s)). Pode encerrar.`
+              : `Balancete NÃO bate com a conciliação — ${balConf.divergencias.length} conta(s) divergente(s). Corrija e reimporte.`}
+            <span style={{ marginLeft: 'auto', fontSize: 11.5, color: theme.sub, fontWeight: 400 }}>{balConf.nome}</span>
+          </p>
+          {!balConf.bate && balConf.divergencias.length > 0 && (
+            <div style={{ overflowX: 'auto', marginTop: 10 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 520 }}>
+                <thead><tr style={{ background: theme.input }}>
+                  <th style={th}>Conta</th><th style={th}>Nome</th><th style={{ ...th, textAlign: 'right' }}>Conciliação</th><th style={{ ...th, textAlign: 'right' }}>Balancete</th><th style={{ ...th, textAlign: 'right' }}>Diferença</th>
+                </tr></thead>
+                <tbody>
+                  {balConf.divergencias.slice(0, 30).map((d, i) => (
+                    <tr key={i} style={{ borderTop: `1px solid ${theme.border}` }}>
+                      <td style={td}>{d.conta}</td>
+                      <td style={td}>{d.nome || '—'}</td>
+                      <td style={{ ...td, textAlign: 'right' }}>{money(d.esperado)}</td>
+                      <td style={{ ...td, textAlign: 'right' }}>{d.importado == null ? <span style={{ color: theme.red }}>não veio</span> : money(d.importado)}</td>
+                      <td style={{ ...td, textAlign: 'right', color: theme.red, fontWeight: 600 }}>{money(d.dif)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {balConf.divergencias.length > 30 && <p style={{ fontSize: 11.5, color: theme.sub, margin: '8px 0 0' }}>+{balConf.divergencias.length - 30} conta(s)…</p>}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Gates */}
       <div style={{ display: 'grid', gap: 12 }}>
