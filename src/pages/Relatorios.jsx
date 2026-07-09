@@ -132,6 +132,8 @@ export default function Relatorios() {
   const indedutiveis = auditoria.filter(a => String(a.dedutibilidade || '').toLowerCase().startsWith('indedut'))
   // Contratos sem documento marcados como "cliente não enviou" (vão às pendências).
   const contratoPend = auditoria.filter(a => a.modulo === 'Contratos' && a.tipo === 'Pendência')
+  // Pendências do cliente marcadas ao justificar (ex.: banco × resultado / conciliação).
+  const despesaPend = auditoria.filter(a => a.modulo === 'Status' && a.tipo === 'Pendência')
 
   // Pendências: documentos não recebidos (rec === false).
   const pendencias = documentos.filter(d => d && d.rec === false)
@@ -194,6 +196,7 @@ export default function Relatorios() {
         ...pendencias.map(d => [d.name, d.cat || 'Documento']),
         ...concPend.map(c => [`Conciliação · ${c.conta}${c.nome ? ' · ' + c.nome : ''}${c.justificativa ? ' — ' + c.justificativa : ''}`, 'Conciliação (saldo sem extrato)']),
         ...contratoPend.map(a => [`${a.item}${a.detalhe ? ' — ' + a.detalhe : ''}`, 'Contrato (cliente não enviou)']),
+        ...despesaPend.map(a => [`${a.item}${a.detalhe ? ' — ' + a.detalhe : ''}`, 'Pendência do cliente (justificativa)']),
       ],
       arquivo: `pendencias_${compSlug}.xlsx`,
       aba: 'Pendências',
@@ -498,8 +501,8 @@ export default function Relatorios() {
 
       {/* Relatório de Pendências */}
       {!carregando && temComp && aba === 'pendencias' && (
-        <Secao titulo="Relatório de Pendências" onExportar={(pendencias.length || concPend.length || contratoPend.length) ? exportarPendencias : null}>
-          {pendencias.length === 0 && concPend.length === 0 && contratoPend.length === 0 ? (
+        <Secao titulo="Relatório de Pendências" onExportar={(pendencias.length || concPend.length || contratoPend.length || despesaPend.length) ? exportarPendencias : null}>
+          {pendencias.length === 0 && concPend.length === 0 && contratoPend.length === 0 && despesaPend.length === 0 ? (
             <Aviso icon="ti-circle-check" texto="Nenhuma pendência nesta competência." />
           ) : (
             <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'auto' }}>
@@ -527,6 +530,12 @@ export default function Relatorios() {
                     <tr key={`contr${i}`} style={{ borderTop: `1px solid ${theme.border}` }}>
                       <td style={td}>{a.item}{a.detalhe ? ` — ${a.detalhe}` : ''}</td>
                       <td style={td}>Contrato (cliente não enviou)</td>
+                    </tr>
+                  ))}
+                  {despesaPend.map((a, i) => (
+                    <tr key={`desp${i}`} style={{ borderTop: `1px solid ${theme.border}` }}>
+                      <td style={td}>{a.item}{a.detalhe ? ` — ${a.detalhe}` : ''}</td>
+                      <td style={td}>Pendência do cliente (justificativa)</td>
                     </tr>
                   ))}
                 </tbody>

@@ -339,12 +339,17 @@ export default function Status() {
     carregar()
   }
 
-  async function registrar(item, tipo, detalhe, dedutibilidade) {
+  async function registrar(item, tipo, detalhe, dedutibilidade, pend) {
     const id = await getCompetenciaId()
     await supabase.from('auditoria').insert({
       competencia_id: id, modulo: 'Status', item, tipo, detalhe, dedutibilidade: dedutibilidade || null, usuario: user?.email,
     })
-    setMsg(`${tipo} registrada na auditoria.`)
+    // "Pendência do cliente": além de justificar, registra a pendência (mesmo padrão dos
+    // contratos) para subir no Relatório de Pendências do cliente.
+    if (pend) await supabase.from('auditoria').insert({
+      competencia_id: id, modulo: 'Status', item, tipo: 'Pendência', detalhe: detalhe || 'Pendência do cliente', usuario: user?.email,
+    })
+    setMsg(`${tipo} registrada na auditoria${pend ? ' · pendência do cliente enviada ao relatório' : ''}.`)
     setModal(null)
   }
 
@@ -571,7 +576,7 @@ export default function Status() {
           lalur={modal.item.lalur}
           contrato={!!modal.item.contratoDoc}
           onClose={() => setModal(null)}
-          onConfirmar={(txt, dedut, pend) => modal.item.contratoDoc ? registrarContrato(modal.item, txt, pend) : registrar(modal.item.item, modal.tipo, txt, dedut)}
+          onConfirmar={(txt, dedut, pend) => modal.item.contratoDoc ? registrarContrato(modal.item, txt, pend) : registrar(modal.item.item, modal.tipo, txt, dedut, pend)}
         />
       )}
 
@@ -848,9 +853,9 @@ function ModalRegistro({ tipo, alvo, lalur, contrato, onClose, onConfirmar }) {
         )}
         <textarea className="input" rows={3} value={txt} onChange={e => setTxt(e.target.value)} autoFocus
           placeholder={tipo === 'Correção' ? 'O que foi corrigido…' : contrato ? 'Ex.: aguardando a apólice / cliente não enviou…' : 'Por que esta pendência pode ser liberada…'} />
-        {contrato && (
+        {(contrato || tipo === 'Justificativa') && (
           <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, margin: '12px 0 0', cursor: 'pointer', color: theme.text }}>
-            <input type="checkbox" checked={pend} onChange={e => setPend(e.target.checked)} /> Cliente não enviou o documento (vai ao relatório de pendências)
+            <input type="checkbox" checked={pend} onChange={e => setPend(e.target.checked)} /> {contrato ? 'Cliente não enviou o documento' : 'É pendência do cliente (cobrar)'} — vai ao relatório de pendências
           </label>
         )}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
