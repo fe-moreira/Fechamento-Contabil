@@ -6,8 +6,65 @@ import DropZone from '../components/DropZone'
 import CampoConta from '../components/CampoConta'
 import { theme, money } from '../lib/theme'
 import { parsePlano, applyMask, normalizaCompetencia } from '../lib/balancete'
+import { gerarExcelTimbrado } from '../lib/excel'
+import { abrePdfTimbrado } from '../lib/pdf'
 
 const hoje = () => new Date().toLocaleDateString('pt-BR')
+
+// ISO YYYY-MM-DD → DD/MM/AAAA (relatório da distribuição).
+function brDataDist(iso) { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || '')); return m ? `${m[3]}/${m[2]}/${m[1]}` : '' }
+// Último dia da competência (MM/AAAA) em ISO — corte para o "posição em".
+function ultimoDiaComp(competencia) {
+  const [m, a] = String(competencia || '').split('/').map(Number)
+  if (!m || !a) return ''
+  const d = new Date(a, m, 0).getDate()
+  return `${a}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+}
+const r2dist = v => Math.round((v || 0) * 100) / 100
+
+// Relatório de composição da distribuição de lucros em ata: por conta/sócio mostra o
+// distribuído (saldo que começou), quantas parcelas já pagou, total pago, o pago no mês
+// do fechamento e o saldo a pagar. O SUBTOTAL por conta = saldo que bate na conciliação.
+function gerarRelatorioDistribuicaoAta({ formato, ata, competencia, empresaNome, planoMap = {} }) {
+  const [mm, aa] = String(competencia || '').split('/')
+  const alvoMes = `${aa}-${String(mm).padStart(2, '0')}`
+  const fimMes = ultimoDiaComp(competencia)
+  const grupos = {}
+  for (const s of (ata?.socios || [])) {
+    const inicial = Number(s.valor) || 0
+    const pags = (s.pagamentos || [])
+    if (!inicial && !pags.length) continue
+    const pagosAte = pags.filter(p => p.data && (!fimMes || p.data <= fimMes))
+    const totalPago = pagosAte.reduce((x, p) => x + (Number(p.valor) || 0), 0)
+    const pagoMes = pags.filter(p => String(p.data || '').slice(0, 7) === alvoMes).reduce((x, p) => x + (Number(p.valor) || 0), 0)
+    const saldo = r2dist(inicial - totalPago)
+    const conta = String(s.conta || '').trim() || '—'
+    const g = (grupos[conta] ||= { conta, nome: planoMap[conta]?.nome || '', itens: [], inicial: 0, pago: 0, mes: 0, saldo: 0, qtd: 0 })
+    g.itens.push({ nome: s.nome || '—', inicial, qtd: pagosAte.length, pago: r2dist(totalPago), mes: r2dist(pagoMes), saldo })
+    g.inicial = r2dist(g.inicial + inicial); g.pago = r2dist(g.pago + totalPago); g.mes = r2dist(g.mes + pagoMes); g.saldo = r2dist(g.saldo + saldo); g.qtd += pagosAte.length
+  }
+  const arr = Object.values(grupos).sort((a, b) => String(a.conta).localeCompare(String(b.conta)))
+  if (!arr.length) { alert('Cadastre os sócios (valor da ata) e os pagamentos para gerar o relatório.'); return }
+  const geral = arr.reduce((s, g) => ({ inicial: r2dist(s.inicial + g.inicial), pago: r2dist(s.pago + g.pago), mes: r2dist(s.mes + g.mes), saldo: r2dist(s.saldo + g.saldo) }), { inicial: 0, pago: 0, mes: 0, saldo: 0 })
+  const titulo = 'Distribuição de Lucros (ata) — Composição do Saldo a Pagar'
+  const sub = `${empresaNome || ''} · Posição em ${brDataDist(fimMes) || competencia} · o "Saldo a pagar" de cada conta bate com a conciliação`
+  const colunas = [
+    { nome: 'Sócio', largura: 34, wrap: true },
+    { nome: 'Distribuído (ata)', alinhar: 'right', moeda: true },
+    { nome: 'Parcelas pagas', alinhar: 'right' },
+    { nome: 'Total pago', alinhar: 'right', moeda: true },
+    { nome: 'Pago no mês', alinhar: 'right', moeda: true },
+    { nome: 'Saldo a pagar', alinhar: 'right', moeda: true },
+  ]
+  const label = g => `Conta ${g.conta}${g.nome ? ' · ' + g.nome : ''}`
+  const arquivo = `distribuicao_lucros_ata_${String(competencia).replace('/', '-')}.${formato === 'excel' ? 'xlsx' : 'pdf'}`
+  if (formato === 'excel') {
+    const secoes = arr.map(g => ({ titulo: label(g), linhas: g.itens.map(it => [it.nome, it.inicial, it.qtd, it.pago, it.mes, it.saldo]), totais: ['Subtotal', g.inicial, g.qtd, g.pago, g.mes, g.saldo] }))
+    return gerarExcelTimbrado({ titulo, sub, colunas, secoes, totais: ['TOTAL GERAL', geral.inicial, '', geral.pago, geral.mes, geral.saldo], arquivo, aba: 'Distribuição' })
+  }
+  const secoes = arr.map(g => ({ titulo: label(g), linhas: g.itens.map(it => [it.nome, money(it.inicial), String(it.qtd), money(it.pago), money(it.mes), money(it.saldo)]), totais: ['Subtotal', money(g.inicial), String(g.qtd), money(g.pago), money(g.mes), money(g.saldo)] }))
+  abrePdfTimbrado({ titulo, sub, colunas, secoes, totais: ['TOTAL GERAL', money(geral.inicial), '', money(geral.pago), money(geral.mes), money(geral.saldo)] })
+}
 
 // Lê a 1ª planilha detectando a linha de cabeçalho (a 1ª com >=3 células de texto não vazias).
 // Necessário p/ exports do Domínio (ex.: plano de contas com cabeçalho na 5ª linha).
@@ -129,7 +186,8 @@ function extrairConta(obj) {
 }
 
 export default function BaseInformacoes() {
-  const { empresaId, empresaNome, recalcularPendencias, recarregarPlano } = useAppData()
+  const { empresaId, empresaNome, competencia, plano, recalcularPendencias, recarregarPlano } = useAppData()
+  const planoMap = Object.fromEntries((plano || []).map(p => [String(p.cod), p]))
   const { user } = useAuth()
 
   const [particularidades, setParticularidades] = useState([])
@@ -336,7 +394,7 @@ export default function BaseInformacoes() {
         <ModalCargaInicial vigencia={modal.vigencia} empresaId={empresaId} onClose={() => setModal(null)} onConcluir={concluirCargaInicial} />
       )}
       {modal?.tipo === 'dist' && (
-        <ModalDist inicial={dist} empresaId={empresaId} onClose={() => setModal(null)} onSalvar={salvarDist} />
+        <ModalDist inicial={dist} empresaId={empresaId} competencia={competencia} empresaNome={empresaNome} planoMap={planoMap} onClose={() => setModal(null)} onSalvar={salvarDist} />
       )}
       {modal?.tipo === 'modelos' && (
         <ModalSimples titulo="Modelos de relatório" texto="Os modelos do escritório (Balancete, DRE, DFC, Balanço) já são gerados na tela de Relatórios a partir do balancete da competência, com exportação para Excel (.xlsx) no papel timbrado da Attentive. A personalização de modelos por cliente entra em breve." onClose={() => setModal(null)} />
@@ -1034,7 +1092,7 @@ function ModalCargaInicial({ vigencia, empresaId, onClose, onConcluir }) {
   )
 }
 
-function ModalDist({ inicial, empresaId, onClose, onSalvar }) {
+function ModalDist({ inicial, empresaId, competencia, empresaNome, planoMap = {}, onClose, onSalvar }) {
   const [limite, setLimite] = useState(inicial?.limite ?? 50000)
   const [aliquota, setAliquota] = useState(inicial?.aliquota ?? 10)
   const [contas, setContas] = useState(inicial?.contas?.length ? inicial.contas : [{ cod: '', nome: '' }])
@@ -1047,7 +1105,12 @@ function ModalDist({ inicial, empresaId, onClose, onSalvar }) {
   const upd = (set, i, k) => e => set(l => l.map((x, j) => j === i ? { ...x, [k]: e.target.value } : x))
   const rem = (set, i) => set(l => l.filter((_, j) => j !== i))
   const updAtaSocio = (i, k) => e => setAta(a => ({ ...a, socios: a.socios.map((x, j) => j === i ? { ...x, [k]: e.target.value } : x) }))
+  const setAtaContaSocio = (i, cod) => setAta(a => ({ ...a, socios: a.socios.map((x, j) => j === i ? { ...x, conta: cod } : x) }))
+  const addPagamento = i => setAta(a => ({ ...a, socios: a.socios.map((x, j) => j === i ? { ...x, pagamentos: [...(x.pagamentos || []), { data: '', valor: '' }] } : x) }))
+  const updPagamento = (i, k, campo) => e => setAta(a => ({ ...a, socios: a.socios.map((x, j) => j === i ? { ...x, pagamentos: (x.pagamentos || []).map((p, pk) => pk === k ? { ...p, [campo]: e.target.value } : p) } : x) }))
+  const remPagamento = (i, k) => setAta(a => ({ ...a, socios: a.socios.map((x, j) => j === i ? { ...x, pagamentos: (x.pagamentos || []).filter((_, pk) => pk !== k) } : x) }))
   const totalAta = (ata.socios || []).reduce((s, x) => s + (Number(x.valor) || 0), 0)
+  const saldoSocio = s => r2dist((Number(s.valor) || 0) - (s.pagamentos || []).reduce((x, p) => x + (Number(p.valor) || 0), 0))
 
   // Marca "houve": se ainda não há sócios na ata, semeia com os nomes já cadastrados.
   function marcarHouve(houve) {
@@ -1080,7 +1143,7 @@ function ModalDist({ inicial, empresaId, onClose, onSalvar }) {
   async function salvar() {
     setSalvando(true)
     const ataLimpa = ata.houve
-      ? { houve: true, arquivo: ata.arquivo || '', documento: ata.documento || '', socios: (ata.socios || []).filter(s => s.nome || s.valor).map(s => ({ nome: s.nome, valor: Number(s.valor) || 0 })) }
+      ? { houve: true, arquivo: ata.arquivo || '', documento: ata.documento || '', socios: (ata.socios || []).filter(s => s.nome || s.valor).map(s => ({ nome: s.nome, valor: Number(s.valor) || 0, conta: String(s.conta || '').trim(), pagamentos: (s.pagamentos || []).filter(p => p.data || p.valor).map(p => ({ data: p.data || '', valor: Number(p.valor) || 0 })) })) }
       : { houve: false, arquivo: '', documento: '', socios: [] }
     await onSalvar({
       limite: Number(limite) || 0, aliquota: Number(aliquota) || 0,
@@ -1141,15 +1204,42 @@ function ModalDist({ inicial, empresaId, onClose, onSalvar }) {
             {ata.arquivo && <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', color: theme.red, borderColor: theme.red }} onClick={removerAta}><i className="ti ti-trash" /> Excluir</button>}
           </div>
 
-          <LinhaTitulo titulo="Sócios e valor distribuído" onAdd={() => setAta(a => ({ ...a, socios: [...(a.socios || []), { nome: '', valor: '' }] }))} />
+          <LinhaTitulo titulo="Sócios, conta e pagamentos" onAdd={() => setAta(a => ({ ...a, socios: [...(a.socios || []), { nome: '', valor: '', conta: '', pagamentos: [] }] }))} />
           {(ata.socios || []).map((s, i) => (
-            <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-              <input className="input" style={{ flex: 1 }} placeholder="Nome do sócio" value={s.nome} onChange={updAtaSocio(i, 'nome')} />
-              <input className="input" style={{ width: 160 }} type="number" step="0.01" placeholder="Valor (R$)" value={s.valor} onChange={updAtaSocio(i, 'valor')} />
-              <i className="ti ti-trash" onClick={() => setAta(a => ({ ...a, socios: a.socios.filter((_, j) => j !== i) }))} style={{ color: theme.sub, cursor: 'pointer', alignSelf: 'center' }} />
+            <div key={i} style={{ border: `0.5px solid ${theme.cb}`, borderRadius: 10, padding: 12, marginBottom: 10 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <input className="input" style={{ flex: 1, minWidth: 150 }} placeholder="Nome do sócio" value={s.nome} onChange={updAtaSocio(i, 'nome')} />
+                <input className="input" style={{ width: 140 }} type="number" step="0.01" placeholder="Distribuído (R$)" value={s.valor} onChange={updAtaSocio(i, 'valor')} />
+                <div style={{ width: 150 }}><CampoConta value={s.conta || ''} onChange={cod => setAtaContaSocio(i, cod)} onPick={p => setAtaContaSocio(i, p.cod)} placeholder="Conta (F4)" /></div>
+                <i className="ti ti-trash" onClick={() => setAta(a => ({ ...a, socios: a.socios.filter((_, j) => j !== i) }))} style={{ color: theme.sub, cursor: 'pointer' }} />
+              </div>
+              {s.conta && planoMap[s.conta] && <p style={{ fontSize: 11, color: theme.accent, margin: '4px 0 0' }}><i className="ti ti-corner-down-right" /> {planoMap[s.conta].nome}</p>}
+              <div style={{ marginTop: 8 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: 11, color: theme.sub, textTransform: 'uppercase', letterSpacing: .3 }}>Pagamentos já feitos</span>
+                  <button className="btn btn-ghost" style={{ fontSize: 11, padding: '3px 8px' }} onClick={() => addPagamento(i)}><i className="ti ti-plus" /> pagamento</button>
+                </div>
+                {(s.pagamentos || []).length === 0 && <p style={{ fontSize: 11.5, color: theme.sub, margin: '4px 0 0' }}>Nenhum pagamento — o saldo a pagar é o valor distribuído.</p>}
+                {(s.pagamentos || []).map((p, k) => (
+                  <div key={k} style={{ display: 'flex', gap: 8, marginTop: 6, alignItems: 'center' }}>
+                    <input className="input" type="date" style={{ width: 165 }} value={p.data || ''} onChange={updPagamento(i, k, 'data')} />
+                    <input className="input" type="number" step="0.01" style={{ width: 140 }} placeholder="Valor pago (R$)" value={p.valor} onChange={updPagamento(i, k, 'valor')} />
+                    <i className="ti ti-trash" onClick={() => remPagamento(i, k)} style={{ color: theme.sub, cursor: 'pointer' }} />
+                  </div>
+                ))}
+                <p style={{ fontSize: 12, color: theme.text, margin: '8px 0 0', textAlign: 'right' }}>Saldo a pagar: <b style={{ color: saldoSocio(s) > 0.005 ? theme.text : theme.green }}>{money(saldoSocio(s))}</b></p>
+              </div>
             </div>
           ))}
           <p style={{ color: theme.text, fontSize: 12.5, margin: '8px 0 0', textAlign: 'right' }}>Total distribuído em ata: <b>{money(totalAta)}</b></p>
+
+          {/* Relatório de composição (para o cliente e para conciliar) */}
+          <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap', alignItems: 'center', borderTop: `0.5px solid ${theme.cb}`, paddingTop: 12 }}>
+            <span style={{ fontSize: 12, color: theme.sub }}><i className="ti ti-report" /> Relatório de composição{competencia ? ` (${competencia})` : ''}:</span>
+            <button className="btn" style={{ fontSize: 12, padding: '6px 12px' }} onClick={() => gerarRelatorioDistribuicaoAta({ formato: 'pdf', ata, competencia, empresaNome, planoMap })} title="Composição do saldo a pagar (PDF) — arraste na conciliação para bater o saldo"><i className="ti ti-file-type-pdf" /> PDF</button>
+            <button className="btn btn-ghost" style={{ fontSize: 12, padding: '6px 12px', borderColor: theme.accent, color: theme.accent }} onClick={() => gerarRelatorioDistribuicaoAta({ formato: 'excel', ata, competencia, empresaNome, planoMap })} title="Composição do saldo a pagar (Excel)"><i className="ti ti-file-spreadsheet" /> Excel</button>
+          </div>
+          <p style={{ fontSize: 11, color: theme.sub, margin: '6px 0 0' }}>O saldo a pagar de cada conta bate com a conciliação. Só o pagamento com data dentro de {competencia || 'MM/AAAA'} entra como "pago no mês".</p>
         </>}
       </div>
 
