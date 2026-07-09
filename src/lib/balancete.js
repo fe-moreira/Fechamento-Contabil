@@ -2,6 +2,17 @@ import { supabase } from './supabase'
 
 const baixa = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
 
+// Diferença de conciliação respeitando a NATUREZA da conta. O documento (guia,
+// extrato, relatório) vem SEMPRE positivo. Numa conta DEVEDORA (saldo > 0) a
+// diferença é saldo − documento; numa CREDORA (saldo < 0) é saldo + documento.
+// Assim, quando |saldo| == |documento|, a diferença é zero — não importa o sinal.
+export function difConciliacao(saldo, doc) {
+  const s = Number(saldo) || 0
+  const v = Math.abs(Number(doc) || 0)
+  const nat = s < 0 ? -1 : 1 // credora subtrai o documento (soma ao saldo negativo)
+  return Math.round((s - nat * v) * 100) / 100
+}
+
 // Aplica a máscara do Domínio (ex.: "9.9.9.999.9999") a uma classificação sem pontos.
 // "1110010001" → "1.1.1.001.0001"; aceita códigos parciais (sintéticas): "111001" → "1.1.1.001".
 export function applyMask(code, mask) {

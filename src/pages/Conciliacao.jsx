@@ -4,22 +4,10 @@ import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { theme, money, moneyDC } from '../lib/theme'
-import { montarBalancete, parsePlano, composicaoAbertura } from '../lib/balancete'
+import { montarBalancete, parsePlano, composicaoAbertura, difConciliacao } from '../lib/balancete'
 import { abrePdfTimbrado } from '../lib/pdf'
 import { gerarExcelTimbrado } from '../lib/excel'
 import CampoConta from '../components/CampoConta'
-
-// Diferença de conciliação respeitando a NATUREZA da conta. O documento (guia,
-// extrato, relatório) vem SEMPRE positivo. Numa conta DEVEDORA (saldo > 0) a
-// diferença é saldo − documento; numa conta CREDORA (saldo < 0) é saldo + documento.
-// Assim, quando |saldo| == |documento|, a diferença é zero — não importa o sinal.
-// Ex.: FGTS a pagar 1.600 C com guia de 1.600 → diferença 0.
-function difConciliacao(saldo, doc) {
-  const s = Number(saldo) || 0
-  const v = Math.abs(Number(doc) || 0)
-  const nat = s < 0 ? -1 : 1 // credora subtrai o documento (soma ao saldo negativo)
-  return Math.round((s - nat * v) * 100) / 100
-}
 
 // NF no histórico só faz sentido em contas de cliente/fornecedor (a pagar/a receber,
 // duplicatas, adiantamentos). Nas demais (banco, despesa, etc.) o histórico sai sem NF.
@@ -212,7 +200,8 @@ export default function Conciliacao() {
   const { empresaId, empresaNome, competencia, getCompetenciaId } = useAppData()
   const { user } = useAuth()
   const [compId, setCompId] = useState(null)
-  const [contas, setContas] = useState([])
+  const [baseContas, setBaseContas] = useState([]) // contas do balancete (Ativo/Passivo)
+  const [planoRed, setPlanoRed] = useState({})     // reduzido → { nome, classif } (p/ contas só de lançamento)
   const [conf, setConf] = useState({}) // conta -> registro conciliacao_conta
   const [acertos, setAcertos] = useState({}) // conta -> ajuste (soma dos lançamentos de acerto pendentes)
   const [carregando, setCarregando] = useState(true)
@@ -247,7 +236,7 @@ export default function Conciliacao() {
   const saldoEf = c => (Number(c.saldo_final) || 0) + ajNet(c)
 
   useEffect(() => {
-    setSel(null); setContas([]); setCompId(null); setConf({})
+    setSel(null); setBaseContas([]); setCompId(null); setConf({}); setPlanoRed({})
     if (!empresaId) { setCarregando(false); return }
     setCarregando(true)
     const [mes, ano] = competencia.split('/').map(Number)
@@ -258,7 +247,14 @@ export default function Conciliacao() {
         const { linhas } = await montarBalancete(empresaId, comp.id)
         // Conciliação trata só Ativo (1) e Passivo (2). Receita/Custos/Despesa vão no Comparativo.
         const ap = linhas.filter(l => { const d = String(l.classifRaw || l.classif).trim()[0]; return d === '1' || d === '2' })
-        setContas(ap.map(l => ({ ...l, conta: l.reduzido })))
+        setBaseContas(ap.map(l => ({ ...l, conta: l.reduzido })))
+        // Índice do plano (reduzido → nome/classif) p/ mostrar contas que só têm
+        // lançamento manual/correção e não vieram no balancete importado.
+        const { data: pc } = await supabase.from('cargas_cadastro').select('dados')
+          .eq('cliente_id', empresaId).eq('tipo', 'plano').order('created_at', { ascending: false }).limit(1).maybeSingle()
+        const idx = {}
+        for (const p of parsePlano(pc?.dados)) { if (p.reduzido) idx[String(p.reduzido)] = { nome: p.nome, classif: p.classif } }
+        setPlanoRed(idx)
         await carregarConf(comp.id)
         await carregarAcertos(comp.id)
         setCarregando(false)
@@ -294,6 +290,18 @@ export default function Conciliacao() {
   if (!compId || contas.length === 0) return <Wrapper><Aviso icon="ti-table-off" texto="Nenhum balancete nesta competência. Importe o razão primeiro." /></Wrapper>
 
   if (sel) return <Detalhe conta={sel} tipoCta={tipoEf(sel)} reg={conf[sel.conta]} compId={compId} empresaId={empresaId} usuario={user?.email} ajuste={acertos[sel.conta] || null} getCompetenciaId={getCompetenciaId} onSalvarConf={recarregar} onMudou={recarregar} onVoltar={() => setSel(null)} />
+
+  // Contas que só têm LANÇAMENTO (manual/correção) e não vieram no balancete importado
+  // (ex.: "a distribuir" de um sócio recém-criada). Entram na lista como analíticas com
+  // saldo de balancete zero — o acerto do lançamento vira o saldo efetivo. Só Ativo/Passivo.
+  const baseSet = new Set(baseContas.map(c => String(c.reduzido)))
+  const extras = Object.keys(acertos)
+    .filter(cod => !baseSet.has(String(cod)) && planoRed[String(cod)] && ['1', '2'].includes(String(planoRed[String(cod)].classif).trim()[0]))
+    .map(cod => {
+      const p = planoRed[String(cod)]
+      return { reduzido: String(cod), conta: String(cod), classif: p.classif, classifRaw: p.classif, nome: p.nome || '', sintetica: false, folha: true, saldo_final: 0, saldo_inicial: 0, debito: 0, credito: 0 }
+    })
+  const contas = extras.length ? [...baseContas, ...extras] : baseContas
 
   // A SINTÉTICA é a soma das ANALÍTICAS: as correções/estornos pendentes ficam nas
   // analíticas (acertos por conta), então acumulamos o ajuste nas sintéticas ancestrais
