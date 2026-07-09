@@ -301,12 +301,14 @@ export default function Conciliacao() {
   const analiticasExtra = Object.keys(acertos)
     .filter(cod => !baseSet.has(String(cod)) && planoRed[String(cod)] && !planoRed[String(cod)].sintetica && ['1', '2'].includes(dig(planoRed[String(cod)].classif)[0]))
     .map(cod => {
-      const p = planoRed[String(cod)]; const raw = dig(p.classif)
-      return { reduzido: String(cod), conta: String(cod), classif: mk(p.classif), classifRaw: raw, nome: p.nome || '', sintetica: false, folha: true, saldo_final: 0, saldo_inicial: 0, debito: 0, credito: 0 }
+      const p = planoRed[String(cod)]; const raw = dig(p.classif); const ac = acertos[String(cod)] || { deb: 0, cred: 0 }
+      // O movimento do lançamento manual entra nas colunas Débito/Crédito (o saldo já
+      // vem por ajNet). saldo_final fica 0 para não duplicar o valor no saldo efetivo.
+      return { reduzido: String(cod), conta: String(cod), classif: mk(p.classif), classifRaw: raw, nome: p.nome || '', sintetica: false, folha: true, saldo_final: 0, saldo_inicial: 0, debito: ac.deb || 0, credito: ac.cred || 0 }
     })
   // Sintéticas ANCESTRAIS dessas analíticas que ainda não estão na lista — para amarrar a
   // analítica à(s) sintética(s) no painel, igual às demais contas. Saldo vem da soma das
-  // analíticas (ajSintMap, por prefixo de classificação).
+  // analíticas (ajSintMap, por prefixo de classificação); Débito/Crédito somam as filhas.
   const sintMap = {}
   for (const a of analiticasExtra) {
     for (const p of planoFull) {
@@ -316,6 +318,7 @@ export default function Conciliacao() {
       sintMap[sr] = { reduzido: p.reduzido ? String(p.reduzido) : '', conta: String(p.reduzido || `sint_${sr}`), classif: mk(p.classif), classifRaw: sr, nome: p.nome || '', sintetica: true, folha: false, saldo_final: 0, saldo_inicial: 0, debito: 0, credito: 0 }
     }
   }
+  for (const a of analiticasExtra) for (const sr in sintMap) if (a.classifRaw.startsWith(sr)) { sintMap[sr].debito += a.debito; sintMap[sr].credito += a.credito }
   const extras = [...analiticasExtra, ...Object.values(sintMap)]
   // Ordena TODAS as contas pela classificação (dígitos) — assim as contas criadas por
   // lançamento (ex.: "a distribuir" de um sócio) entram na posição certa, não no fim.
