@@ -1015,12 +1015,17 @@ function CardConferencia({ conta, reg, compId, usuario, saldoAjuste = 0, composi
         saldoLido = s
       } else {
         const XLSX = await import('xlsx')
-        const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' })
-        const arr = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' })
-        const r = lerSaldoDocumento(arr, saldo)
+        const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellStyles: true })
+        const ws = wb.Sheets[wb.SheetNames[0]]
+        const arr = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
         setDoc(file.name)
-        if (r) { setSaldoDoc(String(r.valor)); setMsg(`Saldo lido: ${r.via} — confira se está correto.`); saldoLido = r.valor }
-        else setErro('Não identifiquei o saldo. Coloque uma célula escrita "SALDO" (ou "TOTAL") com o valor ao lado, ou digite o saldo abaixo.')
+        const amarelo = saldoCelulaAmarela(ws, XLSX)
+        if (amarelo != null) { setSaldoDoc(String(amarelo)); setMsg('Saldo lido da célula destacada em amarelo — confira se está correto.'); saldoLido = amarelo }
+        else {
+          const r = lerSaldoDocumento(arr, saldo)
+          if (r) { setSaldoDoc(String(r.valor)); setMsg(`Saldo lido: ${r.via} — confira se está correto.`); saldoLido = r.valor }
+          else setErro('Não identifiquei o saldo. Destaque a célula do saldo em amarelo, use uma célula escrita "SALDO", ou digite o saldo abaixo.')
+        }
       }
       setArquivo(file)
       await armazenar(file, saldoLido) // grava na hora — não perde ao atualizar a página
@@ -1397,6 +1402,26 @@ const numCell = v => { if (typeof v === 'number') return v; const s = String(v ?
 // 1) uma célula rotulada SALDO / TOTAL (não "anterior") → valor ao lado ou abaixo;
 // 2) senão, a SOMA de uma coluna de valor (cabeçalho Valor/Saldo/Total/Em aberto…);
 // 3) senão, o último número do arquivo (palpite — o comportamento antigo).
+// Se o usuário destacou uma célula em AMARELO no extrato, lê o número dela (é o
+// jeito mais direto de apontar o saldo). Precisa de cellStyles ao ler o arquivo.
+function saldoCelulaAmarela(ws, XLSX) {
+  if (!ws || !ws['!ref']) return null
+  const range = XLSX.utils.decode_range(ws['!ref'])
+  for (let r = range.s.r; r <= range.e.r; r++) {
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      const cell = ws[XLSX.utils.encode_cell({ r, c })]
+      const s = cell && cell.s
+      if (!s || !s.patternType || s.patternType === 'none') continue
+      const rgb = s.fgColor && s.fgColor.rgb
+      if (!rgb) continue
+      const hex = String(rgb).replace(/[^0-9a-fA-F]/g, '').slice(-6).padStart(6, '0')
+      const R = parseInt(hex.slice(0, 2), 16), G = parseInt(hex.slice(2, 4), 16), B = parseInt(hex.slice(4, 6), 16)
+      if (R > 180 && G > 180 && B < 140) { const n = numCell(cell.v); if (n) return n } // amarelo
+    }
+  }
+  return null
+}
+
 function lerSaldoDocumento(arr, alvo) {
   const norm = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim()
   // 0) O saldo do balancete (alvo) aparece no extrato? Procura o número MAIS PRÓXIMO
