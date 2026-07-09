@@ -9,6 +9,7 @@ import { theme, money } from '../lib/theme'
 import { abrePdfTimbrado } from '../lib/pdf'
 import { gerarExcelTimbrado } from '../lib/excel'
 import { gerarDominioCSV } from '../lib/dominio'
+import { anexarArquivoContrato } from '../lib/outras'
 import CampoConta from '../components/CampoConta'
 
 const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
@@ -53,12 +54,22 @@ export default function Status() {
       .order('created_at', { ascending: false }).limit(1).maybeSingle()
     const contasBancarias = Array.isArray(bc?.dados) ? bc.dados : []
 
+    // Contratos (seguro / despesa a apropriar) — para cobrar o documento anexado.
+    const [{ data: seg }, { data: dsp }] = await Promise.all([
+      supabase.from('seguros').select('id, seguradora, apolice, arquivo, vigencia_inicio, vigencia_fim').eq('cliente_id', empresaId),
+      supabase.from('despesas_apropriar').select('id, tipo, descricao, arquivo, vigencia_inicio, vigencia_fim').eq('cliente_id', empresaId),
+    ])
+    const contratos = [
+      ...(seg || []).map(r => ({ tabela: 'seguros', id: r.id, label: `Seguro ${r.seguradora || ''}${r.apolice ? ' · apólice ' + r.apolice : ''}`.trim(), arquivo: r.arquivo, vi: r.vigencia_inicio, vf: r.vigencia_fim })),
+      ...(dsp || []).map(r => ({ tabela: 'despesas_apropriar', id: r.id, label: `${r.tipo || 'Despesa a apropriar'}${r.descricao ? ' · ' + r.descricao : ''}`.trim(), arquivo: r.arquivo, vi: r.vigencia_inicio, vf: r.vigencia_fim })),
+    ]
+
     const [mes, ano] = competencia.split('/').map(Number)
     const { data: comp } = await supabase.from('competencias')
       .select('id, status, documentos, integracoes')
       .eq('cliente_id', empresaId).eq('ano', ano).eq('mes', mes).maybeSingle()
 
-    let temRazao = false, docsPendentes = [], contasAbertas = [], integracoes = {}, observacoes = [], lancamentos = []
+    let temRazao = false, docsPendentes = [], contasAbertas = [], integracoes = {}, observacoes = [], lancamentos = [], contratosJust = new Set()
     if (comp) {
       setCompId(comp.id); setStatus(comp.status || 'andamento')
       const { count: razaoCount } = await supabase.from('razao')
@@ -79,6 +90,10 @@ export default function Status() {
       integracoes = comp.integracoes || {}
       observacoes = obs || []
       lancamentos = lancs || []
+      // Contratos já tratados nesta competência (documento justificado / pendência).
+      const { data: audC } = await supabase.from('auditoria').select('item')
+        .eq('competencia_id', comp.id).eq('modulo', 'Contratos')
+      contratosJust = new Set((audC || []).map(a => a.item))
     } else {
       setCompId(null); setStatus(null)
     }
@@ -87,7 +102,7 @@ export default function Status() {
     const br = await apurarBancoResultado(empresaId, comp?.id)
     const variacoes = await apurarVariacoes(empresaId)
 
-    setDados({ temRazao, docsPendentes, contasAbertas, cargaInicialPendente, integracaoFin, contasBancarias, dist, br, variacoes, integracoes, observacoes, lancamentos })
+    setDados({ temRazao, docsPendentes, contasAbertas, cargaInicialPendente, integracaoFin, contasBancarias, dist, br, variacoes, integracoes, observacoes, lancamentos, contratos, contratosJust })
     setCarregando(false)
   }
 
@@ -141,6 +156,37 @@ export default function Status() {
           finPendente: true,
         }
       })
+  }
+
+  // Contratos (seguro/despesa) ativos na competência e SEM documento anexado, que
+  // ainda não foram justificados neste mês. Pede importar o documento ou justificar.
+  function itensContratos() {
+    const [m, a] = competencia.split('/').map(Number)
+    const ini = `${a}-${String(m).padStart(2, '0')}-01`, fim = `${a}-${String(m).padStart(2, '0')}-31`
+    const ativo = c => !(c.vi && c.vi > fim) && !(c.vf && c.vf < ini)
+    return (dados.contratos || [])
+      .filter(c => ativo(c) && !c.arquivo && !dados.contratosJust?.has(`${c.label} — documento`))
+      .map(c => ({
+        item: `${c.label} — documento`,
+        detalhe: 'Anexe o documento (apólice/carnê) ou justifique. "Cliente não enviou" vai ao relatório de pendências.',
+        contratoDoc: { tabela: c.tabela, id: c.id },
+      }))
+  }
+  // Anexa o documento do contrato direto do Status → zera a pendência.
+  async function importarContratoDoc(it, file) {
+    if (!file) return
+    try { await anexarArquivoContrato(it.contratoDoc.tabela, it.contratoDoc.id, file); setMsg('Documento anexado.'); carregar() }
+    catch (e) { setMsg('Erro ao anexar: ' + e.message) }
+  }
+  // Justifica a falta do documento. "Cliente não enviou" → relatório de pendências.
+  async function registrarContrato(it, txt, pendCliente) {
+    const id = await getCompetenciaId()
+    await supabase.from('auditoria').insert({
+      competencia_id: id, modulo: 'Contratos', item: it.item,
+      tipo: pendCliente ? 'Pendência' : 'Justificativa', detalhe: txt, usuario: user?.email,
+    })
+    setMsg(pendCliente ? 'Registrado como pendência do cliente (relatório de pendências).' : 'Justificativa registrada.')
+    setModal(null); carregar()
   }
 
   const gates = [
@@ -235,6 +281,13 @@ export default function Status() {
           })),
         ...itensFinanceira(),
       ],
+    },
+    {
+      key: 'contratos',
+      nome: 'Documentos de contratos',
+      icon: 'ti-paperclip',
+      descricao: 'Seguros e despesas a apropriar sem o documento anexado.',
+      itens: itensContratos(),
     },
     {
       key: 'observacoes',
@@ -485,6 +538,7 @@ export default function Status() {
           onJustificar={(it) => setModal({ item: it, tipo: 'Justificativa' })}
           onCorrigir={(it) => setModal({ item: it, tipo: it.partida ? 'Partida' : 'Correção' })}
           onSemMovimento={(key) => marcarSemMovimento(key)}
+          onImportarContrato={importarContratoDoc}
         />
       )}
 
@@ -494,8 +548,9 @@ export default function Status() {
           tipo={modal.tipo}
           alvo={modal.item.item}
           lalur={modal.item.lalur}
+          contrato={!!modal.item.contratoDoc}
           onClose={() => setModal(null)}
-          onConfirmar={(txt, dedut) => registrar(modal.item.item, modal.tipo, txt, dedut)}
+          onConfirmar={(txt, dedut, pend) => modal.item.contratoDoc ? registrarContrato(modal.item, txt, pend) : registrar(modal.item.item, modal.tipo, txt, dedut)}
         />
       )}
 
@@ -585,7 +640,7 @@ function ModalLancamentosDominio({ lancamentos, planoMap, pronto, totalPendencia
   )
 }
 
-function PainelGate({ gate, onClose, onJustificar, onCorrigir, onSemMovimento, onExportar }) {
+function PainelGate({ gate, onClose, onJustificar, onCorrigir, onSemMovimento, onExportar, onImportarContrato }) {
   const legenda = gate.informativo
     ? 'Observações registradas (somente visualização — não bloqueiam o encerramento).'
     : gate.key === 'integracoes'
@@ -620,7 +675,14 @@ function PainelGate({ gate, onClose, onJustificar, onCorrigir, onSemMovimento, o
                 {it.sub && <p style={{ fontSize: 11.5, color: theme.accent, margin: '3px 0 0' }}>{it.sub}</p>}
                 <p style={{ fontSize: 12, color: theme.sub, margin: '3px 0 0' }}>{it.detalhe}</p>
               </div>
-              {gate.informativo ? null : it.finPendente ? (
+              {gate.informativo ? null : it.contratoDoc ? (
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <label className="btn" style={{ fontSize: 13, cursor: 'pointer' }}><i className="ti ti-paperclip" /> Importar
+                    <input type="file" accept=".pdf,.xlsx,.xls,.csv,.png,.jpg,.jpeg" style={{ display: 'none' }} onChange={e => onImportarContrato(it, e.target.files?.[0])} />
+                  </label>
+                  <button className="btn btn-ghost" style={{ fontSize: 13 }} onClick={() => onJustificar(it)}><i className="ti ti-flag" /> Justificar</button>
+                </div>
+              ) : it.finPendente ? (
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                   <span style={{ fontSize: 11.5, color: theme.sub }}>Resolva na Integração Financeira</span>
                   <button className="btn btn-ghost" style={{ fontSize: 13 }} onClick={() => onJustificar(it)}><i className="ti ti-flag" /> Justificar</button>
@@ -697,9 +759,10 @@ function ModalPartida({ item, onClose, onConfirmar }) {
   )
 }
 
-function ModalRegistro({ tipo, alvo, lalur, onClose, onConfirmar }) {
+function ModalRegistro({ tipo, alvo, lalur, contrato, onClose, onConfirmar }) {
   const [txt, setTxt] = useState('')
   const [dedut, setDedut] = useState('')
+  const [pend, setPend] = useState(false)
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 60 }}>
       <div onClick={e => e.stopPropagation()} style={{ width: 'min(480px,96vw)', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
@@ -719,10 +782,15 @@ function ModalRegistro({ tipo, alvo, lalur, onClose, onConfirmar }) {
           </div>
         )}
         <textarea className="input" rows={3} value={txt} onChange={e => setTxt(e.target.value)} autoFocus
-          placeholder={tipo === 'Correção' ? 'O que foi corrigido…' : 'Por que esta pendência pode ser liberada…'} />
+          placeholder={tipo === 'Correção' ? 'O que foi corrigido…' : contrato ? 'Ex.: aguardando a apólice / cliente não enviou…' : 'Por que esta pendência pode ser liberada…'} />
+        {contrato && (
+          <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, margin: '12px 0 0', cursor: 'pointer', color: theme.text }}>
+            <input type="checkbox" checked={pend} onChange={e => setPend(e.target.checked)} /> Cliente não enviou o documento (vai ao relatório de pendências)
+          </label>
+        )}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
           <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
-          <button className="btn" onClick={() => txt.trim() && (!lalur || dedut) && onConfirmar(txt.trim(), dedut || null)}>Registrar</button>
+          <button className="btn" onClick={() => txt.trim() && (!lalur || dedut) && onConfirmar(txt.trim(), dedut || null, pend)}>Registrar</button>
         </div>
       </div>
     </div>
