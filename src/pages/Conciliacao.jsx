@@ -262,7 +262,7 @@ export default function Conciliacao() {
     const reg = conf[c.conta]
     if (!reg) return theme.red
     const docBate = reg.documento_path && reg.saldo_documento != null &&
-      Math.abs(saldoEf(c) - Number(reg.saldo_documento)) < 0.01
+      Math.abs(saldoEf(c) - Number(reg.saldo_documento)) < 0.05
     if (docBate) return theme.green
     if (reg.conciliada && reg.justificativa) return theme.yellow
     return theme.red
@@ -979,7 +979,7 @@ function CardConferencia({ conta, reg, compId, usuario, saldoAjuste = 0, composi
   const temDoc = doc && saldoDoc !== ''
   const temSaldoDoc = saldoDoc !== ''
   const dif = saldo - (Number(saldoDoc) || 0)
-  const bateSaldo = temDoc && Math.abs(dif) < 0.01
+  const bateSaldo = temDoc && Math.abs(dif) < 0.05 // até 5 centavos é irrelevante (arredondamento)
   // VERDE só quando o arquivo está armazenado E o saldo bate. Se o arquivo for
   // excluído (path some), volta ao vermelho mesmo que o saldo continue batendo.
   const bate = bateSaldo && !!path
@@ -1017,9 +1017,9 @@ function CardConferencia({ conta, reg, compId, usuario, saldoAjuste = 0, composi
         const XLSX = await import('xlsx')
         const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' })
         const arr = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' })
-        const r = lerSaldoDocumento(arr)
+        const r = lerSaldoDocumento(arr, saldo)
         setDoc(file.name)
-        if (r) { setSaldoDoc(String(r.valor)); setMsg(`Saldo lido pela ${r.via} — confira se está correto.`); saldoLido = r.valor }
+        if (r) { setSaldoDoc(String(r.valor)); setMsg(`Saldo lido: ${r.via} — confira se está correto.`); saldoLido = r.valor }
         else setErro('Não identifiquei o saldo. Coloque uma célula escrita "SALDO" (ou "TOTAL") com o valor ao lado, ou digite o saldo abaixo.')
       }
       setArquivo(file)
@@ -1125,7 +1125,7 @@ function CardConferencia({ conta, reg, compId, usuario, saldoAjuste = 0, composi
         <div style={{ display: 'flex', gap: 28, flexWrap: 'wrap', marginBottom: Math.abs(Number(saldoAjuste) || 0) > 0.005 ? 4 : 12 }}>
           <Mini label="Saldo da conta" v={moneyDC(saldo)} />
           <Mini label="Saldo do documento" v={saldoDoc === '' ? '—' : money(Number(saldoDoc))} />
-          <Mini label="Diferença" v={temSaldoDoc ? money(dif) : '—'} cor={!temSaldoDoc ? theme.sub : Math.abs(dif) < 0.01 ? theme.green : theme.red} />
+          <Mini label="Diferença" v={temSaldoDoc ? money(dif) : '—'} cor={!temSaldoDoc ? theme.sub : Math.abs(dif) < 0.05 ? theme.green : theme.red} />
         </div>
         {Math.abs(Number(saldoAjuste) || 0) > 0.005 && <p style={{ color: theme.accent, fontSize: 11.5, margin: '0 0 12px' }}>
           <i className="ti ti-adjustments-alt" /> Inclui {moneyDC(saldoAjuste)} de correções pendentes (balancete: {moneyDC(conta.saldo_final)}).
@@ -1397,8 +1397,19 @@ const numCell = v => { if (typeof v === 'number') return v; const s = String(v ?
 // 1) uma célula rotulada SALDO / TOTAL (não "anterior") → valor ao lado ou abaixo;
 // 2) senão, a SOMA de uma coluna de valor (cabeçalho Valor/Saldo/Total/Em aberto…);
 // 3) senão, o último número do arquivo (palpite — o comportamento antigo).
-function lerSaldoDocumento(arr) {
+function lerSaldoDocumento(arr, alvo) {
   const norm = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim()
+  // 0) O saldo do balancete (alvo) aparece no extrato? Procura o número MAIS PRÓXIMO
+  //    do saldo da conta. Se bater (diferença ≤ 5 centavos), é o saldo do documento.
+  if (alvo != null && Math.abs(alvo) > 0.005) {
+    let best = null
+    for (const row of (arr || [])) for (const cel of (row || [])) {
+      const n = numCell(cel); if (!n) continue
+      const d = Math.min(Math.abs(n - alvo), Math.abs(-n - alvo))
+      if (best == null || d < best.d) best = { valor: Math.abs(Math.abs(n) - Math.abs(alvo)) <= 0.05 ? (alvo < 0 ? -Math.abs(n) : Math.abs(n)) : n, d }
+    }
+    if (best && best.d <= 0.05) return { valor: best.valor, via: 'valor do extrato que bate com o saldo da conta (≤ 5 centavos)' }
+  }
   // 1) célula rotulada
   for (let i = 0; i < arr.length; i++) {
     const row = arr[i] || []
