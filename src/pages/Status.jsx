@@ -860,7 +860,9 @@ function ModalRegistro({ tipo, alvo, lalur, contrato, onClose, onConfirmar }) {
         )}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
           <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
-          <button className="btn" onClick={() => txt.trim() && (!lalur || dedut) && onConfirmar(txt.trim(), dedut || null, pend)}>Registrar</button>
+          {/* Despesa (LALUR) exige dedutível/indedutível — MAS se for pendência do cliente
+              (ainda vai cobrar), pode gravar sem classificar; a classificação vem depois. */}
+          <button className="btn" disabled={!(txt.trim() && (!lalur || dedut || pend))} onClick={() => onConfirmar(txt.trim(), dedut || null, pend)}>Registrar</button>
         </div>
       </div>
     </div>
