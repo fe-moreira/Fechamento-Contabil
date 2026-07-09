@@ -217,6 +217,7 @@ export default function Conciliacao() {
   const [acertos, setAcertos] = useState({}) // conta -> ajuste (soma dos lançamentos de acerto pendentes)
   const [carregando, setCarregando] = useState(true)
   const [sel, setSel] = useState(null) // conta selecionada (detalhe)
+  const [filtroFarol, setFiltroFarol] = useState('todos') // 'todos' | 'red' | 'yellow' | 'green'
   // Clicar em "Conciliação" no menu (mesma rota) volta para a lista, mesmo estando
   // no detalhe de uma conta — cada navegação gera uma location.key nova.
   const location = useLocation()
@@ -315,12 +316,37 @@ export default function Conciliacao() {
   const ajTotal = c => c.sintetica ? (ajSintMap[String(c.classifRaw || c.classif)] || 0) : ajNet(c)
   const saldoEfAll = c => (Number(c.saldo_final) || 0) + ajTotal(c)
 
+  // Contadores por farol (só analíticas — as sintéticas não têm status).
+  const corFarol = { red: theme.red, yellow: theme.yellow, green: theme.green }
+  const cont = { red: 0, yellow: 0, green: 0 }
+  for (const c of contas) {
+    if (c.sintetica) continue
+    const s = statusConta(c)
+    if (s === theme.red) cont.red++; else if (s === theme.yellow) cont.yellow++; else if (s === theme.green) cont.green++
+  }
+  // Lista visível: "todos" mostra tudo (com sintéticas); um farol específico mostra
+  // só as analíticas daquele status (foca no que falta corrigir).
+  const contasVis = filtroFarol === 'todos'
+    ? contas
+    : contas.filter(c => !c.sintetica && statusConta(c) === corFarol[filtroFarol])
+
+  const farois = [
+    { k: 'todos', cor: null, txt: 'Todos', n: cont.red + cont.yellow + cont.green },
+    { k: 'red', cor: theme.red, txt: 'Vermelho', n: cont.red },
+    { k: 'yellow', cor: theme.yellow, txt: 'Amarelo', n: cont.yellow },
+    { k: 'green', cor: theme.green, txt: 'Verde', n: cont.green },
+  ]
+
   return (
     <Wrapper nome={empresaNome} comp={competencia}>
-      <div style={{ display: 'flex', gap: 16, marginBottom: 14, fontSize: 12, color: theme.sub, flexWrap: 'wrap' }}>
-        <span><Dot c={theme.red} /> Pendente (padrão)</span>
-        <span><Dot c={theme.yellow} /> Confirmada + justificada (sem documento)</span>
-        <span><Dot c={theme.green} /> Documento bate com o saldo</span>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+        {farois.map(o => (
+          <button key={o.k} onClick={() => setFiltroFarol(o.k)} className="btn btn-ghost"
+            title={o.k === 'red' ? 'Pendente' : o.k === 'yellow' ? 'Confirmada + justificada (sem documento)' : o.k === 'green' ? 'Documento bate com o saldo' : 'Mostrar todas'}
+            style={{ fontSize: 12, padding: '5px 12px', display: 'flex', alignItems: 'center', gap: 7, fontWeight: filtroFarol === o.k ? 700 : 400, borderColor: filtroFarol === o.k ? (o.cor || theme.accent) : theme.cb, background: filtroFarol === o.k ? 'rgba(255,255,255,0.05)' : 'transparent' }}>
+            {o.cor ? <Dot c={o.cor} /> : <i className="ti ti-list" />} {o.txt} <span style={{ color: theme.sub }}>({o.n})</span>
+          </button>
+        ))}
       </div>
       <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'auto' }}>
         <table style={{ width: '100%', minWidth: 960, borderCollapse: 'collapse' }}>
@@ -332,7 +358,10 @@ export default function Conciliacao() {
             </tr>
           </thead>
           <tbody>
-            {contas.map((c, i) => {
+            {contasVis.length === 0 && (
+              <tr><td colSpan={9} style={{ ...td, textAlign: 'center', color: theme.sub, padding: 20 }}>Nenhuma conta com esse farol.</td></tr>
+            )}
+            {contasVis.map((c, i) => {
               const sint = c.sintetica
               const peso = sint ? 700 : 400 // só as sintéticas em negrito
               const t = tipoEf(c)
