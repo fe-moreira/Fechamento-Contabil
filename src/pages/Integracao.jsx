@@ -66,6 +66,39 @@ function achadoNoRazao(row, idx) {
 }
 const brDataIso = iso => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || '')); return m ? `${m[3]}/${m[2]}/${m[1]}` : String(iso || '') }
 
+// Índice do razão E dos lançamentos ajustados (correções feitas no sistema também
+// carregam o acumulador no histórico) — agrupado por acumulador, só históricos com "Acum.".
+async function carregarIndiceFiscal(empresaId, competencia) {
+  const [mes, ano] = (competencia || '').split('/').map(Number)
+  const { data: comp } = await supabase.from('competencias').select('id')
+    .eq('cliente_id', empresaId).eq('ano', ano).eq('mes', mes).maybeSingle()
+  const byAcum = {}
+  if (!comp) return { byAcum }
+  const add = (hist, valor, data) => {
+    const acum = acumDoHistorico(hist); if (!acum) return
+    ;(byAcum[acum] ||= []).push({ valor, hist: hist || '', nfs: nfsDoHistorico(hist), data: data || '' })
+  }
+  const { data: rz } = await supabase.from('razao').select('data, historico, debito, credito').eq('competencia_id', comp.id)
+  for (const r of (rz || [])) add(r.historico, (Number(r.debito) || 0) + (Number(r.credito) || 0), r.data)
+  const { data: lc } = await supabase.from('lancamentos').select('data, historico, valor').eq('competencia_id', comp.id)
+  for (const l of (lc || [])) add(l.historico, Math.abs(Number(l.valor) || 0), l.data)
+  return { byAcum }
+}
+
+// Cruza as linhas do arquivo (acumulador) com o índice → resumo por acumulador.
+function cruzarFiscal(rows, idx) {
+  const porAcum = {}
+  for (const row of rows) {
+    const a = (porAcum[row.acum] ||= { acum: row.acum, docTotal: 0, idTotal: 0, qtd: 0, qtdId: 0, divs: [] })
+    a.qtd++; a.docTotal = Math.round((a.docTotal + row.valor) * 100) / 100
+    if (achadoNoRazao(row, idx)) { a.idTotal = Math.round((a.idTotal + row.valor) * 100) / 100; a.qtdId++ }
+    else a.divs.push({ nf: row.nf, data: row.data, forn: row.forn, valor: row.valor })
+  }
+  return Object.values(porAcum)
+    .map(a => ({ ...a, dif: Math.round((a.docTotal - a.idTotal) * 100) / 100 }))
+    .sort((x, y) => Math.abs(y.dif) - Math.abs(x.dif) || Number(x.acum) - Number(y.acum))
+}
+
 export default function Integracao() {
   const { empresas, empresaId, empresaNome, competencia, getCompetenciaId, plano, isAdmin } = useAppData()
   const { user } = useAuth()
@@ -197,28 +230,11 @@ function Fiscal({ competencia, empresaId, user, est, onEstado }) {
   const atual = tipos[sub]
   const nomeLabel = sub === 'entradas' ? 'Fornecedor' : 'Cliente'
 
-  // Índice do razão da competência (por NF e todos), para cruzar as linhas do arquivo.
+  // Índice do razão + lançamentos ajustados da competência, para cruzar o arquivo.
   useEffect(() => {
     let ativo = true
     setCarregando(true); setRazIdx(null); setExpand(null)
-    ;(async () => {
-      const [mes, ano] = (competencia || '').split('/').map(Number)
-      const { data: comp } = await supabase.from('competencias').select('id')
-        .eq('cliente_id', empresaId).eq('ano', ano).eq('mes', mes).maybeSingle()
-      if (!comp) { if (ativo) { setRazIdx({ byNf: {}, all: [] }); setCarregando(false) } return }
-      const { data: rz } = await supabase.from('razao')
-        .select('data, historico, debito, credito').eq('competencia_id', comp.id)
-      // Índice SÓ dos históricos que têm "Acum." (número), agrupados por acumulador.
-      // Ignora o resto do razão (contrapartida de banco etc.) — só a fiscal integra.
-      const byAcum = {}
-      for (const r of (rz || [])) {
-        const acum = acumDoHistorico(r.historico)
-        if (!acum) continue
-        const row = { valor: (Number(r.debito) || 0) + (Number(r.credito) || 0), hist: r.historico || '', nfs: nfsDoHistorico(r.historico), data: r.data || '' }
-        ;(byAcum[acum] ||= []).push(row)
-      }
-      if (ativo) { setRazIdx({ byAcum }); setCarregando(false) }
-    })()
+    carregarIndiceFiscal(empresaId, competencia).then(idx => { if (ativo) { setRazIdx(idx); setCarregando(false) } })
     return () => { ativo = false }
   }, [empresaId, competencia])
 
@@ -237,20 +253,29 @@ function Fiscal({ competencia, empresaId, user, est, onEstado }) {
         rows.push({ nf: String(r[col.nf] ?? '').trim(), data: dataISO(r[col.data]), acum, forn: String(r[col.forn] ?? '').trim(), valor })
       }
       if (!rows.length) { setErro('Não encontrei linhas com Acumulador (coluna R) e Valor (coluna AH). Confira o arquivo/colunas.'); setBusy(false); return }
-      const porAcum = {}
-      for (const row of rows) {
-        const a = (porAcum[row.acum] ||= { acum: row.acum, docTotal: 0, idTotal: 0, qtd: 0, qtdId: 0, divs: [] })
-        a.qtd++; a.docTotal = Math.round((a.docTotal + row.valor) * 100) / 100
-        if (achadoNoRazao(row, razIdx)) { a.idTotal = Math.round((a.idTotal + row.valor) * 100) / 100; a.qtdId++ }
-        else a.divs.push({ nf: row.nf, data: row.data, forn: row.forn, valor: row.valor })
-      }
-      const resumo = Object.values(porAcum)
-        .map(a => ({ ...a, dif: Math.round((a.docTotal - a.idTotal) * 100) / 100 }))
-        .sort((x, y) => Math.abs(y.dif) - Math.abs(x.dif) || Number(x.acum) - Number(y.acum))
-      const novoTipos = { ...tipos, [sub]: { doc: file.name, resumo } }
+      const novoTipos = { ...tipos, [sub]: { doc: file.name, rows, resumo: cruzarFiscal(rows, razIdx) } }
       const done = CHAVES_FISCAL.every(k => novoTipos[k])
       await onEstado({ ...est, tipos: novoTipos, estado: done ? 'validado' : null, doc: done ? 'Fiscal · 3 tipos importados' : null, usuario: user?.email || null })
     } catch (e) { setErro('Não consegui ler: ' + e.message) }
+    setBusy(false)
+  }
+
+  // Relê razão + lançamentos ajustados e re-cruza os arquivos já importados (sem
+  // precisar subir de novo). Assim, ao corrigir o acumulador no sistema, é só clicar.
+  async function atualizar() {
+    setErro(''); setBusy(true); setExpand(null)
+    try {
+      const idx = await carregarIndiceFiscal(empresaId, competencia)
+      setRazIdx(idx)
+      const novoTipos = { ...tipos }
+      let algum = false
+      for (const k of CHAVES_FISCAL) {
+        if (novoTipos[k]?.rows) { novoTipos[k] = { ...novoTipos[k], resumo: cruzarFiscal(novoTipos[k].rows, idx) }; algum = true }
+      }
+      if (!algum) { setErro('Nada para atualizar — reimporte o acumulador uma vez para habilitar o Atualizar.'); setBusy(false); return }
+      const done = CHAVES_FISCAL.every(k => novoTipos[k])
+      await onEstado({ ...est, tipos: novoTipos, estado: done ? 'validado' : null, doc: done ? 'Fiscal · 3 tipos importados' : null, usuario: user?.email || null })
+    } catch (e) { setErro('Não consegui atualizar: ' + e.message) }
     setBusy(false)
   }
 
@@ -259,6 +284,8 @@ function Fiscal({ competencia, empresaId, user, est, onEstado }) {
   const totDoc = (atual?.resumo || []).reduce((s, a) => s + a.docTotal, 0)
   const totId = (atual?.resumo || []).reduce((s, a) => s + a.idTotal, 0)
   const totDif = Math.round((totDoc - totId) * 100) / 100
+  const totQtd = (atual?.resumo || []).reduce((s, a) => s + a.qtd, 0)
+  const totQtdId = (atual?.resumo || []).reduce((s, a) => s + a.qtdId, 0)
 
   return (
     <>
@@ -276,7 +303,10 @@ function Fiscal({ competencia, empresaId, user, est, onEstado }) {
       <ImpCard titulo={`Importar acumulador — ${TIPOS_FISCAL.find(t => t[0] === sub)[1]}`}
         desc={`Colunas: NF (K), Data (N), Acumulador (R), ${nomeLabel} (U), Valor (AH). Cruza NF a NF com o razão.`}
         onImport={importar} nome={atual?.doc} qtd={atual ? atual.resumo.reduce((s, a) => s + a.qtd, 0) : undefined} />
-      {busy && <p style={{ color: theme.sub, fontSize: 12.5, margin: '10px 0 0' }}><i className="ti ti-loader" /> Cruzando com o razão…</p>}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '10px 0 0', flexWrap: 'wrap' }}>
+        {(atual?.rows || CHAVES_FISCAL.some(k => tipos[k]?.rows)) && <button className="btn btn-ghost" style={{ fontSize: 12.5 }} disabled={busy} onClick={atualizar} title="Relê o razão e os lançamentos ajustados e cruza de novo (sem subir o arquivo)"><i className="ti ti-refresh" /> Atualizar cruzamento</button>}
+        {busy && <span style={{ color: theme.sub, fontSize: 12.5 }}><i className="ti ti-loader" /> Cruzando com o razão + lançamentos…</span>}
+      </div>
 
       {atual && <>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(180px,1fr))', gap: 12, margin: '16px 0' }}>
@@ -331,10 +361,20 @@ function Fiscal({ competencia, empresaId, user, est, onEstado }) {
                 )
               })}
             </tbody>
+            <tfoot>
+              <tr style={{ borderTop: `2px solid ${theme.border}`, background: theme.input, fontWeight: 700 }}>
+                <td style={FS.td}>Total</td>
+                <td style={FS.td}>{totQtdId}/{totQtd}</td>
+                <td style={FS.tdR}>{money(totDoc)}</td>
+                <td style={{ ...FS.tdR, color: theme.green }}>{money(totId)}</td>
+                <td style={{ ...FS.tdR, color: Math.abs(totDif) < 0.005 ? theme.sub : theme.red }}>{money(totDif)}</td>
+                <td style={FS.td}></td>
+              </tr>
+            </tfoot>
           </table>
         </div>
         <p style={{ color: theme.sub, fontSize: 11.5, margin: '10px 0 0' }}>
-          Cruzamento por NF + valor + {nomeLabel.toLowerCase()} (e acumulador/data quando não há NF). A fiscal vira <b style={{ color: theme.text }}>validada</b> no Status quando os 3 tipos forem importados.
+          Cruzamento por NF + valor + {nomeLabel.toLowerCase()} (e acumulador/data quando não há NF), lendo o razão <b style={{ color: theme.text }}>e os lançamentos ajustados</b>. Corrigiu o acumulador no sistema? Clique em <b style={{ color: theme.text }}>Atualizar cruzamento</b>. A fiscal vira <b style={{ color: theme.text }}>validada</b> no Status quando os 3 tipos forem importados.
         </p>
       </>}
       {erro && <p style={{ color: theme.red, fontSize: 13, margin: '12px 0 0' }}>{erro}</p>}
