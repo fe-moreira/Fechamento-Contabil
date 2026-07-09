@@ -76,7 +76,7 @@ export function AppDataProvider({ children }) {
     const dist = await apurarDistribuicao(empresaId, comp.id)
     p += (dist.socios || []).filter(s => s.excede).length
     const br = await apurarBancoResultado(empresaId, comp.id)
-    p += (br.lancamentos || []).length
+    p += (br.lancamentos || []).filter(l => !l.tratado).length // justificados/corrigidos saem da contagem
     const variacoes = await apurarVariacoes(empresaId)
     p += (variacoes.itens || []).length
     setPendencias(p)
