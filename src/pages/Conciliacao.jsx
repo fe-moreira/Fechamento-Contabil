@@ -295,7 +295,12 @@ export default function Conciliacao() {
       const p = planoRed[String(cod)]
       return { reduzido: String(cod), conta: String(cod), classif: p.classif, classifRaw: p.classif, nome: p.nome || '', sintetica: false, folha: true, saldo_final: 0, saldo_inicial: 0, debito: 0, credito: 0 }
     })
-  const contas = extras.length ? [...baseContas, ...extras] : baseContas
+  // Ordena TODAS as contas pela classificação (dígitos) — assim as contas criadas por
+  // lançamento (ex.: "a distribuir" de um sócio) entram na posição certa, não no fim.
+  // A comparação por string dos dígitos preserva a hierarquia (sintética = prefixo → antes).
+  const chaveClassif = c => String(c.classifRaw || c.classif || '').replace(/\D/g, '')
+  const contas = (extras.length ? [...baseContas, ...extras] : [...baseContas])
+    .sort((a, b) => { const ka = chaveClassif(a), kb = chaveClassif(b); return ka < kb ? -1 : ka > kb ? 1 : 0 })
 
   if (!empresaId) return <Wrapper><Aviso texto="Selecione uma empresa no menu lateral." /></Wrapper>
   if (carregando) return <Wrapper><p style={{ color: theme.sub, fontSize: 13 }}>Carregando…</p></Wrapper>
