@@ -103,6 +103,12 @@ export async function enviarSaldoInicialContrato({ clienteId, origem, contrato, 
   return restante
 }
 
+// Competência de início do cliente (abertura), em "MM/AAAA".
+export async function competenciaInicioCliente(clienteId) {
+  const { data } = await supabase.from('clientes').select('competencia_inicio').eq('id', clienteId).maybeSingle()
+  return normalizaCompetencia(data?.competencia_inicio)
+}
+
 // Anexo do contrato (apólice/documento) no Storage privado, guardado por contrato.
 export async function anexarArquivoContrato(tabela, id, file) {
   const ext = (file.name.match(/\.[a-z0-9]+$/i) || [''])[0].toLowerCase()
