@@ -140,7 +140,7 @@ export async function composicaoAbertura(empresaId, compId, contaCod, classifRaw
     if (!alvo.has(soDig(codConta(r)))) continue
     const valor = saldoSinalAb(campoPor(r, /valor|saldo/), campoPor(r, /^d\/?c$|natureza/))
     if (Math.abs(valor) < 0.005) continue
-    const cliente = String(campoPor(r, /cliente|fornec|nome|descri/) || '').trim()
+    const cliente = String(campoPor(r, /cliente|fornec|nome|descri|histor/) || '').trim()
     const nf = String(campoPor(r, /\bnf\b|nota|document/) || '').trim()
     out.push({
       id: `abertura-${i++}`, data: 'abertura', contrapartida: '',
