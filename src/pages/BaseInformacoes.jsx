@@ -25,15 +25,51 @@ const r2dist = v => Math.round((v || 0) * 100) / 100
 // Relatório de composição da distribuição de lucros em ata: por conta/sócio mostra o
 // distribuído (saldo que começou), quantas parcelas já pagou, total pago, o pago no mês
 // do fechamento e o saldo a pagar. O SUBTOTAL por conta = saldo que bate na conciliação.
-function gerarRelatorioDistribuicaoAta({ formato, ata, competencia, empresaNome, planoMap = {} }) {
+function gerarRelatorioDistribuicaoAta({ formato, ata, competencia, empresaNome, planoMap = {}, escopo = 'mes', socioIdx = null }) {
   const [mm, aa] = String(competencia || '').split('/')
   const alvoMes = `${aa}-${String(mm).padStart(2, '0')}`
   const fimMes = ultimoDiaComp(competencia)
+  const posic = brDataDist(fimMes) || competencia
+  const contaLabel = conta => `Conta ${conta || '—'}${planoMap[conta]?.nome ? ' · ' + planoMap[conta].nome : ''}`
+  let socios = (ata?.socios || [])
+  if (socioIdx != null && socioIdx !== 'todos' && socioIdx !== '') socios = socios.filter((_, i) => i === Number(socioIdx))
+  socios = socios.filter(s => (Number(s.valor) || 0) || (s.pagamentos || []).length)
+  if (!socios.length) { alert('Cadastre os sócios (valor da ata) e os pagamentos para gerar o relatório.'); return }
+  const arqBase = `distribuicao_lucros_ata_${escopo === 'completo' ? 'completo_' : ''}${String(competencia).replace('/', '-')}`
+
+  // COMPLETO: extrato com cada pagamento por sócio.
+  if (escopo === 'completo') {
+    const titulo = 'Distribuição de Lucros (ata) — Extrato de pagamentos'
+    const sub = `${empresaNome || ''} · Posição em ${posic} · cada pagamento e o saldo a pagar`
+    const colunas = [
+      { nome: 'Data', largura: 16 },
+      { nome: 'Descrição', largura: 40, wrap: true },
+      { nome: 'Valor pago', alinhar: 'right', moeda: true },
+      { nome: 'Saldo a pagar', alinhar: 'right', moeda: true },
+    ]
+    let gPago = 0, gSaldo = 0
+    const dados = socios.map(s => {
+      const inicial = Number(s.valor) || 0
+      const pags = (s.pagamentos || []).filter(p => p.data && (!fimMes || p.data <= fimMes)).slice().sort((a, b) => String(a.data).localeCompare(String(b.data)))
+      let saldo = inicial, pago = 0
+      const linhas = [['—', 'Distribuído em ata (saldo inicial)', '', inicial]]
+      for (const p of pags) { const v = Number(p.valor) || 0; pago = r2dist(pago + v); saldo = r2dist(saldo - v); linhas.push([brDataDist(p.data), 'Pagamento', v, saldo]) }
+      gPago = r2dist(gPago + pago); gSaldo = r2dist(gSaldo + saldo)
+      return { titulo: `${s.nome || '—'} · ${contaLabel(String(s.conta || '').trim())}`, pago, saldo, linhas }
+    })
+    if (formato === 'excel') {
+      const secoes = dados.map(d => ({ titulo: d.titulo, linhas: d.linhas, totais: ['', 'Total pago / saldo a pagar', d.pago, d.saldo] }))
+      return gerarExcelTimbrado({ titulo, sub, colunas, secoes, totais: dados.length > 1 ? ['', 'TOTAL GERAL', gPago, gSaldo] : null, arquivo: arqBase + '.xlsx', aba: 'Distribuição' })
+    }
+    const secoes = dados.map(d => ({ titulo: d.titulo, linhas: d.linhas.map(l => [l[0], l[1], l[2] === '' ? '' : money(l[2]), money(l[3])]), totais: ['', 'Total pago / saldo a pagar', money(d.pago), money(d.saldo)] }))
+    return abrePdfTimbrado({ titulo, sub, colunas, secoes, totais: dados.length > 1 ? ['', 'TOTAL GERAL', money(gPago), money(gSaldo)] : null })
+  }
+
+  // SÓ DO MÊS: resumo por conta (composição do saldo a pagar, com o pago no mês).
   const grupos = {}
-  for (const s of (ata?.socios || [])) {
+  for (const s of socios) {
     const inicial = Number(s.valor) || 0
     const pags = (s.pagamentos || [])
-    if (!inicial && !pags.length) continue
     const pagosAte = pags.filter(p => p.data && (!fimMes || p.data <= fimMes))
     const totalPago = pagosAte.reduce((x, p) => x + (Number(p.valor) || 0), 0)
     const pagoMes = pags.filter(p => String(p.data || '').slice(0, 7) === alvoMes).reduce((x, p) => x + (Number(p.valor) || 0), 0)
@@ -44,10 +80,9 @@ function gerarRelatorioDistribuicaoAta({ formato, ata, competencia, empresaNome,
     g.inicial = r2dist(g.inicial + inicial); g.pago = r2dist(g.pago + totalPago); g.mes = r2dist(g.mes + pagoMes); g.saldo = r2dist(g.saldo + saldo); g.qtd += pagosAte.length
   }
   const arr = Object.values(grupos).sort((a, b) => String(a.conta).localeCompare(String(b.conta)))
-  if (!arr.length) { alert('Cadastre os sócios (valor da ata) e os pagamentos para gerar o relatório.'); return }
   const geral = arr.reduce((s, g) => ({ inicial: r2dist(s.inicial + g.inicial), pago: r2dist(s.pago + g.pago), mes: r2dist(s.mes + g.mes), saldo: r2dist(s.saldo + g.saldo) }), { inicial: 0, pago: 0, mes: 0, saldo: 0 })
-  const titulo = 'Distribuição de Lucros (ata) — Composição do Saldo a Pagar'
-  const sub = `${empresaNome || ''} · Posição em ${brDataDist(fimMes) || competencia} · o "Saldo a pagar" de cada conta bate com a conciliação`
+  const titulo = 'Distribuição de Lucros (ata) — Composição do saldo a pagar'
+  const sub = `${empresaNome || ''} · Posição em ${posic} · o "Saldo a pagar" de cada conta bate com a conciliação`
   const colunas = [
     { nome: 'Sócio', largura: 34, wrap: true },
     { nome: 'Distribuído (ata)', alinhar: 'right', moeda: true },
@@ -56,13 +91,11 @@ function gerarRelatorioDistribuicaoAta({ formato, ata, competencia, empresaNome,
     { nome: 'Pago no mês', alinhar: 'right', moeda: true },
     { nome: 'Saldo a pagar', alinhar: 'right', moeda: true },
   ]
-  const label = g => `Conta ${g.conta}${g.nome ? ' · ' + g.nome : ''}`
-  const arquivo = `distribuicao_lucros_ata_${String(competencia).replace('/', '-')}.${formato === 'excel' ? 'xlsx' : 'pdf'}`
   if (formato === 'excel') {
-    const secoes = arr.map(g => ({ titulo: label(g), linhas: g.itens.map(it => [it.nome, it.inicial, it.qtd, it.pago, it.mes, it.saldo]), totais: ['Subtotal', g.inicial, g.qtd, g.pago, g.mes, g.saldo] }))
-    return gerarExcelTimbrado({ titulo, sub, colunas, secoes, totais: ['TOTAL GERAL', geral.inicial, '', geral.pago, geral.mes, geral.saldo], arquivo, aba: 'Distribuição' })
+    const secoes = arr.map(g => ({ titulo: contaLabel(g.conta), linhas: g.itens.map(it => [it.nome, it.inicial, it.qtd, it.pago, it.mes, it.saldo]), totais: ['Subtotal', g.inicial, g.qtd, g.pago, g.mes, g.saldo] }))
+    return gerarExcelTimbrado({ titulo, sub, colunas, secoes, totais: ['TOTAL GERAL', geral.inicial, '', geral.pago, geral.mes, geral.saldo], arquivo: arqBase + '.xlsx', aba: 'Distribuição' })
   }
-  const secoes = arr.map(g => ({ titulo: label(g), linhas: g.itens.map(it => [it.nome, money(it.inicial), String(it.qtd), money(it.pago), money(it.mes), money(it.saldo)]), totais: ['Subtotal', money(g.inicial), String(g.qtd), money(g.pago), money(g.mes), money(g.saldo)] }))
+  const secoes = arr.map(g => ({ titulo: contaLabel(g.conta), linhas: g.itens.map(it => [it.nome, money(it.inicial), String(it.qtd), money(it.pago), money(it.mes), money(it.saldo)]), totais: ['Subtotal', money(g.inicial), String(g.qtd), money(g.pago), money(g.mes), money(g.saldo)] }))
   abrePdfTimbrado({ titulo, sub, colunas, secoes, totais: ['TOTAL GERAL', money(geral.inicial), '', money(geral.pago), money(geral.mes), money(geral.saldo)] })
 }
 
@@ -1101,6 +1134,8 @@ function ModalDist({ inicial, empresaId, competencia, empresaNome, planoMap = {}
   const [ata, setAta] = useState(inicial?.ata && !Array.isArray(inicial.ata) ? inicial.ata : { houve: false, arquivo: '', documento: '', socios: [] })
   const [salvando, setSalvando] = useState(false)
   const [erro, setErro] = useState('')
+  const [relEscopo, setRelEscopo] = useState('mes')   // 'mes' | 'completo'
+  const [relSocio, setRelSocio] = useState('todos')    // 'todos' | índice do sócio
 
   const upd = (set, i, k) => e => set(l => l.map((x, j) => j === i ? { ...x, [k]: e.target.value } : x))
   const rem = (set, i) => set(l => l.filter((_, j) => j !== i))
@@ -1234,12 +1269,22 @@ function ModalDist({ inicial, empresaId, competencia, empresaNome, planoMap = {}
           <p style={{ color: theme.text, fontSize: 12.5, margin: '8px 0 0', textAlign: 'right' }}>Total distribuído em ata: <b>{money(totalAta)}</b></p>
 
           {/* Relatório de composição (para o cliente e para conciliar) */}
-          <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap', alignItems: 'center', borderTop: `0.5px solid ${theme.cb}`, paddingTop: 12 }}>
-            <span style={{ fontSize: 12, color: theme.sub }}><i className="ti ti-report" /> Relatório de composição{competencia ? ` (${competencia})` : ''}:</span>
-            <button className="btn" style={{ fontSize: 12, padding: '6px 12px' }} onClick={() => gerarRelatorioDistribuicaoAta({ formato: 'pdf', ata, competencia, empresaNome, planoMap })} title="Composição do saldo a pagar (PDF) — arraste na conciliação para bater o saldo"><i className="ti ti-file-type-pdf" /> PDF</button>
-            <button className="btn btn-ghost" style={{ fontSize: 12, padding: '6px 12px', borderColor: theme.accent, color: theme.accent }} onClick={() => gerarRelatorioDistribuicaoAta({ formato: 'excel', ata, competencia, empresaNome, planoMap })} title="Composição do saldo a pagar (Excel)"><i className="ti ti-file-spreadsheet" /> Excel</button>
+          <div style={{ borderTop: `0.5px solid ${theme.cb}`, paddingTop: 12, marginTop: 12 }}>
+            <span style={{ fontSize: 12, color: theme.sub }}><i className="ti ti-report" /> Relatório de composição{competencia ? ` (${competencia})` : ''}</span>
+            <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+              <select className="input" style={{ width: 'auto', fontSize: 12, padding: '6px 10px' }} value={relEscopo} onChange={e => setRelEscopo(e.target.value)}>
+                <option value="mes">Só do mês (resumo)</option>
+                <option value="completo">Completo (cada pagamento)</option>
+              </select>
+              <select className="input" style={{ width: 'auto', fontSize: 12, padding: '6px 10px' }} value={relSocio} onChange={e => setRelSocio(e.target.value)}>
+                <option value="todos">Todos os sócios</option>
+                {(ata.socios || []).map((s, i) => <option key={i} value={i}>{s.nome || `Sócio ${i + 1}`}</option>)}
+              </select>
+              <button className="btn" style={{ fontSize: 12, padding: '6px 12px' }} onClick={() => gerarRelatorioDistribuicaoAta({ formato: 'pdf', ata, competencia, empresaNome, planoMap, escopo: relEscopo, socioIdx: relSocio })} title="Gerar em PDF — arraste na conciliação para bater o saldo"><i className="ti ti-file-type-pdf" /> PDF</button>
+              <button className="btn btn-ghost" style={{ fontSize: 12, padding: '6px 12px', borderColor: theme.accent, color: theme.accent }} onClick={() => gerarRelatorioDistribuicaoAta({ formato: 'excel', ata, competencia, empresaNome, planoMap, escopo: relEscopo, socioIdx: relSocio })} title="Gerar em Excel"><i className="ti ti-file-spreadsheet" /> Excel</button>
+            </div>
+            <p style={{ fontSize: 11, color: theme.sub, margin: '6px 0 0' }}>O saldo a pagar de cada conta bate com a conciliação. Só o pagamento com data dentro de {competencia || 'MM/AAAA'} entra como "pago no mês". O "completo" lista cada pagamento (bom para mandar ao cliente).</p>
           </div>
-          <p style={{ fontSize: 11, color: theme.sub, margin: '6px 0 0' }}>O saldo a pagar de cada conta bate com a conciliação. Só o pagamento com data dentro de {competencia || 'MM/AAAA'} entra como "pago no mês".</p>
         </>}
       </div>
 
