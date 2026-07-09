@@ -895,7 +895,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
           onClose={() => setQuebra(null)} onConfirmar={partes => confirmarQuebra(quebra.i, partes)} />
       )}
 
-      {cruzaOpen && cruza && <ModalCruzaSaldo cruza={cruza} linhas={linhas} planoMap={planoMap} onClose={() => setCruzaOpen(false)}
+      {cruzaOpen && cruza && <ModalCruzaSaldo cruza={cruza} linhas={linhas} planoMap={planoMap} titulo={raw?.banco ? `${raw.banco} ${nomeBanco(raw.banco)}` : ''} onClose={() => setCruzaOpen(false)}
         onVerDia={iso => { const p = String(iso).split('-'); setFData(`${p[2]}/${p[1]}`); setCruzaOpen(false) }} />}
 
       {cfg && (
@@ -913,9 +913,10 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
 // Além de apontar os dias que não bateram, tenta ser ASSERTIVO sobre o erro:
 // casa a diferença do dia com um lançamento (valor exato ou E/S trocada) e
 // detecta lançamento com data trocada (dois dias com diferença oposta e igual).
-function ModalCruzaSaldo({ cruza, linhas, planoMap, onClose, onVerDia }) {
+function ModalCruzaSaldo({ cruza, linhas, planoMap, titulo, onClose, onVerDia }) {
   const brd = iso => iso ? iso.split('-').reverse().join('/') : '—'
   const eps = v => Math.abs(v) < 0.005
+  const r2 = v => Math.round((v || 0) * 100) / 100
   const divergentes = cruza.dias.filter(d => d.delta != null && Math.abs(d.delta) >= 0.005)
   const [soDif, setSoDif] = useState(divergentes.length > 0)
   const [aberto, setAberto] = useState(() => new Set(divergentes.length === 1 ? [divergentes[0].data] : []))
@@ -928,9 +929,9 @@ function ModalCruzaSaldo({ cruza, linhas, planoMap, onClose, onVerDia }) {
     if (!trocaPar[A.data] && !trocaPar[B.data] && eps(A.delta + B.delta)) { trocaPar[A.data] = B.data; trocaPar[B.data] = A.data }
   }
 
-  // Análise de um dia divergente: lista os lançamentos do dia e destaca os que
-  // "explicam" a diferença (mesmo valor, ou o dobro = E/S trocada).
-  function analisar(d) {
+  // Análise de um dia divergente: lista os lançamentos do dia, destaca os que
+  // "explicam" a diferença (mesmo valor, ou o dobro = E/S trocada) e monta a dica.
+  function analisarDia(d) {
     const alvo = d.delta                     // + = classificado a mais; − = a menos
     const doDia = linhas.filter(l => l.data === d.data)
     const cand = []
@@ -939,18 +940,39 @@ function ModalCruzaSaldo({ cruza, linhas, planoMap, onClose, onVerDia }) {
       if (eps(v - Math.abs(alvo))) cand.push({ l, tipo: 'valor' })
       else if (eps(2 * v - Math.abs(alvo)) && ((alvo > 0 && l.entrada) || (alvo < 0 && !l.entrada))) cand.push({ l, tipo: 'sinal' })
     }
-    return { doDia, cand }
+    let dica
+    if (trocaPar[d.data]) dica = `Provável data trocada: um lançamento de ${money(Math.abs(alvo))} aparece aqui, mas o banco registrou em ${brd(trocaPar[d.data])} (um dia sobra, o outro falta o mesmo valor).`
+    else {
+      const sinal = cand.find(c => c.tipo === 'sinal'), exato = cand.find(c => c.tipo === 'valor')
+      if (sinal) dica = `O lançamento "${sinal.l.historico}" (${money(sinal.l.valor)}) está como ${sinal.l.entrada ? 'Entrada' : 'Saída'} — se for ${sinal.l.entrada ? 'Saída' : 'Entrada'}, zera a diferença do dia.`
+      else if (exato) dica = `Confira o lançamento "${exato.l.historico}" (${money(exato.l.valor)}) — bate exatamente com a diferença do dia.`
+      else dica = alvo > 0 ? `Classificado ${money(alvo)} a mais — falta uma Saída de ${money(alvo)} (ou há uma entrada a mais) neste dia.` : `Classificado ${money(-alvo)} a menos — falta uma Entrada de ${money(-alvo)} (ou há uma saída a mais) neste dia.`
+    }
+    return { doDia, cand, dica }
   }
-  function frase(d) {
-    if (trocaPar[d.data]) return <>Provável <b>data trocada</b>: um lançamento de <b>{money(Math.abs(d.delta))}</b> aparece aqui, mas o banco o registrou em <b>{brd(trocaPar[d.data])}</b> (um dia sobra, o outro falta o mesmo valor).</>
-    const { cand } = analisar(d)
-    const sinal = cand.find(c => c.tipo === 'sinal')
-    const exato = cand.find(c => c.tipo === 'valor')
-    if (sinal) return <>O lançamento <b>“{sinal.l.historico}”</b> ({money(sinal.l.valor)}) está como <b>{sinal.l.entrada ? 'Entrada' : 'Saída'}</b> — se for <b>{sinal.l.entrada ? 'Saída' : 'Entrada'}</b>, zera a diferença do dia.</>
-    if (exato) return <>Confira o lançamento <b>“{exato.l.historico}”</b> ({money(exato.l.valor)}) — bate <b>exatamente</b> com a diferença do dia.</>
-    return d.delta > 0
-      ? <>Classificado <b>{money(d.delta)} a mais</b> — falta uma <b>Saída</b> de {money(d.delta)} (ou há uma entrada a mais) neste dia.</>
-      : <>Classificado <b>{money(-d.delta)} a menos</b> — falta uma <b>Entrada</b> de {money(-d.delta)} (ou há uma saída a mais) neste dia.</>
+
+  // Exporta os apontamentos (resumo por dia + lançamentos dos dias com diferença)
+  // para Excel, para procurar/filtrar a diferença fora da tela.
+  async function exportar() {
+    const XLSX = await import('xlsx')
+    const resumo = [['Data', 'Movimento classificado', 'Saldo calculado', 'Saldo extrato', 'Diferença acumulada', 'Diferença do dia', 'Situação', 'Provável causa']]
+    for (const d of cruza.dias) {
+      const div = d.delta != null && Math.abs(d.delta) >= 0.005
+      resumo.push([brd(d.data), r2(d.mov), r2(d.calc), d.ext == null ? '' : r2(d.ext), d.dif == null ? '' : r2(d.dif), d.delta == null ? '' : r2(d.delta), div ? 'NÃO BATEU' : 'ok', div ? analisarDia(d).dica : ''])
+    }
+    const lanc = [['Data', 'Histórico', 'Valor', 'Tipo', 'Contrapartida', 'Conta (nome)', 'Provável causa?']]
+    for (const d of divergentes) {
+      const a = analisarDia(d)
+      if (!a.doDia.length) lanc.push([brd(d.data), '(nenhum lançamento neste dia)', '', '', '', '', 'possível lançamento faltando'])
+      for (const l of a.doDia) lanc.push([brd(d.data), l.historico, r2(l.valor), l.entrada ? 'Entrada' : 'Saída', l.contra || '', planoMap[String(l.contra)]?.nome || '', a.cand.some(c => c.l === l) ? 'SIM' : ''])
+    }
+    const wb = XLSX.utils.book_new()
+    const ws1 = XLSX.utils.aoa_to_sheet(resumo); ws1['!cols'] = [{ wch: 12 }, { wch: 20 }, { wch: 16 }, { wch: 16 }, { wch: 18 }, { wch: 16 }, { wch: 12 }, { wch: 70 }]
+    XLSX.utils.book_append_sheet(wb, ws1, 'Resumo por dia')
+    const ws2 = XLSX.utils.aoa_to_sheet(lanc); ws2['!cols'] = [{ wch: 12 }, { wch: 46 }, { wch: 14 }, { wch: 10 }, { wch: 14 }, { wch: 30 }, { wch: 16 }]
+    XLSX.utils.book_append_sheet(wb, ws2, 'Dias com diferença')
+    const slug = String(titulo || 'banco').replace(/[^\w]+/g, '_').replace(/^_|_$/g, '')
+    XLSX.writeFile(wb, `apontamentos_cruzamento_${slug}.xlsx`)
   }
 
   const linhasTabela = soDif ? divergentes : cruza.dias
@@ -971,7 +993,7 @@ function ModalCruzaSaldo({ cruza, linhas, planoMap, onClose, onVerDia }) {
         {divergentes.length > 0 && (
           <div style={{ marginBottom: 14 }}>
             {divergentes.map((d, i) => {
-              const { doDia, cand } = analisar(d)
+              const { doDia, cand, dica } = analisarDia(d)
               const isCand = l => cand.some(c => c.l === l)
               const exp = aberto.has(d.data)
               return (
@@ -980,7 +1002,7 @@ function ModalCruzaSaldo({ cruza, linhas, planoMap, onClose, onVerDia }) {
                     <i className="ti ti-alert-triangle" style={{ color: theme.red, marginTop: 2 }} />
                     <div style={{ flex: 1, fontSize: 12.5 }}>
                       <b style={{ color: theme.text }}>{brd(d.data)}</b> · diferença do dia <b style={{ color: theme.red }}>{money(d.delta)}</b>
-                      <div style={{ color: theme.sub, marginTop: 3 }}>{frase(d)}</div>
+                      <div style={{ color: theme.sub, marginTop: 3 }}>{dica}</div>
                     </div>
                     <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
                       <button className="btn btn-ghost" style={{ fontSize: 11, padding: '3px 8px', whiteSpace: 'nowrap' }} onClick={() => toggle(d.data)}><i className={`ti ${exp ? 'ti-chevron-up' : 'ti-chevron-down'}`} /> {doDia.length} lançto(s)</button>
@@ -1036,7 +1058,10 @@ function ModalCruzaSaldo({ cruza, linhas, planoMap, onClose, onVerDia }) {
           </table>
         </div>
         <p style={{ color: theme.sub, fontSize: 11, margin: '10px 0 0' }}>"Dif. do dia" é a mudança da diferença de um dia para o outro. A estrela ⭐ marca o lançamento que provavelmente causa a diferença. Clique num dia para filtrar os lançamentos na tabela.</p>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14 }}><button className="btn" onClick={onClose}>Fechar</button></div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginTop: 14 }}>
+          <button className="btn btn-ghost" onClick={exportar}><i className="ti ti-file-spreadsheet" /> Exportar apontamentos (Excel)</button>
+          <button className="btn" onClick={onClose}>Fechar</button>
+        </div>
       </div>
     </div>
   )
