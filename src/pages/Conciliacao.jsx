@@ -429,7 +429,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
     const [{ data: rz }, { data: aj }, { data: acs }, abertura] = await Promise.all([
       supabase.from('razao').select('id, data, contrapartida, historico, debito, credito').eq('competencia_id', compId).eq('conta', conta.conta).order('data'),
       supabase.from('ajuste_leitura').select('razao_id, nf, entidade, historico').eq('competencia_id', compId),
-      supabase.from('lancamentos').select('id, data, conta_debito, conta_credito, valor, historico, razao_id').eq('competencia_id', compId),
+      supabase.from('lancamentos').select('id, data, conta_debito, conta_credito, valor, historico, razao_id, origem').eq('competencia_id', compId),
       composicaoAbertura(empresaId, compId, conta.conta, conta.classifRaw),
     ])
     const ajById = {}; for (const a of (aj || [])) ajById[a.razao_id] = a
@@ -447,7 +447,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
           debito: ehDeb ? (Number(a.valor) || 0) : 0,
           credito: ehDeb ? 0 : (Number(a.valor) || 0),
         }, null)
-        return { ...base, acerto: true, razaoRef: a.razao_id || null }
+        return { ...base, acerto: true, origem: a.origem || null, razaoRef: a.razao_id || null }
       })
     // Títulos de abertura (saldo anterior) primeiro; depois o movimento do mês; por fim os acertos.
     setLanc([...(abertura || []).map(a => ({ ...a, _abertura: true })), ...(rz || []).map(l => aplicarAjuste(l, ajById[l.id])), ...acertoLancs])
@@ -776,7 +776,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
                   return (
                     <tr key={i} onClick={() => abrirLinha(l)}
                       style={{ borderTop: `1px solid ${theme.border}`, cursor: 'pointer', opacity: (l.acerto || tratados.has(l.id)) ? 0.7 : 1, background: (l.acerto || tratados.has(l.id)) ? 'rgba(48,164,108,0.08)' : semNF ? 'rgba(229,72,77,0.08)' : 'transparent' }}
-                      title={l.acerto ? 'Lançamento de acerto (estorno/correção) — clique para ver ou desfazer' : tratados.has(l.id) ? 'Já tratado — clique para ver o que foi feito ou desfazer' : semNF ? 'Baixa com NF que não confere com o título — justifique ou corrija' : 'Justificar ou corrigir este lançamento'}>
+                      title={l.acerto ? `${tagAcertoLanc(l).titulo} — clique para ver ou desfazer` : tratados.has(l.id) ? 'Já tratado — clique para ver o que foi feito ou desfazer' : semNF ? 'Baixa com NF que não confere com o título — justifique ou corrija' : 'Justificar ou corrigir este lançamento'}>
                       <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{l.data || '—'}</td>
                       <td style={{ ...td, color: semNF ? theme.red : theme.sub, fontWeight: 600 }}>NF {l.leitura.nf || '—'}</td>
                       <td style={{ ...td, color: theme.sub, fontFamily: 'monospace', fontSize: 11, maxWidth: 280 }}>{l.historico}</td>
@@ -789,7 +789,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
                       <td style={{ ...tdR, color: theme.red }}>{Number(l.credito) ? money(l.credito) : '—'}</td>
                       <td style={{ ...td, textAlign: 'center' }}>
                         {l.acerto
-                          ? <span title="Lançamento de acerto (estorno/correção)" style={{ color: theme.accent, fontSize: 10.5, fontWeight: 700, whiteSpace: 'nowrap' }}><i className="ti ti-arrow-back-up" /> estorno</span>
+                          ? <span title={tagAcertoLanc(l).titulo} style={{ color: theme.accent, fontSize: 10.5, fontWeight: 700, whiteSpace: 'nowrap' }}><i className={`ti ${tagAcertoLanc(l).icon}`} /> {tagAcertoLanc(l).txt}</span>
                           : tratados.has(l.id)
                             ? <span title="Já tratado" style={{ color: theme.green, fontSize: 10.5, fontWeight: 700, whiteSpace: 'nowrap' }}><i className="ti ti-arrow-back-up" /> corrigido</span>
                             : semNF
@@ -847,7 +847,7 @@ function ListaLancamentos({ lanc, carregando, contraDe, planoMap, tratados = new
             ) : lanc.map((l, i) => {
               const contras = contraDe(l)
               return (
-                <tr key={i} onClick={() => onTratar(l)} style={{ borderTop: `1px solid ${theme.border}`, cursor: 'pointer', opacity: (l.acerto || tratados.has(l.id)) ? 0.7 : 1, background: (l.acerto || tratados.has(l.id)) ? 'rgba(48,164,108,0.08)' : 'transparent' }} title={l.acerto ? 'Lançamento de acerto (estorno/correção) — clique para ver ou desfazer' : tratados.has(l.id) ? 'Já tratado — clique para ver ou desfazer' : 'Justificar ou corrigir este lançamento'}>
+                <tr key={i} onClick={() => onTratar(l)} style={{ borderTop: `1px solid ${theme.border}`, cursor: 'pointer', opacity: (l.acerto || tratados.has(l.id)) ? 0.7 : 1, background: (l.acerto || tratados.has(l.id)) ? 'rgba(48,164,108,0.08)' : 'transparent' }} title={l.acerto ? `${tagAcertoLanc(l).titulo} — clique para ver ou desfazer` : tratados.has(l.id) ? 'Já tratado — clique para ver ou desfazer' : 'Justificar ou corrigir este lançamento'}>
                   <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{l.data || '—'}</td>
                   <td style={{ ...td, color: theme.sub, fontFamily: 'monospace', fontSize: 11, maxWidth: 320 }}>{l.historico}</td>
                   <td style={{ ...td, fontSize: 11.5, whiteSpace: 'nowrap' }} title={contras.map(c => `${c}${planoMap[c] ? ' · ' + planoMap[c] : ''}`).join('\n')}>
@@ -858,7 +858,7 @@ function ListaLancamentos({ lanc, carregando, contraDe, planoMap, tratados = new
                   <td style={{ ...tdR, color: theme.green }}>{Number(l.debito) ? money(l.debito) : '—'}</td>
                   <td style={{ ...tdR, color: theme.red }}>{Number(l.credito) ? money(l.credito) : '—'}</td>
                   <td style={{ ...td, textAlign: 'center' }}>{l.acerto
-                    ? <span title="Lançamento de acerto (estorno/correção)" style={{ color: theme.accent, fontSize: 10.5, fontWeight: 700, whiteSpace: 'nowrap' }}><i className="ti ti-arrow-back-up" /> estorno</span>
+                    ? <span title={tagAcertoLanc(l).titulo} style={{ color: theme.accent, fontSize: 10.5, fontWeight: 700, whiteSpace: 'nowrap' }}><i className={`ti ${tagAcertoLanc(l).icon}`} /> {tagAcertoLanc(l).txt}</span>
                     : tratados.has(l.id)
                       ? <span title="Já tratado" style={{ color: theme.green, fontSize: 10.5, fontWeight: 700, whiteSpace: 'nowrap' }}><i className="ti ti-arrow-back-up" /> corrigido</span>
                       : <i className="ti ti-dots" style={{ color: theme.sub }} />}</td>
@@ -1481,6 +1481,16 @@ const numCell = v => { if (typeof v === 'number') return v; const s = String(v ?
 // 3) senão, o último número do arquivo (palpite — o comportamento antigo).
 // Se o usuário destacou uma célula em AMARELO no extrato, lê o número dela (é o
 // jeito mais direto de apontar o saldo). Precisa de cellStyles ao ler o arquivo.
+// Etiqueta do lançamento gerado pela plataforma (linha "acerto" na conciliação).
+// Antes tudo virava "estorno"; agora reflete a ORIGEM: apropriação de seguro/despesa
+// não é estorno — só correção/estorno de fato leva essa etiqueta.
+function tagAcertoLanc(l) {
+  const o = String(l?.origem || '')
+  if (o === 'seguro' || o === 'despesa') return { txt: 'apropriação', icon: 'ti-calendar-repeat', titulo: 'Apropriação gerada pela plataforma' }
+  if (o === 'correcao' || o === 'estorno') return { txt: 'estorno', icon: 'ti-arrow-back-up', titulo: 'Lançamento de acerto (estorno/correção)' }
+  return { txt: 'lançamento', icon: 'ti-file-plus', titulo: 'Lançamento gerado pela plataforma' }
+}
+
 function saldoCelulaAmarela(ws, XLSX) {
   if (!ws || !ws['!ref']) return null
   const range = XLSX.utils.decode_range(ws['!ref'])
