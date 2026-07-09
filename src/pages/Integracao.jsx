@@ -78,8 +78,13 @@ async function carregarIndiceFiscal(empresaId, competencia) {
     const acum = acumDoHistorico(hist); if (!acum) return
     ;(byAcum[acum] ||= []).push({ valor, hist: hist || '', nfs: nfsDoHistorico(hist), data: data || '' })
   }
-  const { data: rz } = await supabase.from('razao').select('data, historico, debito, credito').eq('competencia_id', comp.id)
-  for (const r of (rz || [])) add(r.historico, (Number(r.debito) || 0) + (Number(r.credito) || 0), r.data)
+  const { data: rz } = await supabase.from('razao').select('id, data, historico, debito, credito').eq('competencia_id', comp.id)
+  // Correções de leitura sobrescrevem o histórico exibido (ex.: acumulador ajustado
+  // de 1602 → 614) sem mudar o razão. Usa o histórico corrigido quando existir.
+  const ajuste = {}
+  const { data: aj } = await supabase.from('ajuste_leitura').select('razao_id, historico')
+  for (const a of (aj || [])) if (a.historico) ajuste[a.razao_id] = a.historico
+  for (const r of (rz || [])) add(ajuste[r.id] || r.historico, (Number(r.debito) || 0) + (Number(r.credito) || 0), r.data)
   const { data: lc } = await supabase.from('lancamentos').select('data, historico, valor').eq('competencia_id', comp.id)
   for (const l of (lc || [])) add(l.historico, Math.abs(Number(l.valor) || 0), l.data)
   return { byAcum }
