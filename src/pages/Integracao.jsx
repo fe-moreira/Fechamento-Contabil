@@ -183,6 +183,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   const [saldoExtrato, setSaldoExtrato] = useState('')     // saldo do extrato informado pelo usuário
   const [cruza, setCruza] = useState(null)                 // resultado do cruzamento por dia com o extrato
   const [cruzaOpen, setCruzaOpen] = useState(false)        // modal do cruzamento aberto (dá p/ reabrir)
+  const [novoLanc, setNovoLanc] = useState(false)          // modal de incluir lançamento manual
   const refsContra = useRef({})                  // foco: Enter pula para a próxima linha
 
   const nomeBanco = cod => planoMap[String(cod)]?.nome || (cod ? `Conta ${cod}` : '—')
@@ -419,6 +420,24 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     }
   }
   const setLinha = (i, patch) => setLinhas(ls => ls.map((l, j) => j === i ? { ...l, ...patch } : l))
+
+  // Salva as linhas no rascunho do banco (mantém estado/doc atuais).
+  function persistirLinhas(novas) {
+    if (raw?.banco) salvarBancoDraft(raw.banco, bancosEst[raw.banco]?.estado || 'rascunho', raw.nome, novas)
+  }
+  // Exclui um lançamento (com confirmação) — para corrigir direto antes de gerar.
+  function excluirLinha(i) {
+    if (!window.confirm('Tem certeza que deseja excluir este lançamento?')) return
+    const novas = linhas.filter((_, j) => j !== i)
+    setLinhas(novas); setSel(new Set()); persistirLinhas(novas)
+    setMsg('Lançamento excluído.')
+  }
+  // Inclui um lançamento manual (confirmado no modal) — ex.: um que faltou.
+  function adicionarLinha(nova) {
+    const novas = [...linhas, nova]
+    setLinhas(novas); persistirLinhas(novas); setNovoLanc(false)
+    setMsg('Lançamento incluído.')
+  }
 
   // Filtros da tabela de classificação + preenchimento em lote.
   const dataBR = iso => iso ? iso.split('-').reverse().join('/') : ''
@@ -813,6 +832,8 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
             <span style={{ color: theme.sub }}>mostrando <b>{visiveis.length}</b> de {linhas.length}{sel.size ? ` · ${sel.size} selecionada(s)` : ''}</span>
             {filtroAtivo && <span style={{ color: theme.sub }}>{fData ? `dia ${fData}: ` : 'filtro: '}<b style={{ color: theme.green }}>+{money(totVisEnt)}</b> · <b style={{ color: theme.red }}>−{money(totVisSai)}</b> · líquido <b style={{ color: theme.text }}>{money(totVisEnt - totVisSai)}</b></span>}
             {sel.size > 0 && <button className="btn btn-ghost" style={{ fontSize: 11.5, padding: '3px 8px', color: theme.sub }} onClick={() => setSel(new Set())}>limpar seleção</button>}
+            <span style={{ flex: 1 }} />
+            <button className="btn btn-ghost" style={{ fontSize: 11.5, padding: '3px 9px' }} onClick={() => setNovoLanc(true)}><i className="ti ti-plus" /> Incluir lançamento</button>
           </div>
           <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center', fontSize: 12.5, margin: '0 0 10px', padding: '10px 12px', background: theme.input, borderRadius: 8 }}>
             <span style={{ color: theme.sub }}>Saldo anterior {raw.banco ? `(${raw.banco} · ${nomeBanco(raw.banco)})` : ''}: <b style={{ color: theme.text }}>{saldoAnterior == null ? '—' : money(saldoAnterior)}</b></span>
@@ -862,6 +883,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
                         <div style={{ flex: 1 }}><ContraCell value={l.contra} onCommit={v => setLinha(i, { contra: v })}
                           inputRef={el => { refsContra.current[pos] = el }} onEnter={() => refsContra.current[pos + 1]?.focus()} /></div>
                         <i className="ti ti-arrows-split-2" title="Dividir em vários lançamentos" onClick={() => setQuebra({ i, linha: l })} style={{ color: theme.sub, cursor: 'pointer', fontSize: 16, flexShrink: 0 }} />
+                        <i className="ti ti-trash" title="Excluir lançamento" onClick={() => excluirLinha(i)} style={{ color: theme.red, cursor: 'pointer', fontSize: 15, flexShrink: 0 }} />
                       </div>
                     </td>
                     <td style={{ ...ftd, fontSize: 11.5, maxWidth: 220 }}>
@@ -897,6 +919,9 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
 
       {cruzaOpen && cruza && <ModalCruzaSaldo cruza={cruza} linhas={linhas} planoMap={planoMap} titulo={raw?.banco ? `${raw.banco} ${nomeBanco(raw.banco)}` : ''} onClose={() => setCruzaOpen(false)}
         onVerDia={iso => { const p = String(iso).split('-'); setFData(`${p[2]}/${p[1]}`); setCruzaOpen(false) }} />}
+
+      {novoLanc && <ModalNovoLancamento banco={raw?.banco} nomeBanco={nomeBanco} competencia={competencia} planoMap={planoMap}
+        onClose={() => setNovoLanc(false)} onConfirmar={adicionarLinha} />}
 
       {cfg && (
         <PerfilExtratoCfg
@@ -1081,6 +1106,62 @@ function ContraCell({ value, onCommit, onEnter, inputRef }) {
       onPick={p => { setV(p.cod); onCommit(p.cod) }}
       onEnter={() => { commit(v); onEnter && onEnter() }}
       onBlur={() => commit(v)} />
+  )
+}
+
+// Inclui um lançamento manual na classificação (ex.: um que faltou, identificado
+// no cruzamento). Confirma antes de subir. Data precisa estar na competência.
+function ModalNovoLancamento({ banco, nomeBanco, competencia, planoMap, onClose, onConfirmar }) {
+  const [mes, ano] = (competencia || '').split('/').map(Number)
+  const ultimo = (mes && ano) ? new Date(ano, mes, 0).getDate() : 1
+  const dataPad = (mes && ano) ? `${ano}-${String(mes).padStart(2, '0')}-${String(ultimo).padStart(2, '0')}` : ''
+  const [data, setData] = useState(dataPad)
+  const [valor, setValor] = useState('')
+  const [entrada, setEntrada] = useState(false)
+  const [historico, setHistorico] = useState('')
+  const [contra, setContra] = useState('')
+  const [erro, setErro] = useState('')
+  const v = parseValor(valor)
+  const nomeC = planoMap[String(contra).trim()]?.nome || ''
+  function confirmar() {
+    if (!(v > 0)) { setErro('Informe um valor maior que zero.'); return }
+    if (!data) { setErro('Informe a data.'); return }
+    const [dy, dm] = data.split('-').map(Number)
+    if (mes && ano && (dm !== mes || dy !== ano)) { setErro(`A data deve estar na competência ${competencia}.`); return }
+    if (!historico.trim()) { setErro('Informe o histórico.'); return }
+    onConfirmar({ banco: banco || '', data, historico: historico.trim(), valor: Math.abs(v), entrada, contra: String(contra).trim(), credor: '' })
+  }
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 16, zIndex: 60 }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 'min(560px,96vw)', maxHeight: '90vh', overflow: 'auto', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 22 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+          <h2 style={{ fontSize: 16, margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}><i className="ti ti-plus" style={{ color: theme.accent }} /> Incluir lançamento</h2>
+          <span onClick={onClose} style={{ cursor: 'pointer', color: theme.sub, fontSize: 20 }}><i className="ti ti-x" /></span>
+        </div>
+        <p style={{ color: theme.sub, fontSize: 12, margin: '0 0 12px' }}>{banco ? `${banco} · ${nomeBanco(banco)}` : 'Banco'} · competência {competencia}</p>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          <div><label style={{ fontSize: 12, color: theme.sub }}>Data</label><input className="input" type="date" value={data} onChange={e => setData(e.target.value)} /></div>
+          <div><label style={{ fontSize: 12, color: theme.sub }}>Valor</label><input className="input" type="number" step="0.01" value={valor} onChange={e => setValor(e.target.value)} placeholder="0,00" /></div>
+          <div style={{ gridColumn: 'span 2' }}>
+            <label style={{ fontSize: 12, color: theme.sub }}>Tipo</label>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button className={entrada ? 'btn' : 'btn btn-ghost'} style={{ fontSize: 12, flex: 1 }} onClick={() => setEntrada(true)}>Entrada (D banco)</button>
+              <button className={!entrada ? 'btn' : 'btn btn-ghost'} style={{ fontSize: 12, flex: 1 }} onClick={() => setEntrada(false)}>Saída (C banco)</button>
+            </div>
+          </div>
+          <div style={{ gridColumn: 'span 2' }}><label style={{ fontSize: 12, color: theme.sub }}>Histórico</label><input className="input" value={historico} onChange={e => setHistorico(e.target.value)} placeholder="Descrição do lançamento" /></div>
+          <div style={{ gridColumn: 'span 2' }}>
+            <label style={{ fontSize: 12, color: theme.sub }}>Contrapartida {nomeC && <span style={{ color: theme.green }}>· {nomeC}</span>}</label>
+            <CampoConta value={contra} onChange={setContra} placeholder="Conta (F4)" />
+          </div>
+        </div>
+        {erro && <p style={{ color: theme.red, fontSize: 12.5, marginTop: 10 }}>{erro}</p>}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
+          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+          <button className="btn" onClick={confirmar}><i className="ti ti-check" /> Confirmar e incluir</button>
+        </div>
+      </div>
+    </div>
   )
 }
 
