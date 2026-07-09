@@ -5,7 +5,7 @@ import { useAuth } from '../components/AuthProvider'
 import { apurarDistribuicao } from '../lib/distribuicao'
 import { apurarBancoResultado } from '../lib/bancoResultado'
 import { apurarVariacoes } from '../lib/variacoes'
-import { difConciliacao } from '../lib/balancete'
+import { contasConciliacaoAbertas } from '../lib/balancete'
 import { theme, money } from '../lib/theme'
 import { abrePdfTimbrado } from '../lib/pdf'
 import { gerarExcelTimbrado } from '../lib/excel'
@@ -76,44 +76,20 @@ export default function Status() {
       setCompId(comp.id); setStatus(comp.status || 'andamento')
       const { count: razaoCount } = await supabase.from('razao')
         .select('id', { count: 'exact', head: true }).eq('competencia_id', comp.id)
-      const { data: balancete } = await supabase.from('balancete')
-        .select('conta, saldo_final').eq('competencia_id', comp.id)
       const { data: obs } = await supabase.from('auditoria')
         .select('modulo, item, detalhe, created_at').eq('competencia_id', comp.id)
         .eq('tipo', 'Justificativa').order('created_at', { ascending: false })
       const { data: lancs } = await supabase.from('lancamentos')
         .select('id, data, conta_debito, conta_credito, valor, historico, origem').eq('competencia_id', comp.id).order('data')
-      const { data: concRows } = await supabase.from('conciliacao_conta')
-        .select('conta, saldo_documento, documento_path, conciliada, justificativa').eq('competencia_id', comp.id)
       const docs = Array.isArray(comp.documentos) ? comp.documentos : []
       temRazao = (razaoCount || 0) > 0
       // Só documento indeciso (pendente) bloqueia. "Não tem" e "Não enviou" não
       // bloqueiam o Status (o "não enviou" vai para o relatório de pendências).
       docsPendentes = docs.filter(d => { const s = d?.situacao ?? (d?.rec ? 'recebido' : ''); return s === '' })
 
-      // Conciliação: pendente = conta Ativo/Passivo com saldo EFETIVO ≠ 0 que ainda
-      // está VERMELHA no painel (sem documento que bate e sem justificativa). Assim o
-      // Status diminui conforme a pessoa concilia. Inclui contas que só têm lançamento
-      // (manual/correção) e não vieram no balancete importado (ex.: "a distribuir").
-      const conf = {}; for (const r of (concRows || [])) conf[String(r.conta)] = r
-      const aj = {} // conta → efeito no saldo (D − C) dos lançamentos
-      for (const l of (lancs || [])) {
-        const v = Number(l.valor) || 0
-        if (l.conta_debito) aj[String(l.conta_debito)] = (aj[String(l.conta_debito)] || 0) + v
-        if (l.conta_credito) aj[String(l.conta_credito)] = (aj[String(l.conta_credito)] || 0) - v
-      }
-      const saldoBal = {}; for (const b of (balancete || [])) saldoBal[String(b.conta)] = Number(b.saldo_final) || 0
-      const ehAtivoPassivo = c => { const d = String(planoMap[String(c)]?.classif || '').trim()[0]; return d === '1' || d === '2' }
-      const candidatos = new Set([...Object.keys(saldoBal), ...Object.keys(aj)].filter(ehAtivoPassivo))
-      const conciliada = (c, saldoEf) => {
-        const reg = conf[String(c)]; if (!reg) return false
-        if (reg.documento_path && reg.saldo_documento != null && Math.abs(difConciliacao(saldoEf, reg.saldo_documento)) < 0.05) return true // verde
-        if (reg.conciliada && reg.justificativa) return true // amarela (justificada)
-        return false
-      }
-      contasAbertas = [...candidatos]
-        .map(c => ({ conta: c, saldo_final: (saldoBal[c] || 0) + (aj[c] || 0) }))
-        .filter(c => Math.abs(c.saldo_final) > 0.005 && !conciliada(c.conta, c.saldo_final))
+      // Conciliação: pendente = conta Ativo/Passivo ainda VERMELHA (fonte única, igual
+      // ao badge do menu — os números batem).
+      contasAbertas = await contasConciliacaoAbertas(empresaId, comp.id)
       integracoes = comp.integracoes || {}
       observacoes = obs || []
       lancamentos = lancs || []

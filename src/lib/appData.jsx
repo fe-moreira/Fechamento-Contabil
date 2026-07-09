@@ -4,7 +4,7 @@ import { useAuth } from '../components/AuthProvider'
 import { apurarDistribuicao } from './distribuicao'
 import { apurarBancoResultado } from './bancoResultado'
 import { apurarVariacoes } from './variacoes'
-import { parsePlano, applyMask } from './balancete'
+import { parsePlano, applyMask, contasConciliacaoAbertas } from './balancete'
 
 // Estado compartilhado: empresa (cliente) e competência selecionadas no topo,
 // usados pelos módulos de fechamento. Resolve/cria a linha de `competencias`
@@ -69,8 +69,8 @@ export function AppDataProvider({ children }) {
     if (!count) p += 1
     // Só documento indeciso (pendente) conta; "não tem"/"não enviou" não bloqueiam.
     p += (Array.isArray(comp.documentos) ? comp.documentos : []).filter(d => (d?.situacao ?? (d?.rec ? 'recebido' : '')) === '').length
-    const { data: bal } = await supabase.from('balancete').select('saldo_final').eq('competencia_id', comp.id)
-    p += (bal || []).filter(b => Math.abs(Number(b.saldo_final)) > 0.005).length
+    // Conciliação: mesma régua da tela Status (fonte única) — só Ativo/Passivo ainda em aberto.
+    p += (await contasConciliacaoAbertas(empresaId, comp.id)).length
     // Integrações não validadas (mesma régua do gate no Status).
     p += ['fiscal', 'folha', 'patrimonio', 'financeira'].filter(k => !comp.integracoes?.[k]?.estado).length
     const dist = await apurarDistribuicao(empresaId, comp.id)
