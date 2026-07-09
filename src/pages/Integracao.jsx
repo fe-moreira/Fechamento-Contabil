@@ -919,8 +919,9 @@ function ModalCruzaSaldo({ cruza, linhas, planoMap, titulo, onClose, onVerDia })
   const r2 = v => Math.round((v || 0) * 100) / 100
   const divergentes = cruza.dias.filter(d => d.delta != null && Math.abs(d.delta) >= 0.005)
   const [soDif, setSoDif] = useState(divergentes.length > 0)
-  const [aberto, setAberto] = useState(() => new Set(divergentes.length === 1 ? [divergentes[0].data] : []))
-  const toggle = data => setAberto(p => { const n = new Set(p); n.has(data) ? n.delete(data) : n.add(data); return n })
+  // Abertura por dia: null | 'todos' (todos os lançamentos) | 'estrela' (só o suspeito).
+  const [aberto, setAberto] = useState(() => (divergentes.length === 1 ? { [divergentes[0].data]: 'todos' } : {}))
+  const abrir = (data, modo) => setAberto(p => ({ ...p, [data]: p[data] === modo ? null : modo }))
 
   // Possível troca de data: dois dias divergentes com deltas opostos e iguais.
   const trocaPar = {}
@@ -995,7 +996,16 @@ function ModalCruzaSaldo({ cruza, linhas, planoMap, titulo, onClose, onVerDia })
             {divergentes.map((d, i) => {
               const { doDia, cand, dica } = analisarDia(d)
               const isCand = l => cand.some(c => c.l === l)
-              const exp = aberto.has(d.data)
+              const modo = aberto[d.data]
+              const mostra = modo === 'estrela' ? doDia.filter(isCand) : doDia
+              const temSuspeito = cand.length > 0
+              const linhaLanc = l => (
+                <tr key={l.historico + l.valor + l.entrada} style={{ borderTop: `1px solid ${theme.border}`, background: isCand(l) ? 'rgba(245,166,35,0.14)' : 'transparent' }}>
+                  <td style={{ ...ftd, fontSize: 11 }}>{isCand(l) && <i className="ti ti-star-filled" style={{ color: theme.yellow, marginRight: 4 }} title="Provável causa da diferença" />}{l.historico}</td>
+                  <td style={{ ...ftd, fontSize: 11, textAlign: 'right', whiteSpace: 'nowrap', color: l.entrada ? theme.green : theme.red }}>{l.entrada ? '+' : '−'}{money(l.valor)}</td>
+                  <td style={{ ...ftd, fontSize: 11, whiteSpace: 'nowrap', color: theme.sub }}>{l.contra ? `${l.contra}${planoMap[String(l.contra)]?.nome ? ' · ' + planoMap[String(l.contra)].nome : ''}` : 'sem contrapartida'}</td>
+                </tr>
+              )
               return (
                 <div key={i} style={{ borderRadius: 10, background: 'rgba(229,72,77,0.07)', border: `0.5px solid rgba(229,72,77,0.30)`, marginBottom: 8, overflow: 'hidden' }}>
                   <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '9px 11px' }}>
@@ -1005,25 +1015,18 @@ function ModalCruzaSaldo({ cruza, linhas, planoMap, titulo, onClose, onVerDia })
                       <div style={{ color: theme.sub, marginTop: 3 }}>{dica}</div>
                     </div>
                     <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
-                      <button className="btn btn-ghost" style={{ fontSize: 11, padding: '3px 8px', whiteSpace: 'nowrap' }} onClick={() => toggle(d.data)}><i className={`ti ${exp ? 'ti-chevron-up' : 'ti-chevron-down'}`} /> {doDia.length} lançto(s)</button>
+                      <button className="btn btn-ghost" style={{ fontSize: 11, padding: '3px 8px', whiteSpace: 'nowrap', borderColor: temSuspeito ? theme.yellow : theme.border, color: temSuspeito ? theme.yellow : theme.sub }} onClick={() => abrir(d.data, 'estrela')} title={temSuspeito ? 'Mostrar o lançamento que provavelmente causa a diferença' : 'Sem lançamento identificado para esta diferença'}><i className={`ti ${temSuspeito ? 'ti-star-filled' : 'ti-star'}`} /> suspeito</button>
+                      <button className="btn btn-ghost" style={{ fontSize: 11, padding: '3px 8px', whiteSpace: 'nowrap' }} onClick={() => abrir(d.data, 'todos')}><i className={`ti ${modo === 'todos' ? 'ti-chevron-up' : 'ti-chevron-down'}`} /> {doDia.length} lançto(s)</button>
                       {onVerDia && <button className="btn btn-ghost" style={{ fontSize: 11, padding: '3px 8px', whiteSpace: 'nowrap' }} onClick={() => onVerDia(d.data)} title="Filtrar a tabela por este dia"><i className="ti ti-filter" /> na tabela</button>}
                     </div>
                   </div>
-                  {exp && (
+                  {modo && (
                     <div style={{ borderTop: `0.5px solid rgba(229,72,77,0.25)`, background: theme.card }}>
-                      {doDia.length === 0
-                        ? <p style={{ color: theme.sub, fontSize: 11.5, margin: 0, padding: '8px 11px' }}>Nenhum lançamento classificado neste dia — provável lançamento faltando de {money(Math.abs(d.delta))}.</p>
-                        : <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                            <tbody>
-                              {doDia.map((l, j) => (
-                                <tr key={j} style={{ borderTop: j ? `1px solid ${theme.border}` : 'none', background: isCand(l) ? 'rgba(245,166,35,0.14)' : 'transparent' }}>
-                                  <td style={{ ...ftd, fontSize: 11 }}>{isCand(l) && <i className="ti ti-star-filled" style={{ color: theme.yellow, marginRight: 4 }} title="Provável causa da diferença" />}{l.historico}</td>
-                                  <td style={{ ...ftd, fontSize: 11, textAlign: 'right', whiteSpace: 'nowrap', color: l.entrada ? theme.green : theme.red }}>{l.entrada ? '+' : '−'}{money(l.valor)}</td>
-                                  <td style={{ ...ftd, fontSize: 11, whiteSpace: 'nowrap', color: theme.sub }}>{l.contra ? `${l.contra}${planoMap[String(l.contra)]?.nome ? ' · ' + planoMap[String(l.contra)].nome : ''}` : 'sem contrapartida'}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>}
+                      {modo === 'estrela' && !temSuspeito
+                        ? <p style={{ color: theme.sub, fontSize: 11.5, margin: 0, padding: '8px 11px' }}><i className="ti ti-help-circle" style={{ marginRight: 4 }} />Não identifiquei um lançamento específico para esta diferença — confira o dia manualmente (botão "{doDia.length} lançto(s)").</p>
+                        : doDia.length === 0
+                          ? <p style={{ color: theme.sub, fontSize: 11.5, margin: 0, padding: '8px 11px' }}>Nenhum lançamento classificado neste dia — provável lançamento faltando de {money(Math.abs(d.delta))}.</p>
+                          : <table style={{ width: '100%', borderCollapse: 'collapse' }}><tbody>{mostra.map(linhaLanc)}</tbody></table>}
                     </div>
                   )}
                 </div>
