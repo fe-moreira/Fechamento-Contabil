@@ -277,6 +277,27 @@ export default function Conciliacao() {
 
   if (sel) return <Detalhe conta={sel} tipoCta={tipoEf(sel)} reg={conf[sel.conta]} compId={compId} empresaId={empresaId} usuario={user?.email} ajuste={acertos[sel.conta] || null} getCompetenciaId={getCompetenciaId} onSalvarConf={recarregar} onMudou={recarregar} onVoltar={() => setSel(null)} />
 
+  // A SINTÉTICA é a soma das ANALÍTICAS: as correções/estornos pendentes ficam nas
+  // analíticas (acertos por conta), então acumulamos o ajuste nas sintéticas ancestrais
+  // (classificação que é prefixo) para o total refletir os estornos feitos embaixo.
+  const ajSintMap = (() => {
+    const map = {}
+    const sints = contas.filter(c => c.sintetica)
+    for (const a of contas) {
+      if (a.sintetica) continue
+      const aj = ajNet(a)
+      if (Math.abs(aj) < 0.005) continue
+      const ar = String(a.classifRaw || a.classif)
+      for (const s of sints) {
+        const sr = String(s.classifRaw || s.classif)
+        if (ar !== sr && ar.startsWith(sr)) map[sr] = (map[sr] || 0) + aj
+      }
+    }
+    return map
+  })()
+  const ajTotal = c => c.sintetica ? (ajSintMap[String(c.classifRaw || c.classif)] || 0) : ajNet(c)
+  const saldoEfAll = c => (Number(c.saldo_final) || 0) + ajTotal(c)
+
   return (
     <Wrapper nome={empresaNome} comp={competencia}>
       <div style={{ display: 'flex', gap: 16, marginBottom: 14, fontSize: 12, color: theme.sub, flexWrap: 'wrap' }}>
@@ -316,9 +337,9 @@ export default function Conciliacao() {
                   <td style={{ ...tdR, fontWeight: peso }}>{moneyDC(c.saldo_inicial)}</td>
                   <td style={{ ...tdR, fontWeight: peso }}>{money(c.debito)}</td>
                   <td style={{ ...tdR, fontWeight: peso }}>{money(c.credito)}</td>
-                  <td style={{ ...tdR, fontWeight: peso, color: inv ? theme.red : undefined }} title={!sint && Math.abs(ajNet(c)) > 0.005 ? `Saldo do balancete ${moneyDC(c.saldo_final)} + correções pendentes ${moneyDC(ajNet(c))}` : undefined}>
-                    {moneyDC(sint ? c.saldo_final : saldoEf(c))}
-                    {!sint && Math.abs(ajNet(c)) > 0.005 && <span title="Inclui correções pendentes de contabilização" style={{ marginLeft: 6, color: theme.accent, fontSize: 10, fontWeight: 700 }}>±</span>}
+                  <td style={{ ...tdR, fontWeight: peso, color: inv ? theme.red : undefined }} title={Math.abs(ajTotal(c)) > 0.005 ? `Saldo do balancete ${moneyDC(c.saldo_final)} + correções pendentes ${moneyDC(ajTotal(c))}` : undefined}>
+                    {moneyDC(saldoEfAll(c))}
+                    {Math.abs(ajTotal(c)) > 0.005 && <span title="Inclui correções pendentes de contabilização" style={{ marginLeft: 6, color: theme.accent, fontSize: 10, fontWeight: 700 }}>±</span>}
                   </td>
                   <td style={{ ...td, textAlign: 'center' }}>{sint ? '' : <Dot c={statusConta(c)} />}</td>
                 </tr>
