@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { theme, money } from '../lib/theme'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
-import { listar, inserir, remover, gerarLancamento, enviarSaldoInicialContrato, anexarArquivoContrato, urlArquivoContrato, removerArquivoContrato, competenciaInicioCliente } from '../lib/outras'
+import { listar, inserir, remover, atualizar, gerarLancamento, enviarSaldoInicialContrato, anexarArquivoContrato, urlArquivoContrato, removerArquivoContrato, competenciaInicioCliente } from '../lib/outras'
 import ObservacoesConciliacao from '../components/ObservacoesConciliacao'
 import LeitorIA from '../components/LeitorIA'
 import CampoConta from '../components/CampoConta'
@@ -277,27 +277,46 @@ function PaneSeguro({ clienteId, user, competencia, abrirGerar, enviarSaldoInici
   const [cron, setCron] = useState(null)
   const [f, on, reset, setF] = useForm({ seguradora: '', apolice: '', ramo: '', vigencia_inicio: '', vigencia_fim: '', premio_total: '', num_parcelas: '12', valor_parcela: '', conta_despesa: '', conta_apropriar: '', conta_pagar: '', saldo_inicial: false })
   const [sav, setSav] = useState(false)
-  async function salvar(e) { e.preventDefault(); setSav(true); try { await inserir('seguros', { cliente_id: clienteId, seguradora: f.seguradora, apolice: f.apolice, ramo: f.ramo, vigencia_inicio: f.vigencia_inicio || null, vigencia_fim: f.vigencia_fim || null, premio_total: num(f.premio_total), num_parcelas: Number(f.num_parcelas) || null, valor_parcela: num(f.valor_parcela), conta_despesa: f.conta_despesa, conta_apropriar: f.conta_apropriar, conta_pagar: f.conta_pagar, saldo_inicial: !!f.saldo_inicial, usuario: user?.email }); reset(); recarregar() } catch (er) { alert(er.message) } finally { setSav(false) } }
+  const [editId, setEditId] = useState(null)
+  // Ao mexer no total ou no nº de parcelas, já traz a parcela calculada (editável).
+  const setCampo = (k, v) => setF(x => { const n = { ...x, [k]: v }; if (k === 'premio_total' || k === 'num_parcelas') { const t = num(n.premio_total), np = Number(n.num_parcelas) || 0; if (t && np) n.valor_parcela = String(Math.round(t / np * 100) / 100) } return n })
+  function cancelarEdicao() { reset(); setEditId(null) }
+  function editar(r) {
+    setF({ seguradora: r.seguradora || '', apolice: r.apolice || '', ramo: r.ramo || '', vigencia_inicio: r.vigencia_inicio || '', vigencia_fim: r.vigencia_fim || '', premio_total: r.premio_total != null ? String(r.premio_total) : '', num_parcelas: r.num_parcelas != null ? String(r.num_parcelas) : '', valor_parcela: r.valor_parcela != null ? String(r.valor_parcela) : '', conta_despesa: r.conta_despesa || '', conta_apropriar: r.conta_apropriar || '', conta_pagar: r.conta_pagar || '', saldo_inicial: !!r.saldo_inicial })
+    setEditId(r.id); window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+  async function salvar(e) {
+    e.preventDefault(); setSav(true)
+    const row = { seguradora: f.seguradora, apolice: f.apolice, ramo: f.ramo, vigencia_inicio: f.vigencia_inicio || null, vigencia_fim: f.vigencia_fim || null, premio_total: num(f.premio_total), num_parcelas: Number(f.num_parcelas) || null, valor_parcela: num(f.valor_parcela), conta_despesa: f.conta_despesa, conta_apropriar: f.conta_apropriar, conta_pagar: f.conta_pagar, saldo_inicial: !!f.saldo_inicial }
+    try {
+      if (editId) await atualizar('seguros', editId, row)
+      else await inserir('seguros', { cliente_id: clienteId, ...row, usuario: user?.email })
+      reset(); setEditId(null); recarregar()
+    } catch (er) { alert(er.message) } finally { setSav(false) }
+  }
   return (
     <div style={{ display: 'grid', gap: 14 }}>
       <Card>
-        <SecTitle><i className="ti ti-shield-half" style={{ color: ACC.seguro }} /> Novo contrato de seguro</SecTitle>
-        <SecSub>Cadastre a apólice — depois gere a apropriação do mês, que vira lançamento.</SecSub>
-        <LeitorIA tipo="seguro" acento={ACC.seguro} onExtraido={d => aplicarIA(setF, d)} />
+        <SecTitle><i className="ti ti-shield-half" style={{ color: ACC.seguro }} /> {editId ? 'Editar contrato de seguro' : 'Novo contrato de seguro'}</SecTitle>
+        <SecSub>Cadastre a apólice — depois gere a apropriação do mês, que vira lançamento.{editId && <b style={{ color: ACC.seguro }}> Editando um contrato.</b>}</SecSub>
+        {!editId && <LeitorIA tipo="seguro" acento={ACC.seguro} onExtraido={d => aplicarIA(setF, d)} />}
         <form onSubmit={salvar} style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10 }}>
           <Field label="Seguradora"><input className="input" value={f.seguradora} onChange={on('seguradora')} required /></Field>
           <Field label="Apólice"><input className="input" value={f.apolice} onChange={on('apolice')} /></Field>
           <Field label="Ramo"><input className="input" value={f.ramo} onChange={on('ramo')} /></Field>
-          <Field label="Prêmio total"><input className="input" value={f.premio_total} onChange={on('premio_total')} placeholder="0,00" /></Field>
+          <Field label="Prêmio total"><input className="input" value={f.premio_total} onChange={e => setCampo('premio_total', e.target.value)} placeholder="0,00" /></Field>
           <Field label="Vigência início"><input className="input" type="date" value={f.vigencia_inicio} onChange={on('vigencia_inicio')} /></Field>
           <Field label="Vigência fim"><input className="input" type="date" value={f.vigencia_fim} onChange={on('vigencia_fim')} /></Field>
-          <Field label="Nº parcelas"><input className="input" value={f.num_parcelas} onChange={on('num_parcelas')} /></Field>
+          <Field label="Nº parcelas"><input className="input" value={f.num_parcelas} onChange={e => setCampo('num_parcelas', e.target.value)} /></Field>
           <Field label="Valor parcela"><input className="input" value={f.valor_parcela} onChange={on('valor_parcela')} placeholder="0,00" /></Field>
           <Field label="Conta despesa (D)"><CampoContaForm valor={f.conta_despesa} set={v => setF(x => ({ ...x, conta_despesa: v }))} /></Field>
           <Field label="Conta a apropriar / ativo"><CampoContaForm valor={f.conta_apropriar} set={v => setF(x => ({ ...x, conta_apropriar: v }))} /></Field>
           <Field label="Conta a pagar / passivo"><CampoContaForm valor={f.conta_pagar} set={v => setF(x => ({ ...x, conta_pagar: v }))} /></Field>
           <Field label="É saldo inicial?"><label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12.5, cursor: 'pointer', height: 38, color: theme.text }} title="Marque se o contrato começou ANTES do início do cliente — alimenta só o ativo (a apropriar) na abertura"><input type="checkbox" checked={!!f.saldo_inicial} onChange={e => setF(x => ({ ...x, saldo_inicial: e.target.checked }))} /> contrato anterior à abertura</label></Field>
-          <div style={{ gridColumn: 'span 4', display: 'flex', alignItems: 'flex-end' }}><button className="btn" disabled={sav}>{sav ? 'Salvando…' : '＋ Salvar contrato'}</button></div>
+          <div style={{ gridColumn: 'span 4', display: 'flex', alignItems: 'flex-end', gap: 8 }}>
+            <button className="btn" disabled={sav}>{sav ? 'Salvando…' : editId ? 'Salvar alterações' : '＋ Salvar contrato'}</button>
+            {editId && <button type="button" className="btn btn-ghost" onClick={cancelarEdicao}>Cancelar edição</button>}
+          </div>
         </form>
       </Card>
       <Card>
@@ -309,6 +328,7 @@ function PaneSeguro({ clienteId, user, competencia, abrirGerar, enviarSaldoInici
               <td style={td}><b>{r.seguradora}</b></td><td style={td}>{r.apolice}</td><td style={td}>{r.ramo}</td>
               <td style={{ ...td, textAlign: 'right' }}>{money(r.premio_total)}</td><td style={{ ...td, textAlign: 'right' }}>{money(r.valor_parcela)}</td>
               <td style={{ ...td, whiteSpace: 'nowrap', textAlign: 'right' }}>
+                <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => editar(r)} title="Editar contrato"><i className="ti ti-pencil" /> Editar</button>{' '}
                 <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => setCron(r)} title="Ver o cronograma de apropriações"><i className="ti ti-list-check" /> Apropriações</button>{' '}
                 <GerarBtn onClick={() => abrirGerar({ data: dataComp(competencia), conta_debito: r.conta_despesa, conta_credito: r.conta_apropriar, valor: r.valor_parcela, historico: `Apropriação seguro ${r.seguradora} ${r.apolice || ''}`.trim(), origem: 'seguro', documento: r.apolice }, `Apropriação — ${r.seguradora}`)}>Apropriação do mês</GerarBtn>{' '}
                 {r.saldo_inicial
@@ -333,32 +353,44 @@ function PaneDespesaApropriar({ clienteId, user, competencia, abrirGerar, enviar
   const [cron, setCron] = useState(null)
   const [f, on, reset, setF] = useForm({ tipo: '', descricao: '', documento: '', valor_total: '', vigencia_inicio: '', vigencia_fim: '', num_parcelas: '12', valor_parcela: '', conta_despesa: '', conta_apropriar: '', conta_pagar: '', saldo_inicial: false })
   const [sav, setSav] = useState(false)
+  const [editId, setEditId] = useState(null)
+  const setCampo = (k, v) => setF(x => { const n = { ...x, [k]: v }; if (k === 'valor_total' || k === 'num_parcelas') { const t = num(n.valor_total), np = Number(n.num_parcelas) || 0; if (t && np) n.valor_parcela = String(Math.round(t / np * 100) / 100) } return n })
+  function cancelarEdicao() { reset(); setEditId(null) }
+  function editar(r) {
+    setF({ tipo: r.tipo || '', descricao: r.descricao || '', documento: r.documento || '', valor_total: r.valor_total != null ? String(r.valor_total) : '', vigencia_inicio: r.vigencia_inicio || '', vigencia_fim: r.vigencia_fim || '', num_parcelas: r.num_parcelas != null ? String(r.num_parcelas) : '', valor_parcela: r.valor_parcela != null ? String(r.valor_parcela) : '', conta_despesa: r.conta_despesa || '', conta_apropriar: r.conta_apropriar || '', conta_pagar: r.conta_pagar || '', saldo_inicial: !!r.saldo_inicial })
+    setEditId(r.id); window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
   async function salvar(e) {
     e.preventDefault(); setSav(true)
+    const row = { tipo: f.tipo, descricao: f.descricao, documento: f.documento, valor_total: num(f.valor_total), vigencia_inicio: f.vigencia_inicio || null, vigencia_fim: f.vigencia_fim || null, num_parcelas: Number(f.num_parcelas) || null, valor_parcela: num(f.valor_parcela), conta_despesa: f.conta_despesa, conta_apropriar: f.conta_apropriar, conta_pagar: f.conta_pagar, saldo_inicial: !!f.saldo_inicial }
     try {
-      await inserir('despesas_apropriar', { cliente_id: clienteId, tipo: f.tipo, descricao: f.descricao, documento: f.documento, valor_total: num(f.valor_total), vigencia_inicio: f.vigencia_inicio || null, vigencia_fim: f.vigencia_fim || null, num_parcelas: Number(f.num_parcelas) || null, valor_parcela: num(f.valor_parcela), conta_despesa: f.conta_despesa, conta_apropriar: f.conta_apropriar, conta_pagar: f.conta_pagar, saldo_inicial: !!f.saldo_inicial, usuario: user?.email })
-      reset(); recarregar()
+      if (editId) await atualizar('despesas_apropriar', editId, row)
+      else await inserir('despesas_apropriar', { cliente_id: clienteId, ...row, usuario: user?.email })
+      reset(); setEditId(null); recarregar()
     } catch (er) { alert(er.message) } finally { setSav(false) }
   }
   return (
     <div style={{ display: 'grid', gap: 14 }}>
       <Card>
-        <SecTitle><i className="ti ti-calendar-repeat" style={{ color: ACC.despesa }} /> Nova despesa a apropriar</SecTitle>
-        <SecSub>IPVA, IPTU, aluguel antecipado, licenças… Cadastre uma vez e gere a apropriação do mês. O saldo que falta apropriar pode ir direto ao saldo inicial.</SecSub>
+        <SecTitle><i className="ti ti-calendar-repeat" style={{ color: ACC.despesa }} /> {editId ? 'Editar despesa a apropriar' : 'Nova despesa a apropriar'}</SecTitle>
+        <SecSub>IPVA, IPTU, aluguel antecipado, licenças… Cadastre uma vez e gere a apropriação do mês. O saldo que falta apropriar pode ir direto ao saldo inicial.{editId && <b style={{ color: ACC.despesa }}> Editando.</b>}</SecSub>
         <form onSubmit={salvar} style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10 }}>
           <Field label="Tipo (IPVA, IPTU…)"><input className="input" value={f.tipo} onChange={on('tipo')} placeholder="IPVA" required /></Field>
           <Field label="Descrição"><input className="input" value={f.descricao} onChange={on('descricao')} placeholder="Placa ABC1D23 / imóvel matriz" /></Field>
           <Field label="Documento"><input className="input" value={f.documento} onChange={on('documento')} /></Field>
-          <Field label="Valor total"><input className="input" value={f.valor_total} onChange={on('valor_total')} placeholder="0,00" /></Field>
+          <Field label="Valor total"><input className="input" value={f.valor_total} onChange={e => setCampo('valor_total', e.target.value)} placeholder="0,00" /></Field>
           <Field label="Vigência início"><input className="input" type="date" value={f.vigencia_inicio} onChange={on('vigencia_inicio')} /></Field>
           <Field label="Vigência fim"><input className="input" type="date" value={f.vigencia_fim} onChange={on('vigencia_fim')} /></Field>
-          <Field label="Nº parcelas"><input className="input" value={f.num_parcelas} onChange={on('num_parcelas')} /></Field>
+          <Field label="Nº parcelas"><input className="input" value={f.num_parcelas} onChange={e => setCampo('num_parcelas', e.target.value)} /></Field>
           <Field label="Valor parcela"><input className="input" value={f.valor_parcela} onChange={on('valor_parcela')} placeholder="0,00" /></Field>
           <Field label="Conta despesa (D)"><CampoContaForm valor={f.conta_despesa} set={v => setF(x => ({ ...x, conta_despesa: v }))} /></Field>
           <Field label="Conta a apropriar / ativo"><CampoContaForm valor={f.conta_apropriar} set={v => setF(x => ({ ...x, conta_apropriar: v }))} /></Field>
           <Field label="Conta a pagar / passivo"><CampoContaForm valor={f.conta_pagar} set={v => setF(x => ({ ...x, conta_pagar: v }))} /></Field>
           <Field label="É saldo inicial?"><label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12.5, cursor: 'pointer', height: 38, color: theme.text }} title="Marque se começou ANTES do início do cliente — alimenta só o ativo (a apropriar) na abertura"><input type="checkbox" checked={!!f.saldo_inicial} onChange={e => setF(x => ({ ...x, saldo_inicial: e.target.checked }))} /> contrato anterior à abertura</label></Field>
-          <div style={{ gridColumn: 'span 4', display: 'flex', alignItems: 'flex-end' }}><button className="btn" disabled={sav}>{sav ? 'Salvando…' : '＋ Salvar despesa'}</button></div>
+          <div style={{ gridColumn: 'span 4', display: 'flex', alignItems: 'flex-end', gap: 8 }}>
+            <button className="btn" disabled={sav}>{sav ? 'Salvando…' : editId ? 'Salvar alterações' : '＋ Salvar despesa'}</button>
+            {editId && <button type="button" className="btn btn-ghost" onClick={cancelarEdicao}>Cancelar edição</button>}
+          </div>
         </form>
       </Card>
       <Card>
@@ -370,6 +402,7 @@ function PaneDespesaApropriar({ clienteId, user, competencia, abrirGerar, enviar
               <td style={td}><b>{r.tipo}</b></td><td style={td}>{r.descricao}</td>
               <td style={{ ...td, textAlign: 'right' }}>{money(r.valor_total)}</td><td style={{ ...td, textAlign: 'right' }}>{money(r.valor_parcela)}</td>
               <td style={{ ...td, whiteSpace: 'nowrap', textAlign: 'right' }}>
+                <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => editar(r)} title="Editar despesa"><i className="ti ti-pencil" /> Editar</button>{' '}
                 <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => setCron(r)} title="Ver o cronograma de apropriações"><i className="ti ti-list-check" /> Apropriações</button>{' '}
                 <GerarBtn onClick={() => abrirGerar({ data: dataComp(competencia), conta_debito: r.conta_despesa, conta_credito: r.conta_apropriar, valor: r.valor_parcela, historico: `Apropriação ${r.tipo} ${r.descricao || ''}`.trim(), origem: 'despesa', documento: r.documento }, `Apropriação — ${r.tipo}`)}>Apropriação do mês</GerarBtn>{' '}
                 {r.saldo_inicial

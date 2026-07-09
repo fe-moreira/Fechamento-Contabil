@@ -20,6 +20,11 @@ export async function remover(tabela, id) {
   if (error) throw error
 }
 
+export async function atualizar(tabela, id, row) {
+  const { error } = await supabase.from(tabela).update(row).eq('id', id)
+  if (error) throw error
+}
+
 // Lê um documento (PDF/imagem) via IA e devolve os campos extraídos.
 // Chama a Edge Function `ler-documento` — a chave da IA fica no servidor.
 export async function lerDocumento(tipo, file) {
