@@ -2,6 +2,17 @@ import { supabase } from './supabase'
 
 const baixa = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
 
+// Regra: NUNCA lançar em conta SINTÉTICA (só analíticas recebem lançamento).
+// Recebe o plano (useAppData().plano = [{cod, sintetica}]) e os códigos da partida;
+// devolve a mensagem de erro se algum for sintético, senão string vazia.
+export function erroContaSintetica(plano, ...contas) {
+  const sint = new Map((plano || []).map(p => [String(p.cod), { sintetica: p.sintetica, nome: p.nome }]))
+  const ruins = [...new Set(contas.filter(Boolean).map(String))].filter(c => sint.get(c)?.sintetica)
+  if (!ruins.length) return ''
+  const lista = ruins.map(c => `${c}${sint.get(c)?.nome ? ' · ' + sint.get(c).nome : ''}`).join('; ')
+  return `Conta sintética não recebe lançamento: ${lista}. Use a conta analítica correspondente.`
+}
+
 // Diferença de conciliação respeitando a NATUREZA da conta. O documento (guia,
 // extrato, relatório) vem SEMPRE positivo. Numa conta DEVEDORA (saldo > 0) a
 // diferença é saldo − documento; numa CREDORA (saldo < 0) é saldo + documento.

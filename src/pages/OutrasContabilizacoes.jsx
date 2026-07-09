@@ -5,6 +5,7 @@ import { useAuth } from '../components/AuthProvider'
 import { listar, inserir, remover, atualizar, gerarLancamento, enviarSaldoInicialContrato, anexarArquivoContrato, urlArquivoContrato, removerArquivoContrato, competenciaInicioCliente, apropriacoesDoMes } from '../lib/outras'
 import { gerarExcelTimbrado } from '../lib/excel'
 import { abrePdfTimbrado } from '../lib/pdf'
+import { erroContaSintetica } from '../lib/balancete'
 import ObservacoesConciliacao from '../components/ObservacoesConciliacao'
 import LeitorIA from '../components/LeitorIA'
 import CampoConta from '../components/CampoConta'
@@ -281,6 +282,8 @@ export default function OutrasContabilizacoes() {
         setMsg(`A data ${brData(g.data)} não é do fechamento em andamento (${competencia}). Só é possível lançar com data dentro de ${competencia}.`)
         return
       }
+      const eSint = erroContaSintetica(plano, g.conta_debito, g.conta_credito)
+      if (eSint) { setMsg(eSint); return }
       const competencia_id = await getCompetenciaId()
       if (!competencia_id) { setMsg('Selecione uma empresa e abra um fechamento.'); return }
       await gerarLancamento({ competencia_id, ...g, usuario: user?.email })

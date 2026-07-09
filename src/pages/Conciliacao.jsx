@@ -4,7 +4,7 @@ import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { theme, money, moneyDC } from '../lib/theme'
-import { montarBalancete, parsePlano, composicaoAbertura, difConciliacao, applyMask } from '../lib/balancete'
+import { montarBalancete, parsePlano, composicaoAbertura, difConciliacao, applyMask, erroContaSintetica } from '../lib/balancete'
 import { abrePdfTimbrado } from '../lib/pdf'
 import { gerarExcelTimbrado } from '../lib/excel'
 import CampoConta from '../components/CampoConta'
@@ -506,7 +506,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
   useEffect(() => {
     supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'plano')
       .order('created_at', { ascending: false }).limit(1).maybeSingle()
-      .then(({ data }) => setPlano(parsePlano(data?.dados).map(p => ({ cod: p.reduzido, nome: p.nome })).filter(p => p.cod)))
+      .then(({ data }) => setPlano(parsePlano(data?.dados).map(p => ({ cod: p.reduzido, nome: p.nome, sintetica: p.sintetica })).filter(p => p.cod)))
   }, [empresaId])
 
   const planoMap = Object.fromEntries(plano.map(p => [p.cod, p.nome]))
@@ -624,6 +624,8 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
     let virouLancamento = false
     if (tipo === 'Correção' && payload.lancamento && (payload.lancamento.conta_debito || payload.lancamento.conta_credito)) {
       const L = payload.lancamento
+      const eSint = erroContaSintetica(plano, L.conta_debito, L.conta_credito)
+      if (eSint) { setMsg(eSint); return }
       await supabase.from('lancamentos').insert({
         competencia_id: id, data: L.data || null,
         conta_debito: L.conta_debito || null, conta_credito: L.conta_credito || null,
