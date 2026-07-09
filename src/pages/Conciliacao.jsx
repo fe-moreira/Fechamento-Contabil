@@ -965,6 +965,7 @@ function CardConferencia({ conta, reg, compId, usuario, saldoAjuste = 0, composi
   const [salvando, setSalvando] = useState(false)
   const [arquivo, setArquivo] = useState(null)          // arquivo selecionado, pendente de upload
   const [path, setPath] = useState(reg?.documento_path || '') // caminho no Storage (arquivo armazenado)
+  const [savedId, setSavedId] = useState(reg?.id || null)     // id da linha de conciliação (evita duplicar)
   const [ocr, setOcr] = useState({ ativo: false, pct: 0 })    // progresso do OCR (PDF-imagem)
 
   // Saldo efetivo = balancete + correções pendentes (estornos/acertos). Assim, ao
@@ -983,6 +984,7 @@ function CardConferencia({ conta, reg, compId, usuario, saldoAjuste = 0, composi
   async function lerArquivo(file) {
     if (!file) return; setErro(''); setMsg('')
     const ehPdf = /\.pdf$/i.test(file.name) || file.type === 'application/pdf'
+    let saldoLido = null
     try {
       if (ehPdf) {
         // Extrato em PDF (ex.: extrato bancário do cliente).
@@ -1005,17 +1007,44 @@ function CardConferencia({ conta, reg, compId, usuario, saldoAjuste = 0, composi
         }
         else
           setErro('Li o PDF, mas não identifiquei o saldo automaticamente — confira e digite o saldo abaixo.')
+        saldoLido = s
       } else {
         const XLSX = await import('xlsx')
         const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' })
         const arr = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' })
         const r = lerSaldoDocumento(arr)
         setDoc(file.name)
-        if (r) { setSaldoDoc(String(r.valor)); setMsg(`Saldo lido pela ${r.via} — confira se está correto.`) }
+        if (r) { setSaldoDoc(String(r.valor)); setMsg(`Saldo lido pela ${r.via} — confira se está correto.`); saldoLido = r.valor }
         else setErro('Não identifiquei o saldo. Coloque uma célula escrita "SALDO" (ou "TOTAL") com o valor ao lado, ou digite o saldo abaixo.')
       }
-      setArquivo(file) // guarda o arquivo para armazenar no Storage ao salvar
+      setArquivo(file)
+      await armazenar(file, saldoLido) // grava na hora — não perde ao atualizar a página
     } catch (e) { setErro('Não consegui ler: ' + e.message) }
+  }
+
+  // Armazena o arquivo no Storage e grava a linha de conciliação NA HORA (ao escolher),
+  // para não perder o anexo se a página for atualizada sem clicar em Salvar.
+  async function armazenar(file, saldoValor) {
+    if (!file || !compId) return
+    setSalvando(true)
+    try {
+      const ext = (file.name.match(/\.[a-z0-9]+$/i) || [''])[0].toLowerCase()
+      const base = `${compId}/${conta.conta}`.replace(/[^a-zA-Z0-9/_-]/g, '_')
+      const novoPath = `${base}/extrato${ext}`
+      const { error: eUp } = await supabase.storage.from('extratos').upload(novoPath, file, { upsert: true, contentType: file.type || undefined })
+      if (eUp) { setErro('Não consegui armazenar o arquivo: ' + eUp.message); return }
+      if (path && path !== novoPath) await supabase.storage.from('extratos').remove([path])
+      const campos = { competencia_id: compId, conta: conta.conta, documento: file.name, documento_path: novoPath, usuario }
+      if (saldoValor != null) campos.saldo_documento = saldoValor
+      const id = reg?.id || savedId
+      let error, novo
+      if (id) ({ error } = await supabase.from('conciliacao_conta').update(campos).eq('id', id))
+      else ({ data: novo, error } = await supabase.from('conciliacao_conta').insert(campos).select('id').single())
+      if (error) { setErro('Não consegui salvar: ' + error.message); return }
+      if (novo?.id) setSavedId(novo.id)
+      setPath(novoPath); setArquivo(null); setMsg('Arquivo anexado e salvo — fica guardado mesmo atualizando a página.')
+      onSalvo && onSalvo()
+    } finally { setSalvando(false) }
   }
 
   // Abre o arquivo armazenado (link assinado, válido por 5 min).
@@ -1039,7 +1068,8 @@ function CardConferencia({ conta, reg, compId, usuario, saldoAjuste = 0, composi
     const { error: eRm } = await supabase.storage.from('extratos').remove([path])
     if (eRm) { setSalvando(false); setErro('Não consegui excluir o arquivo: ' + eRm.message); return }
     let error
-    if (reg) ({ error } = await supabase.from('conciliacao_conta').update({ documento_path: null, documento: null, usuario }).eq('id', reg.id))
+    const id = reg?.id || savedId
+    if (id) ({ error } = await supabase.from('conciliacao_conta').update({ documento_path: null, documento: null, usuario }).eq('id', id))
     setSalvando(false)
     if (error) { setErro(error.message); return }
     setPath(''); setArquivo(null); setDoc('')
@@ -1066,11 +1096,13 @@ function CardConferencia({ conta, reg, compId, usuario, saldoAjuste = 0, composi
       documento_path: novoPath || null,
       conciliada, justificativa: just || null, pendencia_cliente: pend, usuario,
     }
-    let error
-    if (reg) ({ error } = await supabase.from('conciliacao_conta').update(payload).eq('id', reg.id))
-    else ({ error } = await supabase.from('conciliacao_conta').insert(payload))
+    const id = reg?.id || savedId
+    let error, novo
+    if (id) ({ error } = await supabase.from('conciliacao_conta').update(payload).eq('id', id))
+    else ({ data: novo, error } = await supabase.from('conciliacao_conta').insert(payload).select('id').single())
     setSalvando(false)
     if (error) { setErro(error.message); return }
+    if (novo?.id) setSavedId(novo.id)
     setPath(novoPath); setArquivo(null)
     setMsg('Conferência salva.'); onSalvo && onSalvo()
   }
