@@ -17,14 +17,13 @@ export function difConciliacao(saldo, doc) {
 // lançamentos) ≠ 0 e SEM documento que bate nem justificativa. Fonte única para o gate
 // do Status e para o badge do menu (assim os dois números batem). Devolve [{conta, saldo_final}].
 export async function contasConciliacaoAbertas(empresaId, compId) {
-  const { data: planoCarga } = await supabase.from('cargas_cadastro').select('dados')
-    .eq('cliente_id', empresaId).eq('tipo', 'plano').order('created_at', { ascending: false }).limit(1).maybeSingle()
-  const classifDe = {}
-  for (const p of parsePlano(planoCarga?.dados)) if (p.reduzido) classifDe[String(p.reduzido)] = String(p.classif || '')
-  const [{ data: bal }, { data: conc }, { data: lancs }] = await Promise.all([
-    supabase.from('balancete').select('conta, saldo_final').eq('competencia_id', compId),
+  // Usa o MESMO balancete montado que a Conciliação usa (não a tabela `balancete` crua),
+  // para o saldo bater exatamente com o painel — assim badge/Status/financeiro ficam iguais.
+  const { linhas } = await montarBalancete(empresaId, compId)
+  const [{ data: conc }, { data: lancs }, { data: planoCarga }] = await Promise.all([
     supabase.from('conciliacao_conta').select('conta, saldo_documento, documento_path, conciliada, justificativa').eq('competencia_id', compId),
     supabase.from('lancamentos').select('conta_debito, conta_credito, valor').eq('competencia_id', compId),
+    supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'plano').order('created_at', { ascending: false }).limit(1).maybeSingle(),
   ])
   const conf = {}; for (const r of (conc || [])) conf[String(r.conta)] = r
   const aj = {}
@@ -33,7 +32,15 @@ export async function contasConciliacaoAbertas(empresaId, compId) {
     if (l.conta_debito) aj[String(l.conta_debito)] = (aj[String(l.conta_debito)] || 0) + v
     if (l.conta_credito) aj[String(l.conta_credito)] = (aj[String(l.conta_credito)] || 0) - v
   }
-  const saldoBal = {}; for (const b of (bal || [])) saldoBal[String(b.conta)] = Number(b.saldo_final) || 0
+  const saldoBal = {}, classifDe = {}
+  for (const l of linhas) {
+    if (l.sintetica) continue
+    const cod = String(l.reduzido || ''); if (!cod) continue
+    saldoBal[cod] = Number(l.saldo_final) || 0
+    classifDe[cod] = String(l.classifRaw || l.classif || '')
+  }
+  // Contas que só têm lançamento (não vieram no balancete) → classifica pelo plano.
+  for (const p of parsePlano(planoCarga?.dados)) if (p.reduzido && !classifDe[String(p.reduzido)]) classifDe[String(p.reduzido)] = String(p.classif || '')
   const ehAP = c => { const d = String(classifDe[String(c)] || '').trim()[0]; return d === '1' || d === '2' }
   const cands = new Set([...Object.keys(saldoBal), ...Object.keys(aj)].filter(ehAP))
   const conciliada = (c, saldoEf) => {
