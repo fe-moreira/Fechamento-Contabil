@@ -95,6 +95,18 @@ function valorApropriacaoMes(c, competencia) {
   const l = cronogramaContrato(c, c.por_dia ? 'dia' : 'igual').find(x => x.comp === competencia)
   return l ? l.valor : (Number(c.valor_parcela) || 0)
 }
+// Número da parcela / total do contrato na competência (ex.: maio de um seguro anual = 5/12).
+function parcelaDoMes(c, competencia) {
+  const sched = cronogramaContrato(c, c.por_dia ? 'dia' : 'igual')
+  const idx = sched.findIndex(x => x.comp === competencia)
+  const total = sched.length || Number(c.num_parcelas) || 0
+  return { num: idx >= 0 ? idx + 1 : 0, total }
+}
+// Sufixo " - parcela N/total" para o histórico da apropriação (vazio se fora do cronograma).
+function sufixoParcela(c, competencia) {
+  const { num, total } = parcelaDoMes(c, competencia)
+  return (num && total) ? ` - parcela ${num}/${total}` : ''
+}
 
 // ISO YYYY-MM-DD → DD/MM/AAAA (usado no relatório).
 function brDataRel(iso) { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || '')); return m ? `${m[3]}/${m[2]}/${m[1]}` : '' }
@@ -530,7 +542,7 @@ function PaneSeguro({ clienteId, user, competencia, abrirGerar, enviarSaldoInici
               <td style={{ ...td, whiteSpace: 'nowrap', textAlign: 'right' }}>
                 <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => editar(r)} title="Editar contrato"><i className="ti ti-pencil" /> Editar</button>{' '}
                 <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => setCron(r)} title="Ver o cronograma de apropriações"><i className="ti ti-list-check" /> Apropriações</button>{' '}
-                <GerarBtn onClick={() => abrirGerar({ data: dataComp(competencia), conta_debito: r.conta_despesa, conta_credito: r.conta_apropriar, valor: valorApropriacaoMes(r, competencia), historico: `Apropriação seguro ${r.seguradora} ${r.apolice || ''}`.trim(), origem: 'seguro', documento: r.apolice }, `Apropriação — ${r.seguradora}`)}>{apropriado ? 'Apropriar de novo' : 'Apropriação do mês'}</GerarBtn>{' '}
+                <GerarBtn onClick={() => abrirGerar({ data: dataComp(competencia), conta_debito: r.conta_despesa, conta_credito: r.conta_apropriar, valor: valorApropriacaoMes(r, competencia), historico: `${`Apropriação seguro ${r.seguradora} ${r.apolice || ''}`.trim()}${sufixoParcela(r, competencia)}`, origem: 'seguro', documento: r.apolice }, `Apropriação — ${r.seguradora}`)}>{apropriado ? 'Apropriar de novo' : 'Apropriação do mês'}</GerarBtn>{' '}
                 {r.saldo_inicial
                   ? <SaldoIniBtn onClick={() => enviarSaldoInicial('seguro', r)} />
                   : <GerarBtn onClick={() => abrirGerar({ data: dataComp(competencia), conta_debito: r.conta_apropriar, conta_credito: r.conta_pagar, valor: r.premio_total, historico: `Contrato seguro ${r.seguradora} ${r.apolice || ''}`.trim(), origem: 'seguro', documento: r.apolice }, `Contrato — ${r.seguradora}`)}>Contabilizar contrato</GerarBtn>}{' '}
@@ -611,7 +623,7 @@ function PaneDespesaApropriar({ clienteId, user, competencia, abrirGerar, enviar
               <td style={{ ...td, whiteSpace: 'nowrap', textAlign: 'right' }}>
                 <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => editar(r)} title="Editar despesa"><i className="ti ti-pencil" /> Editar</button>{' '}
                 <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => setCron(r)} title="Ver o cronograma de apropriações"><i className="ti ti-list-check" /> Apropriações</button>{' '}
-                <GerarBtn onClick={() => abrirGerar({ data: dataComp(competencia), conta_debito: r.conta_despesa, conta_credito: r.conta_apropriar, valor: valorApropriacaoMes(r, competencia), historico: `Apropriação ${r.tipo} ${r.descricao || ''}`.trim(), origem: 'despesa', documento: r.documento }, `Apropriação — ${r.tipo}`)}>{apropriado ? 'Apropriar de novo' : 'Apropriação do mês'}</GerarBtn>{' '}
+                <GerarBtn onClick={() => abrirGerar({ data: dataComp(competencia), conta_debito: r.conta_despesa, conta_credito: r.conta_apropriar, valor: valorApropriacaoMes(r, competencia), historico: `${`Apropriação ${r.tipo} ${r.descricao || ''}`.trim()}${sufixoParcela(r, competencia)}`, origem: 'despesa', documento: r.documento }, `Apropriação — ${r.tipo}`)}>{apropriado ? 'Apropriar de novo' : 'Apropriação do mês'}</GerarBtn>{' '}
                 {r.saldo_inicial
                   ? <SaldoIniBtn onClick={() => enviarSaldoInicial('despesa', r)} />
                   : <GerarBtn onClick={() => abrirGerar({ data: dataComp(competencia), conta_debito: r.conta_apropriar, conta_credito: r.conta_pagar, valor: r.valor_total, historico: `Contrato ${r.tipo} ${r.descricao || ''}`.trim(), origem: 'despesa', documento: r.documento }, `Contrato — ${r.tipo}`)}>Contabilizar contrato</GerarBtn>}{' '}
