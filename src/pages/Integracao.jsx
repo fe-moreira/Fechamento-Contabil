@@ -816,6 +816,12 @@ function Folha({ competencia, empresaId, user, est, onEstado, onSemMov }) {
     const done = !!novoArq.folha
     await onEstado({ ...est, arquivos: novoArq, justif, estado: done ? 'validado' : null, doc: done ? 'Folha · rubricas cruzadas' : null, usuario: user?.email || null })
   }
+  // Marca um arquivo (ex.: adiantamento) como sem movimento no mês — pode não ter havido.
+  async function semMovArquivo(alvo) {
+    const novoArq = { ...arquivos, [alvo]: { semMovimento: true } }
+    const done = !!novoArq.folha
+    await onEstado({ ...est, arquivos: novoArq, justif, estado: done ? 'validado' : null, doc: done ? 'Folha · rubricas cruzadas' : null, usuario: user?.email || null })
+  }
   async function salvarJustificativa(cod, texto) {
     const novo = { ...justif }
     if (texto && texto.trim()) novo[cod] = texto.trim(); else delete novo[cod]
@@ -839,32 +845,40 @@ function Folha({ competencia, empresaId, user, est, onEstado, onSemMov }) {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(300px,1fr))', gap: 12, marginBottom: 14 }}>
         {ARQ_FOLHA.map(([k, label, icon]) => {
           const a = arquivos[k]
+          const semMovK = a?.semMovimento
+          const importado = a && !semMovK
+          const cor = importado ? theme.green : semMovK ? theme.cb : theme.cb
           return (
-            <div key={k} style={{ background: theme.card, border: `1px solid ${a ? theme.green : theme.cb}`, borderRadius: 12, padding: 14 }}>
+            <div key={k} style={{ background: theme.card, border: `1px solid ${cor}`, borderRadius: 12, padding: 14 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
                 <i className={`ti ${icon}`} style={{ color: theme.accent }} />
                 <span style={{ fontWeight: 600, fontSize: 13 }}>{label}</span>
-                {a ? <i className="ti ti-circle-check" style={{ color: theme.green, marginLeft: 'auto' }} /> : <span style={{ marginLeft: 'auto', color: theme.sub, fontSize: 12 }}>{k === 'adiant' ? 'opcional' : 'obrigatório'}</span>}
+                {importado ? <i className="ti ti-circle-check" style={{ color: theme.green, marginLeft: 'auto' }} /> : semMovK ? <i className="ti ti-circle-minus" style={{ color: theme.sub, marginLeft: 'auto' }} /> : <span style={{ marginLeft: 'auto', color: theme.sub, fontSize: 12 }}>{k === 'adiant' ? 'opcional' : 'obrigatório'}</span>}
               </div>
-              <p style={{ fontSize: 12, color: a ? theme.text : theme.sub, margin: '0 0 10px' }}>{a ? `${a.doc} · ${a.eventos.length} rubrica(s)` : 'Relatório de rubricas do Domínio (colunas V/W/Z).'}</p>
+              <p style={{ fontSize: 12, color: importado ? theme.text : theme.sub, margin: '0 0 10px' }}>{importado ? `${a.doc} · ${a.eventos.length} rubrica(s)` : semMovK ? 'Sem movimento no período.' : 'Relatório de rubricas do Domínio (colunas V/W/Z).'}</p>
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                <label className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', cursor: 'pointer' }}>
-                  <i className="ti ti-cloud-upload" /> {a ? 'Reimportar' : 'Importar'}
-                  <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={e => importar(k, e.target.files?.[0])} />
-                </label>
-                {a?.path && <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => extrair(k)}><i className="ti ti-download" /> Extrair</button>}
-                {a && <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', color: theme.sub }} onClick={() => removerArquivo(k)}>limpar</button>}
+                {semMovK
+                  ? <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => removerArquivo(k)}><i className="ti ti-rotate" /> Tem movimento</button>
+                  : <>
+                    <label className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', cursor: 'pointer' }}>
+                      <i className="ti ti-cloud-upload" /> {importado ? 'Reimportar' : 'Importar'}
+                      <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={e => importar(k, e.target.files?.[0])} />
+                    </label>
+                    {a?.path && <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => extrair(k)}><i className="ti ti-download" /> Extrair</button>}
+                    {importado && <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', color: theme.sub }} onClick={() => removerArquivo(k)}>limpar</button>}
+                    {k === 'adiant' && !importado && <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => semMovArquivo(k)} title="Não houve adiantamento neste mês"><i className="ti ti-circle-minus" /> Sem movimento</button>}
+                  </>}
                 {busy === k && <span style={{ color: theme.sub, fontSize: 12 }}><i className="ti ti-loader" /> lendo…</span>}
               </div>
             </div>
           )
         })}
       </div>
-      {!arquivos.folha && !arquivos.adiant && <button className="btn btn-ghost" style={{ fontSize: 12.5, marginBottom: 12 }} onClick={onSemMov} title="Cliente sem folha no período (fica verde no Status)"><i className="ti ti-circle-minus" /> Marcar sem movimento</button>}
+      {!arquivos.folha && <button className="btn btn-ghost" style={{ fontSize: 12.5, marginBottom: 12 }} onClick={onSemMov} title="Cliente sem folha no período (fica verde no Status)"><i className="ti ti-circle-minus" /> Marcar sem movimento</button>}
 
       {eventos.length > 0 && <>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(180px,1fr))', gap: 12, margin: '4px 0 16px' }}>
-          <Metric label="Total das rubricas" valor={money(totDoc)} icon="ti-receipt" />
+          <Metric label="Total do documento" valor={money(totDoc)} icon="ti-receipt" />
           <Metric label="Razão / contabilidade" valor={money(totRaz)} icon="ti-checks" cor={theme.green} />
           <Metric label="Diferença" valor={money(totDif)} icon="ti-arrows-diff" cor={Math.abs(totDif) < 0.005 ? theme.green : theme.red} sub={Math.abs(totDif) < 0.005 ? 'tudo identificado' : `${pendentes} rubrica(s) a resolver`} />
         </div>
