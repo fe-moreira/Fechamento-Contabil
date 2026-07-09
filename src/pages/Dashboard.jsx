@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import { useAppData } from '../lib/appData'
 import { theme, applyThemeMode, getThemeMode } from '../lib/theme'
 import { normalizaCompetencia } from '../lib/balancete'
 import { fechaSozinho } from '../lib/clientes'
@@ -8,7 +9,7 @@ import { fechaSozinho } from '../lib/clientes'
 const MES = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
 const MES_C = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
 const TEMPO = 10000 // 10s por tela
-const N = 8
+const N = 9
 
 const fmtH = s => { const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return `${h}h${String(m).padStart(2, '0')}` }
 
@@ -50,6 +51,7 @@ function Donut({ size = 150, segs, label, sub, labelColor }) {
 
 export default function Dashboard() {
   const nav = useNavigate()
+  const { setEmpresaId, setCompetencia } = useAppData()
   const box = useRef(null)
   const [d, setD] = useState(null)
   const [idx, setIdx] = useState(0)
@@ -73,10 +75,12 @@ export default function Dashboard() {
     (async () => {
      try {
       const inicioMes = new Date(hoje.getFullYear(), hoje.getMonth(), 1).toISOString()
-      const [{ data: cli }, { data: comps }, { data: ts }] = await Promise.all([
+      const [{ data: cli }, { data: comps }, { data: ts }, { data: rasc }] = await Promise.all([
         supabase.from('clientes').select('*'),
         supabase.from('competencias').select('cliente_id, ano, mes, status, razao_importado, created_at'),
         supabase.from('timesheet').select('cliente_id, cliente_nome, segundos, created_at').gte('created_at', inicioMes),
+        // Trabalhos financeiros salvos para continuar depois (rascunhos), de qualquer usuário.
+        supabase.from('competencias').select('cliente_id, ano, mes, integracoes, updated_at').not('integracoes->financeira', 'is', null),
       ])
       // Carteira inteira (matriz + filiais) — usada no painel de regime.
       const todos = cli || []
@@ -177,7 +181,23 @@ export default function Dashboard() {
       }
       const sistemas = Object.entries(sisMap).map(([nome, n]) => ({ nome, n })).sort((a, b) => b.n - a.n)
 
-      setD({ placar, recentes, atrasoLista, atrasoTotal, regime, matrizes, filiais, analistas, tsLista, tsTotal, prazos, dias, semPrazo: semPrazo.length, nomesAnal, matriz, matrizTot, totalClientes: clientes.length, sistemas })
+      // 9 · Trabalhos em andamento (rascunhos financeiros) — de qualquer usuário,
+      // para que outra pessoa possa localizar e concluir. Nome vem da carteira inteira.
+      const nomeTodos = Object.fromEntries(todos.map(c => [c.id, c.razao_social]))
+      const rascunhos = []
+      for (const c of (rasc || [])) {
+        const fin = c.integracoes?.financeira || {}
+        for (const [conta, b] of Object.entries(fin.bancos || {})) {
+          if (b?.estado === 'rascunho') rascunhos.push({
+            cliente_id: c.cliente_id, cliente: nomeTodos[c.cliente_id] || '—', ano: c.ano, mes: c.mes,
+            conta, usuario: b.usuario || null, doc: b.doc || null,
+            n: Array.isArray(b.draft) ? b.draft.length : 0, updated_at: c.updated_at,
+          })
+        }
+      }
+      rascunhos.sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)))
+
+      setD({ placar, recentes, atrasoLista, atrasoTotal, regime, matrizes, filiais, analistas, tsLista, tsTotal, prazos, dias, semPrazo: semPrazo.length, nomesAnal, matriz, matrizTot, totalClientes: clientes.length, sistemas, rascunhos })
      } catch (e) { console.error('Dashboard:', e); setErroPainel(String(e?.message || e)) }
     })()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -190,6 +210,12 @@ export default function Dashboard() {
   }, [idx, paused, d])
 
   const irPara = i => setIdx((i + N) % N)
+  // Abre o rascunho no cliente/competência certos, já na aba Financeira.
+  const continuarRascunho = r => {
+    setEmpresaId(r.cliente_id)
+    setCompetencia(`${String(r.mes).padStart(2, '0')}/${r.ano}`)
+    nav('/integracao', { state: { tab: 'financeira' } })
+  }
   const flipTema = () => setMode(applyThemeMode(mode === 'light' ? 'dark' : 'light'))
   const telaCheia = () => {
     if (!document.fullscreenElement) box.current?.requestFullscreen?.()
@@ -236,6 +262,7 @@ export default function Dashboard() {
         {idx === 5 && <PainelPrazo d={d} />}
         {idx === 6 && <PainelMatriz d={d} />}
         {idx === 7 && <PainelSistemas d={d} />}
+        {idx === 8 && <PainelRascunhos d={d} onContinuar={continuarRascunho} />}
       </div>
 
       {/* navegação */}
@@ -549,6 +576,31 @@ function PainelSistemas({ d }) {
           <b style={{ fontSize: 64, fontWeight: 800 }}>{distintos}</b>
           <small style={{ color: theme.sub }}>{comSistema} de {totalCli} clientes usam sistema</small>
         </div>
+      </div>
+    </>
+  )
+}
+
+function PainelRascunhos({ d, onContinuar }) {
+  const lista = d.rascunhos || []
+  return (
+    <>
+      <Titulo h2="Trabalhos em andamento" sub="Integrações financeiras salvas para continuar depois — qualquer um pode concluir" />
+      <div style={{ ...card, flex: 1, overflow: 'auto' }}>
+        {lista.length === 0 ? (
+          <p style={{ color: theme.sub, fontSize: 14 }}><i className="ti ti-circle-check" style={{ color: theme.green }} /> Nenhum trabalho pendente salvo. 🎉</p>
+        ) : lista.map((r, i) => (
+          <div key={i} style={{ display: 'grid', gridTemplateColumns: '28px 1fr auto', alignItems: 'center', gap: 12, padding: '12px 0', borderTop: i ? `1px solid ${theme.border}` : 'none' }}>
+            <span style={{ color: theme.sub, fontWeight: 700, textAlign: 'center' }}>{i + 1}</span>
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 600 }}>{r.cliente} <span style={{ color: theme.sub, fontWeight: 400 }}>· {MES_C[r.mes - 1]}/{r.ano}</span></div>
+              <div style={{ fontSize: 12, color: theme.sub }}>
+                Banco {r.conta}{r.n ? ` · ${r.n} lançto(s)` : ''}{r.usuario ? ` · iniciado por ${String(r.usuario).split('@')[0]}` : ''}
+              </div>
+            </div>
+            <button className="btn" style={{ fontSize: 13, padding: '6px 12px' }} onClick={() => onContinuar(r)}><i className="ti ti-player-play" /> Continuar</button>
+          </div>
+        ))}
       </div>
     </>
   )

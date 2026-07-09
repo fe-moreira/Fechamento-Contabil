@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
@@ -42,7 +43,9 @@ export default function Integracao() {
     await supabase.from('competencias').update({ integracoes: novo }).eq('id', id)
     setEstado(novo)
   }
-  const [tab, setTab] = useState('fiscal')
+  // Ao vir do painel ("Continuar" um rascunho), já abre na aba indicada.
+  const location = useLocation()
+  const [tab, setTab] = useState(location.state?.tab || 'fiscal')
   const [dados, setDados] = useState({}) // { tab: { nome, linhas } }
   const [estado, setEstado] = useState({}) // integrações validadas/sem movimento salvas na competência
   const [erro, setErro] = useState('')
@@ -716,7 +719,8 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
               {contas.map(c => {
                 const s = bancosEst[c.conta_contabil]
                 const cor = s?.estado === 'validado' ? theme.green : s?.estado === 'sem_movimento' ? theme.sub : s?.estado === 'rascunho' ? theme.yellow : theme.red
-                const txt = s?.estado === 'validado' ? `Concluído${s.doc ? ` · ${s.doc}` : ''}` : s?.estado === 'sem_movimento' ? 'Sem movimento no mês' : s?.estado === 'rascunho' ? `Em andamento${s.draft ? ` · ${s.draft.length} lançto(s)` : ''}` : 'Pendente'
+                const quem = s?.usuario ? ` · por ${String(s.usuario).split('@')[0]}` : ''
+                const txt = s?.estado === 'validado' ? `Concluído${s.doc ? ` · ${s.doc}` : ''}` : s?.estado === 'sem_movimento' ? 'Sem movimento no mês' : s?.estado === 'rascunho' ? `Em andamento${quem}${s.draft ? ` · ${s.draft.length} lançto(s)` : ''}` : 'Pendente'
                 const icon = s?.estado === 'validado' ? 'ti-circle-check' : s?.estado === 'sem_movimento' ? 'ti-circle-minus' : s?.estado === 'rascunho' ? 'ti-progress' : 'ti-alert-triangle'
                 return (
                   <div key={c.conta_contabil} style={{ background: theme.card, border: `1px solid ${s?.estado === 'sem_movimento' ? theme.cb : cor}`, borderRadius: 12, padding: 14 }}>
