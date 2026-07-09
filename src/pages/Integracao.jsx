@@ -1830,8 +1830,8 @@ function analiticasSob(codes, linhas) {
     const l = linhas.find(x => String(x.reduzido) === c || String(x.classif) === c || (dig(x.classif) && dig(x.classif) === dig(c)) || (dig(x.reduzido) && dig(x.reduzido) === dig(c)))
     if (!l) continue
     if (!l.sintetica) { out.set(String(l.reduzido), l); continue }
-    const pref = String(l.classifRaw || l.classif)
-    for (const x of linhas) { if (x.sintetica) continue; const cx = String(x.classifRaw || x.classif); if (cx.startsWith(pref) && cx !== pref) out.set(String(x.reduzido), x) }
+    const pref = String(l.classif || '') // mascarado, ex.: "1.2.3" — casa filhas com "1.2.3."
+    for (const x of linhas) { if (x.sintetica) continue; if (pref && String(x.classif || '').startsWith(pref + '.')) out.set(String(x.reduzido), x) }
   }
   return [...out.values()]
 }
@@ -1924,11 +1924,18 @@ function Patrimonio({ empresaId, competencia, planoMap = {}, est, onEstado, onSe
   useEffect(() => {
     if (semMov) return
     const desired = bate ? 'validado' : null
-    if ((est?.estado || null) !== desired && contas.length && valorDoc != null && saldoTotal != null) {
-      onEstado({ ...(est || {}), estado: desired })
-      validarConciliacao(desired === 'validado')
-    }
+    if ((est?.estado || null) !== desired && contas.length && valorDoc != null && saldoTotal != null) onEstado({ ...(est || {}), estado: desired })
   }, [bate, saldoTotal, valorDoc]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Marca/desmarca as analíticas na conciliação SEMPRE que estiver batendo (não só na
+  // transição) — cobre o caso do patrimônio já validado de antes. Idempotente por assinatura.
+  const marcadoRef = useRef('')
+  useEffect(() => {
+    if (!linhas || semMov) return
+    const sig = (bate && contas.length) ? `${contas.join(',')}|${valorDoc}|${est?.path || ''}` : ''
+    if (sig && marcadoRef.current !== sig) { marcadoRef.current = sig; validarConciliacao(true) }
+    else if (!sig && marcadoRef.current) { marcadoRef.current = ''; validarConciliacao(false) }
+  }, [linhas, bate, valorDoc]) // eslint-disable-line react-hooks/exhaustive-deps
 
   if (semMov) return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
