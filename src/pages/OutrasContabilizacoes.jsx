@@ -3,6 +3,8 @@ import { theme, money } from '../lib/theme'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { listar, inserir, remover, atualizar, gerarLancamento, enviarSaldoInicialContrato, anexarArquivoContrato, urlArquivoContrato, removerArquivoContrato, competenciaInicioCliente } from '../lib/outras'
+import { gerarExcelTimbrado } from '../lib/excel'
+import { abrePdfTimbrado } from '../lib/pdf'
 import ObservacoesConciliacao from '../components/ObservacoesConciliacao'
 import LeitorIA from '../components/LeitorIA'
 import CampoConta from '../components/CampoConta'
@@ -94,6 +96,83 @@ function valorApropriacaoMes(c, competencia) {
   return l ? l.valor : (Number(c.valor_parcela) || 0)
 }
 
+// ISO YYYY-MM-DD → DD/MM/AAAA (usado no relatório).
+function brDataRel(iso) { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || '')); return m ? `${m[3]}/${m[2]}/${m[1]}` : '' }
+
+// Apropriação ACUMULADA de um contrato até a competência (inclusive) e a do mês.
+// Saldo a apropriar = total − acumulado (é o saldo do ativo "a apropriar" no fim do mês).
+function apropriacaoAcumulada(c, competencia) {
+  const total = Number(c.premio_total ?? c.valor_total) || 0
+  const sched = cronogramaContrato(c, c.por_dia ? 'dia' : 'igual')
+  const [cm, ca] = String(competencia || '').split('/').map(Number)
+  const alvo = (ca * 12 + cm) || 0
+  let acum = 0, mes = 0
+  for (const s of sched) {
+    const [m, a] = s.comp.split('/').map(Number)
+    const abs = a * 12 + m
+    if (alvo && abs <= alvo) acum = r2(acum + s.valor)
+    if (alvo && abs === alvo) mes = s.valor
+  }
+  return { total, acum: r2(acum), mes, saldo: r2(total - acum) }
+}
+
+// Monta o relatório de apropriação (seguro/despesa) agrupado pela conta "a apropriar".
+// O SUBTOTAL de cada conta = saldo a apropriar que deve bater na conciliação daquela conta.
+function dadosRelatorioApropriacao(rows, origem, competencia, planoMap = {}) {
+  const grupos = {}
+  for (const r of rows) {
+    const { total, acum, mes, saldo } = apropriacaoAcumulada(r, competencia)
+    const conta = String(r.conta_apropriar || '').trim() || '—'
+    const nome = origem === 'seguro'
+      ? `${r.seguradora || ''}${r.apolice ? ' · ' + r.apolice : ''}`.trim()
+      : `${r.tipo || ''}${r.descricao ? ' · ' + r.descricao : ''}`.trim()
+    const vig = `${brDataRel(r.vigencia_inicio)}${r.vigencia_fim ? ' a ' + brDataRel(r.vigencia_fim) : ''}`.trim()
+    const g = (grupos[conta] ||= { conta, nome: planoMap[conta]?.nome || '', itens: [], total: 0, mes: 0, acum: 0, saldo: 0 })
+    g.itens.push({ nome: nome || '—', vig, total, mes, acum, saldo })
+    g.total = r2(g.total + total); g.mes = r2(g.mes + mes); g.acum = r2(g.acum + acum); g.saldo = r2(g.saldo + saldo)
+  }
+  const arr = Object.values(grupos).sort((a, b) => String(a.conta).localeCompare(String(b.conta)))
+  const geral = arr.reduce((s, g) => ({ total: r2(s.total + g.total), mes: r2(s.mes + g.mes), acum: r2(s.acum + g.acum), saldo: r2(s.saldo + g.saldo) }), { total: 0, mes: 0, acum: 0, saldo: 0 })
+  return { grupos: arr, geral }
+}
+
+// Colunas do relatório de apropriação (seguro/despesa).
+const colunasRelApropriacao = origem => [
+  { nome: origem === 'seguro' ? 'Seguradora / Apólice' : 'Tipo / Descrição', largura: 38, wrap: true },
+  { nome: 'Vigência', largura: 22, alinhar: 'left' },
+  { nome: 'Valor total', alinhar: 'right', moeda: true },
+  { nome: 'Apropriado no mês', alinhar: 'right', moeda: true },
+  { nome: 'Apropriado acum.', alinhar: 'right', moeda: true },
+  { nome: 'Saldo a apropriar', alinhar: 'right', moeda: true },
+]
+
+// Gera o relatório de apropriação em PDF (timbrado, dá pra arrastar na conciliação) ou Excel.
+function gerarRelatorioApropriacao({ formato, origem, rows, competencia, empresaNome, planoMap }) {
+  const { grupos, geral } = dadosRelatorioApropriacao(rows, origem, competencia, planoMap)
+  const titulo = origem === 'seguro' ? 'Seguros a Apropriar — Saldo por Apólice' : 'Despesas a Apropriar — Saldo por Contrato'
+  const sub = `${empresaNome || ''} · Competência ${competencia} · o saldo a apropriar de cada conta bate com a conciliação`
+  const colunas = colunasRelApropriacao(origem)
+  const label = g => `Conta ${g.conta}${g.nome ? ' · ' + g.nome : ''}`
+  const arquivo = `${origem === 'seguro' ? 'seguros' : 'despesas'}_a_apropriar_${String(competencia).replace('/', '-')}.${formato === 'excel' ? 'xlsx' : 'pdf'}`
+  if (formato === 'excel') {
+    const secoes = grupos.map(g => ({ titulo: label(g), linhas: g.itens.map(it => [it.nome, it.vig, it.total, it.mes, it.acum, it.saldo]), totais: ['Subtotal', '', g.total, g.mes, g.acum, g.saldo] }))
+    return gerarExcelTimbrado({ titulo, sub, colunas, secoes, totais: ['TOTAL GERAL', '', geral.total, geral.mes, geral.acum, geral.saldo], arquivo, aba: origem === 'seguro' ? 'Seguros' : 'Despesas' })
+  }
+  const secoes = grupos.map(g => ({ titulo: label(g), linhas: g.itens.map(it => [it.nome, it.vig, money(it.total), money(it.mes), money(it.acum), money(it.saldo)]), totais: ['Subtotal', '', money(g.total), money(g.mes), money(g.acum), money(g.saldo)] }))
+  abrePdfTimbrado({ titulo, sub, colunas, secoes, totais: ['TOTAL GERAL', '', money(geral.total), money(geral.mes), money(geral.acum), money(geral.saldo)] })
+}
+
+// Botões de relatório (PDF/Excel) do saldo a apropriar — reaproveitados por seguro e despesa.
+function BotoesRelatorio({ origem, rows, competencia, empresaNome, planoMap }) {
+  const dis = !rows.length
+  return (
+    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+      <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} disabled={dis} onClick={() => gerarRelatorioApropriacao({ formato: 'pdf', origem, rows, competencia, empresaNome, planoMap })} title="Relatório do saldo a apropriar (PDF) — arraste na conciliação para bater o saldo"><i className="ti ti-file-type-pdf" /> Relatório PDF</button>
+      <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} disabled={dis} onClick={() => gerarRelatorioApropriacao({ formato: 'excel', origem, rows, competencia, empresaNome, planoMap })} title="Relatório do saldo a apropriar (Excel)"><i className="ti ti-file-spreadsheet" /> Relatório Excel</button>
+    </div>
+  )
+}
+
 // Data do último dia da competência (MM/AAAA) em ISO.
 function dataComp(competencia) {
   const [m, a] = (competencia || '').split('/').map(Number)
@@ -137,7 +216,8 @@ function aplicarIA(setF, dados) {
 }
 
 export default function OutrasContabilizacoes() {
-  const { empresaId, empresaNome, competencia, getCompetenciaId } = useAppData()
+  const { empresaId, empresaNome, competencia, getCompetenciaId, plano } = useAppData()
+  const planoMap = Object.fromEntries((plano || []).map(p => [String(p.cod), p]))
   const { user } = useAuth()
   const [tab, setTab] = useState('seguro')
   const [gerar, setGerar] = useState(null) // {campos, titulo}
@@ -175,7 +255,7 @@ export default function OutrasContabilizacoes() {
 
   if (!empresaId) return <Aviso texto="Selecione uma empresa no menu lateral." />
 
-  const props = { clienteId: empresaId, user, competencia, abrirGerar, enviarSaldoInicial, compInicio }
+  const props = { clienteId: empresaId, user, competencia, abrirGerar, enviarSaldoInicial, compInicio, empresaNome, planoMap }
   const Pane = { seguro: PaneSeguro, despesa: PaneDespesaApropriar, importacao: PaneImportacao, emprestimo: PaneEmprestimo, parcelamento: PaneParcelamento, equivalencia: PaneEquivalencia, outros: PaneOutros }[tab]
 
   return (
@@ -349,7 +429,7 @@ function ModalCronograma({ contrato, origem, compInicio, onClose }) {
 }
 
 // ================= SEGURO =================
-function PaneSeguro({ clienteId, user, competencia, abrirGerar, enviarSaldoInicial, compInicio }) {
+function PaneSeguro({ clienteId, user, competencia, abrirGerar, enviarSaldoInicial, compInicio, empresaNome, planoMap }) {
   const { rows, loading, erro, recarregar, excluir } = useLista('seguros', clienteId)
   const [cron, setCron] = useState(null)
   const [f, on, reset, setF] = useForm({ seguradora: '', apolice: '', ramo: '', vigencia_inicio: '', vigencia_fim: '', premio_total: '', num_parcelas: '12', valor_parcela: '', conta_despesa: '', conta_apropriar: '', conta_pagar: '', saldo_inicial: false, por_dia: false })
@@ -398,7 +478,10 @@ function PaneSeguro({ clienteId, user, competencia, abrirGerar, enviarSaldoInici
         </form>
       </Card>
       <Card>
-        <SecTitle>Contratos de seguro ({rows.length})</SecTitle>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
+          <SecTitle>Contratos de seguro ({rows.length})</SecTitle>
+          <BotoesRelatorio origem="seguro" rows={rows} competencia={competencia} empresaNome={empresaNome} planoMap={planoMap} />
+        </div>
         {erro && <p style={{ color: theme.red, fontSize: 13 }}>{erro}</p>}
         <div style={{ overflowX: 'auto' }}><table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }}><thead><tr>{['Seguradora', 'Apólice', 'Ramo', 'Prêmio', 'Parcela', ''].map((h, i) => <th key={i} style={th}>{h}</th>)}</tr></thead><tbody>
           {loading ? <Vazio colSpan={6} texto="Carregando…" /> : rows.length === 0 ? <Vazio colSpan={6} texto="Nenhum contrato cadastrado ainda." /> : rows.map(r => (
@@ -426,7 +509,7 @@ function PaneSeguro({ clienteId, user, competencia, abrirGerar, enviarSaldoInici
 
 // ================= DESPESA A APROPRIAR =================
 // Funciona como o seguro, mas genérico: IPVA, IPTU, aluguel antecipado, etc.
-function PaneDespesaApropriar({ clienteId, user, competencia, abrirGerar, enviarSaldoInicial, compInicio }) {
+function PaneDespesaApropriar({ clienteId, user, competencia, abrirGerar, enviarSaldoInicial, compInicio, empresaNome, planoMap }) {
   const { rows, loading, erro, recarregar, excluir } = useLista('despesas_apropriar', clienteId)
   const [cron, setCron] = useState(null)
   const [f, on, reset, setF] = useForm({ tipo: '', descricao: '', documento: '', valor_total: '', vigencia_inicio: '', vigencia_fim: '', num_parcelas: '12', valor_parcela: '', conta_despesa: '', conta_apropriar: '', conta_pagar: '', saldo_inicial: false, por_dia: false })
@@ -473,7 +556,10 @@ function PaneDespesaApropriar({ clienteId, user, competencia, abrirGerar, enviar
         </form>
       </Card>
       <Card>
-        <SecTitle>Despesas a apropriar ({rows.length})</SecTitle>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
+          <SecTitle>Despesas a apropriar ({rows.length})</SecTitle>
+          <BotoesRelatorio origem="despesa" rows={rows} competencia={competencia} empresaNome={empresaNome} planoMap={planoMap} />
+        </div>
         {erro && <p style={{ color: theme.red, fontSize: 13 }}>{erro}</p>}
         <div style={{ overflowX: 'auto' }}><table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}><thead><tr>{['Tipo', 'Descrição', 'Total', 'Parcela', ''].map((h, i) => <th key={i} style={th}>{h}</th>)}</tr></thead><tbody>
           {loading ? <Vazio colSpan={5} texto="Carregando…" /> : rows.length === 0 ? <Vazio colSpan={5} texto="Nenhuma despesa cadastrada ainda." /> : rows.map(r => (
