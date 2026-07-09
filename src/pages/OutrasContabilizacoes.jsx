@@ -102,6 +102,20 @@ function dataComp(competencia) {
   return `${a}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`
 }
 
+// A data (ISO YYYY-MM-DD) é do mês/ano do fechamento em andamento (MM/AAAA)?
+// Só se pode lançar com data dentro da competência que está sendo fechada.
+function dataNaCompetencia(dataISO, competencia) {
+  const m = /^(\d{4})-(\d{2})/.exec(String(dataISO || ''))
+  const c = /^(\d{2})\/(\d{4})$/.exec(String(competencia || ''))
+  if (!m || !c) return true // sem dados suficientes, não bloqueia
+  return m[1] === c[2] && m[2] === c[1]
+}
+// ISO YYYY-MM-DD → DD/MM/AAAA (para mensagens).
+function brData(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || ''))
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : String(iso || '')
+}
+
 // ---- form genérico (controlado) ----
 function useForm(init) {
   const [f, setF] = useState(init)
@@ -135,6 +149,10 @@ export default function OutrasContabilizacoes() {
 
   async function confirmarGerar(g) {
     try {
+      if (!dataNaCompetencia(g.data, competencia)) {
+        setMsg(`A data ${brData(g.data)} não é do fechamento em andamento (${competencia}). Só é possível lançar com data dentro de ${competencia}.`)
+        return
+      }
       const competencia_id = await getCompetenciaId()
       if (!competencia_id) { setMsg('Selecione uma empresa e abra um fechamento.'); return }
       await gerarLancamento({ competencia_id, ...g, usuario: user?.email })
@@ -196,30 +214,34 @@ export default function OutrasContabilizacoes() {
       </div>
 
       <Pane {...props} />
-      {gerar && <GerarModal cfg={gerar} onClose={() => setGerar(null)} onConfirm={confirmarGerar} />}
+      {gerar && <GerarModal cfg={gerar} competencia={competencia} onClose={() => setGerar(null)} onConfirm={confirmarGerar} />}
     </div>
   )
 }
 
 // ---- Modal: confirmar/editar a partida antes de gerar o lançamento ----
-function GerarModal({ cfg, onClose, onConfirm }) {
+function GerarModal({ cfg, competencia, onClose, onConfirm }) {
   const [f, on] = useForm({ data: cfg.data || '', conta_debito: cfg.conta_debito || '', conta_credito: cfg.conta_credito || '', valor: cfg.valor || '', historico: cfg.historico || '', origem: cfg.origem, documento: cfg.documento })
+  const dataOk = dataNaCompetencia(f.data, competencia)
   return (
     <div onClick={e => { if (e.target === e.currentTarget) onClose() }} style={{ position: 'fixed', inset: 0, background: 'rgba(8,11,18,0.64)', zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
       <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: 14, maxWidth: 560, width: '100%', padding: '22px 24px' }}>
         <h3 style={{ fontSize: 16, fontWeight: 700, margin: '0 0 4px' }}>Gerar lançamento</h3>
         <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 16px' }}>{cfg._titulo} — confira a partida e confirme.</p>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-          <Field label="Data"><input className="input" type="date" value={f.data} onChange={on('data')} /></Field>
+          <Field label="Data"><input className="input" type="date" value={f.data} onChange={on('data')} style={!dataOk ? { borderColor: theme.red } : undefined} /></Field>
           <Field label="Valor"><input className="input" type="number" step="0.01" value={f.valor} onChange={on('valor')} /></Field>
           <Field label="Conta débito"><input className="input" value={f.conta_debito} onChange={on('conta_debito')} /></Field>
           <Field label="Conta crédito"><input className="input" value={f.conta_credito} onChange={on('conta_credito')} /></Field>
           <Field label="Histórico" col={2}><input className="input" value={f.historico} onChange={on('historico')} /></Field>
         </div>
+        {!dataOk && <p style={{ color: theme.red, fontSize: 12.5, marginTop: 12, fontWeight: 600 }}>
+          <i className="ti ti-alert-triangle" /> A data {brData(f.data)} não é do fechamento em andamento ({competencia}). Só é possível lançar com data dentro de {competencia}.
+        </p>}
         <p style={{ color: theme.sub, fontSize: 12, marginTop: 12 }}><i className="ti ti-sparkles" style={{ color: theme.accent }} /> Só gera no Domínio com débito e crédito. Atualiza a conciliação.</p>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 16 }}>
           <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
-          <button className="btn" onClick={() => onConfirm(f)}>Confirmar e gerar</button>
+          <button className="btn" disabled={!dataOk} onClick={() => onConfirm(f)}>Confirmar e gerar</button>
         </div>
       </div>
     </div>
