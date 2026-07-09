@@ -40,10 +40,10 @@ export default function Status() {
   const [verDominio, setVerDominio] = useState(false) // modal com os lançamentos p/ o Domínio
   const [editLanc, setEditLanc] = useState(null)      // lançamento em edição (modal)
 
-  async function carregar() {
-    setSel(null); setMsg('')
+  async function carregar(silent) {
+    setMsg('') // NÃO fecha o painel (sel) — ao justificar/corrigir, recarrega e mantém aberto atualizado
     if (!empresaId) { setCarregando(false); return }
-    setCarregando(true)
+    if (!silent) setCarregando(true) // recarga silenciosa (após justificar) não pisca a tela toda
 
     const { data: cli } = await supabase.from('clientes')
       .select('carga_saldos, carga_inicial_feita, integracao_financeira').eq('id', empresaId).maybeSingle()
@@ -253,6 +253,7 @@ export default function Status() {
           sub: `Banco: ${[b.classif, b.nome].filter(Boolean).join(' · ') || '—'}  →  Resultado: ${[r.classif, r.nome].filter(Boolean).join(' · ') || '—'}`,
           detalhe: `${l.historico}${l.despesa ? ' — despesa: classificar dedutível/indedutível (LALUR)' : ''}`,
           lalur: l.despesa,
+          tratado: !!l.tratado, pendenciaCliente: !!l.pendenciaCliente,
           partida: { data: l.data || '', valor: l.valor, banco: l.banco, resultado: l.resultado, bancoNome: b.nome, resultadoNome: r.nome, historico: l.historico, despesa: l.despesa },
         }
       }),
@@ -306,10 +307,14 @@ export default function Status() {
     },
   ]
 
+  // Pendências restantes de um gate = itens ainda não tratados (justificados/corrigidos
+  // continuam na lista, mas saem da contagem). Gates informativos não contam.
+  const pendDe = g => g.informativo ? 0 : g.itens.filter(it => !it.tratado).length
   // Gates informativos (observações) não bloqueiam o encerramento.
-  const totalPendencias = gates.filter(g => !g.informativo).reduce((s, g) => s + g.itens.length, 0)
+  const totalPendencias = gates.filter(g => !g.informativo).reduce((s, g) => s + pendDe(g), 0)
   const pronto = totalPendencias === 0
   const fechado = status === 'fechado'
+  const selGate = sel ? gates.find(g => g.key === sel) : null
 
   async function encerrar() {
     setSalvando(true)
@@ -341,6 +346,8 @@ export default function Status() {
 
   async function registrar(item, tipo, detalhe, dedutibilidade, pend) {
     const id = await getCompetenciaId()
+    // Justificativa ÚNICA por item: substitui a anterior (reabrir e mudar atualiza, não acumula).
+    await supabase.from('auditoria').delete().eq('competencia_id', id).eq('modulo', 'Status').eq('item', item)
     await supabase.from('auditoria').insert({
       competencia_id: id, modulo: 'Status', item, tipo, detalhe, dedutibilidade: dedutibilidade || null, usuario: user?.email,
     })
@@ -349,8 +356,9 @@ export default function Status() {
     if (pend) await supabase.from('auditoria').insert({
       competencia_id: id, modulo: 'Status', item, tipo: 'Pendência', detalhe: detalhe || 'Pendência do cliente', usuario: user?.email,
     })
-    setMsg(`${tipo} registrada na auditoria${pend ? ' · pendência do cliente enviada ao relatório' : ''}.`)
     setModal(null)
+    await carregar(true) // recarrega e mantém o painel aberto → item aparece como Justificado e sai da contagem
+    setMsg(`${tipo} registrada${pend ? ' · pendência do cliente enviada ao relatório' : ''}.`)
   }
 
   // Desfaz (remove) um lançamento gerado pela plataforma — sai do arquivo do Domínio.
@@ -380,29 +388,36 @@ export default function Status() {
       valor: Number(L.valor) || 0, historico: L.historico || null,
       origem: 'correcao', usuario: user?.email,
     })
+    await supabase.from('auditoria').delete().eq('competencia_id', id).eq('modulo', 'Status').eq('item', itemTxt)
     await supabase.from('auditoria').insert({
       competencia_id: id, modulo: 'Status', item: itemTxt, tipo: 'Correção',
       detalhe: `Reclassificação banco × resultado: D ${L.conta_debito} / C ${L.conta_credito} · ${money(L.valor)}`,
       dedutibilidade: L.dedutibilidade || null, usuario: user?.email,
     })
+    setModal(null); await carregar(true)
     setMsg('Correção registrada — lançamento enviado para o painel Contabilizar.')
-    setModal(null); carregar()
   }
 
-  // Exporta os itens de um gate em Excel ou PDF (papel timbrado).
+  // Exporta os itens de um gate em Excel ou PDF (papel timbrado). Inclui a Situação
+  // (Pendente / Justificado / Pendência do cliente) para separar no relatório.
   async function exportarGate(gate, fmt) {
-    const linhas = gate.itens.map(it => [it.item, it.sub || '', it.detalhe || ''])
+    const situacao = it => it.pendenciaCliente ? 'Pendência do cliente' : it.tratado ? 'Justificado' : 'Pendente'
+    const ordem = { Pendente: 0, 'Pendência do cliente': 1, Justificado: 2 }
+    const itens = gate.itens.slice().sort((a, b) => ordem[situacao(a)] - ordem[situacao(b)])
+    const linhas = itens.map(it => [situacao(it), it.item, it.sub || '', it.detalhe || ''])
+    const nPend = gate.itens.filter(it => !it.tratado).length
+    const sub = gate.informativo ? `${gate.itens.length} observação(ões)` : `${nPend} pendência(s) · ${gate.itens.filter(it => it.tratado).length} justificado(s)`
     const tituloRel = `${gate.nome} — ${empresaNome} · ${competencia}`
     if (fmt === 'excel') {
       await gerarExcelTimbrado({
-        titulo: tituloRel, sub: `${gate.itens.length} pendência(s)`,
-        colunas: [{ nome: 'Item', largura: 30 }, { nome: 'Contas', largura: 50 }, { nome: 'Detalhe', largura: 60, wrap: true }],
+        titulo: tituloRel, sub,
+        colunas: [{ nome: 'Situação', largura: 20 }, { nome: 'Item', largura: 28 }, { nome: 'Contas', largura: 48 }, { nome: 'Detalhe', largura: 56, wrap: true }],
         linhas, totais: null, arquivo: `${gate.key}_${competencia.replace('/', '-')}.xlsx`, aba: 'Pendências',
       })
     } else {
       abrePdfTimbrado({
-        titulo: tituloRel, sub: `${gate.itens.length} pendência(s)`,
-        colunas: [{ nome: 'Item' }, { nome: 'Contas' }, { nome: 'Detalhe' }],
+        titulo: tituloRel, sub,
+        colunas: [{ nome: 'Situação' }, { nome: 'Item' }, { nome: 'Contas' }, { nome: 'Detalhe' }],
         linhas,
       })
     }
@@ -495,14 +510,15 @@ export default function Status() {
       {/* Gates */}
       <div style={{ display: 'grid', gap: 12 }}>
         {gates.map(g => {
-          const n = g.itens.length
+          const total = g.itens.length
           const info = g.informativo
+          const n = info ? total : g.itens.filter(it => !it.tratado).length // pendências restantes
           const pend = !info && n > 0
-          const cor = info ? (n > 0 ? theme.accent : theme.sub) : (pend ? theme.red : theme.green)
-          const clicavel = n > 0 && !g.emBreve
+          const cor = info ? (total > 0 ? theme.accent : theme.sub) : (pend ? theme.red : theme.green)
+          const clicavel = total > 0 && !g.emBreve // abre mesmo com tudo tratado (para ver a lista)
           return (
             <div key={g.key}
-              onClick={clicavel ? () => { setSel(g); setMsg('') } : undefined}
+              onClick={clicavel ? () => { setSel(g.key); setMsg('') } : undefined}
               style={{
                 background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12,
                 padding: '16px 18px', display: 'flex', alignItems: 'center', gap: 16,
@@ -556,10 +572,10 @@ export default function Status() {
       </div>
 
       {/* Painel de itens do gate selecionado */}
-      {sel && (
+      {selGate && (
         <PainelGate
-          gate={sel}
-          onExportar={(fmt) => exportarGate(sel, fmt)}
+          gate={selGate}
+          onExportar={(fmt) => exportarGate(selGate, fmt)}
           onClose={() => setSel(null)}
           onJustificar={(it) => setModal({ item: it, tipo: 'Justificativa' })}
           onCorrigir={(it) => setModal({ item: it, tipo: it.partida ? 'Partida' : 'Correção' })}
@@ -693,7 +709,9 @@ function PainelGate({ gate, onClose, onJustificar, onCorrigir, onSemMovimento, o
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', margin: '0 0 16px' }}>
           <p style={{ color: theme.sub, fontSize: 12.5, margin: 0 }}>
-            {gate.itens.length} {gate.informativo ? 'observação(ões)' : 'pendência(s)'}. {legenda}
+            {gate.informativo
+              ? `${gate.itens.length} observação(ões).`
+              : <>{gate.itens.filter(it => !it.tratado).length} pendência(s){gate.itens.some(it => it.tratado) ? <> · <span style={{ color: theme.green }}>{gate.itens.filter(it => it.tratado).length} justificado(s)</span></> : ''}.</>} {legenda}
           </p>
           {gate.itens.length > 0 && onExportar && (
             <div style={{ display: 'flex', gap: 8 }}>
@@ -705,13 +723,20 @@ function PainelGate({ gate, onClose, onJustificar, onCorrigir, onSemMovimento, o
 
         <div style={{ display: 'grid', gap: 10 }}>
           {gate.itens.map((it, i) => (
-            <div key={i} style={{ background: theme.input, borderRadius: 10, padding: 14, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <div key={i} style={{ background: it.tratado ? (it.pendenciaCliente ? 'rgba(245,166,35,0.08)' : 'rgba(48,164,108,0.08)') : theme.input, border: it.tratado ? `1px solid ${it.pendenciaCliente ? 'rgba(245,166,35,0.4)' : 'rgba(48,164,108,0.4)'}` : 'none', borderRadius: 10, padding: 14, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
               <div style={{ flex: 1, minWidth: 200 }}>
                 <p style={{ fontSize: 13.5, fontWeight: 600, margin: 0 }}>{it.item}</p>
                 {it.sub && <p style={{ fontSize: 11.5, color: theme.accent, margin: '3px 0 0' }}>{it.sub}</p>}
                 <p style={{ fontSize: 12, color: theme.sub, margin: '3px 0 0' }}>{it.detalhe}</p>
               </div>
-              {gate.informativo ? null : it.contratoDoc ? (
+              {gate.informativo ? null : it.tratado ? (
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 700, color: it.pendenciaCliente ? theme.yellow : theme.green, background: it.pendenciaCliente ? 'rgba(245,166,35,0.14)' : 'rgba(48,164,108,0.14)', border: `1px solid ${it.pendenciaCliente ? theme.yellow : theme.green}`, borderRadius: 20, padding: '4px 11px', whiteSpace: 'nowrap' }}>
+                    <i className={`ti ${it.pendenciaCliente ? 'ti-flag' : 'ti-circle-check'}`} /> {it.pendenciaCliente ? 'Pendência do cliente' : 'Justificado'}
+                  </span>
+                  <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => onJustificar(it)} title="Rever / alterar a justificativa">editar</button>
+                </div>
+              ) : it.contratoDoc ? (
                 <div style={{ display: 'flex', gap: 8 }}>
                   <label className="btn" style={{ fontSize: 13, cursor: 'pointer' }}><i className="ti ti-paperclip" /> Importar
                     <input type="file" accept=".pdf,.xlsx,.xls,.csv,.png,.jpg,.jpeg" style={{ display: 'none' }} onChange={e => onImportarContrato(it, e.target.files?.[0])} />
@@ -860,9 +885,9 @@ function ModalRegistro({ tipo, alvo, lalur, contrato, onClose, onConfirmar }) {
         )}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
           <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
-          {/* Despesa (LALUR) exige dedutível/indedutível — MAS se for pendência do cliente
-              (ainda vai cobrar), pode gravar sem classificar; a classificação vem depois. */}
-          <button className="btn" disabled={!(txt.trim() && (!lalur || dedut || pend))} onClick={() => onConfirmar(txt.trim(), dedut || null, pend)}>Registrar</button>
+          {/* Despesa (LALUR) SEMPRE exige dedutível/indedutível — mesmo sendo pendência do
+              cliente — porque o indedutível sobe para o LALUR de qualquer forma. */}
+          <button className="btn" disabled={!(txt.trim() && (!lalur || dedut))} onClick={() => onConfirmar(txt.trim(), dedut || null, pend)}>Registrar</button>
         </div>
       </div>
     </div>

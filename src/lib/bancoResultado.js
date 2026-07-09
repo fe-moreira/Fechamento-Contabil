@@ -1,5 +1,6 @@
 import { supabase } from './supabase'
 import { parsePlano } from './balancete'
+import { money } from './theme'
 
 const norm = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
 const soNum = s => String(s ?? '').replace(/\D/g, '')
@@ -58,6 +59,17 @@ export async function apurarBancoResultado(empresaId, compId) {
         despesa: /^4/.test(resultadoCl),
       })
     }
+  }
+  // Marca o que já foi tratado (justificado/corrigido) e o que é pendência do cliente —
+  // pela mesma chave do item usada no Status. Assim o item some da CONTAGEM de pendências
+  // mas continua na lista (marcado), e a pendência do cliente sobe no relatório.
+  const { data: aud } = await supabase.from('auditoria').select('item, tipo').eq('competencia_id', compId).eq('modulo', 'Status')
+  const tratados = new Set(), pend = new Set()
+  for (const a of (aud || [])) { if (a.tipo === 'Pendência') pend.add(a.item); else tratados.add(a.item) }
+  for (const f of flagged) {
+    const chave = `${f.banco} → ${f.resultado} · ${money(f.valor)}`
+    f.tratado = tratados.has(chave)
+    f.pendenciaCliente = pend.has(chave)
   }
   return { temCarga: rows.length > 0, bancos: bancos.size, lancamentos: flagged }
 }
