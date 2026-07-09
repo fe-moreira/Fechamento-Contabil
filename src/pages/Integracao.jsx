@@ -8,6 +8,7 @@ import CampoConta from '../components/CampoConta'
 import { normHist, casarHistorico, aprender, parseValor, dataISO, aplicarPerfil, extrairEntidade, ehEmpresa, catByRowDeMerges } from '../lib/financeiro'
 import { gerarExcelTimbrado } from '../lib/excel'
 import { gerarDominioCSV } from '../lib/dominio'
+import { contasConciliacaoAbertas } from '../lib/balancete'
 
 const TABS = [['fiscal', 'Fiscal'], ['folha', 'Folha'], ['patrimonio', 'Patrimônio'], ['financeira', 'Financeira']]
 const DESC = {
@@ -202,10 +203,19 @@ export default function Integracao() {
   // Uma integração está OK (verde) quando validada ou marcada sem movimento.
   function integracaoOk(key) {
     if (key === 'financeira') {
+      if (['validado', 'sem_movimento'].includes(estado.financeira?.estado)) return true // via sistema / confirmada
       const arr = estado.financeira?.bancos ? Object.values(estado.financeira.bancos) : []
       return arr.length > 0 && arr.every(x => x.estado === 'validado' || x.estado === 'sem_movimento')
     }
     return ['validado', 'sem_movimento'].includes(estado[key]?.estado)
+  }
+  // Financeiro via sistema (não é Excel): um clique confirma que a integração foi feita.
+  async function confirmarFinanceiraSistema(feito) {
+    const id = await getCompetenciaId()
+    if (!id) return
+    const novo = { ...estado, financeira: feito ? { estado: 'validado', via: 'sistema', usuario: user?.email || null } : {} }
+    await supabase.from('competencias').update({ integracoes: novo }).eq('id', id)
+    setEstado(novo)
   }
 
   if (!empresaId) {
@@ -224,11 +234,27 @@ export default function Integracao() {
       // Persiste: integração validada (documento importado) na competência → some do Status.
       const id = await getCompetenciaId()
       if (id) {
-        const novo = { ...estado, [alvo]: { estado: 'validado', doc: file.name, usuario: user?.email || null } }
+        // Guarda o arquivo no Storage para poder extrair depois (ver o que importaram).
+        let path = estado[alvo]?.path || ''
+        try {
+          const ext = (file.name.match(/\.[a-z0-9]+$/i) || ['.xlsx'])[0].toLowerCase()
+          path = `integracao/${id}/${alvo}${ext}`
+          await supabase.storage.from('extratos').upload(path, file, { upsert: true, contentType: file.type || undefined })
+        } catch { path = '' }
+        const novo = { ...estado, [alvo]: { estado: 'validado', doc: file.name, path, usuario: user?.email || null } }
         await supabase.from('competencias').update({ integracoes: novo }).eq('id', id)
         setEstado(novo)
       }
     } catch (err) { setErro('Não consegui ler: ' + err.message) }
+  }
+  // Baixa o arquivo importado de uma integração (folha/patrimônio) — ver o que subiram.
+  async function extrairIntegracao(alvo) {
+    const t = estado[alvo]
+    if (!t?.path) { setErro('Este arquivo foi importado numa versão anterior e não ficou salvo. Reimporte uma vez para poder extrair.'); return }
+    const { data, error } = await supabase.storage.from('extratos').createSignedUrl(t.path, 300, { download: t.doc || `${alvo}.xlsx` })
+    if (error) { setErro('Não consegui abrir o arquivo: ' + error.message); return }
+    const a = document.createElement('a'); a.href = data.signedUrl; a.download = t.doc || `${alvo}.xlsx`
+    document.body.appendChild(a); a.click(); a.remove()
   }
 
   return (
@@ -255,10 +281,10 @@ export default function Integracao() {
       {tab === 'financeira'
         ? (integ === 'Excel'
           ? <Financeira competencia={competencia} est={estado.financeira || {}} empresaId={empresaId} planoMap={planoMap} user={user} onEstado={salvarFinanceira} isAdmin={isAdmin} usaCC={!!cliente?.usa_centro_custo} />
-          : <FinanceiraViaSistema integ={integ} sistema={sistema} />)
+          : <FinanceiraViaSistema integ={integ} sistema={sistema} empresaId={empresaId} competencia={competencia} est={estado.financeira} onConfirmar={confirmarFinanceiraSistema} />)
         : tab === 'fiscal'
           ? <Fiscal competencia={competencia} empresaId={empresaId} user={user} est={estado.fiscal || {}} onEstado={salvarFiscal} />
-          : <Cruzamento tab={tab} dados={dados[tab]} onImport={f => importar(tab, f)} onSemMov={() => marcarSemMov(tab)} est={estado[tab]} />}
+          : <Cruzamento tab={tab} dados={dados[tab]} onImport={f => importar(tab, f)} onSemMov={() => marcarSemMov(tab)} onExtrair={() => extrairIntegracao(tab)} est={estado[tab]} />}
     </Wrapper>
   )
 }
@@ -274,14 +300,17 @@ function EstadoBadge({ est }) {
   )
 }
 
-function Cruzamento({ tab, dados, onImport, onSemMov, est }) {
+function Cruzamento({ tab, dados, onImport, onSemMov, onExtrair, est }) {
   const total = dados ? somaNumerica(dados.linhas) : 0
   const semMov = est?.estado === 'sem_movimento'
   return (
     <>
       <div><EstadoBadge est={est} /></div>
       <ImpCard titulo={`Importar — ${DESC[tab].split(' ')[1] || 'relatório'}`} desc={DESC[tab]} onImport={onImport} nome={dados?.nome} qtd={dados?.linhas.length} />
-      {!semMov && !dados && <button className="btn btn-ghost" style={{ marginTop: 10, fontSize: 12.5 }} onClick={onSemMov} title="Marca esta integração como sem movimento no período (fica verde no Status)"><i className="ti ti-circle-minus" /> Marcar sem movimento</button>}
+      <div style={{ display: 'flex', gap: 12, marginTop: 10, flexWrap: 'wrap' }}>
+        {!semMov && !dados && <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={onSemMov} title="Marca esta integração como sem movimento no período (fica verde no Status)"><i className="ti ti-circle-minus" /> Marcar sem movimento</button>}
+        {est?.path && <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={onExtrair} title="Baixar o arquivo importado"><i className="ti ti-download" /> Extrair arquivo</button>}
+      </div>
       {dados && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(180px,1fr))', gap: 12, marginTop: 16 }}>
           <Metric label="Total do relatório" valor={money(total)} icon="ti-receipt" />
@@ -304,6 +333,8 @@ function Fiscal({ competencia, empresaId, user, est, onEstado }) {
   const [erro, setErro] = useState('')
   const [busy, setBusy] = useState(false)
   const [expand, setExpand] = useState(null)   // acumulador expandido
+  const [justAberto, setJustAberto] = useState(false)
+  const [justTxt, setJustTxt] = useState('')
 
   const tipos = est?.tipos || {}
   const atual = tipos[sub]
@@ -365,6 +396,19 @@ function Fiscal({ competencia, empresaId, user, est, onEstado }) {
     const novoTipos = { ...tipos }; delete novoTipos[sub]
     const done = CHAVES_FISCAL.every(k => novoTipos[k])
     await onEstado({ ...est, tipos: novoTipos, estado: done ? 'validado' : null, doc: null, usuario: user?.email || null })
+  }
+  // Justificar (só Saídas): ex.: valor no acumulador de operação interna nossa. Marca a
+  // Saídas como resolvida. Entradas/Serviços não têm justificar — têm que corrigir.
+  async function justificarSaida(texto) {
+    const t = texto == null ? '' : texto
+    const base = tipos.saidas && !tipos.saidas.semMovimento ? tipos.saidas : {}
+    const novoSaidas = t ? { ...base, justificativa: t, justUsuario: user?.email || null } : { ...base }
+    if (!t) delete novoSaidas.justificativa
+    const novoTipos = { ...tipos, saidas: novoSaidas }
+    if (!Object.keys(novoSaidas).length) delete novoTipos.saidas
+    const done = CHAVES_FISCAL.every(k => novoTipos[k])
+    await onEstado({ ...est, tipos: novoTipos, estado: done ? 'validado' : null, doc: done ? 'Fiscal · 3 tipos' : null, usuario: user?.email || null })
+    setJustAberto(false); setJustTxt('')
   }
 
   // Resumo final: importa o "Resumo por Acumulador" (PDF-texto) → totais por tipo.
@@ -430,8 +474,25 @@ function Fiscal({ competencia, empresaId, user, est, onEstado }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '10px 0 0', flexWrap: 'wrap' }}>
         {atual?.path && <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={extrairArquivo} title="Baixar o arquivo do acumulador importado"><i className="ti ti-download" /> Extrair arquivo</button>}
         {!semMov && !atual?.resumo && <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={marcarSemMovTipo} title="Este cliente não tem esse tipo de movimento no período"><i className="ti ti-circle-minus" /> Marcar sem movimento</button>}
+        {sub === 'saidas' && !tipos.saidas?.justificativa && <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={() => { setJustTxt(''); setJustAberto(true) }} title="Só Saídas: justificar valor de operação interna (ex.: rendimento). Entradas/Serviços têm que corrigir."><i className="ti ti-flag" /> Justificar</button>}
         {busy && <span style={{ color: theme.sub, fontSize: 12.5 }}><i className="ti ti-loader" /> Cruzando com razão + lançamentos + ajustes…</span>}
       </div>
+
+      {sub === 'saidas' && tipos.saidas?.justificativa && <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '12px 0 0', flexWrap: 'wrap', background: 'rgba(245,166,35,0.10)', border: `1px solid ${theme.yellow}`, borderRadius: 10, padding: '8px 12px' }}>
+        <i className="ti ti-flag" style={{ color: theme.yellow }} />
+        <span style={{ fontSize: 12.5, color: theme.text }}><b>Justificada:</b> {tipos.saidas.justificativa}</span>
+        <button className="btn btn-ghost" style={{ fontSize: 12, padding: '3px 10px', marginLeft: 'auto' }} onClick={() => { setJustTxt(tipos.saidas.justificativa); setJustAberto(true) }}>editar</button>
+        <button className="btn btn-ghost" style={{ fontSize: 12, padding: '3px 10px', color: theme.red, borderColor: theme.red }} onClick={() => justificarSaida('')}>remover</button>
+      </div>}
+
+      {sub === 'saidas' && justAberto && <div style={{ margin: '12px 0 0', background: theme.card, border: `1px solid ${theme.cb}`, borderRadius: 10, padding: 14 }}>
+        <label style={{ fontSize: 12.5, color: theme.sub }}>Justificativa da Saída (ex.: operação interna — rendimento de aplicação, transferência entre contas…)</label>
+        <textarea className="input" rows={2} value={justTxt} onChange={e => setJustTxt(e.target.value)} placeholder="Explique por que este valor de saída não precisa ser corrigido…" style={{ marginTop: 6 }} />
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>
+          <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={() => { setJustAberto(false); setJustTxt('') }}>Cancelar</button>
+          <button className="btn" style={{ fontSize: 12.5 }} disabled={!justTxt.trim()} onClick={() => justificarSaida(justTxt)}>Salvar justificativa</button>
+        </div>
+      </div>}
 
       {semMov && <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '16px 0', flexWrap: 'wrap' }}>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: theme.sub, background: theme.card, border: `1px solid ${theme.cb}`, borderRadius: 20, padding: '5px 12px' }}><i className="ti ti-circle-minus" /> {TIPOS_FISCAL.find(t => t[0] === sub)[1]} — sem movimento no período</span>
@@ -530,7 +591,15 @@ function ResumoFinal({ est, totalImportado, onImport, busy }) {
       <ImpCard titulo="Importar Resumo por Acumulador (Domínio)"
         desc={'PDF (com texto) do "Resumo por Acumulador". Leio os totais de Entradas, Saídas e Serviços e confiro com o que foi importado.'}
         onImport={onImport} nome={est?.resumoPdf?.doc} qtd={temResumo ? Object.keys(totais).length : undefined} />
-      {busy && <p style={{ color: theme.sub, fontSize: 12.5, margin: '10px 0 0' }}><i className="ti ti-loader" /> Lendo o resumo…</p>}
+      <div style={{ display: 'flex', gap: 12, margin: '10px 0 0', flexWrap: 'wrap' }}>
+        {est?.resumoPdf?.path && <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={async () => {
+          const { data, error } = await supabase.storage.from('extratos').createSignedUrl(est.resumoPdf.path, 300, { download: est.resumoPdf.doc || 'resumo.pdf' })
+          if (error) return
+          const a = document.createElement('a'); a.href = data.signedUrl; a.download = est.resumoPdf.doc || 'resumo.pdf'
+          document.body.appendChild(a); a.click(); a.remove()
+        }} title="Baixar o resumo importado"><i className="ti ti-download" /> Extrair arquivo</button>}
+        {busy && <span style={{ color: theme.sub, fontSize: 12.5 }}><i className="ti ti-loader" /> Lendo o resumo…</span>}
+      </div>
 
       <div style={{ margin: '16px 0', padding: 16, borderRadius: 12, border: `1px solid ${tudoOk ? theme.green : theme.cb}`, background: theme.card }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
@@ -1737,21 +1806,70 @@ const fth = { textAlign: 'left', padding: '9px 12px', fontSize: 11, color: theme
 const ftd = { padding: '7px 12px', fontSize: 12.5, color: theme.text, verticalAlign: 'middle' }
 
 // Cliente sem integração por Excel: não habilita a importação, só informa a origem.
-function FinanceiraViaSistema({ integ, sistema }) {
+function FinanceiraViaSistema({ integ, sistema, empresaId, competencia, est, onConfirmar }) {
   const usaSistema = integ === 'Sistema' || (integ !== 'Excel' && sistema)
+  const confirmado = est?.estado === 'validado'
+  const [contas, setContas] = useState(null) // [{conta, conciliada}]
+  const jaAuto = useRef(false)
+
+  // Busca as contas bancárias cadastradas e verifica se estão conciliadas (bateram com o
+  // extrato = verde) na competência. Se todas bateram, marca o financeiro como feito.
+  useEffect(() => {
+    if (!usaSistema || !empresaId) { setContas(null); return }
+    let ativo = true
+    ;(async () => {
+      const { data: cb } = await supabase.from('cargas_cadastro').select('dados')
+        .eq('cliente_id', empresaId).eq('tipo', 'contas_bancarias').order('created_at', { ascending: false }).limit(1).maybeSingle()
+      const codigos = []
+      for (const r of (Array.isArray(cb?.dados) ? cb.dados : [])) {
+        const k = Object.keys(r).find(x => /conta.?cont|reduzid|c[oó]digo|^conta$/i.test(x))
+        const v = String(r[k] ?? '').trim(); if (v) codigos.push(v)
+      }
+      const [mes, ano] = (competencia || '').split('/').map(Number)
+      const { data: comp } = await supabase.from('competencias').select('id')
+        .eq('cliente_id', empresaId).eq('ano', ano).eq('mes', mes).maybeSingle()
+      const abertasSet = new Set(comp ? (await contasConciliacaoAbertas(empresaId, comp.id)).map(c => String(c.conta)) : [])
+      const dig = s => String(s).replace(/\D/g, '')
+      const abertasDig = new Set([...abertasSet].map(dig))
+      const lista = codigos.map(c => ({ conta: c, conciliada: !abertasSet.has(c) && !abertasDig.has(dig(c)) }))
+      if (ativo) setContas(lista)
+    })()
+    return () => { ativo = false }
+  }, [usaSistema, empresaId, competencia])
+
+  const tudoOk = contas && contas.length > 0 && contas.every(c => c.conciliada)
+  // Auto-tica: se todas as contas bancárias bateram e ainda não está confirmado, confirma.
+  useEffect(() => {
+    if (tudoOk && !confirmado && !jaAuto.current) { jaAuto.current = true; onConfirmar(true) }
+  }, [tudoOk, confirmado]) // eslint-disable-line react-hooks/exhaustive-deps
+
   return (
-    <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: '26px 24px', display: 'flex', alignItems: 'center', gap: 16, maxWidth: 640 }}>
+    <div style={{ background: theme.card, border: `0.5px solid ${confirmado ? theme.green : theme.cb}`, borderRadius: 12, padding: '26px 24px', display: 'flex', alignItems: 'flex-start', gap: 16, maxWidth: 640, flexWrap: 'wrap' }}>
       <span style={{ background: 'rgba(74,124,255,0.15)', borderRadius: 12, width: 48, height: 48, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
         <i className={`ti ${usaSistema ? 'ti-plug-connected' : 'ti-plug-off'}`} style={{ color: theme.accent, fontSize: 24 }} />
       </span>
-      <div>
+      <div style={{ flex: 1, minWidth: 240 }}>
         {usaSistema ? (
           <>
             <p style={{ fontSize: 15, fontWeight: 600, margin: 0 }}>Financeiro importado via sistema</p>
             <p style={{ color: theme.sub, fontSize: 13.5, margin: '6px 0 0', lineHeight: 1.5 }}>
-              Este cliente utiliza o sistema <b style={{ color: theme.text }}>{sistema || 'não informado'}</b>. A importação por Excel fica desabilitada — o financeiro vem direto do sistema.
+              Este cliente utiliza o sistema <b style={{ color: theme.text }}>{sistema || 'não informado'}</b>. Não importa por Excel — verifico direto se as <b style={{ color: theme.text }}>contas bancárias</b> bateram com o extrato na conciliação.
               {!sistema && <span style={{ display: 'block', color: theme.yellow, marginTop: 6 }}>Informe o sistema no cadastro do cliente (campo “Sistema financeiro”).</span>}
             </p>
+            {contas && contas.length > 0 && <div style={{ margin: '12px 0 0' }}>
+              {contas.map((c, i) => (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: theme.sub, padding: '3px 0' }}>
+                  <i className={`ti ${c.conciliada ? 'ti-circle-check' : 'ti-alert-triangle'}`} style={{ color: c.conciliada ? theme.green : theme.yellow }} />
+                  Conta {c.conta} — {c.conciliada ? 'conciliada (bateu com o extrato)' : 'ainda não conciliada'}
+                </div>
+              ))}
+            </div>}
+            {contas && contas.length === 0 && <p style={{ color: theme.yellow, fontSize: 12.5, margin: '10px 0 0' }}>Nenhuma conta bancária cadastrada. Cadastre as contas bancárias (Base de Informações / Financeira) para a verificação automática.</p>}
+            <div style={{ marginTop: 14 }}>
+              {confirmado
+                ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 13, color: theme.green }}><i className="ti ti-circle-check" /> {tudoOk ? 'Contas bancárias conciliadas — financeiro OK' : 'Confirmado'} {est?.usuario ? `· ${est.usuario}` : ''} <button className="btn btn-ghost" style={{ fontSize: 12, padding: '3px 10px', marginLeft: 8 }} onClick={() => onConfirmar(false)}>desfazer</button></span>
+                : <button className="btn" onClick={() => onConfirmar(true)}><i className="ti ti-check" /> Confirmar que a integração foi feita</button>}
+            </div>
           </>
         ) : (
           <>

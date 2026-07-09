@@ -1,5 +1,10 @@
 {
   "rewrites": [
     { "source": "/((?!prototipo).*)", "destination": "/index.html" }
-  ]
+  ],
+  "git": {
+    "deploymentEnabled": {
+      "claude/sweet-gauss-vmujqi": false
+    }
+  }
 }
