@@ -164,8 +164,15 @@ function baixadosPorNF(lancs) {
 
 // Natureza invertida do SALDO da conta (não redutora):
 // 'credor' = conta do Ativo (1) com saldo credor; 'devedor' = Passivo (2) com saldo devedor.
+// Contas de DUPLA NATUREZA: podem ficar devedoras OU credoras normalmente, então não se
+// alerta natureza invertida (ex.: Ajustes de Exercícios Anteriores, Lucros/Prejuízos
+// Acumulados, Resultado do Exercício, Conta Corrente de Sócios). Vale para todos os clientes.
+function ehDuplaNatureza(nome) {
+  const n = baixaTxt(nome)
+  return /ajuste.{0,6}exerc|exerc.{0,8}anterior|lucros?.{0,8}preju|preju[ií]zos?.{0,6}acumulad|lucros?.{0,6}acumulad|resultado.{0,8}(do\s+)?exerc|resultado.{0,6}acumulad|conta.?corrente.{0,14}(s[oó]cio|acionist|cotist)|(s[oó]cio|acionist|cotist).{0,14}conta.?corrente/.test(n)
+}
 function saldoInvertido(classifRaw, nome, saldoFinal) {
-  if (ehRedutora(nome)) return null
+  if (ehRedutora(nome) || ehDuplaNatureza(nome)) return null
   const d = String(classifRaw || '').replace(/\D/g, '')[0]
   const s = Number(saldoFinal) || 0
   if (d === '1' && s < -0.005) return 'credor'
