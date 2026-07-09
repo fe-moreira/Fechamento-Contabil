@@ -285,12 +285,6 @@ export default function Conciliacao() {
     carregarConf(compId)
   }
 
-  if (!empresaId) return <Wrapper><Aviso texto="Selecione uma empresa no menu lateral." /></Wrapper>
-  if (carregando) return <Wrapper><p style={{ color: theme.sub, fontSize: 13 }}>Carregando…</p></Wrapper>
-  if (!compId || contas.length === 0) return <Wrapper><Aviso icon="ti-table-off" texto="Nenhum balancete nesta competência. Importe o razão primeiro." /></Wrapper>
-
-  if (sel) return <Detalhe conta={sel} tipoCta={tipoEf(sel)} reg={conf[sel.conta]} compId={compId} empresaId={empresaId} usuario={user?.email} ajuste={acertos[sel.conta] || null} getCompetenciaId={getCompetenciaId} onSalvarConf={recarregar} onMudou={recarregar} onVoltar={() => setSel(null)} />
-
   // Contas que só têm LANÇAMENTO (manual/correção) e não vieram no balancete importado
   // (ex.: "a distribuir" de um sócio recém-criada). Entram na lista como analíticas com
   // saldo de balancete zero — o acerto do lançamento vira o saldo efetivo. Só Ativo/Passivo.
@@ -302,6 +296,12 @@ export default function Conciliacao() {
       return { reduzido: String(cod), conta: String(cod), classif: p.classif, classifRaw: p.classif, nome: p.nome || '', sintetica: false, folha: true, saldo_final: 0, saldo_inicial: 0, debito: 0, credito: 0 }
     })
   const contas = extras.length ? [...baseContas, ...extras] : baseContas
+
+  if (!empresaId) return <Wrapper><Aviso texto="Selecione uma empresa no menu lateral." /></Wrapper>
+  if (carregando) return <Wrapper><p style={{ color: theme.sub, fontSize: 13 }}>Carregando…</p></Wrapper>
+  if (!compId || contas.length === 0) return <Wrapper><Aviso icon="ti-table-off" texto="Nenhum balancete nesta competência. Importe o razão primeiro." /></Wrapper>
+
+  if (sel) return <Detalhe conta={sel} tipoCta={tipoEf(sel)} reg={conf[sel.conta]} compId={compId} empresaId={empresaId} usuario={user?.email} ajuste={acertos[sel.conta] || null} getCompetenciaId={getCompetenciaId} onSalvarConf={recarregar} onMudou={recarregar} onVoltar={() => setSel(null)} />
 
   // A SINTÉTICA é a soma das ANALÍTICAS: as correções/estornos pendentes ficam nas
   // analíticas (acertos por conta), então acumulamos o ajuste nas sintéticas ancestrais
