@@ -297,7 +297,7 @@ export default function Integracao() {
         : tab === 'fiscal'
           ? <Fiscal competencia={competencia} empresaId={empresaId} user={user} est={estado.fiscal || {}} onEstado={salvarFiscal} />
           : tab === 'patrimonio'
-            ? <Patrimonio empresaId={empresaId} competencia={competencia} est={estado.patrimonio} onEstado={salvarPatrimonio} onSemMov={() => marcarSemMov('patrimonio')} />
+            ? <Patrimonio empresaId={empresaId} competencia={competencia} planoMap={planoMap} est={estado.patrimonio} onEstado={salvarPatrimonio} onSemMov={() => marcarSemMov('patrimonio')} />
             : <Cruzamento tab={tab} dados={dados[tab]} onImport={f => importar(tab, f)} onSemMov={() => marcarSemMov(tab)} onExtrair={() => extrairIntegracao(tab)} est={estado[tab]} />}
     </Wrapper>
   )

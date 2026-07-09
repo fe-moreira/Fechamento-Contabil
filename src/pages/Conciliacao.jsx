@@ -450,7 +450,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
         return { ...base, acerto: true, razaoRef: a.razao_id || null }
       })
     // Títulos de abertura (saldo anterior) primeiro; depois o movimento do mês; por fim os acertos.
-    setLanc([...(abertura || []), ...(rz || []).map(l => aplicarAjuste(l, ajById[l.id])), ...acertoLancs])
+    setLanc([...(abertura || []).map(a => ({ ...a, _abertura: true })), ...(rz || []).map(l => aplicarAjuste(l, ajById[l.id])), ...acertoLancs])
     setCarregando(false)
   }
   useEffect(() => { carregarLanc() }, [compId, conta.conta]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -491,8 +491,13 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
   }
 
   const somaComp = lanc.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
+  // Nas contas de COMPOSIÇÃO a abertura entra como títulos (já no somaComp); nas de SALDO
+  // (ex.: banco) não há título de abertura — então o saldo inicial não está no somaComp.
+  // Completa o que falta da abertura para a amarração fechar nos dois casos.
+  const aberturaSoma = lanc.reduce((s, l) => l._abertura ? s + (Number(l.debito) || 0) - (Number(l.credito) || 0) : s, 0)
+  const aberturaFaltante = (Number(conta.saldo_inicial) || 0) - aberturaSoma
   // Saldo efetivo (balancete + acertos) para amarrar com a composição, que já inclui os acertos.
-  const dif = (Number(conta.saldo_final) || 0) + ajNet - somaComp
+  const dif = (Number(conta.saldo_final) || 0) + ajNet - somaComp - aberturaFaltante
 
   // Resíduo da NF do lançamento (D - C de todos os lançamentos da mesma NF) — usado para
   // tratar a diferença como desconto/juros quando NF e cliente batem mas o valor não.
