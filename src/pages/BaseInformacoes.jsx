@@ -59,18 +59,26 @@ const MODELOS = {
   },
 }
 
-// Modelos da carga inicial — separados por TIPO de conta (Saldo × Composição).
-// Conta de Saldo: basta o saldo de abertura. Conta de Composição: sobe os títulos em
-// aberto (por cliente/NF) e o sistema confere se a soma bate com o saldo da conta.
+// Modelos da carga inicial — em TRÊS blocos:
+//  1) Saldos: contas que são só saldo de abertura (data, código, nome, saldo, D/C).
+//  2) Clientes e fornecedores: composição COM nota fiscal (data, conta, cliente/forn., NF, valor, D/C).
+//  3) Outras contas com composição: SEM nota fiscal — o "quem" é o histórico da conta
+//     (data, conta, histórico, valor, D/C).
+// Nos blocos 2 e 3 o sistema confere se a soma dos itens bate com o saldo da conta.
 const MODELO_SALDOS = {
-  cols: ['Código', 'Nome', 'Saldo', 'D/C'],
-  ex: [['12', 'Banco Itaú c/c', '15230.45', 'D'], ['340', 'Impostos a recolher', '3120.00', 'C']],
-  dica: 'Contas de saldo (banco, aplicação, impostos a recolher…). Uma linha por conta: código da conta (o mesmo do razão/plano), nome, saldo e D/C.',
+  cols: ['Data', 'Código', 'Nome', 'Saldo', 'D/C'],
+  ex: [['31/12/2025', '12', 'Banco Itaú c/c', '15230.45', 'D'], ['31/12/2025', '340', 'Impostos a recolher', '3120.00', 'C']],
+  dica: 'Contas de saldo (banco, aplicação, impostos a recolher…). Uma linha por conta: data, código da conta (o mesmo do razão/plano), nome, saldo e D/C.',
 }
-const MODELO_COMP = {
-  cols: ['Conta', 'Cliente/Fornecedor', 'NF', 'Valor', 'D/C'],
-  ex: [['118', 'PAGSEGURO INTERNET', '3256', '24275.92', 'D'], ['205', 'CPFL ENERGIAS', '8842', '1200.00', 'C']],
-  dica: 'Contas de composição (clientes, fornecedores, contas a pagar, adiantamentos). Um título em aberto por linha: código da conta, cliente/fornecedor, NF, valor e D/C.',
+const MODELO_CLIFOR = {
+  cols: ['Data', 'Conta', 'Cliente/Fornecedor', 'NF', 'Valor', 'D/C'],
+  ex: [['31/12/2025', '118', 'PAGSEGURO INTERNET', '3256', '24275.92', 'D'], ['31/12/2025', '205', 'CPFL ENERGIAS', '8842', '1200.00', 'C']],
+  dica: 'Clientes e fornecedores. Um título em aberto por linha, COM nota fiscal: data, conta, cliente/fornecedor, NF, valor e D/C.',
+}
+const MODELO_OUTRAS = {
+  cols: ['Data', 'Conta', 'Histórico', 'Valor', 'D/C'],
+  ex: [['31/12/2025', '150', 'Adiantamento de viagem', '800.00', 'D'], ['31/12/2025', '260', 'Provisão de férias', '5400.00', 'C']],
+  dica: 'Outras contas com composição, SEM nota fiscal (adiantamentos, provisões, empréstimos…). Uma linha por item: data, conta, histórico, valor e D/C.',
 }
 
 // Lê valor em formato brasileiro ("1.234,56") ou americano ("1234.56").
@@ -771,8 +779,9 @@ function ModalPeriodo({ valorInicial, cargaSaldos, cargaFeita, onClose, onSalvar
 }
 
 function ModalCargaInicial({ vigencia, empresaId, onClose, onConcluir }) {
-  const [saldos, setSaldos] = useState(null)        // { nome, dados:[...] }
-  const [comp, setComp] = useState(null)            // { nome, dados:[...] }
+  const [saldos, setSaldos] = useState(null)        // { nome, dados:[...] } — só saldo
+  const [comp, setComp] = useState(null)            // clientes e fornecedores (com NF)
+  const [outras, setOutras] = useState(null)        // outras contas com composição (sem NF)
   const [erro, setErro] = useState('')
   const [salvando, setSalvando] = useState(false)
   const [planoNomes, setPlanoNomes] = useState({})  // chaveConta → nome (fallback p/ conferência)
@@ -792,8 +801,10 @@ function ModalCargaInicial({ vigencia, empresaId, onClose, onConcluir }) {
       })
   }, [empresaId])
 
-  async function lerArquivo(file, setter) {
+  async function lerArquivo(file, setter, atual) {
     if (!file) return
+    // A ideia é SOBREPOR, não complementar: se já há um arquivo neste bloco, confirma.
+    if (atual && !confirm(`Este bloco já tem "${atual.nome}". Sobrepor pelo novo arquivo?`)) return
     setErro('')
     try {
       const XLSX = await import('xlsx')
@@ -814,8 +825,9 @@ function ModalCargaInicial({ vigencia, empresaId, onClose, onConcluir }) {
   }
 
   // Conferência: soma da composição por conta × saldo informado no bloco de saldos.
+  // Blocos 2 (clientes/fornecedores) e 3 (outras contas) somam juntos por conta.
   const conferencia = (() => {
-    const compRows = comp?.dados || []
+    const compRows = [...(comp?.dados || []), ...(outras?.dados || [])]
     if (!compRows.length) return []
     // Saldo informado por conta (chave dígitos).
     const saldoPorConta = {}
@@ -846,13 +858,15 @@ function ModalCargaInicial({ vigencia, empresaId, onClose, onConcluir }) {
     }).sort((a, b) => a.k.localeCompare(b.k))
   })()
 
-  const temAlgo = (saldos?.dados?.length || 0) + (comp?.dados?.length || 0) > 0
+  const temAlgo = (saldos?.dados?.length || 0) + (comp?.dados?.length || 0) + (outras?.dados?.length || 0) > 0
   const temDivergencia = conferencia.some(c => !c.ok)
 
   async function concluir() {
     setSalvando(true)
-    const obsArq = [saldos?.nome, comp?.nome].filter(Boolean).join(' + ') || 'manual'
-    try { await onConcluir(vigencia, { saldos: saldos?.dados || [], composicoes: comp?.dados || [] }, obsArq) }
+    const obsArq = [saldos?.nome, comp?.nome, outras?.nome].filter(Boolean).join(' + ') || 'manual'
+    // Clientes/fornecedores + outras composições vão juntos em `composicoes` (mesma conferência).
+    const composicoes = [...(comp?.dados || []), ...(outras?.dados || [])]
+    try { await onConcluir(vigencia, { saldos: saldos?.dados || [], composicoes }, obsArq) }
     finally { setSalvando(false) }
   }
 
@@ -865,7 +879,7 @@ function ModalCargaInicial({ vigencia, empresaId, onClose, onConcluir }) {
         </div>
         <button className="btn btn-ghost" style={{ fontSize: 12, whiteSpace: 'nowrap' }} onClick={() => baixarModelo(modelo, arquivo)}><i className="ti ti-download" /> Modelo</button>
       </div>
-      <DropZone onArquivo={f => lerArquivo(f, setter)} hint="Arraste ou clique · .xlsx, .xls ou .csv" />
+      <DropZone onArquivo={f => lerArquivo(f, setter, estado)} hint="Arraste ou clique · .xlsx, .xls ou .csv" />
       {estado && (
         <p style={{ color: theme.green, fontSize: 12.5, marginTop: 8 }}>
           <i className="ti ti-circle-check" /> {estado.nome} — {estado.dados.length} linha(s)
@@ -878,16 +892,20 @@ function ModalCargaInicial({ vigencia, empresaId, onClose, onConcluir }) {
   return (
     <Modal titulo="Carga inicial de saldos" sub={`Saldo de abertura — vigência ${vigencia}`} onClose={onClose} largura={640}>
       <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 14, lineHeight: 1.55 }}>
-        São <b style={{ color: theme.text }}>dois tipos de conta</b>: as de <b style={{ color: theme.text }}>saldo</b> (basta o valor de abertura) e as de
-        <b style={{ color: theme.text }}> composição</b> (clientes, fornecedores, contas a pagar…) que precisam dos títulos em aberto.
-        O sistema confere se a composição bate com o saldo da conta.
+        São <b style={{ color: theme.text }}>três blocos</b>: contas de <b style={{ color: theme.text }}>saldo</b> (basta o valor de abertura),
+        <b style={{ color: theme.text }}> clientes e fornecedores</b> (títulos em aberto com nota fiscal) e
+        <b style={{ color: theme.text }}> outras contas com composição</b> (sem NF — pelo histórico da conta).
+        O sistema confere se cada composição bate com o saldo da conta.
       </p>
 
       {Bloco({ icon: 'ti-scale', titulo: '1. Saldos de abertura', dica: MODELO_SALDOS.dica,
         modelo: MODELO_SALDOS, arquivo: 'modelo_saldos_abertura.xlsx', estado: saldos, setter: setSaldos })}
 
-      {Bloco({ icon: 'ti-list-details', titulo: '2. Composições de abertura', dica: MODELO_COMP.dica,
-        modelo: MODELO_COMP, arquivo: 'modelo_composicoes_abertura.xlsx', estado: comp, setter: setComp })}
+      {Bloco({ icon: 'ti-users', titulo: '2. Clientes e fornecedores', dica: MODELO_CLIFOR.dica,
+        modelo: MODELO_CLIFOR, arquivo: 'modelo_clientes_fornecedores.xlsx', estado: comp, setter: setComp })}
+
+      {Bloco({ icon: 'ti-list-details', titulo: '3. Outras contas com composição', dica: MODELO_OUTRAS.dica,
+        modelo: MODELO_OUTRAS, arquivo: 'modelo_outras_composicoes.xlsx', estado: outras, setter: setOutras })}
 
       {/* Conferência composição × saldo */}
       {conferencia.length > 0 && (
