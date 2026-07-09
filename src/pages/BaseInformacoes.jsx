@@ -875,7 +875,9 @@ function ModalCargaInicial({ vigencia, empresaId, onClose, onConcluir }) {
       return {
         k, nome: nomePorConta[k] || planoNomes.red?.[k] || planoNomes.cls?.[k] || '',
         somaComp, saldo, temSaldo, diff,
-        ok: temSaldo && Math.abs(diff) < 0.005,
+        // A composição É o saldo da conta (soma dos itens por código, D − C). Só há
+        // divergência quando o usuário informou um saldo separado que não bate.
+        ok: !temSaldo || Math.abs(diff) < 0.005,
       }
     }).sort((a, b) => a.k.localeCompare(b.k))
   })()
@@ -917,7 +919,7 @@ function ModalCargaInicial({ vigencia, empresaId, onClose, onConcluir }) {
         São <b style={{ color: theme.text }}>três blocos</b>: contas de <b style={{ color: theme.text }}>saldo</b> (basta o valor de abertura),
         <b style={{ color: theme.text }}> clientes e fornecedores</b> (títulos em aberto com nota fiscal) e
         <b style={{ color: theme.text }}> outras contas com composição</b> (sem NF — pelo histórico da conta).
-        O sistema confere se cada composição bate com o saldo da conta.
+        Nas contas de composição, o <b style={{ color: theme.text }}>saldo é a própria soma dos itens</b> (por código, débito − crédito) — não precisa informá-lo à parte. Se você informar um saldo, o sistema confere se bate.
       </p>
       {(saldos?.salvo || comp?.salvo || outras?.salvo) && (
         <p style={{ color: theme.sub, fontSize: 12, marginBottom: 12, padding: '8px 11px', background: theme.input, borderRadius: 8, lineHeight: 1.5 }}>
@@ -948,7 +950,7 @@ function ModalCargaInicial({ vigencia, empresaId, onClose, onConcluir }) {
                 comp. {money(Math.abs(c.somaComp))} {c.somaComp < 0 ? 'C' : 'D'}
                 {c.temSaldo
                   ? <> · saldo {money(Math.abs(c.saldo))} {c.saldo < 0 ? 'C' : 'D'}{c.ok ? '' : <b style={{ color: theme.yellow }}> · dif {money(Math.abs(c.diff))}</b>}</>
-                  : <b style={{ color: theme.yellow }}> · sem saldo informado</b>}
+                  : <span style={{ color: theme.green }}> · vira o saldo da conta</span>}
               </span>
             </div>
           ))}
