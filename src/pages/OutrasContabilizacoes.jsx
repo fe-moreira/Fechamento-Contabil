@@ -44,6 +44,56 @@ function num(v) {
   return isNaN(n) ? 0 : n
 }
 
+function parseISO(s) { const m = String(s || '').match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : null }
+const r2 = v => Math.round((v || 0) * 100) / 100
+
+// Cronograma de apropriação de um contrato: lista [{comp:'MM/AAAA', valor, dias?}].
+// metodo 'dia' = proporcional aos dias de cada mês dentro da vigência (oscila mês a
+// mês); metodo 'igual' = parcelas iguais (a última absorve o arredondamento).
+function cronogramaContrato(c, metodo) {
+  const total = Number(c.premio_total ?? c.valor_total) || 0
+  const vi = parseISO(c.vigencia_inicio)
+  if (metodo === 'dia') {
+    const vf = parseISO(c.vigencia_fim)
+    if (!vi || !vf || vf < vi || !total) return []
+    const totalDias = Math.round((vf - vi) / 86400000) + 1
+    const linhas = []
+    let cursor = new Date(vi.getFullYear(), vi.getMonth(), vi.getDate()), acum = 0
+    while (cursor <= vf) {
+      const ano = cursor.getFullYear(), mes = cursor.getMonth()
+      const fimMes = new Date(ano, mes + 1, 0)
+      const ate = fimMes < vf ? fimMes : vf
+      const dias = Math.round((ate - cursor) / 86400000) + 1
+      const prox = new Date(ano, mes + 1, 1)
+      const valor = prox > vf ? r2(total - acum) : r2(total * dias / totalDias)
+      acum = r2(acum + valor)
+      linhas.push({ comp: `${String(mes + 1).padStart(2, '0')}/${ano}`, valor, dias })
+      cursor = prox
+    }
+    return linhas
+  }
+  // parcelas iguais
+  const nParc = Number(c.num_parcelas) || 0
+  const mensal = Number(c.valor_parcela) || (nParc ? total / nParc : 0)
+  const linhas = []
+  if (vi && mensal > 0 && nParc > 0) {
+    let ym = vi.getFullYear() * 12 + vi.getMonth(), acum = 0
+    for (let i = 0; i < nParc; i++) {
+      const ano = Math.floor(ym / 12), mes = (ym % 12) + 1
+      const valor = i === nParc - 1 ? r2(total - mensal * (nParc - 1)) : r2(mensal)
+      acum = r2(acum + valor)
+      linhas.push({ comp: `${String(mes).padStart(2, '0')}/${ano}`, valor })
+      ym++
+    }
+  }
+  return linhas
+}
+// Valor da apropriação do contrato na competência informada (MM/AAAA).
+function valorApropriacaoMes(c, competencia) {
+  const l = cronogramaContrato(c, c.por_dia ? 'dia' : 'igual').find(x => x.comp === competencia)
+  return l ? l.valor : (Number(c.valor_parcela) || 0)
+}
+
 // Data do último dia da competência (MM/AAAA) em ISO.
 function dataComp(competencia) {
   const [m, a] = (competencia || '').split('/').map(Number)
@@ -219,53 +269,47 @@ function Vazio({ colSpan, texto }) { return <tr><td colSpan={colSpan} style={{ p
 // antes da abertura do cliente) e quais geram lançamento no mês.
 function ModalCronograma({ contrato, origem, compInicio, onClose }) {
   const total = Number(contrato.premio_total ?? contrato.valor_total) || 0
-  const nParc = Number(contrato.num_parcelas) || 0
-  const mensal = Number(contrato.valor_parcela) || (nParc ? total / nParc : 0)
-  const vi = String(contrato.vigencia_inicio || '').match(/^(\d{4})-(\d{2})/)
+  const porDia = !!contrato.por_dia
   const ci = String(compInicio || '').match(/^(\d{2})\/(\d{4})$/)
   const corteAbs = ci ? Number(ci[2]) * 12 + Number(ci[1]) : null
   const nome = origem === 'seguro' ? `${contrato.seguradora || ''}${contrato.apolice ? ' · ' + contrato.apolice : ''}`.trim() : `${contrato.tipo || ''}${contrato.descricao ? ' · ' + contrato.descricao : ''}`.trim()
+  const sched = cronogramaContrato(contrato, porDia ? 'dia' : 'igual')
   const linhas = []
-  let saldoAbertura = total
-  if (vi && mensal > 0 && nParc > 0) {
-    let ym = Number(vi[1]) * 12 + (Number(vi[2]) - 1) // índice absoluto do mês (0-based no mês)
-    let acum = 0
-    for (let i = 0; i < nParc; i++) {
-      const ano = Math.floor(ym / 12), mes = (ym % 12) + 1
-      const val = i === nParc - 1 ? Math.round((total - mensal * (nParc - 1)) * 100) / 100 : mensal
-      acum = Math.round((acum + val) * 100) / 100
-      const saldoIni = corteAbs != null && (ano * 12 + mes) < corteAbs
-      if (saldoIni) saldoAbertura = Math.round((total - acum) * 100) / 100
-      linhas.push({ i: i + 1, comp: `${String(mes).padStart(2, '0')}/${ano}`, val, restante: Math.round((total - acum) * 100) / 100, saldoIni })
-      ym++
-    }
-  }
+  let acum = 0, saldoAbertura = total
+  sched.forEach((s, i) => {
+    acum = r2(acum + s.valor)
+    const [mes, ano] = s.comp.split('/').map(Number)
+    const saldoIni = corteAbs != null && (ano * 12 + mes) < corteAbs
+    if (saldoIni) saldoAbertura = r2(total - acum)
+    linhas.push({ i: i + 1, comp: s.comp, val: s.valor, dias: s.dias, restante: r2(total - acum), saldoIni })
+  })
   const temCorte = corteAbs != null && linhas.some(l => l.saldoIni)
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 16, zIndex: 60 }}>
-      <div onClick={e => e.stopPropagation()} style={{ width: 'min(640px,96vw)', maxHeight: '90vh', overflow: 'auto', background: theme.card, border: `1px solid ${theme.border}`, borderRadius: 16, padding: 22 }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 'min(680px,96vw)', maxHeight: '90vh', overflow: 'auto', background: theme.card, border: `1px solid ${theme.border}`, borderRadius: 16, padding: 22 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
           <h2 style={{ fontSize: 16, margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}><i className="ti ti-list-check" style={{ color: theme.accent }} /> Apropriações — {nome}</h2>
           <span onClick={onClose} style={{ cursor: 'pointer', color: theme.sub, fontSize: 20 }}><i className="ti ti-x" /></span>
         </div>
         <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', margin: '0 0 12px', fontSize: 12.5 }}>
           <span style={{ color: theme.sub }}>Total: <b style={{ color: theme.text }}>{money(total)}</b></span>
-          <span style={{ color: theme.sub }}>Parcela: <b style={{ color: theme.text }}>{money(mensal)}</b> × {nParc}</span>
+          <span style={{ color: theme.sub }}>Método: <b style={{ color: theme.text }}>{porDia ? 'por dia (proporcional)' : 'parcelas iguais'}</b></span>
           {temCorte && <span style={{ color: theme.sub }}>Saldo inicial (abertura {compInicio}): <b style={{ color: theme.accent }}>{money(saldoAbertura)}</b></span>}
         </div>
         {!linhas.length ? (
-          <p style={{ color: theme.sub, fontSize: 13 }}>Preencha vigência início, nº de parcelas e valor da parcela para ver o cronograma.</p>
+          <p style={{ color: theme.sub, fontSize: 13 }}>{porDia ? 'Preencha vigência início e fim (o valor sai proporcional aos dias).' : 'Preencha vigência início, nº de parcelas e valor da parcela.'}</p>
         ) : (
           <div style={{ border: `0.5px solid ${theme.border}`, borderRadius: 10, overflow: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 460 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 500 }}>
               <thead><tr style={{ background: theme.input }}>
-                <th style={th}>#</th><th style={th}>Competência</th><th style={{ ...th, textAlign: 'right' }}>Valor</th><th style={{ ...th, textAlign: 'right' }}>A apropriar após</th><th style={th}>Situação</th>
+                <th style={th}>#</th><th style={th}>Competência</th>{porDia && <th style={{ ...th, textAlign: 'right' }}>Dias</th>}<th style={{ ...th, textAlign: 'right' }}>Valor</th><th style={{ ...th, textAlign: 'right' }}>A apropriar após</th><th style={th}>Situação</th>
               </tr></thead>
               <tbody>
                 {linhas.map(l => (
                   <tr key={l.i} style={{ borderTop: `1px solid ${theme.border}`, background: l.saldoIni ? 'rgba(74,124,255,0.08)' : 'transparent' }}>
                     <td style={{ ...td, color: theme.sub }}>{l.i}</td>
                     <td style={td}>{l.comp}</td>
+                    {porDia && <td style={{ ...td, textAlign: 'right', color: theme.sub }}>{l.dias}</td>}
                     <td style={{ ...td, textAlign: 'right', whiteSpace: 'nowrap' }}>{money(l.val)}</td>
                     <td style={{ ...td, textAlign: 'right', whiteSpace: 'nowrap', color: theme.sub }}>{money(l.restante)}</td>
                     <td style={{ ...td, fontSize: 12 }}>{l.saldoIni ? <span style={{ color: theme.accent }}>Saldo inicial</span> : <span style={{ color: theme.green }}>Apropria no mês</span>}</td>
@@ -275,7 +319,7 @@ function ModalCronograma({ contrato, origem, compInicio, onClose }) {
             </table>
           </div>
         )}
-        <p style={{ color: theme.sub, fontSize: 11.5, margin: '10px 0 0' }}>As parcelas de meses anteriores à abertura ({compInicio || 'defina a competência de início'}) formam o <b style={{ color: theme.text }}>saldo inicial</b> do ativo "a apropriar". As demais viram apropriação (D despesa / C a apropriar) mês a mês.</p>
+        <p style={{ color: theme.sub, fontSize: 11.5, margin: '10px 0 0' }}>{porDia ? 'Por dia: o valor de cada mês é proporcional aos dias da vigência naquele mês (oscila um pouco). ' : ''}As parcelas de meses anteriores à abertura ({compInicio || 'defina a competência de início'}) formam o <b style={{ color: theme.text }}>saldo inicial</b> do ativo "a apropriar". As demais viram apropriação mês a mês.</p>
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14 }}><button className="btn" onClick={onClose}>Fechar</button></div>
       </div>
     </div>
@@ -286,19 +330,19 @@ function ModalCronograma({ contrato, origem, compInicio, onClose }) {
 function PaneSeguro({ clienteId, user, competencia, abrirGerar, enviarSaldoInicial, compInicio }) {
   const { rows, loading, erro, recarregar, excluir } = useLista('seguros', clienteId)
   const [cron, setCron] = useState(null)
-  const [f, on, reset, setF] = useForm({ seguradora: '', apolice: '', ramo: '', vigencia_inicio: '', vigencia_fim: '', premio_total: '', num_parcelas: '12', valor_parcela: '', conta_despesa: '', conta_apropriar: '', conta_pagar: '', saldo_inicial: false })
+  const [f, on, reset, setF] = useForm({ seguradora: '', apolice: '', ramo: '', vigencia_inicio: '', vigencia_fim: '', premio_total: '', num_parcelas: '12', valor_parcela: '', conta_despesa: '', conta_apropriar: '', conta_pagar: '', saldo_inicial: false, por_dia: false })
   const [sav, setSav] = useState(false)
   const [editId, setEditId] = useState(null)
   // Ao mexer no total ou no nº de parcelas, já traz a parcela calculada (editável).
   const setCampo = (k, v) => setF(x => { const n = { ...x, [k]: v }; if (k === 'premio_total' || k === 'num_parcelas') { const t = num(n.premio_total), np = Number(n.num_parcelas) || 0; if (t && np) n.valor_parcela = String(Math.round(t / np * 100) / 100) } return n })
   function cancelarEdicao() { reset(); setEditId(null) }
   function editar(r) {
-    setF({ seguradora: r.seguradora || '', apolice: r.apolice || '', ramo: r.ramo || '', vigencia_inicio: r.vigencia_inicio || '', vigencia_fim: r.vigencia_fim || '', premio_total: r.premio_total != null ? String(r.premio_total) : '', num_parcelas: r.num_parcelas != null ? String(r.num_parcelas) : '', valor_parcela: r.valor_parcela != null ? String(r.valor_parcela) : '', conta_despesa: r.conta_despesa || '', conta_apropriar: r.conta_apropriar || '', conta_pagar: r.conta_pagar || '', saldo_inicial: !!r.saldo_inicial })
+    setF({ seguradora: r.seguradora || '', apolice: r.apolice || '', ramo: r.ramo || '', vigencia_inicio: r.vigencia_inicio || '', vigencia_fim: r.vigencia_fim || '', premio_total: r.premio_total != null ? String(r.premio_total) : '', num_parcelas: r.num_parcelas != null ? String(r.num_parcelas) : '', valor_parcela: r.valor_parcela != null ? String(r.valor_parcela) : '', conta_despesa: r.conta_despesa || '', conta_apropriar: r.conta_apropriar || '', conta_pagar: r.conta_pagar || '', saldo_inicial: !!r.saldo_inicial, por_dia: !!r.por_dia })
     setEditId(r.id); window.scrollTo({ top: 0, behavior: 'smooth' })
   }
   async function salvar(e) {
     e.preventDefault(); setSav(true)
-    const row = { seguradora: f.seguradora, apolice: f.apolice, ramo: f.ramo, vigencia_inicio: f.vigencia_inicio || null, vigencia_fim: f.vigencia_fim || null, premio_total: num(f.premio_total), num_parcelas: Number(f.num_parcelas) || null, valor_parcela: num(f.valor_parcela), conta_despesa: f.conta_despesa, conta_apropriar: f.conta_apropriar, conta_pagar: f.conta_pagar, saldo_inicial: !!f.saldo_inicial }
+    const row = { seguradora: f.seguradora, apolice: f.apolice, ramo: f.ramo, vigencia_inicio: f.vigencia_inicio || null, vigencia_fim: f.vigencia_fim || null, premio_total: num(f.premio_total), num_parcelas: Number(f.num_parcelas) || null, valor_parcela: num(f.valor_parcela), conta_despesa: f.conta_despesa, conta_apropriar: f.conta_apropriar, conta_pagar: f.conta_pagar, saldo_inicial: !!f.saldo_inicial, por_dia: !!f.por_dia }
     try {
       if (editId) await atualizar('seguros', editId, row)
       else await inserir('seguros', { cliente_id: clienteId, ...row, usuario: user?.email })
@@ -324,6 +368,7 @@ function PaneSeguro({ clienteId, user, competencia, abrirGerar, enviarSaldoInici
           <Field label="Conta a apropriar / ativo"><CampoContaForm valor={f.conta_apropriar} set={v => setF(x => ({ ...x, conta_apropriar: v }))} /></Field>
           <Field label="Conta a pagar / passivo"><CampoContaForm valor={f.conta_pagar} set={v => setF(x => ({ ...x, conta_pagar: v }))} /></Field>
           <Field label="É saldo inicial?"><label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12.5, cursor: 'pointer', height: 38, color: theme.text }} title="Marque se o contrato começou ANTES do início do cliente — alimenta só o ativo (a apropriar) na abertura"><input type="checkbox" checked={!!f.saldo_inicial} onChange={e => setF(x => ({ ...x, saldo_inicial: e.target.checked }))} /> contrato anterior à abertura</label></Field>
+          <Field label="Apropriar por dia?"><label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12.5, cursor: 'pointer', height: 38, color: theme.text }} title="Proporcional aos dias de cada mês (oscila mês a mês). Requer vigência início e fim."><input type="checkbox" checked={!!f.por_dia} onChange={e => setF(x => ({ ...x, por_dia: e.target.checked }))} /> proporcional aos dias</label></Field>
           <div style={{ gridColumn: 'span 4', display: 'flex', alignItems: 'flex-end', gap: 8 }}>
             <button className="btn" disabled={sav}>{sav ? 'Salvando…' : editId ? 'Salvar alterações' : '＋ Salvar contrato'}</button>
             {editId && <button type="button" className="btn btn-ghost" onClick={cancelarEdicao}>Cancelar edição</button>}
@@ -341,7 +386,7 @@ function PaneSeguro({ clienteId, user, competencia, abrirGerar, enviarSaldoInici
               <td style={{ ...td, whiteSpace: 'nowrap', textAlign: 'right' }}>
                 <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => editar(r)} title="Editar contrato"><i className="ti ti-pencil" /> Editar</button>{' '}
                 <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => setCron(r)} title="Ver o cronograma de apropriações"><i className="ti ti-list-check" /> Apropriações</button>{' '}
-                <GerarBtn onClick={() => abrirGerar({ data: dataComp(competencia), conta_debito: r.conta_despesa, conta_credito: r.conta_apropriar, valor: r.valor_parcela, historico: `Apropriação seguro ${r.seguradora} ${r.apolice || ''}`.trim(), origem: 'seguro', documento: r.apolice }, `Apropriação — ${r.seguradora}`)}>Apropriação do mês</GerarBtn>{' '}
+                <GerarBtn onClick={() => abrirGerar({ data: dataComp(competencia), conta_debito: r.conta_despesa, conta_credito: r.conta_apropriar, valor: valorApropriacaoMes(r, competencia), historico: `Apropriação seguro ${r.seguradora} ${r.apolice || ''}`.trim(), origem: 'seguro', documento: r.apolice }, `Apropriação — ${r.seguradora}`)}>Apropriação do mês</GerarBtn>{' '}
                 {r.saldo_inicial
                   ? <SaldoIniBtn onClick={() => enviarSaldoInicial('seguro', r)} />
                   : <GerarBtn onClick={() => abrirGerar({ data: dataComp(competencia), conta_debito: r.conta_apropriar, conta_credito: r.conta_pagar, valor: r.premio_total, historico: `Contrato seguro ${r.seguradora} ${r.apolice || ''}`.trim(), origem: 'seguro', documento: r.apolice }, `Contrato — ${r.seguradora}`)}>Contabilizar contrato</GerarBtn>}{' '}
@@ -362,18 +407,18 @@ function PaneSeguro({ clienteId, user, competencia, abrirGerar, enviarSaldoInici
 function PaneDespesaApropriar({ clienteId, user, competencia, abrirGerar, enviarSaldoInicial, compInicio }) {
   const { rows, loading, erro, recarregar, excluir } = useLista('despesas_apropriar', clienteId)
   const [cron, setCron] = useState(null)
-  const [f, on, reset, setF] = useForm({ tipo: '', descricao: '', documento: '', valor_total: '', vigencia_inicio: '', vigencia_fim: '', num_parcelas: '12', valor_parcela: '', conta_despesa: '', conta_apropriar: '', conta_pagar: '', saldo_inicial: false })
+  const [f, on, reset, setF] = useForm({ tipo: '', descricao: '', documento: '', valor_total: '', vigencia_inicio: '', vigencia_fim: '', num_parcelas: '12', valor_parcela: '', conta_despesa: '', conta_apropriar: '', conta_pagar: '', saldo_inicial: false, por_dia: false })
   const [sav, setSav] = useState(false)
   const [editId, setEditId] = useState(null)
   const setCampo = (k, v) => setF(x => { const n = { ...x, [k]: v }; if (k === 'valor_total' || k === 'num_parcelas') { const t = num(n.valor_total), np = Number(n.num_parcelas) || 0; if (t && np) n.valor_parcela = String(Math.round(t / np * 100) / 100) } return n })
   function cancelarEdicao() { reset(); setEditId(null) }
   function editar(r) {
-    setF({ tipo: r.tipo || '', descricao: r.descricao || '', documento: r.documento || '', valor_total: r.valor_total != null ? String(r.valor_total) : '', vigencia_inicio: r.vigencia_inicio || '', vigencia_fim: r.vigencia_fim || '', num_parcelas: r.num_parcelas != null ? String(r.num_parcelas) : '', valor_parcela: r.valor_parcela != null ? String(r.valor_parcela) : '', conta_despesa: r.conta_despesa || '', conta_apropriar: r.conta_apropriar || '', conta_pagar: r.conta_pagar || '', saldo_inicial: !!r.saldo_inicial })
+    setF({ tipo: r.tipo || '', descricao: r.descricao || '', documento: r.documento || '', valor_total: r.valor_total != null ? String(r.valor_total) : '', vigencia_inicio: r.vigencia_inicio || '', vigencia_fim: r.vigencia_fim || '', num_parcelas: r.num_parcelas != null ? String(r.num_parcelas) : '', valor_parcela: r.valor_parcela != null ? String(r.valor_parcela) : '', conta_despesa: r.conta_despesa || '', conta_apropriar: r.conta_apropriar || '', conta_pagar: r.conta_pagar || '', saldo_inicial: !!r.saldo_inicial, por_dia: !!r.por_dia })
     setEditId(r.id); window.scrollTo({ top: 0, behavior: 'smooth' })
   }
   async function salvar(e) {
     e.preventDefault(); setSav(true)
-    const row = { tipo: f.tipo, descricao: f.descricao, documento: f.documento, valor_total: num(f.valor_total), vigencia_inicio: f.vigencia_inicio || null, vigencia_fim: f.vigencia_fim || null, num_parcelas: Number(f.num_parcelas) || null, valor_parcela: num(f.valor_parcela), conta_despesa: f.conta_despesa, conta_apropriar: f.conta_apropriar, conta_pagar: f.conta_pagar, saldo_inicial: !!f.saldo_inicial }
+    const row = { tipo: f.tipo, descricao: f.descricao, documento: f.documento, valor_total: num(f.valor_total), vigencia_inicio: f.vigencia_inicio || null, vigencia_fim: f.vigencia_fim || null, num_parcelas: Number(f.num_parcelas) || null, valor_parcela: num(f.valor_parcela), conta_despesa: f.conta_despesa, conta_apropriar: f.conta_apropriar, conta_pagar: f.conta_pagar, saldo_inicial: !!f.saldo_inicial, por_dia: !!f.por_dia }
     try {
       if (editId) await atualizar('despesas_apropriar', editId, row)
       else await inserir('despesas_apropriar', { cliente_id: clienteId, ...row, usuario: user?.email })
@@ -398,6 +443,7 @@ function PaneDespesaApropriar({ clienteId, user, competencia, abrirGerar, enviar
           <Field label="Conta a apropriar / ativo"><CampoContaForm valor={f.conta_apropriar} set={v => setF(x => ({ ...x, conta_apropriar: v }))} /></Field>
           <Field label="Conta a pagar / passivo"><CampoContaForm valor={f.conta_pagar} set={v => setF(x => ({ ...x, conta_pagar: v }))} /></Field>
           <Field label="É saldo inicial?"><label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12.5, cursor: 'pointer', height: 38, color: theme.text }} title="Marque se começou ANTES do início do cliente — alimenta só o ativo (a apropriar) na abertura"><input type="checkbox" checked={!!f.saldo_inicial} onChange={e => setF(x => ({ ...x, saldo_inicial: e.target.checked }))} /> contrato anterior à abertura</label></Field>
+          <Field label="Apropriar por dia?"><label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12.5, cursor: 'pointer', height: 38, color: theme.text }} title="Proporcional aos dias de cada mês (oscila mês a mês). Requer vigência início e fim."><input type="checkbox" checked={!!f.por_dia} onChange={e => setF(x => ({ ...x, por_dia: e.target.checked }))} /> proporcional aos dias</label></Field>
           <div style={{ gridColumn: 'span 4', display: 'flex', alignItems: 'flex-end', gap: 8 }}>
             <button className="btn" disabled={sav}>{sav ? 'Salvando…' : editId ? 'Salvar alterações' : '＋ Salvar despesa'}</button>
             {editId && <button type="button" className="btn btn-ghost" onClick={cancelarEdicao}>Cancelar edição</button>}
@@ -415,7 +461,7 @@ function PaneDespesaApropriar({ clienteId, user, competencia, abrirGerar, enviar
               <td style={{ ...td, whiteSpace: 'nowrap', textAlign: 'right' }}>
                 <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => editar(r)} title="Editar despesa"><i className="ti ti-pencil" /> Editar</button>{' '}
                 <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => setCron(r)} title="Ver o cronograma de apropriações"><i className="ti ti-list-check" /> Apropriações</button>{' '}
-                <GerarBtn onClick={() => abrirGerar({ data: dataComp(competencia), conta_debito: r.conta_despesa, conta_credito: r.conta_apropriar, valor: r.valor_parcela, historico: `Apropriação ${r.tipo} ${r.descricao || ''}`.trim(), origem: 'despesa', documento: r.documento }, `Apropriação — ${r.tipo}`)}>Apropriação do mês</GerarBtn>{' '}
+                <GerarBtn onClick={() => abrirGerar({ data: dataComp(competencia), conta_debito: r.conta_despesa, conta_credito: r.conta_apropriar, valor: valorApropriacaoMes(r, competencia), historico: `Apropriação ${r.tipo} ${r.descricao || ''}`.trim(), origem: 'despesa', documento: r.documento }, `Apropriação — ${r.tipo}`)}>Apropriação do mês</GerarBtn>{' '}
                 {r.saldo_inicial
                   ? <SaldoIniBtn onClick={() => enviarSaldoInicial('despesa', r)} />
                   : <GerarBtn onClick={() => abrirGerar({ data: dataComp(competencia), conta_debito: r.conta_apropriar, conta_credito: r.conta_pagar, valor: r.valor_total, historico: `Contrato ${r.tipo} ${r.descricao || ''}`.trim(), origem: 'despesa', documento: r.documento }, `Contrato — ${r.tipo}`)}>Contabilizar contrato</GerarBtn>}{' '}
