@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { theme, money } from '../lib/theme'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
-import { listar, inserir, remover, gerarLancamento, enviarSaldoInicialContrato, anexarArquivoContrato, urlArquivoContrato, removerArquivoContrato } from '../lib/outras'
+import { listar, inserir, remover, gerarLancamento, enviarSaldoInicialContrato, anexarArquivoContrato, urlArquivoContrato, removerArquivoContrato, competenciaInicioCliente } from '../lib/outras'
 import ObservacoesConciliacao from '../components/ObservacoesConciliacao'
 import LeitorIA from '../components/LeitorIA'
 import CampoConta from '../components/CampoConta'
@@ -67,6 +67,8 @@ export default function OutrasContabilizacoes() {
   const [tab, setTab] = useState('seguro')
   const [gerar, setGerar] = useState(null) // {campos, titulo}
   const [msg, setMsg] = useState('')
+  const [compInicio, setCompInicio] = useState('') // competência de início do cliente (abertura)
+  useEffect(() => { if (empresaId) competenciaInicioCliente(empresaId).then(setCompInicio); else setCompInicio('') }, [empresaId])
 
   function abrirGerar(prefill, titulo) { setGerar({ ...prefill, _titulo: titulo }) }
 
@@ -94,7 +96,7 @@ export default function OutrasContabilizacoes() {
 
   if (!empresaId) return <Aviso texto="Selecione uma empresa no menu lateral." />
 
-  const props = { clienteId: empresaId, user, competencia, abrirGerar, enviarSaldoInicial }
+  const props = { clienteId: empresaId, user, competencia, abrirGerar, enviarSaldoInicial, compInicio }
   const Pane = { seguro: PaneSeguro, despesa: PaneDespesaApropriar, importacao: PaneImportacao, emprestimo: PaneEmprestimo, parcelamento: PaneParcelamento, equivalencia: PaneEquivalencia, outros: PaneOutros }[tab]
 
   return (
@@ -201,9 +203,78 @@ function AnexoContrato({ tabela, row, onChange }) {
 }
 function Vazio({ colSpan, texto }) { return <tr><td colSpan={colSpan} style={{ padding: 18, color: theme.sub, fontSize: 13 }}>{texto}</td></tr> }
 
+// Cronograma de apropriações do contrato: total, cada parcela (mês e valor) e o
+// saldo a apropriar após cada uma. Marca quais compõem o SALDO INICIAL (meses
+// antes da abertura do cliente) e quais geram lançamento no mês.
+function ModalCronograma({ contrato, origem, compInicio, onClose }) {
+  const total = Number(contrato.premio_total ?? contrato.valor_total) || 0
+  const nParc = Number(contrato.num_parcelas) || 0
+  const mensal = Number(contrato.valor_parcela) || (nParc ? total / nParc : 0)
+  const vi = String(contrato.vigencia_inicio || '').match(/^(\d{4})-(\d{2})/)
+  const ci = String(compInicio || '').match(/^(\d{2})\/(\d{4})$/)
+  const corteAbs = ci ? Number(ci[2]) * 12 + Number(ci[1]) : null
+  const nome = origem === 'seguro' ? `${contrato.seguradora || ''}${contrato.apolice ? ' · ' + contrato.apolice : ''}`.trim() : `${contrato.tipo || ''}${contrato.descricao ? ' · ' + contrato.descricao : ''}`.trim()
+  const linhas = []
+  let saldoAbertura = total
+  if (vi && mensal > 0 && nParc > 0) {
+    let ym = Number(vi[1]) * 12 + (Number(vi[2]) - 1) // índice absoluto do mês (0-based no mês)
+    let acum = 0
+    for (let i = 0; i < nParc; i++) {
+      const ano = Math.floor(ym / 12), mes = (ym % 12) + 1
+      const val = i === nParc - 1 ? Math.round((total - mensal * (nParc - 1)) * 100) / 100 : mensal
+      acum = Math.round((acum + val) * 100) / 100
+      const saldoIni = corteAbs != null && (ano * 12 + mes) < corteAbs
+      if (saldoIni) saldoAbertura = Math.round((total - acum) * 100) / 100
+      linhas.push({ i: i + 1, comp: `${String(mes).padStart(2, '0')}/${ano}`, val, restante: Math.round((total - acum) * 100) / 100, saldoIni })
+      ym++
+    }
+  }
+  const temCorte = corteAbs != null && linhas.some(l => l.saldoIni)
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 16, zIndex: 60 }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 'min(640px,96vw)', maxHeight: '90vh', overflow: 'auto', background: theme.card, border: `1px solid ${theme.border}`, borderRadius: 16, padding: 22 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+          <h2 style={{ fontSize: 16, margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}><i className="ti ti-list-check" style={{ color: theme.accent }} /> Apropriações — {nome}</h2>
+          <span onClick={onClose} style={{ cursor: 'pointer', color: theme.sub, fontSize: 20 }}><i className="ti ti-x" /></span>
+        </div>
+        <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', margin: '0 0 12px', fontSize: 12.5 }}>
+          <span style={{ color: theme.sub }}>Total: <b style={{ color: theme.text }}>{money(total)}</b></span>
+          <span style={{ color: theme.sub }}>Parcela: <b style={{ color: theme.text }}>{money(mensal)}</b> × {nParc}</span>
+          {temCorte && <span style={{ color: theme.sub }}>Saldo inicial (abertura {compInicio}): <b style={{ color: theme.accent }}>{money(saldoAbertura)}</b></span>}
+        </div>
+        {!linhas.length ? (
+          <p style={{ color: theme.sub, fontSize: 13 }}>Preencha vigência início, nº de parcelas e valor da parcela para ver o cronograma.</p>
+        ) : (
+          <div style={{ border: `0.5px solid ${theme.border}`, borderRadius: 10, overflow: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 460 }}>
+              <thead><tr style={{ background: theme.input }}>
+                <th style={th}>#</th><th style={th}>Competência</th><th style={{ ...th, textAlign: 'right' }}>Valor</th><th style={{ ...th, textAlign: 'right' }}>A apropriar após</th><th style={th}>Situação</th>
+              </tr></thead>
+              <tbody>
+                {linhas.map(l => (
+                  <tr key={l.i} style={{ borderTop: `1px solid ${theme.border}`, background: l.saldoIni ? 'rgba(74,124,255,0.08)' : 'transparent' }}>
+                    <td style={{ ...td, color: theme.sub }}>{l.i}</td>
+                    <td style={td}>{l.comp}</td>
+                    <td style={{ ...td, textAlign: 'right', whiteSpace: 'nowrap' }}>{money(l.val)}</td>
+                    <td style={{ ...td, textAlign: 'right', whiteSpace: 'nowrap', color: theme.sub }}>{money(l.restante)}</td>
+                    <td style={{ ...td, fontSize: 12 }}>{l.saldoIni ? <span style={{ color: theme.accent }}>Saldo inicial</span> : <span style={{ color: theme.green }}>Apropria no mês</span>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <p style={{ color: theme.sub, fontSize: 11.5, margin: '10px 0 0' }}>As parcelas de meses anteriores à abertura ({compInicio || 'defina a competência de início'}) formam o <b style={{ color: theme.text }}>saldo inicial</b> do ativo "a apropriar". As demais viram apropriação (D despesa / C a apropriar) mês a mês.</p>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14 }}><button className="btn" onClick={onClose}>Fechar</button></div>
+      </div>
+    </div>
+  )
+}
+
 // ================= SEGURO =================
-function PaneSeguro({ clienteId, user, competencia, abrirGerar, enviarSaldoInicial }) {
+function PaneSeguro({ clienteId, user, competencia, abrirGerar, enviarSaldoInicial, compInicio }) {
   const { rows, loading, erro, recarregar, excluir } = useLista('seguros', clienteId)
+  const [cron, setCron] = useState(null)
   const [f, on, reset, setF] = useForm({ seguradora: '', apolice: '', ramo: '', vigencia_inicio: '', vigencia_fim: '', premio_total: '', num_parcelas: '12', valor_parcela: '', conta_despesa: '', conta_apropriar: '', conta_pagar: '', saldo_inicial: false })
   const [sav, setSav] = useState(false)
   async function salvar(e) { e.preventDefault(); setSav(true); try { await inserir('seguros', { cliente_id: clienteId, seguradora: f.seguradora, apolice: f.apolice, ramo: f.ramo, vigencia_inicio: f.vigencia_inicio || null, vigencia_fim: f.vigencia_fim || null, premio_total: num(f.premio_total), num_parcelas: Number(f.num_parcelas) || null, valor_parcela: num(f.valor_parcela), conta_despesa: f.conta_despesa, conta_apropriar: f.conta_apropriar, conta_pagar: f.conta_pagar, saldo_inicial: !!f.saldo_inicial, usuario: user?.email }); reset(); recarregar() } catch (er) { alert(er.message) } finally { setSav(false) } }
@@ -238,6 +309,7 @@ function PaneSeguro({ clienteId, user, competencia, abrirGerar, enviarSaldoInici
               <td style={td}><b>{r.seguradora}</b></td><td style={td}>{r.apolice}</td><td style={td}>{r.ramo}</td>
               <td style={{ ...td, textAlign: 'right' }}>{money(r.premio_total)}</td><td style={{ ...td, textAlign: 'right' }}>{money(r.valor_parcela)}</td>
               <td style={{ ...td, whiteSpace: 'nowrap', textAlign: 'right' }}>
+                <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => setCron(r)} title="Ver o cronograma de apropriações"><i className="ti ti-list-check" /> Apropriações</button>{' '}
                 <GerarBtn onClick={() => abrirGerar({ data: dataComp(competencia), conta_debito: r.conta_despesa, conta_credito: r.conta_apropriar, valor: r.valor_parcela, historico: `Apropriação seguro ${r.seguradora} ${r.apolice || ''}`.trim(), origem: 'seguro', documento: r.apolice }, `Apropriação — ${r.seguradora}`)}>Apropriação do mês</GerarBtn>{' '}
                 {r.saldo_inicial
                   ? <SaldoIniBtn onClick={() => enviarSaldoInicial('seguro', r)} />
@@ -249,14 +321,16 @@ function PaneSeguro({ clienteId, user, competencia, abrirGerar, enviarSaldoInici
           ))}
         </tbody></table></div>
       </Card>
+      {cron && <ModalCronograma contrato={cron} origem="seguro" compInicio={compInicio} onClose={() => setCron(null)} />}
     </div>
   )
 }
 
 // ================= DESPESA A APROPRIAR =================
 // Funciona como o seguro, mas genérico: IPVA, IPTU, aluguel antecipado, etc.
-function PaneDespesaApropriar({ clienteId, user, competencia, abrirGerar, enviarSaldoInicial }) {
+function PaneDespesaApropriar({ clienteId, user, competencia, abrirGerar, enviarSaldoInicial, compInicio }) {
   const { rows, loading, erro, recarregar, excluir } = useLista('despesas_apropriar', clienteId)
+  const [cron, setCron] = useState(null)
   const [f, on, reset, setF] = useForm({ tipo: '', descricao: '', documento: '', valor_total: '', vigencia_inicio: '', vigencia_fim: '', num_parcelas: '12', valor_parcela: '', conta_despesa: '', conta_apropriar: '', conta_pagar: '', saldo_inicial: false })
   const [sav, setSav] = useState(false)
   async function salvar(e) {
@@ -296,6 +370,7 @@ function PaneDespesaApropriar({ clienteId, user, competencia, abrirGerar, enviar
               <td style={td}><b>{r.tipo}</b></td><td style={td}>{r.descricao}</td>
               <td style={{ ...td, textAlign: 'right' }}>{money(r.valor_total)}</td><td style={{ ...td, textAlign: 'right' }}>{money(r.valor_parcela)}</td>
               <td style={{ ...td, whiteSpace: 'nowrap', textAlign: 'right' }}>
+                <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => setCron(r)} title="Ver o cronograma de apropriações"><i className="ti ti-list-check" /> Apropriações</button>{' '}
                 <GerarBtn onClick={() => abrirGerar({ data: dataComp(competencia), conta_debito: r.conta_despesa, conta_credito: r.conta_apropriar, valor: r.valor_parcela, historico: `Apropriação ${r.tipo} ${r.descricao || ''}`.trim(), origem: 'despesa', documento: r.documento }, `Apropriação — ${r.tipo}`)}>Apropriação do mês</GerarBtn>{' '}
                 {r.saldo_inicial
                   ? <SaldoIniBtn onClick={() => enviarSaldoInicial('despesa', r)} />
@@ -307,6 +382,7 @@ function PaneDespesaApropriar({ clienteId, user, competencia, abrirGerar, enviar
           ))}
         </tbody></table></div>
       </Card>
+      {cron && <ModalCronograma contrato={cron} origem="despesa" compInicio={compInicio} onClose={() => setCron(null)} />}
     </div>
   )
 }

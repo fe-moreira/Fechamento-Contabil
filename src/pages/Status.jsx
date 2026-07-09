@@ -345,6 +345,14 @@ export default function Status() {
     setModal(null)
   }
 
+  // Desfaz (remove) um lançamento gerado pela plataforma — sai do arquivo do Domínio.
+  async function desfazerLancamento(id) {
+    if (!window.confirm('Desfazer este lançamento? Ele será removido e não entra no arquivo do Domínio.')) return
+    const { error } = await supabase.from('lancamentos').delete().eq('id', id)
+    if (error) { setMsg('Erro ao desfazer: ' + error.message); return }
+    await carregar(); setMsg('Lançamento desfeito.')
+  }
+
   // Corrigir banco × resultado: grava a partida de acerto (vai para o Contabilizar) + auditoria.
   async function registrarPartida(itemTxt, L) {
     const id = await getCompetenciaId()
@@ -571,6 +579,7 @@ export default function Status() {
           pronto={pronto}
           totalPendencias={totalPendencias}
           onGerar={() => gerarDominioCSV(dados.lancamentos, `dominio_${competencia.replace('/', '-')}.csv`)}
+          onDesfazer={desfazerLancamento}
           onClose={() => setVerDominio(false)}
         />
       )}
@@ -580,7 +589,7 @@ export default function Status() {
 
 // Lista os lançamentos que a plataforma já gerou (estornos/correções) — para o
 // usuário acompanhar — e permite gerar o arquivo do Domínio só quando pronto.
-function ModalLancamentosDominio({ lancamentos, planoMap, pronto, totalPendencias, onGerar, onClose }) {
+function ModalLancamentosDominio({ lancamentos, planoMap, pronto, totalPendencias, onGerar, onDesfazer, onClose }) {
   const nomeConta = c => { const p = planoMap[String(c)]; return `${c || '—'}${p?.nome ? ' · ' + p.nome : ''}` }
   const origemLabel = { correcao: 'Correção/Estorno', sugestao: 'Sugestão', documento: 'Documento', manual: 'Manual' }
   const total = lancamentos.reduce((s, l) => s + (Number(l.valor) || 0), 0)
@@ -600,7 +609,7 @@ function ModalLancamentosDominio({ lancamentos, planoMap, pronto, totalPendencia
             <thead>
               <tr style={{ background: theme.input }}>
                 <th style={th}>Data</th><th style={th}>Débito</th><th style={th}>Crédito</th>
-                <th style={{ ...th, textAlign: 'right' }}>Valor</th><th style={th}>Histórico</th><th style={th}>Origem</th>
+                <th style={{ ...th, textAlign: 'right' }}>Valor</th><th style={th}>Histórico</th><th style={th}>Origem</th><th style={th} />
               </tr>
             </thead>
             <tbody>
@@ -612,6 +621,9 @@ function ModalLancamentosDominio({ lancamentos, planoMap, pronto, totalPendencia
                   <td style={{ ...td, textAlign: 'right', whiteSpace: 'nowrap', fontWeight: 600 }}>{money(l.valor)}</td>
                   <td style={{ ...td, color: theme.sub, fontSize: 11.5, maxWidth: 240 }}>{l.historico}</td>
                   <td style={{ ...td, fontSize: 11.5 }}><span style={{ color: theme.accent }}>{origemLabel[l.origem] || l.origem || '—'}</span></td>
+                  <td style={{ ...td, whiteSpace: 'nowrap', textAlign: 'right' }}>
+                    {onDesfazer && <button className="btn btn-ghost" style={{ fontSize: 11.5, padding: '3px 8px', color: theme.red, borderColor: theme.red }} onClick={() => onDesfazer(l.id)} title="Remover este lançamento"><i className="ti ti-arrow-back-up" /> Desfazer</button>}
+                  </td>
                 </tr>
               ))}
             </tbody>
