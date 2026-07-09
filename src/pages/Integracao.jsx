@@ -168,6 +168,23 @@ export default function Integracao() {
       .then(({ data }) => setEstado(data?.integracoes || {}))
   }, [empresaId, competencia])
 
+  // Marca uma integração (folha/patrimônio) como sem movimento no período.
+  async function marcarSemMov(key) {
+    const id = await getCompetenciaId()
+    if (!id) return
+    const novo = { ...estado, [key]: { estado: 'sem_movimento', usuario: user?.email || null } }
+    await supabase.from('competencias').update({ integracoes: novo }).eq('id', id)
+    setEstado(novo)
+  }
+  // Uma integração está OK (verde) quando validada ou marcada sem movimento.
+  function integracaoOk(key) {
+    if (key === 'financeira') {
+      const arr = estado.financeira?.bancos ? Object.values(estado.financeira.bancos) : []
+      return arr.length > 0 && arr.every(x => x.estado === 'validado' || x.estado === 'sem_movimento')
+    }
+    return ['validado', 'sem_movimento'].includes(estado[key]?.estado)
+  }
+
   if (!empresaId) {
     return <Wrapper><Aviso texto="Selecione uma empresa no menu lateral para usar a integração." /></Wrapper>
   }
@@ -197,10 +214,17 @@ export default function Integracao() {
         <b style={{ color: theme.text }}>{empresaNome}</b> · competência <b style={{ color: theme.text }}>{competencia}</b>
       </p>
 
-      <div style={{ display: 'flex', gap: 10, marginBottom: 18 }}>
-        {TABS.map(([id, label]) => (
-          <button key={id} onClick={() => setTab(id)} style={{ borderRadius: 8, padding: '8px 16px', fontSize: 13, fontWeight: 500, border: tab === id ? 'none' : `1px solid ${theme.border}`, background: tab === id ? theme.accent : 'transparent', color: tab === id ? '#fff' : theme.text, cursor: 'pointer' }}>{label}</button>
-        ))}
+      <div style={{ display: 'flex', gap: 10, marginBottom: 18, flexWrap: 'wrap' }}>
+        {TABS.map(([id, label]) => {
+          const ok = integracaoOk(id)
+          const ativa = tab === id
+          return (
+            <button key={id} onClick={() => setTab(id)} style={{ borderRadius: 8, padding: '8px 16px', fontSize: 13, fontWeight: 500, border: ativa ? 'none' : `1px solid ${theme.border}`, background: ativa ? theme.accent : 'transparent', color: ativa ? '#fff' : theme.text, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+              {label}
+              <i className={`ti ${ok ? 'ti-circle-check' : 'ti-alert-triangle'}`} style={{ color: ativa ? '#fff' : ok ? theme.green : theme.yellow, fontSize: 15 }} title={ok ? 'OK' : 'Falta fazer'} />
+            </button>
+          )
+        })}
       </div>
 
       {erro && <p style={{ color: theme.red, fontSize: 13, marginBottom: 12 }}>{erro}</p>}
@@ -211,7 +235,7 @@ export default function Integracao() {
           : <FinanceiraViaSistema integ={integ} sistema={sistema} />)
         : tab === 'fiscal'
           ? <Fiscal competencia={competencia} empresaId={empresaId} user={user} est={estado.fiscal || {}} onEstado={salvarFiscal} />
-          : <Cruzamento tab={tab} dados={dados[tab]} onImport={f => importar(tab, f)} est={estado[tab]} />}
+          : <Cruzamento tab={tab} dados={dados[tab]} onImport={f => importar(tab, f)} onSemMov={() => marcarSemMov(tab)} est={estado[tab]} />}
     </Wrapper>
   )
 }
@@ -227,12 +251,14 @@ function EstadoBadge({ est }) {
   )
 }
 
-function Cruzamento({ tab, dados, onImport, est }) {
+function Cruzamento({ tab, dados, onImport, onSemMov, est }) {
   const total = dados ? somaNumerica(dados.linhas) : 0
+  const semMov = est?.estado === 'sem_movimento'
   return (
     <>
       <div><EstadoBadge est={est} /></div>
       <ImpCard titulo={`Importar — ${DESC[tab].split(' ')[1] || 'relatório'}`} desc={DESC[tab]} onImport={onImport} nome={dados?.nome} qtd={dados?.linhas.length} />
+      {!semMov && !dados && <button className="btn btn-ghost" style={{ marginTop: 10, fontSize: 12.5 }} onClick={onSemMov} title="Marca esta integração como sem movimento no período (fica verde no Status)"><i className="ti ti-circle-minus" /> Marcar sem movimento</button>}
       {dados && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(180px,1fr))', gap: 12, marginTop: 16 }}>
           <Metric label="Total do relatório" valor={money(total)} icon="ti-receipt" />
@@ -306,7 +332,20 @@ function Fiscal({ competencia, empresaId, user, est, onEstado }) {
     document.body.appendChild(a); a.click(); a.remove()
   }
 
+  // Marca / desfaz "sem movimento" para o tipo atual (ex.: cliente sem Saídas).
+  async function marcarSemMovTipo() {
+    const novoTipos = { ...tipos, [sub]: { semMovimento: true } }
+    const done = CHAVES_FISCAL.every(k => novoTipos[k])
+    await onEstado({ ...est, tipos: novoTipos, estado: done ? 'validado' : null, doc: done ? 'Fiscal · 3 tipos' : null, usuario: user?.email || null })
+  }
+  async function desfazerSemMov() {
+    const novoTipos = { ...tipos }; delete novoTipos[sub]
+    const done = CHAVES_FISCAL.every(k => novoTipos[k])
+    await onEstado({ ...est, tipos: novoTipos, estado: done ? 'validado' : null, doc: null, usuario: user?.email || null })
+  }
+
   if (carregando) return <p style={{ color: theme.sub, fontSize: 13 }}>Carregando razão…</p>
+  const semMov = atual?.semMovimento
 
   const totDoc = resumoAtual.reduce((s, a) => s + a.docTotal, 0)
   const totId = resumoAtual.reduce((s, a) => s + a.idTotal, 0)
@@ -322,7 +361,7 @@ function Fiscal({ competencia, empresaId, user, est, onEstado }) {
         {TIPOS_FISCAL.map(([k, label, icon]) => (
           <button key={k} onClick={() => { setSub(k); setExpand(null) }} className="btn btn-ghost"
             style={{ fontSize: 12.5, padding: '6px 12px', display: 'flex', alignItems: 'center', gap: 7, fontWeight: sub === k ? 700 : 400, borderColor: sub === k ? theme.accent : theme.cb, background: sub === k ? 'rgba(74,124,255,0.10)' : 'transparent' }}>
-            <i className={`ti ${icon}`} /> {label} {tipos[k] ? <i className="ti ti-circle-check" style={{ color: theme.green }} /> : <span style={{ color: theme.sub }}>·</span>}
+            <i className={`ti ${icon}`} /> {label} {tipos[k]?.semMovimento ? <i className="ti ti-circle-minus" style={{ color: theme.sub }} title="Sem movimento" /> : tipos[k] ? <i className="ti ti-circle-check" style={{ color: theme.green }} /> : <span style={{ color: theme.sub }}>·</span>}
           </button>
         ))}
       </div>
@@ -332,10 +371,16 @@ function Fiscal({ competencia, empresaId, user, est, onEstado }) {
         onImport={importar} nome={atual?.doc} qtd={atual ? resumoAtual.reduce((s, a) => s + a.qtd, 0) : undefined} />
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '10px 0 0', flexWrap: 'wrap' }}>
         {atual?.path && <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={extrairArquivo} title="Baixar o arquivo do acumulador importado"><i className="ti ti-download" /> Extrair arquivo</button>}
+        {!semMov && !atual?.resumo && <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={marcarSemMovTipo} title="Este cliente não tem esse tipo de movimento no período"><i className="ti ti-circle-minus" /> Marcar sem movimento</button>}
         {busy && <span style={{ color: theme.sub, fontSize: 12.5 }}><i className="ti ti-loader" /> Cruzando com razão + lançamentos + ajustes…</span>}
       </div>
 
-      {atual && <>
+      {semMov && <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '16px 0', flexWrap: 'wrap' }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: theme.sub, background: theme.card, border: `1px solid ${theme.cb}`, borderRadius: 20, padding: '5px 12px' }}><i className="ti ti-circle-minus" /> {TIPOS_FISCAL.find(t => t[0] === sub)[1]} — sem movimento no período</span>
+        <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={desfazerSemMov}><i className="ti ti-rotate" /> Tem movimento (importar)</button>
+      </div>}
+
+      {atual && !semMov && <>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(180px,1fr))', gap: 12, margin: '16px 0' }}>
           <Metric label="Total do documento" valor={money(totDoc)} icon="ti-receipt" />
           <Metric label="Razão / contabilidade" valor={money(totId)} icon="ti-checks" cor={theme.green} />
