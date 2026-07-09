@@ -9,6 +9,18 @@ import { abrePdfTimbrado } from '../lib/pdf'
 import { gerarExcelTimbrado } from '../lib/excel'
 import CampoConta from '../components/CampoConta'
 
+// Diferença de conciliação respeitando a NATUREZA da conta. O documento (guia,
+// extrato, relatório) vem SEMPRE positivo. Numa conta DEVEDORA (saldo > 0) a
+// diferença é saldo − documento; numa conta CREDORA (saldo < 0) é saldo + documento.
+// Assim, quando |saldo| == |documento|, a diferença é zero — não importa o sinal.
+// Ex.: FGTS a pagar 1.600 C com guia de 1.600 → diferença 0.
+function difConciliacao(saldo, doc) {
+  const s = Number(saldo) || 0
+  const v = Math.abs(Number(doc) || 0)
+  const nat = s < 0 ? -1 : 1 // credora subtrai o documento (soma ao saldo negativo)
+  return Math.round((s - nat * v) * 100) / 100
+}
+
 // NF no histórico só faz sentido em contas de cliente/fornecedor (a pagar/a receber,
 // duplicatas, adiantamentos). Nas demais (banco, despesa, etc.) o histórico sai sem NF.
 const contaComNF = (nome) => {
@@ -262,7 +274,7 @@ export default function Conciliacao() {
     const reg = conf[c.conta]
     if (!reg) return theme.red
     const docBate = reg.documento_path && reg.saldo_documento != null &&
-      Math.abs(Math.abs(saldoEf(c)) - Math.abs(Number(reg.saldo_documento))) < 0.05 // só o módulo importa
+      Math.abs(difConciliacao(saldoEf(c), reg.saldo_documento)) < 0.05 // natureza da conta (D/C)
     if (docBate) return theme.green
     if (reg.conciliada && reg.justificativa) return theme.yellow
     return theme.red
@@ -978,10 +990,10 @@ function CardConferencia({ conta, reg, compId, usuario, saldoAjuste = 0, composi
   const saldo = (Number(conta.saldo_final) || 0) + (Number(saldoAjuste) || 0)
   const temDoc = doc && saldoDoc !== ''
   const temSaldoDoc = saldoDoc !== ''
-  // Só o MÓDULO importa: num passivo o documento (guia/relatório) vem POSITIVO,
-  // enquanto o saldo contábil é credor. Se |saldo| == |documento|, está conciliado
-  // (sem diferença) — não importa o sinal. Ex.: FGTS a pagar.
-  const dif = Math.abs(saldo) - Math.abs(Number(saldoDoc) || 0)
+  // Diferença pela NATUREZA da conta: o documento vem positivo; numa devedora é
+  // saldo − documento, numa credora é saldo + documento. Se |saldo| == |documento|,
+  // fecha em zero. Ex.: FGTS a pagar 1.600 C com guia de 1.600 → zero.
+  const dif = difConciliacao(saldo, Number(saldoDoc) || 0)
   const bateSaldo = temDoc && Math.abs(dif) < 0.05 // até 5 centavos é irrelevante (arredondamento)
   // VERDE só quando o arquivo está armazenado E o saldo bate. Se o arquivo for
   // excluído (path some), volta ao vermelho mesmo que o saldo continue batendo.
