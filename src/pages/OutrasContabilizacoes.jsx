@@ -31,7 +31,18 @@ function Card({ children, style }) { return <div style={{ background: theme.card
 function SecTitle({ children }) { return <p style={{ fontSize: 15, fontWeight: 700, margin: '0 0 2px', display: 'flex', alignItems: 'center', gap: 8 }}>{children}</p> }
 function SecSub({ children }) { return <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 14px' }}>{children}</p> }
 function Field({ label, children, col }) { return <div style={{ gridColumn: col ? `span ${col}` : 'auto' }}><label>{label}</label>{children}</div> }
-function num(v) { return Number(String(v).replace(/\./g, '').replace(',', '.')) || 0 }
+// Aceita BR ("1.234,56") e US/simples ("3467.12", vindo de String(numero)):
+// só trata "." como milhar quando há vírgula decimal ou quando é grupo de 3 dígitos.
+function num(v) {
+  if (typeof v === 'number') return v
+  let s = String(v ?? '').trim().replace(/[R$\s]/g, '')
+  if (!s) return 0
+  if (s.includes(',')) s = s.replace(/\./g, '').replace(',', '.')       // BR com decimal: 1.234,56
+  else if (/\.\d{3}(\.\d{3})*$/.test(s)) s = s.replace(/\./g, '')       // milhares sem decimal: 1.500 / 1.234.567
+  // senão: "." é decimal (3467.12, 288.92) — mantém
+  const n = parseFloat(s)
+  return isNaN(n) ? 0 : n
+}
 
 // Data do último dia da competência (MM/AAAA) em ISO.
 function dataComp(competencia) {

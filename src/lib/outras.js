@@ -100,10 +100,15 @@ export async function enviarSaldoInicialContrato({ clienteId, origem, contrato, 
     composicoes.push({ Data: dataBR, Conta: conta, 'Histórico': hist, 'Competência': contrato.vigencia_fim || '', Valor: restante, 'D/C': 'D', _origem: tag })
   }
   const dados = { saldos, composicoes }
-  for (const c of iniciais) await supabase.from('cargas_cadastro').delete().eq('id', c.id)
-  const obs = atual?.obs || 'Carga inicial · contratos'
-  const { error } = await supabase.from('cargas_cadastro').insert({ cliente_id: clienteId, tipo: 'financeiro', vigencia: compIni, dados, usuario, obs })
-  if (error) throw error
+  // NÃO apaga a carga (isso já apagou a carga manual por corrida). ATUALIZA a carga
+  // ativa no lugar (preserva clientes/fornecedores/etc.); só cria uma se não existir.
+  if (atual) {
+    const { error } = await supabase.from('cargas_cadastro').update({ dados, usuario }).eq('id', atual.id)
+    if (error) throw error
+  } else {
+    const { error } = await supabase.from('cargas_cadastro').insert({ cliente_id: clienteId, tipo: 'financeiro', vigencia: compIni, dados, usuario, obs: 'Carga inicial · contratos' })
+    if (error) throw error
+  }
   await supabase.from('clientes').update({ carga_inicial_feita: true }).eq('id', clienteId)
   return restante
 }
