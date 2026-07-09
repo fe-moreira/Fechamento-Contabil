@@ -1020,11 +1020,13 @@ function CardConferencia({ conta, reg, compId, usuario, saldoAjuste = 0, composi
         const arr = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
         setDoc(file.name)
         const amarelo = saldoCelulaAmarela(ws, XLSX)
+        const comentario = amarelo == null ? saldoCelulaComentario(ws, XLSX) : null
         if (amarelo != null) { setSaldoDoc(String(amarelo)); setMsg('Saldo lido da célula destacada em amarelo — confira se está correto.'); saldoLido = amarelo }
+        else if (comentario != null) { setSaldoDoc(String(comentario)); setMsg('Saldo lido da célula com comentário — confira se está correto.'); saldoLido = comentario }
         else {
           const r = lerSaldoDocumento(arr, saldo)
           if (r) { setSaldoDoc(String(r.valor)); setMsg(`Saldo lido: ${r.via} — confira se está correto.`); saldoLido = r.valor }
-          else setErro('Não identifiquei o saldo. Destaque a célula do saldo em amarelo, use uma célula escrita "SALDO", ou digite o saldo abaixo.')
+          else setErro('Não identifiquei o saldo. Destaque a célula do saldo em amarelo, coloque um comentário nela, use uma célula escrita "SALDO", ou digite o saldo abaixo.')
         }
       }
       setArquivo(file)
@@ -1420,6 +1422,27 @@ function saldoCelulaAmarela(ws, XLSX) {
     }
   }
   return null
+}
+
+// Se o usuário colocou um COMENTÁRIO numa célula (ex.: "saldo do extrato"), usa isso
+// como sinal de onde está o saldo. Preferência: o número da PRÓPRIA célula comentada;
+// se ela não for número, tenta ler um número do texto do comentário. Precisa de
+// cellStyles ao ler o arquivo (o SheetJS popula cell.c com os comentários).
+function saldoCelulaComentario(ws, XLSX) {
+  if (!ws || !ws['!ref']) return null
+  const range = XLSX.utils.decode_range(ws['!ref'])
+  let doTexto = null
+  for (let r = range.s.r; r <= range.e.r; r++) {
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      const cell = ws[XLSX.utils.encode_cell({ r, c })]
+      if (!cell || !cell.c || !cell.c.length) continue
+      const n = numCell(cell.v)
+      if (n) return n // a própria célula comentada é número → é o saldo
+      // guarda um palpite pelo texto do comentário (usa só se nenhuma célula comentada for número)
+      if (doTexto == null) { const t = cell.c.map(x => x && x.t).join(' '); const m = numCell(t); if (m) doTexto = m }
+    }
+  }
+  return doTexto
 }
 
 function lerSaldoDocumento(arr, alvo) {
