@@ -112,11 +112,18 @@ const chaveConta = v => String(v ?? '').replace(/\D/g, '')
 function extrairConta(obj) {
   const keys = Object.keys(obj || {})
   const acha = re => keys.find(k => re.test(normK(k)))
-  const kCod = keys.find(k => /(codigo|conta)/.test(normK(k)) && !/classif/.test(normK(k))) || acha(/^cod/)
+  // Código REDUZIDO da conta (chave estável). Cuidado: no export cru do Domínio há
+  // "nome_conta", "tipo_conta" e "classificacao_conta" — todas contêm "conta". Por isso
+  // procuramos primeiro "reduzido"/"codigo" e só caímos em "conta" excluindo nome/tipo/etc.
+  const kCod = keys.find(k => /reduzid/.test(normK(k)))
+    || keys.find(k => /codigo/.test(normK(k)) && !/classif/.test(normK(k)))
+    || keys.find(k => /^cod/.test(normK(k)))
+    || keys.find(k => /conta/.test(normK(k)) && !/(nome|tipo|classif|razao|inscri|detalhe|grupo|emp|scp|dados|linha|mascara)/.test(normK(k)))
+  const kTipo = keys.find(k => /tipo/.test(normK(k)) && /conta/.test(normK(k))) || acha(/^tipo/) || acha(/tipo/)
   return {
     codigo: String(obj[kCod] ?? '').trim(),
-    nome: String(obj[acha(/nome|descri/)] ?? '').trim(),
-    tipo: String(obj[acha(/tipo/)] ?? '').trim(),
+    nome: String(obj[acha(/nome.*conta|conta.*nome/) || acha(/nome|descri/)] ?? '').trim(),
+    tipo: String(obj[kTipo] ?? '').trim(),
     classif: String(obj[acha(/classific/)] ?? '').trim(),
   }
 }
