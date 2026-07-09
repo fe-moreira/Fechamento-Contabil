@@ -5,7 +5,7 @@ import { useAuth } from '../components/AuthProvider'
 import { apurarDistribuicao } from '../lib/distribuicao'
 import { apurarBancoResultado } from '../lib/bancoResultado'
 import { apurarVariacoes } from '../lib/variacoes'
-import { contasConciliacaoAbertas, conferirBalanceteEncerramento } from '../lib/balancete'
+import { contasConciliacaoAbertas, conferirBalanceteEncerramento, erroContaSintetica } from '../lib/balancete'
 import { theme, money } from '../lib/theme'
 import { abrePdfTimbrado } from '../lib/pdf'
 import { gerarExcelTimbrado } from '../lib/excel'
@@ -424,6 +424,8 @@ export default function Status() {
 
   // Corrigir banco × resultado: grava a partida de acerto (vai para o Contabilizar) + auditoria.
   async function registrarPartida(itemTxt, L) {
+    const eSint = erroContaSintetica(plano, L.conta_debito, L.conta_credito)
+    if (eSint) { setMsg(eSint); return }
     const id = await getCompetenciaId()
     await supabase.from('lancamentos').insert({
       competencia_id: id, data: L.data || null,
