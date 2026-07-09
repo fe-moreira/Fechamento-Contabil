@@ -130,6 +130,8 @@ export default function Relatorios() {
 
   // Despesas indedutíveis (LALUR): justificativas com dedutibilidade indedutível.
   const indedutiveis = auditoria.filter(a => String(a.dedutibilidade || '').toLowerCase().startsWith('indedut'))
+  // Contratos sem documento marcados como "cliente não enviou" (vão às pendências).
+  const contratoPend = auditoria.filter(a => a.modulo === 'Contratos' && a.tipo === 'Pendência')
 
   // Pendências: documentos não recebidos (rec === false).
   const pendencias = documentos.filter(d => d && d.rec === false)
@@ -191,6 +193,7 @@ export default function Relatorios() {
       linhas: [
         ...pendencias.map(d => [d.name, d.cat || 'Documento']),
         ...concPend.map(c => [`Conciliação · ${c.conta}${c.nome ? ' · ' + c.nome : ''}${c.justificativa ? ' — ' + c.justificativa : ''}`, 'Conciliação (saldo sem extrato)']),
+        ...contratoPend.map(a => [`${a.item}${a.detalhe ? ' — ' + a.detalhe : ''}`, 'Contrato (cliente não enviou)']),
       ],
       arquivo: `pendencias_${compSlug}.xlsx`,
       aba: 'Pendências',
@@ -495,8 +498,8 @@ export default function Relatorios() {
 
       {/* Relatório de Pendências */}
       {!carregando && temComp && aba === 'pendencias' && (
-        <Secao titulo="Relatório de Pendências" onExportar={(pendencias.length || concPend.length) ? exportarPendencias : null}>
-          {pendencias.length === 0 && concPend.length === 0 ? (
+        <Secao titulo="Relatório de Pendências" onExportar={(pendencias.length || concPend.length || contratoPend.length) ? exportarPendencias : null}>
+          {pendencias.length === 0 && concPend.length === 0 && contratoPend.length === 0 ? (
             <Aviso icon="ti-circle-check" texto="Nenhuma pendência nesta competência." />
           ) : (
             <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'auto' }}>
@@ -518,6 +521,12 @@ export default function Relatorios() {
                     <tr key={`conc${i}`} style={{ borderTop: `1px solid ${theme.border}` }}>
                       <td style={td}>Conciliação · {c.conta}{c.nome ? ` · ${c.nome}` : ''}{c.justificativa ? ` — ${c.justificativa}` : ''}</td>
                       <td style={td}>Conciliação (saldo sem extrato)</td>
+                    </tr>
+                  ))}
+                  {contratoPend.map((a, i) => (
+                    <tr key={`contr${i}`} style={{ borderTop: `1px solid ${theme.border}` }}>
+                      <td style={td}>{a.item}{a.detalhe ? ` — ${a.detalhe}` : ''}</td>
+                      <td style={td}>Contrato (cliente não enviou)</td>
                     </tr>
                   ))}
                 </tbody>
