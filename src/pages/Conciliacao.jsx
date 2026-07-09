@@ -4,7 +4,7 @@ import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { theme, money, moneyDC } from '../lib/theme'
-import { montarBalancete, parsePlano, composicaoAbertura, difConciliacao } from '../lib/balancete'
+import { montarBalancete, parsePlano, composicaoAbertura, difConciliacao, applyMask } from '../lib/balancete'
 import { abrePdfTimbrado } from '../lib/pdf'
 import { gerarExcelTimbrado } from '../lib/excel'
 import CampoConta from '../components/CampoConta'
@@ -201,7 +201,9 @@ export default function Conciliacao() {
   const { user } = useAuth()
   const [compId, setCompId] = useState(null)
   const [baseContas, setBaseContas] = useState([]) // contas do balancete (Ativo/Passivo)
-  const [planoRed, setPlanoRed] = useState({})     // reduzido → { nome, classif } (p/ contas só de lançamento)
+  const [planoRed, setPlanoRed] = useState({})     // reduzido → { nome, classif, sintetica } (p/ contas só de lançamento)
+  const [planoFull, setPlanoFull] = useState([])   // plano inteiro (p/ achar as sintéticas ancestrais)
+  const [planoMask, setPlanoMask] = useState('9.9.9.999.9999') // máscara de classificação do cliente
   const [conf, setConf] = useState({}) // conta -> registro conciliacao_conta
   const [acertos, setAcertos] = useState({}) // conta -> ajuste (soma dos lançamentos de acerto pendentes)
   const [carregando, setCarregando] = useState(true)
@@ -236,7 +238,7 @@ export default function Conciliacao() {
   const saldoEf = c => (Number(c.saldo_final) || 0) + ajNet(c)
 
   useEffect(() => {
-    setSel(null); setBaseContas([]); setCompId(null); setConf({}); setPlanoRed({})
+    setSel(null); setBaseContas([]); setCompId(null); setConf({}); setPlanoRed({}); setPlanoFull([])
     if (!empresaId) { setCarregando(false); return }
     setCarregando(true)
     const [mes, ano] = competencia.split('/').map(Number)
@@ -252,9 +254,12 @@ export default function Conciliacao() {
         // lançamento manual/correção e não vieram no balancete importado.
         const { data: pc } = await supabase.from('cargas_cadastro').select('dados')
           .eq('cliente_id', empresaId).eq('tipo', 'plano').order('created_at', { ascending: false }).limit(1).maybeSingle()
+        const parsed = parsePlano(pc?.dados)
         const idx = {}
-        for (const p of parsePlano(pc?.dados)) { if (p.reduzido) idx[String(p.reduzido)] = { nome: p.nome, classif: p.classif } }
+        for (const p of parsed) { if (p.reduzido) idx[String(p.reduzido)] = { nome: p.nome, classif: p.classif, sintetica: !!p.sintetica } }
         setPlanoRed(idx)
+        setPlanoFull(parsed)
+        setPlanoMask(parsed.find(p => p.mascara)?.mascara || '9.9.9.999.9999')
         await carregarConf(comp.id)
         await carregarAcertos(comp.id)
         setCarregando(false)
@@ -288,13 +293,30 @@ export default function Conciliacao() {
   // Contas que só têm LANÇAMENTO (manual/correção) e não vieram no balancete importado
   // (ex.: "a distribuir" de um sócio recém-criada). Entram na lista como analíticas com
   // saldo de balancete zero — o acerto do lançamento vira o saldo efetivo. Só Ativo/Passivo.
+  const dig = s => String(s || '').replace(/\D/g, '')
+  const mk = x => applyMask(dig(x), planoMask) // classificação com pontos (padrão das demais contas)
   const baseSet = new Set(baseContas.map(c => String(c.reduzido)))
-  const extras = Object.keys(acertos)
-    .filter(cod => !baseSet.has(String(cod)) && planoRed[String(cod)] && ['1', '2'].includes(String(planoRed[String(cod)].classif).trim()[0]))
+  const baseClassif = new Set(baseContas.map(c => dig(c.classifRaw || c.classif)))
+  // Analíticas que só têm lançamento (não vieram no balancete) — Ativo/Passivo.
+  const analiticasExtra = Object.keys(acertos)
+    .filter(cod => !baseSet.has(String(cod)) && planoRed[String(cod)] && !planoRed[String(cod)].sintetica && ['1', '2'].includes(dig(planoRed[String(cod)].classif)[0]))
     .map(cod => {
-      const p = planoRed[String(cod)]
-      return { reduzido: String(cod), conta: String(cod), classif: p.classif, classifRaw: p.classif, nome: p.nome || '', sintetica: false, folha: true, saldo_final: 0, saldo_inicial: 0, debito: 0, credito: 0 }
+      const p = planoRed[String(cod)]; const raw = dig(p.classif)
+      return { reduzido: String(cod), conta: String(cod), classif: mk(p.classif), classifRaw: raw, nome: p.nome || '', sintetica: false, folha: true, saldo_final: 0, saldo_inicial: 0, debito: 0, credito: 0 }
     })
+  // Sintéticas ANCESTRAIS dessas analíticas que ainda não estão na lista — para amarrar a
+  // analítica à(s) sintética(s) no painel, igual às demais contas. Saldo vem da soma das
+  // analíticas (ajSintMap, por prefixo de classificação).
+  const sintMap = {}
+  for (const a of analiticasExtra) {
+    for (const p of planoFull) {
+      if (!p.sintetica) continue
+      const sr = dig(p.classif)
+      if (!sr || sr === a.classifRaw || !a.classifRaw.startsWith(sr) || baseClassif.has(sr) || sintMap[sr]) continue
+      sintMap[sr] = { reduzido: p.reduzido ? String(p.reduzido) : '', conta: String(p.reduzido || `sint_${sr}`), classif: mk(p.classif), classifRaw: sr, nome: p.nome || '', sintetica: true, folha: false, saldo_final: 0, saldo_inicial: 0, debito: 0, credito: 0 }
+    }
+  }
+  const extras = [...analiticasExtra, ...Object.values(sintMap)]
   // Ordena TODAS as contas pela classificação (dígitos) — assim as contas criadas por
   // lançamento (ex.: "a distribuir" de um sócio) entram na posição certa, não no fim.
   // A comparação por string dos dígitos preserva a hierarquia (sintética = prefixo → antes).
