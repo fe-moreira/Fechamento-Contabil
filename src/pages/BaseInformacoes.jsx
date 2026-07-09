@@ -76,9 +76,9 @@ const MODELO_CLIFOR = {
   dica: 'Clientes e fornecedores. Um título em aberto por linha, COM nota fiscal: data, conta, cliente/fornecedor, NF, valor e D/C.',
 }
 const MODELO_OUTRAS = {
-  cols: ['Data', 'Conta', 'Histórico', 'Valor', 'D/C'],
-  ex: [['31/12/2025', '150', 'Adiantamento de viagem', '800.00', 'D'], ['31/12/2025', '260', 'Provisão de férias', '5400.00', 'C']],
-  dica: 'Outras contas com composição, SEM nota fiscal (adiantamentos, provisões, empréstimos…). Uma linha por item: data, conta, histórico, valor e D/C.',
+  cols: ['Data', 'Conta', 'Histórico', 'Competência', 'Valor', 'D/C'],
+  ex: [['31/12/2025', '150', 'Adiantamento de viagem', '12/2025', '800.00', 'D'], ['31/12/2025', '260', 'Provisão de férias', '12/2025', '5400.00', 'C']],
+  dica: 'Outras contas com composição, SEM nota fiscal (adiantamentos, provisões, empréstimos…). O "quem" é o histórico (você sobe direto do seu sistema). Uma linha por item: data, conta, histórico, competência, valor e D/C.',
 }
 
 // Lê valor em formato brasileiro ("1.234,56") ou americano ("1234.56").
