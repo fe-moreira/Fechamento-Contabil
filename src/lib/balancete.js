@@ -13,6 +13,40 @@ export function difConciliacao(saldo, doc) {
   return Math.round((s - nat * v) * 100) / 100
 }
 
+// Contas Ativo/Passivo ainda "em aberto" na conciliação: saldo efetivo (balancete +
+// lançamentos) ≠ 0 e SEM documento que bate nem justificativa. Fonte única para o gate
+// do Status e para o badge do menu (assim os dois números batem). Devolve [{conta, saldo_final}].
+export async function contasConciliacaoAbertas(empresaId, compId) {
+  const { data: planoCarga } = await supabase.from('cargas_cadastro').select('dados')
+    .eq('cliente_id', empresaId).eq('tipo', 'plano').order('created_at', { ascending: false }).limit(1).maybeSingle()
+  const classifDe = {}
+  for (const p of parsePlano(planoCarga?.dados)) if (p.reduzido) classifDe[String(p.reduzido)] = String(p.classif || '')
+  const [{ data: bal }, { data: conc }, { data: lancs }] = await Promise.all([
+    supabase.from('balancete').select('conta, saldo_final').eq('competencia_id', compId),
+    supabase.from('conciliacao_conta').select('conta, saldo_documento, documento_path, conciliada, justificativa').eq('competencia_id', compId),
+    supabase.from('lancamentos').select('conta_debito, conta_credito, valor').eq('competencia_id', compId),
+  ])
+  const conf = {}; for (const r of (conc || [])) conf[String(r.conta)] = r
+  const aj = {}
+  for (const l of (lancs || [])) {
+    const v = Number(l.valor) || 0
+    if (l.conta_debito) aj[String(l.conta_debito)] = (aj[String(l.conta_debito)] || 0) + v
+    if (l.conta_credito) aj[String(l.conta_credito)] = (aj[String(l.conta_credito)] || 0) - v
+  }
+  const saldoBal = {}; for (const b of (bal || [])) saldoBal[String(b.conta)] = Number(b.saldo_final) || 0
+  const ehAP = c => { const d = String(classifDe[String(c)] || '').trim()[0]; return d === '1' || d === '2' }
+  const cands = new Set([...Object.keys(saldoBal), ...Object.keys(aj)].filter(ehAP))
+  const conciliada = (c, saldoEf) => {
+    const reg = conf[String(c)]; if (!reg) return false
+    if (reg.documento_path && reg.saldo_documento != null && Math.abs(difConciliacao(saldoEf, reg.saldo_documento)) < 0.05) return true
+    if (reg.conciliada && reg.justificativa) return true
+    return false
+  }
+  const out = []
+  for (const c of cands) { const saldoEf = (saldoBal[c] || 0) + (aj[c] || 0); if (Math.abs(saldoEf) > 0.005 && !conciliada(c, saldoEf)) out.push({ conta: c, saldo_final: saldoEf }) }
+  return out
+}
+
 // Aplica a máscara do Domínio (ex.: "9.9.9.999.9999") a uma classificação sem pontos.
 // "1110010001" → "1.1.1.001.0001"; aceita códigos parciais (sintéticas): "111001" → "1.1.1.001".
 export function applyMask(code, mask) {
