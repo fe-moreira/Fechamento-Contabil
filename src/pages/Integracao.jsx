@@ -293,37 +293,17 @@ function Fiscal({ competencia, empresaId, user, est, onEstado }) {
     setBusy(false)
   }
 
-  // Relê razão + lançamentos + ajustes e re-cruza os arquivos já importados. Para arquivos
-  // guardados no Storage, rebaixa e reprocessa (mesmo importados por outro usuário/versão).
-  async function atualizar() {
-    setErro(''); setBusy(true); setExpand(null)
-    try {
-      const idx = await carregarIndiceFiscal(empresaId, competencia)
-      setRazIdx(idx); setCompId(idx.compId)
-      const novoTipos = { ...tipos }
-      let algum = false
-      for (const k of CHAVES_FISCAL) {
-        const t = novoTipos[k]; if (!t) continue
-        let rows = t.rows
-        if (!rows && t.path) {
-          try { const { data } = await supabase.storage.from('extratos').download(t.path); if (data) rows = await parseAcumulador(new File([data], t.doc || 'acumulador.xlsx'), k) } catch { /* ignore */ }
-        }
-        if (rows) { novoTipos[k] = { ...t, rows, resumo: cruzarFiscal(rows, idx) }; algum = true }
-      }
-      if (!algum) { setErro('Nada para atualizar — reimporte o acumulador uma vez (o arquivo passa a ficar salvo).'); setBusy(false); return }
-      const done = CHAVES_FISCAL.every(k => novoTipos[k])
-      await onEstado({ ...est, tipos: novoTipos, estado: done ? 'validado' : null, doc: done ? 'Fiscal · 3 tipos importados' : null, usuario: user?.email || null })
-    } catch (e) { setErro('Não consegui atualizar: ' + e.message) }
-    setBusy(false)
-  }
-
-  // Extrair (baixar) o arquivo que foi importado — inclusive por outro usuário.
+  // Extrair (baixar) o arquivo que foi importado — inclusive por outro usuário. Usa a
+  // opção de download do Storage + âncora para forçar o download (não abre aba em branco).
   async function extrairArquivo() {
     const t = tipos[sub]
     if (!t?.path) { setErro('Este acumulador foi importado numa versão anterior e o arquivo não ficou salvo. Reimporte uma vez para poder extrair.'); return }
-    const { data, error } = await supabase.storage.from('extratos').createSignedUrl(t.path, 300)
+    const nome = t.doc || `acumulador-${sub}.xls`
+    const { data, error } = await supabase.storage.from('extratos').createSignedUrl(t.path, 300, { download: nome })
     if (error) { setErro('Não consegui abrir o arquivo: ' + error.message); return }
-    window.open(data.signedUrl, '_blank', 'noopener')
+    const a = document.createElement('a')
+    a.href = data.signedUrl; a.download = nome
+    document.body.appendChild(a); a.click(); a.remove()
   }
 
   if (carregando) return <p style={{ color: theme.sub, fontSize: 13 }}>Carregando razão…</p>
@@ -351,7 +331,6 @@ function Fiscal({ competencia, empresaId, user, est, onEstado }) {
         desc={`Colunas: NF (${COLS_FISCAL[sub].nf}), Data (${COLS_FISCAL[sub].data}), Acumulador (${COLS_FISCAL[sub].acum}), ${nomeLabel} (${COLS_FISCAL[sub].forn}), Valor (${COLS_FISCAL[sub].valor}). Cruza NF a NF com o razão.`}
         onImport={importar} nome={atual?.doc} qtd={atual ? resumoAtual.reduce((s, a) => s + a.qtd, 0) : undefined} />
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '10px 0 0', flexWrap: 'wrap' }}>
-        <button className="btn btn-ghost" style={{ fontSize: 12.5 }} disabled={busy} onClick={atualizar} title="Relê o razão, os lançamentos e os ajustes e cruza de novo (sem subir o arquivo)"><i className="ti ti-refresh" /> Atualizar cruzamento</button>
         {atual?.path && <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={extrairArquivo} title="Baixar o arquivo do acumulador importado"><i className="ti ti-download" /> Extrair arquivo</button>}
         {busy && <span style={{ color: theme.sub, fontSize: 12.5 }}><i className="ti ti-loader" /> Cruzando com razão + lançamentos + ajustes…</span>}
       </div>
@@ -422,7 +401,7 @@ function Fiscal({ competencia, empresaId, user, est, onEstado }) {
           </table>
         </div>
         <p style={{ color: theme.sub, fontSize: 11.5, margin: '10px 0 0' }}>
-          Cruzamento por NF + valor + {nomeLabel.toLowerCase()} (e acumulador/data quando não há NF), lendo o razão <b style={{ color: theme.text }}>e os lançamentos ajustados</b>. Corrigiu o acumulador no sistema? Clique em <b style={{ color: theme.text }}>Atualizar cruzamento</b>. A fiscal vira <b style={{ color: theme.text }}>validada</b> no Status quando os 3 tipos forem importados.
+          Cruzamento pelo acumulador (coluna {COLS_FISCAL[sub].acum}) × "Acum." no histórico do razão <b style={{ color: theme.text }}>e dos lançamentos ajustados</b> — atualiza sozinho ao abrir. A fiscal vira <b style={{ color: theme.text }}>validada</b> no Status quando os 3 tipos forem importados.
         </p>
       </>}
       {erro && <p style={{ color: theme.red, fontSize: 13, margin: '12px 0 0' }}>{erro}</p>}
