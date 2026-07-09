@@ -201,7 +201,7 @@ export default function BaseInformacoes() {
   async function concluirCargaInicial(vigencia, payload, obs) {
     const existentes = (cargas.financeiro || []).filter(c => String(c.obs || '').startsWith('Carga inicial'))
     if (existentes.length) {
-      if (!confirm('Já existe uma carga inicial para este cliente. Substituir pela nova?')) return
+      if (!confirm('Atualizar a carga inicial salva? Os blocos que você não reenviou são mantidos.')) return
       for (const c of existentes) await supabase.from('cargas_cadastro').delete().eq('id', c.id)
     }
     await supabase.from('cargas_cadastro').insert({ cliente_id: empresaId, tipo: 'financeiro', vigencia, dados: payload, usuario: user?.email, obs: 'Carga inicial · ' + obs })
@@ -784,20 +784,42 @@ function ModalCargaInicial({ vigencia, empresaId, onClose, onConcluir }) {
   const [outras, setOutras] = useState(null)        // outras contas com composição (sem NF)
   const [erro, setErro] = useState('')
   const [salvando, setSalvando] = useState(false)
-  const [planoNomes, setPlanoNomes] = useState({})  // chaveConta → nome (fallback p/ conferência)
+  const [planoNomes, setPlanoNomes] = useState({ red: {}, cls: {} })  // nome p/ conferência
 
-  // Nomes do plano p/ exibir na conferência quando a conta não veio no bloco de saldos.
+  // Nomes do plano p/ exibir na conferência. Mapas SEPARADOS por reduzido e por
+  // classificação: como a carga usa o código reduzido, o nome é buscado pelo
+  // reduzido primeiro. (Evita colisão de dígitos, ex.: reduzido "23" = clientes
+  // vs classificação "2.3" = patrimônio líquido, que dariam a mesma chave.)
   useEffect(() => {
     if (!empresaId) return
     supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'plano')
       .order('created_at', { ascending: false }).limit(1).maybeSingle()
       .then(({ data }) => {
-        const m = {}
+        const red = {}, cls = {}
         for (const p of parsePlano(data?.dados)) {
-          if (p.classif) m[chaveConta(p.classif)] = p.nome
-          if (p.reduzido) m[chaveConta(p.reduzido)] = p.nome
+          if (p.reduzido) red[chaveConta(p.reduzido)] = p.nome
+          if (p.classif) cls[chaveConta(p.classif)] = p.nome
         }
-        setPlanoNomes(m)
+        setPlanoNomes({ red, cls })
+      })
+  }, [empresaId])
+
+  // Pré-carrega a carga inicial JÁ SALVA nos três blocos, para não perdê-la ao
+  // concluir: o bloco que não for reenviado é preservado. Divide as composições
+  // em clientes/fornecedores (tem cliente/fornecedor ou NF) e outras (histórico).
+  useEffect(() => {
+    if (!empresaId) return
+    supabase.from('cargas_cadastro').select('dados, obs').eq('cliente_id', empresaId).eq('tipo', 'financeiro')
+      .order('created_at', { ascending: false }).limit(1).maybeSingle()
+      .then(({ data }) => {
+        const d = data?.dados
+        if (!d || Array.isArray(d) || !String(data?.obs || '').startsWith('Carga inicial')) return
+        const ehClifor = r => Object.keys(r || {}).some(k => /cliente|fornec|\bnf\b|nota\s*fisc/.test(normK(k)))
+        const comps = d.composicoes || []
+        const cli = comps.filter(ehClifor), out = comps.filter(r => !ehClifor(r))
+        if ((d.saldos || []).length) setSaldos({ nome: 'carga anterior', dados: d.saldos, salvo: true })
+        if (cli.length) setComp({ nome: 'carga anterior', dados: cli, salvo: true })
+        if (out.length) setOutras({ nome: 'carga anterior', dados: out, salvo: true })
       })
   }, [empresaId])
 
@@ -851,7 +873,7 @@ function ModalCargaInicial({ vigencia, empresaId, onClose, onConcluir }) {
       const temSaldo = saldoPorConta[k] !== undefined
       const diff = temSaldo ? (saldo - somaComp) : null
       return {
-        k, nome: nomePorConta[k] || planoNomes[k] || '',
+        k, nome: nomePorConta[k] || planoNomes.red?.[k] || planoNomes.cls?.[k] || '',
         somaComp, saldo, temSaldo, diff,
         ok: temSaldo && Math.abs(diff) < 0.005,
       }
@@ -863,7 +885,7 @@ function ModalCargaInicial({ vigencia, empresaId, onClose, onConcluir }) {
 
   async function concluir() {
     setSalvando(true)
-    const obsArq = [saldos?.nome, comp?.nome, outras?.nome].filter(Boolean).join(' + ') || 'manual'
+    const obsArq = [...new Set([saldos?.nome, comp?.nome, outras?.nome].filter(Boolean))].join(' + ') || 'manual'
     // Clientes/fornecedores + outras composições vão juntos em `composicoes` (mesma conferência).
     const composicoes = [...(comp?.dados || []), ...(outras?.dados || [])]
     try { await onConcluir(vigencia, { saldos: saldos?.dados || [], composicoes }, obsArq) }
@@ -881,8 +903,8 @@ function ModalCargaInicial({ vigencia, empresaId, onClose, onConcluir }) {
       </div>
       <DropZone onArquivo={f => lerArquivo(f, setter, estado)} hint="Arraste ou clique · .xlsx, .xls ou .csv" />
       {estado && (
-        <p style={{ color: theme.green, fontSize: 12.5, marginTop: 8 }}>
-          <i className="ti ti-circle-check" /> {estado.nome} — {estado.dados.length} linha(s)
+        <p style={{ color: estado.salvo ? theme.sub : theme.green, fontSize: 12.5, marginTop: 8 }}>
+          <i className={`ti ${estado.salvo ? 'ti-database' : 'ti-circle-check'}`} /> {estado.salvo ? 'Já salvo (carga anterior)' : estado.nome} — {estado.dados.length} linha(s){estado.salvo ? ' · será mantido se você não reenviar' : ''}
           <i className="ti ti-x" title="Remover" onClick={() => setter(null)} style={{ color: theme.sub, cursor: 'pointer', marginLeft: 8 }} />
         </p>
       )}
@@ -897,6 +919,11 @@ function ModalCargaInicial({ vigencia, empresaId, onClose, onConcluir }) {
         <b style={{ color: theme.text }}> outras contas com composição</b> (sem NF — pelo histórico da conta).
         O sistema confere se cada composição bate com o saldo da conta.
       </p>
+      {(saldos?.salvo || comp?.salvo || outras?.salvo) && (
+        <p style={{ color: theme.sub, fontSize: 12, marginBottom: 12, padding: '8px 11px', background: theme.input, borderRadius: 8, lineHeight: 1.5 }}>
+          <i className="ti ti-info-circle" style={{ color: theme.accent, marginRight: 5 }} />Já existe carga inicial para este cliente — os blocos abaixo vêm preenchidos. Reenviar um bloco <b style={{ color: theme.text }}>substitui só aquele bloco</b>; os demais são mantidos.
+        </p>
+      )}
 
       {Bloco({ icon: 'ti-scale', titulo: '1. Saldos de abertura', dica: MODELO_SALDOS.dica,
         modelo: MODELO_SALDOS, arquivo: 'modelo_saldos_abertura.xlsx', estado: saldos, setter: setSaldos })}
