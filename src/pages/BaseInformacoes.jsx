@@ -336,7 +336,7 @@ export default function BaseInformacoes() {
         <ModalCargaInicial vigencia={modal.vigencia} empresaId={empresaId} onClose={() => setModal(null)} onConcluir={concluirCargaInicial} />
       )}
       {modal?.tipo === 'dist' && (
-        <ModalDist inicial={dist} onClose={() => setModal(null)} onSalvar={salvarDist} />
+        <ModalDist inicial={dist} empresaId={empresaId} onClose={() => setModal(null)} onSalvar={salvarDist} />
       )}
       {modal?.tipo === 'modelos' && (
         <ModalSimples titulo="Modelos de relatório" texto="Os modelos do escritório (Balancete, DRE, DFC, Balanço) já são gerados na tela de Relatórios a partir do balancete da competência, com exportação para Excel (.xlsx) no papel timbrado da Attentive. A personalização de modelos por cliente entra em breve." onClose={() => setModal(null)} />
@@ -1034,21 +1034,58 @@ function ModalCargaInicial({ vigencia, empresaId, onClose, onConcluir }) {
   )
 }
 
-function ModalDist({ inicial, onClose, onSalvar }) {
+function ModalDist({ inicial, empresaId, onClose, onSalvar }) {
   const [limite, setLimite] = useState(inicial?.limite ?? 50000)
   const [aliquota, setAliquota] = useState(inicial?.aliquota ?? 10)
   const [contas, setContas] = useState(inicial?.contas?.length ? inicial.contas : [{ cod: '', nome: '' }])
   const [socios, setSocios] = useState(inicial?.socios?.length ? inicial.socios : [{ nome: '', ident: '' }])
+  // Lucros a distribuir registrados em ATA (passivo "a distribuir") — só cadastro/informação.
+  const [ata, setAta] = useState(inicial?.ata && !Array.isArray(inicial.ata) ? inicial.ata : { houve: false, arquivo: '', documento: '', socios: [] })
   const [salvando, setSalvando] = useState(false)
+  const [erro, setErro] = useState('')
 
   const upd = (set, i, k) => e => set(l => l.map((x, j) => j === i ? { ...x, [k]: e.target.value } : x))
   const rem = (set, i) => set(l => l.filter((_, j) => j !== i))
+  const updAtaSocio = (i, k) => e => setAta(a => ({ ...a, socios: a.socios.map((x, j) => j === i ? { ...x, [k]: e.target.value } : x) }))
+  const totalAta = (ata.socios || []).reduce((s, x) => s + (Number(x.valor) || 0), 0)
+
+  // Marca "houve": se ainda não há sócios na ata, semeia com os nomes já cadastrados.
+  function marcarHouve(houve) {
+    setAta(a => {
+      const base = (a.socios && a.socios.length) ? a.socios : socios.filter(s => s.nome).map(s => ({ nome: s.nome, valor: '' }))
+      return { ...a, houve, socios: houve ? (base.length ? base : [{ nome: '', valor: '' }]) : a.socios }
+    })
+  }
+
+  async function anexarAta(file) {
+    if (!file || !empresaId) return
+    setErro('')
+    const ext = (file.name.match(/\.[a-z0-9]+$/i) || [''])[0].toLowerCase()
+    const path = `atas/dist/${empresaId}${ext}`
+    const { error } = await supabase.storage.from('extratos').upload(path, file, { upsert: true, contentType: file.type || undefined })
+    if (error) { setErro('Não consegui anexar a ata: ' + error.message); return }
+    setAta(a => ({ ...a, arquivo: path, documento: file.name }))
+  }
+  async function verAta() {
+    if (!ata.arquivo) return
+    const { data, error } = await supabase.storage.from('extratos').createSignedUrl(ata.arquivo, 300)
+    if (error) { setErro('Não consegui abrir a ata: ' + error.message); return }
+    window.open(data.signedUrl, '_blank', 'noopener')
+  }
+  async function removerAta() {
+    if (ata.arquivo) await supabase.storage.from('extratos').remove([ata.arquivo])
+    setAta(a => ({ ...a, arquivo: '', documento: '' }))
+  }
 
   async function salvar() {
     setSalvando(true)
+    const ataLimpa = ata.houve
+      ? { houve: true, arquivo: ata.arquivo || '', documento: ata.documento || '', socios: (ata.socios || []).filter(s => s.nome || s.valor).map(s => ({ nome: s.nome, valor: Number(s.valor) || 0 })) }
+      : { houve: false, arquivo: '', documento: '', socios: [] }
     await onSalvar({
       limite: Number(limite) || 0, aliquota: Number(aliquota) || 0,
       contas: contas.filter(c => c.cod || c.nome), socios: socios.filter(s => s.nome || s.ident),
+      ata: ataLimpa,
     })
     setSalvando(false)
   }
@@ -1079,6 +1116,44 @@ function ModalDist({ inicial, onClose, onSalvar }) {
       ))}
 
       <p style={{ color: theme.sub, fontSize: 11.5, margin: '12px 0 0' }}>Estimativa para revisão humana — o razão não distingue sozinho lucro de 2025 (isento) de lucro novo.</p>
+
+      {/* ---- Lucros a distribuir registrados em ATA (passivo "a distribuir") ---- */}
+      <div style={{ borderTop: `0.5px solid ${theme.cb}`, margin: '18px 0 0', paddingTop: 16 }}>
+        <span style={{ color: theme.sub, fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: .4 }}>Lucros a distribuir (registrados em ata)</span>
+        <p style={{ color: theme.sub, fontSize: 11.5, margin: '4px 0 10px' }}>Distribuição deliberada em ata que fica no passivo "a distribuir" — separada da distribuição do ano acima. Só cadastro/informação.</p>
+        <div style={{ display: 'flex', gap: 18, marginBottom: ata.houve ? 12 : 0 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 13, cursor: 'pointer' }}>
+            <input type="radio" name="ata-houve" checked={!ata.houve} onChange={() => setAta(a => ({ ...a, houve: false }))} /> Não houve
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 13, cursor: 'pointer' }}>
+            <input type="radio" name="ata-houve" checked={!!ata.houve} onChange={() => marcarHouve(true)} /> Houve (distribuído em ata)
+          </label>
+        </div>
+
+        {ata.houve && <>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
+            <label className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', cursor: 'pointer' }}>
+              <i className="ti ti-paperclip" /> {ata.documento ? 'Trocar ata' : 'Importar ata'}
+              <input type="file" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png" style={{ display: 'none' }} onChange={e => anexarAta(e.target.files?.[0])} />
+            </label>
+            {ata.documento && <span style={{ color: theme.sub, fontSize: 12 }}><i className="ti ti-file" /> {ata.documento}</span>}
+            {ata.arquivo && <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={verAta}><i className="ti ti-eye" /> Ver</button>}
+            {ata.arquivo && <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', color: theme.red, borderColor: theme.red }} onClick={removerAta}><i className="ti ti-trash" /> Excluir</button>}
+          </div>
+
+          <LinhaTitulo titulo="Sócios e valor distribuído" onAdd={() => setAta(a => ({ ...a, socios: [...(a.socios || []), { nome: '', valor: '' }] }))} />
+          {(ata.socios || []).map((s, i) => (
+            <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+              <input className="input" style={{ flex: 1 }} placeholder="Nome do sócio" value={s.nome} onChange={updAtaSocio(i, 'nome')} />
+              <input className="input" style={{ width: 160 }} type="number" step="0.01" placeholder="Valor (R$)" value={s.valor} onChange={updAtaSocio(i, 'valor')} />
+              <i className="ti ti-trash" onClick={() => setAta(a => ({ ...a, socios: a.socios.filter((_, j) => j !== i) }))} style={{ color: theme.sub, cursor: 'pointer', alignSelf: 'center' }} />
+            </div>
+          ))}
+          <p style={{ color: theme.text, fontSize: 12.5, margin: '8px 0 0', textAlign: 'right' }}>Total distribuído em ata: <b>{money(totalAta)}</b></p>
+        </>}
+      </div>
+
+      {erro && <p style={{ color: theme.red, fontSize: 12.5, margin: '10px 0 0' }}>{erro}</p>}
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
         <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
         <button className="btn" disabled={salvando} onClick={salvar}>{salvando ? 'Salvando…' : 'Salvar configuração'}</button>
