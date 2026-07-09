@@ -1418,7 +1418,11 @@ function saldoCelulaAmarela(ws, XLSX) {
       if (!rgb) continue
       const hex = String(rgb).replace(/[^0-9a-fA-F]/g, '').slice(-6).padStart(6, '0')
       const R = parseInt(hex.slice(0, 2), 16), G = parseInt(hex.slice(2, 4), 16), B = parseInt(hex.slice(4, 6), 16)
-      if (R > 180 && G > 180 && B < 140) { const n = numCell(cell.v); if (n) return n } // amarelo
+      // "Amarelo" no sentido amplo: destaque quente (amarelo/tan/laranja) — o azul fica
+      // bem abaixo do vermelho e do verde. Cobre desde amarelo puro (FFFF00) até o
+      // amarelo-claro do Google Sheets (F9E79F). Ignora branco e cinzas.
+      const quente = R > 150 && G > 130 && B < Math.min(R, G) * 0.85 && (R + G) / 2 - B > 35
+      if (quente) { const n = numCell(cell.v); if (n) return n } // célula destacada em amarelo
     }
   }
   return null
