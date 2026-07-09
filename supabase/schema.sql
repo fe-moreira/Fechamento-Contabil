@@ -302,6 +302,12 @@ begin
 end $$;
 
 -- ============================================================
+-- Distribuição de lucros: cadastro dos lucros a distribuir em ATA
+-- (passivo "a distribuir") — { houve, arquivo, documento, socios:[{nome,valor}] }.
+-- ============================================================
+alter table if exists public.dist_lucros_config add column if not exists ata jsonb;
+
+-- ============================================================
 -- (Opcional) Seed mínimo para testar o cadastro de clientes.
 -- Descomente se quiser dados de exemplo.
 -- ============================================================
