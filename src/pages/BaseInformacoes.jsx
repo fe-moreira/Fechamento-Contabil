@@ -424,7 +424,9 @@ function ModalCarga({ carga, historico, empresaId, usuario, onClose, onImportado
   const [planoIdx, setPlanoIdx] = useState(null) // { porRed, porNum, mascara } p/ puxar nome pelo código
   const [hist, setHist] = useState(historico || []) // cargas (vigências) já salvas — recarrega ao salvar
   const [msgOk, setMsgOk] = useState('')
-  const [pendente, setPendente] = useState(null) // { dados, nome } aguardando confirmação
+  const [pendente, setPendente] = useState(null) // { dados, nome, diff? } aguardando confirmação
+  const [planoRaw, setPlanoRaw] = useState([])   // linhas cruas do plano atual (p/ diff e mesclagem)
+  const ehPlano = carga.tipo === 'plano'
   const vigOk = /^\d{2}\/\d{4}$/.test(vigencia)
 
   async function recarregar() {
@@ -445,8 +447,37 @@ function ModalCarga({ carga, historico, empresaId, usuario, onClose, onImportado
           if (p.classif) porNum[p.classif.replace(/\D/g, '')] = p
         }
         setPlanoIdx({ porRed, porNum, mascara: plano.find(p => p.mascara)?.mascara || '9.9.9.999.9999' })
+        setPlanoRaw(Array.isArray(data?.dados) ? data.dados : [])
       })
   }, [empresaId])
+
+  // Chave estável de uma linha de plano (código reduzido; senão dígitos da classificação).
+  const chavePlano = row => { const e = extrairConta(row); return String(e.codigo || '').trim() || chaveConta(e.classif) }
+  // Diferença do plano importado vs o plano atual: contas novas e alteradas
+  // (nome/classificação/tipo). "Mantidas" = existem hoje e não vieram no arquivo.
+  function diffPlano(novoDados) {
+    const antigos = new Map(planoRaw.map(r => [chavePlano(r), extrairConta(r)]).filter(([k]) => k))
+    const novas = [], alteradas = []
+    const novasKeys = new Set()
+    for (const r of novoDados) {
+      const k = chavePlano(r); if (!k) continue
+      novasKeys.add(k)
+      const e = extrairConta(r), old = antigos.get(k)
+      if (!old) novas.push(e)
+      else if (String(old.nome).trim() !== String(e.nome).trim() || chaveConta(old.classif) !== chaveConta(e.classif) || String(old.tipo).trim() !== String(e.tipo).trim()) alteradas.push({ de: old, para: e })
+    }
+    const mantidas = [...antigos.keys()].filter(k => !novasKeys.has(k)).length
+    return { novas, alteradas, mantidas }
+  }
+  // Mescla o plano atual com o importado: mantém as contas existentes e
+  // inclui/atualiza só as novas e alteradas (o novo sobrepõe pela chave).
+  function mesclarPlano(novoDados) {
+    const mapa = new Map()
+    for (const r of planoRaw) { const k = chavePlano(r); if (k) mapa.set(k, r) }
+    const extra = []
+    for (const r of novoDados) { const k = chavePlano(r); if (k) mapa.set(k, r); else extra.push(r) }
+    return [...mapa.values(), ...extra]
+  }
 
   // Acha a conta no plano pelo código digitado (reduzido ou classificação, com/sem máscara).
   function buscaConta(v) {
@@ -490,7 +521,9 @@ function ModalCarga({ carga, historico, empresaId, usuario, onClose, onImportado
       const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' })
       const dados = lerPlanilha(XLSX, wb.Sheets[wb.SheetNames[0]])
       if (!dados.length) { setErro('Planilha vazia.'); return }
-      setPendente({ dados, nome: file.name }) // aguarda confirmação (conferir antes de gravar)
+      // No plano de contas, mostra o que é novo/alterado vs o plano atual.
+      const diff = (ehPlano && planoRaw.length) ? diffPlano(dados) : null
+      setPendente({ dados, nome: file.name, diff }) // aguarda confirmação (conferir antes de gravar)
     } catch (err) { setErro('Erro ao ler o arquivo: ' + err.message) }
   }
 
@@ -500,12 +533,15 @@ function ModalCarga({ carga, historico, empresaId, usuario, onClose, onImportado
     setErro(''); setSalvando(true)
     try {
       if (!(await sobreporSeMesma())) { setSalvando(false); return }
+      // Plano: mescla com o atual (mantém as contas existentes, inclui/atualiza as novas).
+      const dadosFinal = (ehPlano && planoRaw.length) ? mesclarPlano(pendente.dados) : pendente.dados
       const { error } = await supabase.from('cargas_cadastro').insert({
-        cliente_id: empresaId, tipo: carga.tipo, vigencia, dados: pendente.dados, usuario, obs: pendente.nome,
+        cliente_id: empresaId, tipo: carga.tipo, vigencia, dados: dadosFinal, usuario, obs: pendente.nome,
       })
       if (error) throw error
       await recarregar(); onImportado(); setSalvando(false)
-      setMsgOk(`Importado · vigência ${vigencia} (${pendente.dados.length} linha(s)).`); setPendente(null)
+      const resumo = pendente.diff ? ` · ${pendente.diff.novas.length} nova(s), ${pendente.diff.alteradas.length} alterada(s)` : ''
+      setMsgOk(`Importado · vigência ${vigencia} (${dadosFinal.length} conta(s)${resumo}).`); setPendente(null)
     } catch (err) { setErro('Erro ao importar: ' + err.message); setSalvando(false) }
   }
 
@@ -606,6 +642,28 @@ function ModalCarga({ carga, historico, empresaId, usuario, onClose, onImportado
             <div style={{ border: `1px solid ${theme.accent}`, borderRadius: 10, padding: 14, marginTop: 4 }}>
               <p style={{ fontSize: 13, fontWeight: 600, margin: '0 0 4px' }}><i className="ti ti-eye" style={{ color: theme.accent }} /> Confira antes de importar</p>
               <p style={{ fontSize: 12.5, color: theme.sub, margin: '0 0 10px' }}>{pendente.nome} · <b style={{ color: theme.text }}>{pendente.dados.length}</b> linha(s) · vigência {vigencia}</p>
+              {pendente.diff && (
+                <div style={{ background: theme.input, borderRadius: 8, padding: '10px 12px', marginBottom: 10, fontSize: 12.5 }}>
+                  <p style={{ margin: '0 0 6px', color: theme.text, fontWeight: 600 }}><i className="ti ti-git-compare" style={{ color: theme.accent, marginRight: 5 }} />Comparação com o plano atual — será incluído só o que é novo ou mudou; o resto é mantido.</p>
+                  <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                    <span style={{ color: theme.green }}><b>{pendente.diff.novas.length}</b> nova(s)</span>
+                    <span style={{ color: theme.yellow }}><b>{pendente.diff.alteradas.length}</b> alterada(s)</span>
+                    <span style={{ color: theme.sub }}><b>{pendente.diff.mantidas}</b> mantida(s) (não vieram no arquivo)</span>
+                  </div>
+                  {(pendente.diff.novas.length + pendente.diff.alteradas.length) > 0 && (
+                    <div style={{ marginTop: 8, maxHeight: 130, overflowY: 'auto' }}>
+                      {pendente.diff.novas.slice(0, 12).map((c, i) => (
+                        <div key={'n' + i} style={{ fontSize: 12, padding: '3px 0', color: theme.text }}><span style={{ color: theme.green, fontSize: 11, marginRight: 6 }}>NOVA</span><span style={{ color: theme.sub }}>{c.codigo}</span> {c.nome}</div>
+                      ))}
+                      {pendente.diff.alteradas.slice(0, 12).map((c, i) => (
+                        <div key={'a' + i} style={{ fontSize: 12, padding: '3px 0', color: theme.text }}><span style={{ color: theme.yellow, fontSize: 11, marginRight: 6 }}>ALTEROU</span><span style={{ color: theme.sub }}>{c.para.codigo}</span> {c.de.nome} → {c.para.nome}</div>
+                      ))}
+                      {(pendente.diff.novas.length + pendente.diff.alteradas.length) > 24 && <p style={{ fontSize: 11, color: theme.sub, margin: '4px 0 0' }}>… e mais.</p>}
+                    </div>
+                  )}
+                  {pendente.diff.novas.length + pendente.diff.alteradas.length === 0 && <p style={{ fontSize: 12, color: theme.sub, margin: '6px 0 0' }}>Nada novo ou alterado em relação ao plano atual.</p>}
+                </div>
+              )}
               <div style={{ overflowX: 'auto', border: `0.5px solid ${theme.cb}`, borderRadius: 8, maxHeight: 240 }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 420 }}>
                   <thead><tr style={{ background: theme.input }}>{Object.keys(pendente.dados[0] || {}).map(c => <th key={c} style={{ textAlign: 'left', padding: '7px 10px', fontSize: 11, color: theme.sub, textTransform: 'uppercase', letterSpacing: .3, whiteSpace: 'nowrap' }}>{c}</th>)}</tr></thead>
