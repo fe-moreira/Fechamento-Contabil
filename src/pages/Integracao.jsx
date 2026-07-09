@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
@@ -27,6 +27,45 @@ function somaNumerica(linhas) {
   return tot
 }
 
+// ---- Integração FISCAL: cruzamento acumulador × razão ----------------------
+const TIPOS_FISCAL = [['entradas', 'Entradas', 'ti-arrow-down-left'], ['saidas', 'Saídas', 'ti-arrow-up-right'], ['servicos', 'Serviços prestados', 'ti-briefcase']]
+const CHAVES_FISCAL = TIPOS_FISCAL.map(t => t[0])
+// NF só com dígitos, sem zeros à esquerda ("05602823" → "5602823").
+const normNF = v => String(v ?? '').replace(/\D/g, '').replace(/^0+/, '')
+const normAcum = v => String(v ?? '').replace(/\D/g, '').replace(/^0+/, '')
+const numFis = v => { if (typeof v === 'number') return v; const n = parseValor(v); return Number.isFinite(n) ? n : 0 }
+// Todas as NFs citadas no histórico do razão (após "NF").
+function nfsDoHistorico(h) {
+  const out = new Set()
+  for (const m of String(h || '').matchAll(/nf[\s.ºn°o:_-]*(\d{1,})/gi)) { const d = m[1].replace(/^0+/, ''); if (d) out.add(d) }
+  return out
+}
+// Acumulador citado no histórico (vem depois de "Acum.").
+function acumDoHistorico(h) {
+  const m = /acum[\s.ºn°o:_-]*(\d{1,})/i.exec(String(h || ''))
+  return m ? m[1].replace(/^0+/, '') : ''
+}
+const normNome = s => String(s || '').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim()
+const STOP_NOME = new Set(['LTDA', 'ME', 'EPP', 'EIRELI', 'SA', 'CIA', 'DE', 'DA', 'DO', 'DOS', 'DAS', 'E', 'COMERCIO', 'SERVICOS', 'SERVICO', 'BRASIL', 'INDUSTRIA', 'IMPORTACAO', 'EXPORTACAO'])
+// Nome do fornecedor/cliente aparece no histórico do razão? (1º token significativo)
+function nomeCombina(nome, hist) {
+  const toks = normNome(nome).split(' ').filter(t => t.length >= 3 && !STOP_NOME.has(t))
+  if (!toks.length) return true
+  return normNome(hist).includes(toks[0])
+}
+// A linha do acumulador (arquivo) foi identificada no razão? SÓ cruza com históricos
+// que têm "Acum." + número — assim ignora a contrapartida de banco (que não tem
+// acumulador); só entram os lançamentos integrados pela fiscal. Dentro do mesmo
+// acumulador, casa pela NF; sem NF, confirma por valor + nome.
+function achadoNoRazao(row, idx) {
+  const cands = idx.byAcum[row.acum] || []
+  if (!cands.length) return false
+  const nf = normNF(row.nf)
+  if (nf && cands.some(r => r.nfs.has(nf))) return true
+  return cands.some(r => Math.abs(r.valor - row.valor) <= 0.05 && nomeCombina(row.forn, r.hist))
+}
+const brDataIso = iso => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || '')); return m ? `${m[3]}/${m[2]}/${m[1]}` : String(iso || '') }
+
 export default function Integracao() {
   const { empresas, empresaId, empresaNome, competencia, getCompetenciaId, plano, isAdmin } = useAppData()
   const { user } = useAuth()
@@ -40,6 +79,14 @@ export default function Integracao() {
     const id = await getCompetenciaId()
     if (!id) return
     const novo = { ...estado, financeira: novoFin }
+    await supabase.from('competencias').update({ integracoes: novo }).eq('id', id)
+    setEstado(novo)
+  }
+  // Persiste o estado da integração fiscal (3 tipos + cruzamento) na competência.
+  async function salvarFiscal(novoFis) {
+    const id = await getCompetenciaId()
+    if (!id) return
+    const novo = { ...estado, fiscal: novoFis }
     await supabase.from('competencias').update({ integracoes: novo }).eq('id', id)
     setEstado(novo)
   }
@@ -100,7 +147,9 @@ export default function Integracao() {
         ? (integ === 'Excel'
           ? <Financeira competencia={competencia} est={estado.financeira || {}} empresaId={empresaId} planoMap={planoMap} user={user} onEstado={salvarFinanceira} isAdmin={isAdmin} usaCC={!!cliente?.usa_centro_custo} />
           : <FinanceiraViaSistema integ={integ} sistema={sistema} />)
-        : <Cruzamento tab={tab} dados={dados[tab]} onImport={f => importar(tab, f)} est={estado[tab]} />}
+        : tab === 'fiscal'
+          ? <Fiscal competencia={competencia} empresaId={empresaId} user={user} est={estado.fiscal || {}} onEstado={salvarFiscal} />
+          : <Cruzamento tab={tab} dados={dados[tab]} onImport={f => importar(tab, f)} est={estado[tab]} />}
     </Wrapper>
   )
 }
@@ -131,6 +180,175 @@ function Cruzamento({ tab, dados, onImport, est }) {
       )}
     </>
   )
+}
+
+// Integração FISCAL: importa o acumulador (Entradas/Saídas/Serviços) e cruza NF a NF
+// com o razão. Resumo por acumulador (total do documento × identificado × diferença);
+// clicando numa linha com diferença, mostra as NFs do acumulador que não achei no razão.
+function Fiscal({ competencia, empresaId, user, est, onEstado }) {
+  const [sub, setSub] = useState('entradas')
+  const [razIdx, setRazIdx] = useState(null)   // { byNf:{nf:[row]}, all:[row] }
+  const [carregando, setCarregando] = useState(true)
+  const [erro, setErro] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [expand, setExpand] = useState(null)   // acumulador expandido
+
+  const tipos = est?.tipos || {}
+  const atual = tipos[sub]
+  const nomeLabel = sub === 'entradas' ? 'Fornecedor' : 'Cliente'
+
+  // Índice do razão da competência (por NF e todos), para cruzar as linhas do arquivo.
+  useEffect(() => {
+    let ativo = true
+    setCarregando(true); setRazIdx(null); setExpand(null)
+    ;(async () => {
+      const [mes, ano] = (competencia || '').split('/').map(Number)
+      const { data: comp } = await supabase.from('competencias').select('id')
+        .eq('cliente_id', empresaId).eq('ano', ano).eq('mes', mes).maybeSingle()
+      if (!comp) { if (ativo) { setRazIdx({ byNf: {}, all: [] }); setCarregando(false) } return }
+      const { data: rz } = await supabase.from('razao')
+        .select('data, historico, debito, credito').eq('competencia_id', comp.id)
+      // Índice SÓ dos históricos que têm "Acum." (número), agrupados por acumulador.
+      // Ignora o resto do razão (contrapartida de banco etc.) — só a fiscal integra.
+      const byAcum = {}
+      for (const r of (rz || [])) {
+        const acum = acumDoHistorico(r.historico)
+        if (!acum) continue
+        const row = { valor: (Number(r.debito) || 0) + (Number(r.credito) || 0), hist: r.historico || '', nfs: nfsDoHistorico(r.historico), data: r.data || '' }
+        ;(byAcum[acum] ||= []).push(row)
+      }
+      if (ativo) { setRazIdx({ byAcum }); setCarregando(false) }
+    })()
+    return () => { ativo = false }
+  }, [empresaId, competencia])
+
+  async function importar(file) {
+    if (!file || !razIdx) return
+    setErro(''); setBusy(true); setExpand(null)
+    try {
+      const XLSX = await import('xlsx')
+      const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true })
+      const arr = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' })
+      const col = { nf: XLSX.utils.decode_col('K'), data: XLSX.utils.decode_col('N'), acum: XLSX.utils.decode_col('R'), forn: XLSX.utils.decode_col('U'), valor: XLSX.utils.decode_col('AH') }
+      const rows = []
+      for (const r of arr) {
+        const valor = numFis(r[col.valor]); const acum = normAcum(r[col.acum])
+        if (!acum || !valor) continue // pula cabeçalho e linhas sem acumulador/valor
+        rows.push({ nf: String(r[col.nf] ?? '').trim(), data: dataISO(r[col.data]), acum, forn: String(r[col.forn] ?? '').trim(), valor })
+      }
+      if (!rows.length) { setErro('Não encontrei linhas com Acumulador (coluna R) e Valor (coluna AH). Confira o arquivo/colunas.'); setBusy(false); return }
+      const porAcum = {}
+      for (const row of rows) {
+        const a = (porAcum[row.acum] ||= { acum: row.acum, docTotal: 0, idTotal: 0, qtd: 0, qtdId: 0, divs: [] })
+        a.qtd++; a.docTotal = Math.round((a.docTotal + row.valor) * 100) / 100
+        if (achadoNoRazao(row, razIdx)) { a.idTotal = Math.round((a.idTotal + row.valor) * 100) / 100; a.qtdId++ }
+        else a.divs.push({ nf: row.nf, data: row.data, forn: row.forn, valor: row.valor })
+      }
+      const resumo = Object.values(porAcum)
+        .map(a => ({ ...a, dif: Math.round((a.docTotal - a.idTotal) * 100) / 100 }))
+        .sort((x, y) => Math.abs(y.dif) - Math.abs(x.dif) || Number(x.acum) - Number(y.acum))
+      const novoTipos = { ...tipos, [sub]: { doc: file.name, resumo } }
+      const done = CHAVES_FISCAL.every(k => novoTipos[k])
+      await onEstado({ ...est, tipos: novoTipos, estado: done ? 'validado' : null, doc: done ? 'Fiscal · 3 tipos importados' : null, usuario: user?.email || null })
+    } catch (e) { setErro('Não consegui ler: ' + e.message) }
+    setBusy(false)
+  }
+
+  if (carregando) return <p style={{ color: theme.sub, fontSize: 13 }}>Carregando razão…</p>
+
+  const totDoc = (atual?.resumo || []).reduce((s, a) => s + a.docTotal, 0)
+  const totId = (atual?.resumo || []).reduce((s, a) => s + a.idTotal, 0)
+  const totDif = Math.round((totDoc - totId) * 100) / 100
+
+  return (
+    <>
+      <div><EstadoBadge est={est} /></div>
+      {/* seletor dos 3 tipos de movimento */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
+        {TIPOS_FISCAL.map(([k, label, icon]) => (
+          <button key={k} onClick={() => { setSub(k); setExpand(null) }} className="btn btn-ghost"
+            style={{ fontSize: 12.5, padding: '6px 12px', display: 'flex', alignItems: 'center', gap: 7, fontWeight: sub === k ? 700 : 400, borderColor: sub === k ? theme.accent : theme.cb, background: sub === k ? 'rgba(74,124,255,0.10)' : 'transparent' }}>
+            <i className={`ti ${icon}`} /> {label} {tipos[k] ? <i className="ti ti-circle-check" style={{ color: theme.green }} /> : <span style={{ color: theme.sub }}>·</span>}
+          </button>
+        ))}
+      </div>
+
+      <ImpCard titulo={`Importar acumulador — ${TIPOS_FISCAL.find(t => t[0] === sub)[1]}`}
+        desc={`Colunas: NF (K), Data (N), Acumulador (R), ${nomeLabel} (U), Valor (AH). Cruza NF a NF com o razão.`}
+        onImport={importar} nome={atual?.doc} qtd={atual ? atual.resumo.reduce((s, a) => s + a.qtd, 0) : undefined} />
+      {busy && <p style={{ color: theme.sub, fontSize: 12.5, margin: '10px 0 0' }}><i className="ti ti-loader" /> Cruzando com o razão…</p>}
+
+      {atual && <>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(180px,1fr))', gap: 12, margin: '16px 0' }}>
+          <Metric label="Total do documento" valor={money(totDoc)} icon="ti-receipt" />
+          <Metric label="Identificado no razão" valor={money(totId)} icon="ti-checks" cor={theme.green} />
+          <Metric label="Diferença" valor={money(totDif)} icon="ti-arrows-diff" cor={Math.abs(totDif) < 0.005 ? theme.green : theme.red} sub={Math.abs(totDif) < 0.005 ? 'tudo identificado' : 'clique no acumulador p/ ver'} />
+        </div>
+
+        <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'auto' }}>
+          <table style={{ width: '100%', minWidth: 640, borderCollapse: 'collapse' }}>
+            <thead><tr style={{ background: theme.input }}>
+              <th style={FS.th}>Acumulador</th><th style={FS.th}>NFs</th><th style={FS.thR}>Total documento</th><th style={FS.thR}>Identificado</th><th style={FS.thR}>Diferença</th><th style={FS.th}></th>
+            </tr></thead>
+            <tbody>
+              {atual.resumo.map((a, i) => {
+                const bate = Math.abs(a.dif) < 0.005
+                const aberto = expand === a.acum
+                return (
+                  <Fragment key={a.acum}>
+                    <tr onClick={() => a.divs.length && setExpand(aberto ? null : a.acum)}
+                      style={{ borderTop: `1px solid ${theme.border}`, cursor: a.divs.length ? 'pointer' : 'default', background: bate ? 'transparent' : 'rgba(229,72,77,0.06)' }}>
+                      <td style={FS.td}>{a.acum}</td>
+                      <td style={FS.td}>{a.qtdId}/{a.qtd}</td>
+                      <td style={FS.tdR}>{money(a.docTotal)}</td>
+                      <td style={{ ...FS.tdR, color: theme.green }}>{money(a.idTotal)}</td>
+                      <td style={{ ...FS.tdR, color: bate ? theme.sub : theme.red, fontWeight: 600 }}>{money(a.dif)}</td>
+                      <td style={{ ...FS.td, textAlign: 'center', color: theme.sub }}>{a.divs.length ? <i className={`ti ti-chevron-${aberto ? 'up' : 'down'}`} /> : <i className="ti ti-circle-check" style={{ color: theme.green }} />}</td>
+                    </tr>
+                    {aberto && a.divs.length > 0 && (
+                      <tr><td colSpan={6} style={{ padding: 0, background: theme.input }}>
+                        <div style={{ padding: '4px 0' }}>
+                          <p style={{ fontSize: 11.5, color: theme.sub, margin: '6px 14px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: .3 }}>Lançado no acumulador e não identificado no razão ({a.divs.length})</p>
+                          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                            <thead><tr>
+                              <th style={FS.thS}>NF</th><th style={FS.thS}>Data</th><th style={FS.thS}>{nomeLabel}</th><th style={FS.thSR}>Valor</th>
+                            </tr></thead>
+                            <tbody>
+                              {a.divs.map((d, j) => (
+                                <tr key={j} style={{ borderTop: `1px solid ${theme.border}` }}>
+                                  <td style={FS.tdS}>{d.nf || '—'}</td>
+                                  <td style={FS.tdS}>{brDataIso(d.data)}</td>
+                                  <td style={FS.tdS}>{d.forn || '—'}</td>
+                                  <td style={{ ...FS.tdS, textAlign: 'right', color: theme.red }}>{money(d.valor)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </td></tr>
+                    )}
+                  </Fragment>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+        <p style={{ color: theme.sub, fontSize: 11.5, margin: '10px 0 0' }}>
+          Cruzamento por NF + valor + {nomeLabel.toLowerCase()} (e acumulador/data quando não há NF). A fiscal vira <b style={{ color: theme.text }}>validada</b> no Status quando os 3 tipos forem importados.
+        </p>
+      </>}
+      {erro && <p style={{ color: theme.red, fontSize: 13, margin: '12px 0 0' }}>{erro}</p>}
+    </>
+  )
+}
+const FS = {
+  th: { textAlign: 'left', padding: '10px 12px', fontSize: 11, color: theme.sub, textTransform: 'uppercase', letterSpacing: .3, whiteSpace: 'nowrap' },
+  thR: { textAlign: 'right', padding: '10px 12px', fontSize: 11, color: theme.sub, textTransform: 'uppercase', letterSpacing: .3, whiteSpace: 'nowrap' },
+  td: { padding: '9px 12px', fontSize: 13, color: theme.text },
+  tdR: { padding: '9px 12px', fontSize: 13, color: theme.text, textAlign: 'right' },
+  thS: { textAlign: 'left', padding: '6px 14px', fontSize: 10.5, color: theme.sub, textTransform: 'uppercase', letterSpacing: .3 },
+  thSR: { textAlign: 'right', padding: '6px 14px', fontSize: 10.5, color: theme.sub, textTransform: 'uppercase', letterSpacing: .3 },
+  tdS: { padding: '6px 14px', fontSize: 12, color: theme.text },
 }
 
 // Índice da coluna que melhor casa com um regex no cabeçalho; senão -1.
