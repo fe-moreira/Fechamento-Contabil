@@ -63,10 +63,19 @@ export async function ocrPdf(file, onProgress) {
 // Palpite do saldo do extrato. Prioriza o saldo da CONTA CORRENTE — muitos
 // bancos (ex.: Itaú) mostram também um "saldo final" que SOMA o investimento,
 // e não é o que vai para a conta contábil do banco.
-export function palpiteSaldo(texto) {
+export function palpiteSaldo(texto, alvo) {
   const parse = s => parseFloat(String(s).replace(/\./g, '').replace(',', '.'))
   const t = String(texto || '')
   const V = '(-?\\d{1,3}(?:\\.\\d{3})*,\\d{2})'
+  // 0) Se sabemos o saldo da CONTA (alvo), procura no documento o número que bate com
+  //    ele em MÓDULO (só o valor importa — passivo/guia vem positivo). É o sinal mais
+  //    forte e evita "pegar o último número" quando o saldo aparece no meio do arquivo.
+  if (alvo != null && Math.abs(alvo) > 0.005) {
+    const nums = t.match(/-?\d{1,3}(?:\.\d{3})*,\d{2}/g) || []
+    let best = null
+    for (const m of nums) { const n = parse(m); const d = Math.abs(Math.abs(n) - Math.abs(alvo)); if (best == null || d < best.d) best = { n, d } }
+    if (best && best.d <= 0.05) return best.n
+  }
   // Pega a ÚLTIMA ocorrência de um rótulo com valor (extrato lista um "saldo do
   // dia" por dia → o do último dia é o que vale).
   const ultimo = (rot) => {
