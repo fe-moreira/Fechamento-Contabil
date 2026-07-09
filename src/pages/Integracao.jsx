@@ -1819,6 +1819,23 @@ function PerfilExtratoCfg({ arr, catByRow, adiantContas, nome, bancoNome, perfil
 const fth = { textAlign: 'left', padding: '9px 12px', fontSize: 11, color: theme.sub, textTransform: 'uppercase', letterSpacing: .3, whiteSpace: 'nowrap' }
 const ftd = { padding: '7px 12px', fontSize: 12.5, color: theme.text, verticalAlign: 'middle' }
 
+// Documento "virtual" que marca uma conta como validada pela integração de patrimônio.
+const DOC_PATRIMONIO = 'Resumo da Depreciação Fiscal · Patrimônio'
+// Contas ANALÍTICAS sob as contas cadastradas (se sintética, pega os filhos; se analítica,
+// ela mesma) — são as que somando batem com a sintética e serão validadas na conciliação.
+function analiticasSob(codes, linhas) {
+  const dig = s => String(s).replace(/\D/g, '')
+  const out = new Map()
+  for (const c of codes) {
+    const l = linhas.find(x => String(x.reduzido) === c || String(x.classif) === c || (dig(x.classif) && dig(x.classif) === dig(c)) || (dig(x.reduzido) && dig(x.reduzido) === dig(c)))
+    if (!l) continue
+    if (!l.sintetica) { out.set(String(l.reduzido), l); continue }
+    const pref = String(l.classifRaw || l.classif)
+    for (const x of linhas) { if (x.sintetica) continue; const cx = String(x.classifRaw || x.classif); if (cx.startsWith(pref) && cx !== pref) out.set(String(x.reduzido), x) }
+  }
+  return [...out.values()]
+}
+
 // Integração PATRIMÔNIO: cadastra a conta SINTÉTICA (imobilizado − depreciação) e importa o
 // "Resumo da Depreciação Fiscal" (PDF). O saldo da sintética deve bater com o "Saldo a
 // depreciar" (imobilizado líquido) do documento. Bateu → verde.
@@ -1881,10 +1898,36 @@ function Patrimonio({ empresaId, competencia, planoMap = {}, est, onEstado, onSe
 
   const dif = (saldoTotal != null && valorDoc != null) ? Math.round((Math.abs(saldoTotal) - Math.abs(valorDoc)) * 100) / 100 : null
   const bate = dif != null && Math.abs(dif) < 0.05
+
+  // Marca (ou desmarca) as contas analíticas do imobilizado como VERDES na conciliação,
+  // usando o próprio Resumo da Depreciação como documento validador.
+  async function validarConciliacao(marcar) {
+    if (!linhas) return
+    const [mes, ano] = (competencia || '').split('/').map(Number)
+    const { data: comp } = await supabase.from('competencias').select('id').eq('cliente_id', empresaId).eq('ano', ano).eq('mes', mes).maybeSingle()
+    if (!comp) return
+    for (const l of analiticasSob(contas, linhas)) {
+      const conta = String(l.reduzido)
+      const { data: ex } = await supabase.from('conciliacao_conta').select('id, documento, documento_path').eq('competencia_id', comp.id).eq('conta', conta).maybeSingle()
+      if (marcar) {
+        // não sobrescreve um extrato real já anexado
+        if (ex?.documento_path && !String(ex.documento || '').startsWith('Resumo da Depreciação')) continue
+        const campos = { competencia_id: comp.id, conta, documento: DOC_PATRIMONIO, documento_path: est?.path || null, saldo_documento: Number(l.saldo_final) || 0 }
+        if (ex) await supabase.from('conciliacao_conta').update(campos).eq('id', ex.id)
+        else await supabase.from('conciliacao_conta').insert(campos)
+      } else if (ex && String(ex.documento || '').startsWith('Resumo da Depreciação')) {
+        await supabase.from('conciliacao_conta').update({ documento: null, documento_path: null, saldo_documento: null }).eq('id', ex.id)
+      }
+    }
+  }
+
   useEffect(() => {
     if (semMov) return
     const desired = bate ? 'validado' : null
-    if ((est?.estado || null) !== desired && contas.length && valorDoc != null && saldoTotal != null) onEstado({ ...(est || {}), estado: desired })
+    if ((est?.estado || null) !== desired && contas.length && valorDoc != null && saldoTotal != null) {
+      onEstado({ ...(est || {}), estado: desired })
+      validarConciliacao(desired === 'validado')
+    }
   }, [bate, saldoTotal, valorDoc]) // eslint-disable-line react-hooks/exhaustive-deps
 
   if (semMov) return (

@@ -1030,6 +1030,7 @@ function CardConferencia({ conta, reg, compId, usuario, saldoAjuste = 0, composi
   // Saldo efetivo = balancete + correções pendentes (estornos/acertos). Assim, ao
   // corrigir, o saldo já reconfere com o extrato e a conta fica verde na hora.
   const saldo = (Number(conta.saldo_final) || 0) + (Number(saldoAjuste) || 0)
+  const validadoPatrimonio = /patrim/i.test(doc || '') // validada pela integração de Patrimônio
   const temDoc = doc && saldoDoc !== ''
   const temSaldoDoc = saldoDoc !== ''
   // Diferença pela NATUREZA da conta: o documento vem positivo; numa devedora é
@@ -1207,8 +1208,11 @@ function CardConferencia({ conta, reg, compId, usuario, saldoAjuste = 0, composi
         {Math.abs(Number(saldoAjuste) || 0) > 0.005 && <p style={{ color: theme.accent, fontSize: 11.5, margin: '0 0 12px' }}>
           <i className="ti ti-adjustments-alt" /> Inclui {moneyDC(saldoAjuste)} de correções pendentes (balancete: {moneyDC(conta.saldo_final)}).
         </p>}
+        {validadoPatrimonio && <p style={{ color: theme.green, fontSize: 12.5, margin: '0 0 10px', fontWeight: 500 }}>
+          <i className="ti ti-shield-check" /> Validado pela <b>Integração de Patrimônio</b> (Resumo da Depreciação). O arquivo que valida está lá, na aba <b>Patrimônio</b> — não precisa importar aqui.
+        </p>}
         <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
-          <div><label>Documento suporte <span style={{ color: theme.sub, fontWeight: 400 }}>(Excel ou PDF do extrato)</span></label><input type="file" accept=".xlsx,.xls,.csv,.pdf" onChange={e => lerArquivo(e.target.files?.[0])} style={{ fontSize: 13, color: theme.sub, display: 'block' }} /></div>
+          <div><label>Documento suporte <span style={{ color: theme.sub, fontWeight: 400 }}>{validadoPatrimonio ? '(ou troque pelo extrato próprio)' : '(Excel ou PDF do extrato)'}</span></label><input type="file" accept=".xlsx,.xls,.csv,.pdf" onChange={e => lerArquivo(e.target.files?.[0])} style={{ fontSize: 13, color: theme.sub, display: 'block' }} /></div>
           <div><label>Saldo conforme o documento</label><input className="input" type="number" step="0.01" style={{ maxWidth: 200 }} value={saldoDoc} onChange={e => setSaldoDoc(e.target.value)} placeholder="0,00" /></div>
         </div>
         {ocr.ativo && <p style={{ color: theme.sub, fontSize: 12.5, margin: '10px 0 0', fontWeight: 500 }}>
