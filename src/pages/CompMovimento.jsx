@@ -3,7 +3,23 @@ import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { theme, money, moneyDC } from '../lib/theme'
-import { montarBalancete } from '../lib/balancete'
+import { montarBalancete, normalizaCompetencia } from '../lib/balancete'
+
+// Data (Date do Excel ou "dd/mm/aaaa") → ISO "aaaa-mm-dd".
+function toISO(v) {
+  if (!v) return null
+  if (v instanceof Date) return `${v.getFullYear()}-${String(v.getMonth() + 1).padStart(2, '0')}-${String(v.getDate()).padStart(2, '0')}`
+  const m = String(v).trim().match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/)
+  if (m) { let [, d, mo, y] = m; if (y.length === 2) y = '20' + y; return `${y}-${mo.padStart(2, '0')}-${d.padStart(2, '0')}` }
+  const iso = String(v).trim().match(/^(\d{4})-(\d{2})-(\d{2})/); return iso ? iso[0] : null
+}
+function numBR(v) {
+  if (v == null || v === '') return 0
+  if (typeof v === 'number') return v
+  let s = String(v).trim(); if (s.includes(',')) s = s.replace(/\./g, '').replace(',', '.')
+  const n = parseFloat(s.replace(/[^\d.-]/g, '')); return isNaN(n) ? 0 : n
+}
+function limpaContra(v) { const s = String(v ?? '').trim(); return (!s || /^0+([.,]0+)?$/.test(s.replace(/\./g, ''))) ? null : s }
 
 const ANO = 2026
 const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
@@ -51,6 +67,78 @@ export default function CompMovimento() {
   const [matriz, setMatriz] = useState({})      // { classif: { mes: saldo_final } }
   const [detalhe, setDetalhe] = useState(null)  // { conta, nome, mes, compId }
   const [justificadas, setJustificadas] = useState(() => new Set()) // 'conta|mes' já justificadas/corrigidas localmente
+  const [refresh, setRefresh] = useState(0)     // recarrega após importar meses anteriores
+  const [impBusy, setImpBusy] = useState(false)
+  const [impMsg, setImpMsg] = useState('')
+  const [filtroMes, setFiltroMes] = useState('todos') // 'todos' | número do mês
+
+  // Importa o razão dos MESES ANTERIORES (ex.: jan–abr) num único arquivo, agrupando por
+  // mês (coluna de competência/mês ou o mês da data). Cria a competência de cada mês e
+  // grava razão + balancete — só para meses ANTES do início do cliente (não mexe nos
+  // fechamentos reais). Depois o comparativo já traz a régua dos 10% com histórico.
+  async function importarMeses(file) {
+    if (!file || !empresaId) return
+    setImpBusy(true); setImpMsg('')
+    try {
+      const XLSX = await import('xlsx')
+      const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true })
+      const arr = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' })
+      let h = 0
+      for (let i = 0; i < Math.min(arr.length, 25); i++) { if ((arr[i] || []).filter(c => typeof c === 'string' && c.trim().length > 1).length >= 3) { h = i; break } }
+      const headers = (arr[h] || []).map(x => String(x ?? ''))
+      const norm = s => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+      const findCol = (...dicas) => headers.findIndex(hd => { const hl = norm(hd); return dicas.some(d => hl.includes(d)) })
+      const col = {
+        data: findCol('data'),
+        conta: headers.findIndex(hd => { const hl = norm(hd); return hl === 'clasc' || (hl.includes('conta') && !hl.includes('contra') && !hl.includes('nome')) }),
+        nome: headers.findIndex(hd => { const hl = norm(hd); return hl === 'nomec' || hl.includes('nome da conta') || hl.includes('nome conta') }),
+        contrapartida: findCol('contrapartida', 'contra partida', 'contrap'),
+        historico: findCol('histor', 'complemento'),
+        debito: findCol('debito', 'valdeb', 'vlr deb'),
+        credito: findCol('credito', 'valcre', 'vlr cred'),
+        comp: findCol('compet', 'mes', 'mês'),
+      }
+      if (col.conta < 0 || (col.debito < 0 && col.credito < 0)) { setImpMsg('Não identifiquei as colunas (preciso de Conta e Débito/Crédito).'); setImpBusy(false); return }
+      const { data: cli } = await supabase.from('clientes').select('competencia_inicio').eq('id', empresaId).maybeSingle()
+      const iniM = String(normalizaCompetencia(cli?.competencia_inicio) || '').match(/^(\d{2})\/(\d{4})$/)
+      const mesInicio = iniM ? Number(iniM[1]) : 99 // sem início definido → importa todos os meses do arquivo
+      const porMes = {}
+      for (const r of arr.slice(h + 1)) {
+        const contaCod = String(r[col.conta] ?? '').trim(); if (!contaCod) continue
+        let mes = null
+        if (col.comp >= 0) { const mm = String(r[col.comp] ?? '').match(/(\d{1,2})/); if (mm) mes = Number(mm[1]) }
+        if (!mes) { const iso = toISO(r[col.data]); if (iso) mes = Number(iso.slice(5, 7)) }
+        if (!mes || mes < 1 || mes > 12 || mes >= mesInicio) continue // só meses ANTERIORES ao início
+        ;(porMes[mes] ||= []).push({
+          data: toISO(r[col.data]), conta: contaCod,
+          nome: col.nome >= 0 ? String(r[col.nome] ?? '').trim() : null,
+          contrapartida: col.contrapartida >= 0 ? limpaContra(r[col.contrapartida]) : null,
+          historico: col.historico >= 0 ? String(r[col.historico] ?? '').trim() : '',
+          debito: col.debito >= 0 ? numBR(r[col.debito]) : 0,
+          credito: col.credito >= 0 ? numBR(r[col.credito]) : 0,
+        })
+      }
+      const meses = Object.keys(porMes).map(Number).sort((a, b) => a - b)
+      if (!meses.length) { setImpMsg(`Nenhum mês anterior a ${mesInicio <= 12 ? MESES[mesInicio - 1] : 'início'} reconhecido no arquivo.`); setImpBusy(false); return }
+      for (const mes of meses) {
+        let compId
+        const { data: ex } = await supabase.from('competencias').select('id').eq('cliente_id', empresaId).eq('ano', ANO).eq('mes', mes).maybeSingle()
+        if (ex) compId = ex.id
+        else { const { data: cr, error } = await supabase.from('competencias').insert({ cliente_id: empresaId, ano: ANO, mes }).select('id').single(); if (error) throw error; compId = cr.id }
+        const regs = porMes[mes].map(x => ({ competencia_id: compId, data: x.data, conta: x.conta, nome: x.nome, contrapartida: x.contrapartida, historico: x.historico, debito: x.debito, credito: x.credito }))
+        await supabase.from('razao').delete().eq('competencia_id', compId)
+        for (let i = 0; i < regs.length; i += 500) { const { error } = await supabase.from('razao').insert(regs.slice(i, i + 500)); if (error) throw error }
+        const porConta = {}
+        for (const r of regs) { const c = porConta[r.conta] || (porConta[r.conta] = { conta: r.conta, nome: r.nome || null, debito: 0, credito: 0 }); if (!c.nome && r.nome) c.nome = r.nome; c.debito += r.debito; c.credito += r.credito }
+        const bal = Object.values(porConta).map(c => ({ competencia_id: compId, conta: c.conta, nome: c.nome || null, saldo_inicial: 0, debito: c.debito, credito: c.credito, saldo_final: c.debito - c.credito }))
+        await supabase.from('balancete').delete().eq('competencia_id', compId)
+        for (let i = 0; i < bal.length; i += 500) { const { error } = await supabase.from('balancete').insert(bal.slice(i, i + 500)); if (error) throw error }
+      }
+      setImpMsg(`Importado(s) ${meses.length} mês(es): ${meses.map(m => MESES[m - 1]).join(', ')}.`)
+      setRefresh(x => x + 1)
+    } catch (e) { setImpMsg('Erro ao importar: ' + (e.message || e)) }
+    setImpBusy(false)
+  }
 
   useEffect(() => {
     setComps([]); setContas([]); setMatriz({}); setDetalhe(null); setJustificadas(new Set())
@@ -128,7 +216,7 @@ export default function CompMovimento() {
       }
     })()
     return () => { vivo = false }
-  }, [empresaId])
+  }, [empresaId, refresh])
 
   // Uma célula desvia se difere mais de 10% da média da conta nos meses carregados.
   function desviante(conta, valor) {
@@ -162,6 +250,15 @@ export default function CompMovimento() {
     })
   }
 
+  // Filtro por mês (todos ou um só). A coluna "Total" só faz sentido com >1 mês.
+  const mesesVis = filtroMes === 'todos' ? comps : comps.filter(c => c.mes === Number(filtroMes))
+  const mostraTotal = mesesVis.length > 1
+  const totalConta = key => { const linha = matriz[key] || {}; return mesesVis.reduce((s, c) => s + (linha[c.mes] || 0), 0) }
+  // Lucro (ou prejuízo) do mês = −(soma dos saldos das contas de resultado analíticas).
+  // Receita fica com saldo credor (negativo); despesa/custo devedor (positivo) → negar dá o lucro.
+  const lucroDe = mes => -contas.filter(c => !c.sintetica).reduce((s, c) => s + ((matriz[c.classifRaw] || {})[mes] || 0), 0)
+  const lucroTotal = mesesVis.reduce((s, c) => s + lucroDe(c.mes), 0)
+
   if (!empresaId) {
     return (
       <Wrapper>
@@ -177,9 +274,20 @@ export default function CompMovimento() {
 
   return (
     <Wrapper>
-      <p style={{ color: theme.sub, fontSize: 13, marginBottom: 18 }}>
+      <p style={{ color: theme.sub, fontSize: 13, marginBottom: 12 }}>
         <b style={{ color: theme.text }}>{empresaNome}</b> · ano <b style={{ color: theme.text }}>{ANO}</b>
       </p>
+
+      {/* Carga dos meses anteriores (ex.: jan–abr) — dá histórico para a régua dos 10% */}
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 18, background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 10, padding: '10px 14px' }}>
+        <i className="ti ti-calendar-plus" style={{ color: theme.accent, fontSize: 18 }} />
+        <span style={{ fontSize: 12.5, color: theme.sub, flex: 1, minWidth: 200 }}>Comecei depois do início do ano? Importe o razão dos <b style={{ color: theme.text }}>meses anteriores</b> (um arquivo com os meses) para ter a comparação de oscilação.</span>
+        <label className="btn btn-ghost" style={{ fontSize: 12.5, cursor: impBusy ? 'wait' : 'pointer' }}>
+          <i className="ti ti-file-import" /> {impBusy ? 'Importando…' : 'Importar meses anteriores'}
+          <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} disabled={impBusy} onChange={e => importarMeses(e.target.files?.[0])} />
+        </label>
+      </div>
+      {impMsg && <p style={{ fontSize: 12.5, margin: '-8px 0 16px', color: impMsg.startsWith('Erro') ? theme.red : theme.green }}><i className={`ti ${impMsg.startsWith('Erro') ? 'ti-alert-triangle' : 'ti-circle-check'}`} /> {impMsg}</p>}
 
       {carregando && (
         <p style={{ color: theme.sub, fontSize: 13 }}><i className="ti ti-loader" /> Carregando balancetes…</p>
@@ -217,9 +325,18 @@ export default function CompMovimento() {
               </span>
             )}
           </div>
-          <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 14 }}>
-            Contas de resultado (Receita, Custos e Despesas). Valores em <b style={{ color: theme.red }}>vermelho</b> desviam mais de 10% da média da conta nos meses carregados. Clique em um valor para ver o razão da conta no mês.
-          </p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
+            <p style={{ color: theme.sub, fontSize: 12.5, margin: 0, flex: 1, minWidth: 240 }}>
+              Contas de resultado. Valores em <b style={{ color: theme.red }}>vermelho</b> desviam mais de 10% da média da conta. Clique num valor para ver o razão e o provável culpado.
+            </p>
+            <label style={{ fontSize: 12, color: theme.sub, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <i className="ti ti-filter" /> Mês:
+              <select className="input" style={{ width: 'auto', fontSize: 12, padding: '6px 10px' }} value={filtroMes} onChange={e => setFiltroMes(e.target.value)}>
+                <option value="todos">Todos os meses</option>
+                {comps.map(c => <option key={c.mes} value={c.mes}>{MESES[c.mes - 1]}</option>)}
+              </select>
+            </label>
+          </div>
           <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'auto', maxWidth: '100%' }}>
             <table style={{ borderCollapse: 'collapse', width: '100%' }}>
               <thead>
@@ -227,9 +344,10 @@ export default function CompMovimento() {
                   <th style={{ ...th, minWidth: 70 }}>Conta</th>
                   <th style={{ ...th, minWidth: 110 }}>Classificação</th>
                   <th style={{ ...th, minWidth: 220 }}>Nome da Conta</th>
-                  {comps.map(c => (
+                  {mesesVis.map(c => (
                     <th key={c.mes} style={{ ...th, textAlign: 'right' }}>{MESES[c.mes - 1]}</th>
                   ))}
+                  {mostraTotal && <th style={{ ...th, textAlign: 'right', color: theme.text }}>Total</th>}
                 </tr>
               </thead>
               <tbody>
@@ -240,7 +358,7 @@ export default function CompMovimento() {
                       <td style={{ ...td, color: theme.sub, fontSize: 11 }}>{reduzido || ''}</td>
                       <td style={{ ...td, color: theme.sub, fontSize: 11 }}>{classif}</td>
                       <td style={{ ...td, fontWeight: sintetica ? 700 : 400, maxWidth: 320 }}>{nome || '—'}</td>
-                      {comps.map(c => {
+                      {mesesVis.map(c => {
                         const v = linha[c.mes]
                         if (v == null) return <td key={c.mes} style={{ ...td, textAlign: 'right' }} />
                         if (sintetica) {
@@ -267,10 +385,20 @@ export default function CompMovimento() {
                           </td>
                         )
                       })}
+                      {mostraTotal && <td style={{ ...td, textAlign: 'right', fontWeight: sintetica ? 700 : 600 }}>{moneyDC(totalConta(classifRaw))}</td>}
                     </tr>
                   )
                 })}
               </tbody>
+              <tfoot>
+                <tr style={{ borderTop: `2px solid ${theme.border}`, background: theme.input }}>
+                  <td style={{ ...td, fontWeight: 700 }} colSpan={3}>Lucro / Prejuízo do período</td>
+                  {mesesVis.map(c => { const L = lucroDe(c.mes); return (
+                    <td key={c.mes} style={{ ...td, textAlign: 'right', fontWeight: 700, color: L >= 0 ? theme.green : theme.red }}>{money(L)}</td>
+                  ) })}
+                  {mostraTotal && <td style={{ ...td, textAlign: 'right', fontWeight: 800, color: lucroTotal >= 0 ? theme.green : theme.red }}>{money(lucroTotal)}</td>}
+                </tr>
+              </tfoot>
             </table>
           </div>
         </>
