@@ -950,6 +950,7 @@ function CardConferencia({ conta, reg, compId, usuario, saldoAjuste = 0, composi
   // corrigir, o saldo já reconfere com o extrato e a conta fica verde na hora.
   const saldo = (Number(conta.saldo_final) || 0) + (Number(saldoAjuste) || 0)
   const temDoc = doc && saldoDoc !== ''
+  const temSaldoDoc = saldoDoc !== ''
   const dif = saldo - (Number(saldoDoc) || 0)
   const bateSaldo = temDoc && Math.abs(dif) < 0.01
   // VERDE só quando o arquivo está armazenado E o saldo bate. Se o arquivo for
@@ -987,10 +988,10 @@ function CardConferencia({ conta, reg, compId, usuario, saldoAjuste = 0, composi
         const XLSX = await import('xlsx')
         const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' })
         const arr = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' })
-        let ultimo = null // palpite do saldo: último valor numérico do arquivo
-        for (const row of arr) for (const cel of row) { const n = numCell(cel); if (n) ultimo = n }
+        const r = lerSaldoDocumento(arr)
         setDoc(file.name)
-        if (ultimo != null) setSaldoDoc(String(ultimo))
+        if (r) { setSaldoDoc(String(r.valor)); setMsg(`Saldo lido pela ${r.via} — confira se está correto.`) }
+        else setErro('Não identifiquei o saldo. Coloque uma célula escrita "SALDO" (ou "TOTAL") com o valor ao lado, ou digite o saldo abaixo.')
       }
       setArquivo(file) // guarda o arquivo para armazenar no Storage ao salvar
     } catch (e) { setErro('Não consegui ler: ' + e.message) }
@@ -999,10 +1000,14 @@ function CardConferencia({ conta, reg, compId, usuario, saldoAjuste = 0, composi
   // Abre o arquivo armazenado (link assinado, válido por 5 min).
   async function verArquivo() {
     setErro('')
-    if (!path) return
-    const { data, error } = await supabase.storage.from('extratos').createSignedUrl(path, 300)
-    if (error) { setErro('Não consegui abrir o arquivo: ' + error.message); return }
-    window.open(data.signedUrl, '_blank', 'noopener')
+    if (path) {
+      const { data, error } = await supabase.storage.from('extratos').createSignedUrl(path, 300)
+      if (error) { setErro('Não consegui abrir o arquivo: ' + error.message); return }
+      window.open(data.signedUrl, '_blank', 'noopener')
+    } else if (arquivo) {
+      // Arquivo recém-escolhido, ainda não salvo — abre a cópia local.
+      window.open(URL.createObjectURL(arquivo), '_blank', 'noopener')
+    }
   }
 
   // Exclui o arquivo armazenado → a conta volta ao vermelho.
@@ -1062,7 +1067,7 @@ function CardConferencia({ conta, reg, compId, usuario, saldoAjuste = 0, composi
         <div style={{ display: 'flex', gap: 28, flexWrap: 'wrap', marginBottom: Math.abs(Number(saldoAjuste) || 0) > 0.005 ? 4 : 12 }}>
           <Mini label="Saldo da conta" v={moneyDC(saldo)} />
           <Mini label="Saldo do documento" v={saldoDoc === '' ? '—' : money(Number(saldoDoc))} />
-          <Mini label="Diferença" v={temDoc ? money(dif) : '—'} cor={!temDoc ? theme.sub : bate ? theme.green : theme.red} />
+          <Mini label="Diferença" v={temSaldoDoc ? money(dif) : '—'} cor={!temSaldoDoc ? theme.sub : Math.abs(dif) < 0.01 ? theme.green : theme.red} />
         </div>
         {Math.abs(Number(saldoAjuste) || 0) > 0.005 && <p style={{ color: theme.accent, fontSize: 11.5, margin: '0 0 12px' }}>
           <i className="ti ti-adjustments-alt" /> Inclui {moneyDC(saldoAjuste)} de correções pendentes (balancete: {moneyDC(conta.saldo_final)}).
@@ -1076,13 +1081,13 @@ function CardConferencia({ conta, reg, compId, usuario, saldoAjuste = 0, composi
         </p>}
         {doc && <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', margin: '10px 0 0' }}>
           <span style={{ color: theme.sub, fontSize: 12 }}><i className="ti ti-file" /> {doc}{path ? '' : arquivo ? ' (será armazenado ao salvar)' : ''}</span>
-          {path && <button className="btn btn-ghost" style={{ padding: '4px 10px', fontSize: 12 }} onClick={verArquivo}><i className="ti ti-eye" /> Ver arquivo</button>}
+          {(path || arquivo) && <button className="btn btn-ghost" style={{ padding: '4px 10px', fontSize: 12 }} onClick={verArquivo}><i className="ti ti-eye" /> Ver arquivo</button>}
           {path && <button className="btn btn-ghost" style={{ padding: '4px 10px', fontSize: 12, color: theme.red, borderColor: theme.red }} disabled={salvando} onClick={excluirArquivo}><i className="ti ti-trash" /> Excluir arquivo</button>}
         </div>}
-        {temDoc && <p style={{ color: bate ? theme.green : bateSaldo ? theme.sub : theme.red, fontSize: 12.5, margin: '10px 0 0', fontWeight: 500 }}>
-          <i className={`ti ${bate ? 'ti-circle-check' : bateSaldo ? 'ti-cloud-upload' : 'ti-alert-triangle'}`} /> {bate ? 'Arquivo armazenado e bate com o saldo — fica verde.' : bateSaldo ? 'Bate com o saldo — salve para armazenar o arquivo e ficar verde.' : `Diferença de ${money(Math.abs(dif))} entre o saldo e o documento.`}
+        {temSaldoDoc && <p style={{ color: bate ? theme.green : bateSaldo ? theme.sub : theme.red, fontSize: 12.5, margin: '10px 0 0', fontWeight: 500 }}>
+          <i className={`ti ${bate ? 'ti-circle-check' : bateSaldo ? 'ti-cloud-upload' : 'ti-alert-triangle'}`} /> {bate ? 'Arquivo armazenado e bate com o saldo — fica verde.' : bateSaldo ? 'Bate com o saldo — salve para armazenar o arquivo e ficar verde.' : `Diferença de ${money(Math.abs(dif))} entre o saldo da conta e o documento.`}
         </p>}
-        {temDoc && !bateSaldo && Math.abs(dif) > 0.005 && <SugestoesDiferenca conta={conta} compId={compId} dif={dif} />}
+        {temSaldoDoc && !bateSaldo && Math.abs(dif) > 0.005 && <SugestoesDiferenca conta={conta} compId={compId} dif={dif} />}
       </div>
 
       <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: 16 }}>
@@ -1329,6 +1334,41 @@ function ContaSelect({ value, onChange, plano }) {
 }
 
 const numCell = v => { if (typeof v === 'number') return v; const s = String(v ?? '').trim(); if (/^-?[\d.]+,\d{2}$/.test(s)) return parseFloat(s.replace(/\./g, '').replace(',', '.')); const n = parseFloat(s.replace(/[^\d.-]/g, '')); return isNaN(n) ? 0 : n }
+
+// Lê o saldo do documento suporte (Excel) de forma PREVISÍVEL, em ordem:
+// 1) uma célula rotulada SALDO / TOTAL (não "anterior") → valor ao lado ou abaixo;
+// 2) senão, a SOMA de uma coluna de valor (cabeçalho Valor/Saldo/Total/Em aberto…);
+// 3) senão, o último número do arquivo (palpite — o comportamento antigo).
+function lerSaldoDocumento(arr) {
+  const norm = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim()
+  // 1) célula rotulada
+  for (let i = 0; i < arr.length; i++) {
+    const row = arr[i] || []
+    for (let j = 0; j < row.length; j++) {
+      const t = norm(row[j])
+      if (!t || /anterior/.test(t) || t.length > 26) continue
+      if (/\b(saldo|total|montante)\b/.test(t)) {
+        for (let k = j + 1; k < row.length; k++) { const n = numCell(row[k]); if (n) return { valor: n, via: `célula "${String(row[j]).trim()}"` } }
+        const ab = arr[i + 1] ? numCell(arr[i + 1][j]) : 0; if (ab) return { valor: ab, via: `célula "${String(row[j]).trim()}"` }
+      }
+    }
+  }
+  // 2) soma de uma coluna de valor
+  let hi = -1, col = -1
+  for (let i = 0; i < Math.min(arr.length, 15); i++) {
+    const j = (arr[i] || []).findIndex(c => /valor|saldo|total|aberto|liquido|montante/i.test(String(c ?? '')))
+    if (j >= 0) { hi = i; col = j; break }
+  }
+  if (col >= 0) {
+    let soma = 0, n = 0
+    for (let i = hi + 1; i < arr.length; i++) { const v = numCell(arr[i]?.[col]); if (v) { soma += v; n++ } }
+    if (n) return { valor: Math.round(soma * 100) / 100, via: `soma da coluna "${String(arr[hi][col]).trim()}" (${n} linha(s))` }
+  }
+  // 3) fallback: último número
+  let ultimo = null
+  for (const row of arr) for (const cel of row) { const x = numCell(cel); if (x) ultimo = x }
+  return ultimo != null ? { valor: ultimo, via: 'último número do arquivo (palpite)' } : null
+}
 function Mini({ label, v, cor }) {
   return <div><p style={{ color: theme.sub, fontSize: 10.5, textTransform: 'uppercase', margin: 0 }}>{label}</p><p style={{ color: cor || theme.text, fontSize: 15, fontWeight: 600, margin: '2px 0 0' }}>{v}</p></div>
 }
