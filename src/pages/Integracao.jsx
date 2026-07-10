@@ -1186,8 +1186,10 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
       // Extrato por banco: cada cliente exporta diferente → usa o perfil salvo;
       // se ainda não houver, abre o mapeamento (uma vez por cliente).
       if (modo === 'porBanco' && bancoFixo) {
-        if (perfil) return aplicarEProsseguir(arr, file.name, bancoFixo, perfil, catByRow)
-        setCfg({ arr, catByRow, nome: file.name, banco: bancoFixo, perfil: perfilPadrao(arr) })
+        // SEMPRE abre a tela de configuração para o usuário CONFERIR se o sistema entendeu
+        // as colunas (parte do perfil salvo, quando houver — é só conferir e confirmar).
+        // Ao confirmar, importa (aplicarEProsseguir no onSalvar da tela).
+        setCfg({ arr, catByRow, nome: file.name, banco: bancoFixo, perfil: perfil || perfilPadrao(arr) })
         return
       }
       const header = arr[0] || []
