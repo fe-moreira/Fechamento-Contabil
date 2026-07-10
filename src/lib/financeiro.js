@@ -15,21 +15,29 @@ export function normHist(s) {
     .trim()
 }
 
-// Casa um histórico com a memória. Retorna a conta de contrapartida (ou '').
-// Preferência: igualdade exata da chave; senão, a chave da memória mais longa
-// que esteja contida no histórico (mais específica).
+// Palavras genéricas do histórico do extrato/Domínio — não distinguem um lançamento
+// de outro (tipo de operação, documento, sufixo societário). Ignoradas no casamento.
+const STOP_HIST = new Set(['VALOR', 'REFERENTE', 'PAGAMENTO', 'PGTO', 'PAGTO', 'RECEBIMENTO', 'RECEBTO', 'RECEB', 'REF', 'DOC', 'DOCTO', 'DOCUMENTO', 'NOTA', 'FISCAL', 'LTDA', 'EPP', 'EIRELI', 'EIRELLI', 'TAR', 'TARIFA', 'CONF'])
+// Tokens significativos de um texto (nome/descrição): ≥3 letras e não genéricos.
+export function tokensHist(s) {
+  return normHist(s).split(' ').filter(t => t.length >= 3 && !STOP_HIST.has(t))
+}
+
+// Casa um histórico com a memória por TOKENS significativos (não por substring, que
+// quebrava com "PGTO" × "PAGAMENTO" e deixava lixo de 1 letra casar tudo). Um termo
+// casa quando TODOS os seus tokens significativos estão no histórico; vence o termo
+// com MAIS tokens (mais específico). Termo sem token significativo é ignorado.
 export function casarHistorico(historico, memoria) {
-  const h = normHist(historico)
-  if (!h) return ''
-  let exato = null, contido = null
+  const htoks = new Set(tokensHist(historico))
+  if (!htoks.size) return ''
+  let best = null, bestScore = 0
   for (const m of (memoria || [])) {
-    const t = String(m.termo || '').trim()
-    if (!t) continue
-    if (t === h) { exato = m; break }
-    if (h.includes(t) && (!contido || t.length > String(contido.termo).length)) contido = m
+    const tt = tokensHist(m.termo)
+    if (!tt.length) continue
+    if (!tt.every(t => htoks.has(t))) continue
+    if (tt.length > bestScore) { bestScore = tt.length; best = m }
   }
-  const m = exato || contido
-  return m ? String(m.conta || '') : ''
+  return best ? String(best.conta || '') : ''
 }
 
 // Valor em formato BR ("1.234,56") ou US ("1234.56"); negativo por sinal ou (parênteses).
@@ -62,7 +70,9 @@ export function aprender(memoria, novas) {
   for (const { historico, conta } of (novas || [])) {
     const termo = normHist(historico)
     const c = String(conta || '').trim()
-    if (!termo || !c) continue
+    // Só aprende termos com algum token significativo (evita lixo tipo "D", "C",
+    // "PAGAMENTO" — que casariam com tudo). Sem token útil, não vira regra.
+    if (!termo || !c || !tokensHist(termo).length) continue
     map.set(termo, { termo, conta: c })
   }
   return [...map.values()]
