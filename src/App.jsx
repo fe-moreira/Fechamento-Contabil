@@ -19,6 +19,7 @@ import Contabilizar from './pages/Contabilizar'
 import OutrasContabilizacoes from './pages/OutrasContabilizacoes'
 import SugestoesContabilizacao from './pages/SugestoesContabilizacao'
 import Relatorios from './pages/Relatorios'
+import PainelCliente from './pages/PainelCliente'
 import Status from './pages/Status'
 import BaseInformacoes from './pages/BaseInformacoes'
 import ImportacaoMassa from './pages/ImportacaoMassa'
@@ -53,6 +54,7 @@ function Rotas() {
         <Route path="outras" element={<OutrasContabilizacoes />} />
         <Route path="contabilizar" element={<Contabilizar />} />
         <Route path="relatorios" element={<Relatorios />} />
+        <Route path="painel-cliente" element={<PainelCliente />} />
         <Route path="status" element={<Status />} />
         <Route path="base" element={<BaseInformacoes />} />
         <Route path="importacoes" element={<ImportacaoMassa />} />
