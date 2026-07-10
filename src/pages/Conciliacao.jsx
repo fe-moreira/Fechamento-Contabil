@@ -7,7 +7,66 @@ import { theme, money, moneyDC } from '../lib/theme'
 import { montarBalancete, parsePlano, composicaoAbertura, difConciliacao, applyMask, erroContaSintetica } from '../lib/balancete'
 import { abrePdfTimbrado } from '../lib/pdf'
 import { gerarExcelTimbrado } from '../lib/excel'
+import { listarComentariosConta, adicionarComentario, excluirComentario } from '../lib/comentarios'
 import CampoConta from '../components/CampoConta'
+
+const dataHora = iso => { const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) }
+
+// Comentários da conta (histórico que acompanha a conta em todos os meses). Independe da
+// competência: fica por cliente + conta e vai acumulando a cada fechamento. Aparece também
+// no Book de Composições. Editável aqui na Conciliação.
+function ComentariosConta({ clienteId, conta, usuario }) {
+  const [itens, setItens] = useState(null)
+  const [texto, setTexto] = useState('')
+  const [salvando, setSalvando] = useState(false)
+
+  useEffect(() => {
+    let vivo = true
+    listarComentariosConta(clienteId, conta).then(r => { if (vivo) setItens(r) })
+    return () => { vivo = false }
+  }, [clienteId, conta])
+
+  async function adicionar() {
+    const t = texto.trim()
+    if (!t || salvando) return
+    setSalvando(true)
+    const { data, error } = await adicionarComentario(clienteId, conta, t, usuario)
+    setSalvando(false)
+    if (!error && data) { setItens(l => [data, ...(l || [])]); setTexto('') }
+  }
+  async function remover(id) {
+    if (!window.confirm('Excluir este comentário do histórico da conta?')) return
+    await excluirComentario(id)
+    setItens(l => (l || []).filter(i => i.id !== id))
+  }
+
+  return (
+    <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: 16 }}>
+      <p style={{ fontSize: 14, fontWeight: 600, margin: '0 0 4px' }}>Comentários da conta</p>
+      <p style={{ fontSize: 12, color: theme.sub, margin: '0 0 10px' }}>
+        Observações que acompanham esta conta em <b>todos os meses</b> (vão para o Book). Todo mundo acompanha o que está acontecendo.
+      </p>
+      <textarea className="input" rows={2} value={texto} onChange={e => setTexto(e.target.value)} placeholder="Escreva um comentário sobre esta conta…" />
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
+        <button className="btn" disabled={!texto.trim() || salvando} onClick={adicionar}><i className="ti ti-message-plus" /> Adicionar comentário</button>
+      </div>
+      <div style={{ marginTop: 12 }}>
+        {itens === null ? <p style={{ color: theme.sub, fontSize: 12.5 }}>Carregando…</p>
+          : itens.length === 0 ? <p style={{ color: theme.sub, fontSize: 12.5 }}>Nenhum comentário ainda.</p>
+          : itens.map(c => (
+            <div key={c.id} style={{ borderTop: `1px solid ${theme.border}`, padding: '9px 0', display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+              <i className="ti ti-message-2" style={{ color: theme.accent, fontSize: 16, marginTop: 2 }} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, color: theme.text, whiteSpace: 'pre-wrap' }}>{c.texto}</div>
+                <div style={{ fontSize: 11, color: theme.sub, marginTop: 3 }}>{dataHora(c.created_at)}{c.usuario ? ` · ${String(c.usuario).split('@')[0]}` : ''}</div>
+              </div>
+              <span onClick={() => remover(c.id)} title="Excluir" style={{ cursor: 'pointer', color: theme.sub, fontSize: 15 }}><i className="ti ti-trash" /></span>
+            </div>
+          ))}
+      </div>
+    </div>
+  )
+}
 
 // NF no histórico só faz sentido em contas de cliente/fornecedor (a pagar/a receber,
 // duplicatas, adiantamentos). Nas demais (banco, despesa, etc.) o histórico sai sem NF.
@@ -1119,6 +1178,7 @@ function ModalCorrigido({ linha, compId, planoMap = {}, onClose, onDesfazer }) {
 }
 
 function CardConferencia({ conta, reg, compId, usuario, saldoAjuste = 0, composicao, onSalvo }) {
+  const { empresaId } = useAppData()
   const [doc, setDoc] = useState(reg?.documento || '')
   const [saldoDoc, setSaldoDoc] = useState(reg?.saldo_documento != null ? String(reg.saldo_documento) : '')
   const [conciliada, setConciliada] = useState(!!reg?.conciliada)
@@ -1361,6 +1421,8 @@ function CardConferencia({ conta, reg, compId, usuario, saldoAjuste = 0, composi
         {msg && <p style={{ color: theme.green, fontSize: 12.5, margin: '10px 0 0' }}><i className="ti ti-circle-check" /> {msg}</p>}
         {erro && <p style={{ color: theme.red, fontSize: 12.5, margin: '10px 0 0' }}>{erro}</p>}
       </div>
+
+      <ComentariosConta clienteId={empresaId} conta={conta.conta} usuario={usuario} />
     </div>
   )
 }

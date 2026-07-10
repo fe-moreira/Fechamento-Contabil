@@ -3,6 +3,7 @@ import JSZip from 'jszip'
 import { supabase } from '../lib/supabase'
 import { montarBalancete, composicaoAbertura, difConciliacao } from '../lib/balancete'
 import { itensAbertosConta } from '../lib/aberturaArrasto'
+import { comentariosPorConta } from '../lib/comentarios'
 import { gerarExcelTimbrado } from '../lib/excel'
 import { theme, money } from '../lib/theme'
 
@@ -11,6 +12,7 @@ const baixa = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-�
 // Contas cuja composição é por TÍTULO (cliente/fornecedor) — as demais amarram pelo saldo/documento.
 const ehEntidade = nome => /client|fornecedor|duplicat|adiantament|contas? a pagar|a receber/.test(baixa(nome))
 const dataBR = d => { const s = String(d || ''); const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${m[3]}/${m[2]}/${m[1]}` : (s === 'abertura' ? 'abertura' : s) }
+const dataBRhora = iso => { const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) }
 const fmtCnpj = c => { const s = String(c || '').replace(/\D/g, ''); return s.length === 14 ? `${s.slice(0,2)}.${s.slice(2,5)}.${s.slice(5,8)}/${s.slice(8,12)}-${s.slice(12)}` : (c || '—') }
 
 // Situação da amarração de uma conta patrimonial.
@@ -40,10 +42,11 @@ export default function BookComposicoes({ empresaId, empresaNome, competencia, c
         if (!vivo) return
         if (!comp) { setSemComp(true); return }
 
-        const [{ linhas }, { data: conc }, { data: lancs }] = await Promise.all([
+        const [{ linhas }, { data: conc }, { data: lancs }, coments] = await Promise.all([
           montarBalancete(empresaId, comp.id),
           supabase.from('conciliacao_conta').select('conta, saldo_documento, documento, documento_path, conciliada, justificativa').eq('competencia_id', comp.id),
           supabase.from('lancamentos').select('conta_debito, conta_credito, valor').eq('competencia_id', comp.id),
+          comentariosPorConta(empresaId),
         ])
         if (!vivo) return
         const conf = {}; for (const r of (conc || [])) conf[String(r.conta)] = r
@@ -77,6 +80,7 @@ export default function BookComposicoes({ empresaId, empresaNome, competencia, c
             saldo_final: num(l.saldo_final), natureza: num(l.saldo_final) >= 0 ? 'D' : 'C',
             saldo_documento: reg?.saldo_documento ?? null, documento: reg?.documento || null, documento_path: reg?.documento_path || null,
             conciliada: !!reg?.conciliada, justificativa: reg?.justificativa || '', dif, composicao,
+            comentarios: coments[cod] || [],
           })
         }
         if (vivo) setContas(out)
@@ -154,6 +158,10 @@ export default function BookComposicoes({ empresaId, empresaNome, competencia, c
         const sup = c.documento ? `Documento: ${c.documento}`
           : (c.justificativa ? `Justificativa: ${c.justificativa}` : 'Sem documento nem justificativa anexados')
         linhasSec.push(['Documento-suporte', sup, '', '', '', anexo])
+        for (const m of (c.comentarios || [])) {
+          const quem = m.usuario ? ` · ${String(m.usuario).split('@')[0]}` : ''
+          linhasSec.push(['Comentário', `${m.texto}  (${dataBRhora(m.created_at)}${quem})`, '', '', '', ''])
+        }
         secoes.push({
           titulo: `${c.conta} · ${c.nome} — ${c.grupo} (natureza ${c.natureza})`,
           linhas: linhasSec,
@@ -332,6 +340,21 @@ function Folha({ c, onAbrir }) {
             <p style={{ fontSize: 12.5, color: theme.yellow, margin: 0 }}><i className="ti ti-alert-triangle" /> Sem documento anexado nem justificativa.</p>
           )}
         </div>
+
+        {/* Comentários da conta (histórico que acompanha a conta em todos os meses) */}
+        {c.comentarios && c.comentarios.length > 0 && (
+          <div style={{ marginTop: 16 }}>
+            <div style={blkT}>Comentários da conta</div>
+            <div style={{ border: `1px solid ${theme.border}`, borderRadius: 9, overflow: 'hidden' }}>
+              {c.comentarios.map((m, j) => (
+                <div key={j} style={{ padding: '9px 12px', borderTop: j ? `1px solid ${theme.border}` : 'none' }}>
+                  <div style={{ fontSize: 12.5, color: theme.text, whiteSpace: 'pre-wrap' }}>{m.texto}</div>
+                  <div style={{ fontSize: 11, color: theme.sub, marginTop: 3 }}>{dataBRhora(m.created_at)}{m.usuario ? ` · ${String(m.usuario).split('@')[0]}` : ''}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )
