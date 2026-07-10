@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import JSZip from 'jszip'
 import { supabase } from '../lib/supabase'
 import { montarBalancete, composicaoAbertura, difConciliacao } from '../lib/balancete'
 import { itensAbertosConta } from '../lib/aberturaArrasto'
@@ -24,6 +25,7 @@ export default function BookComposicoes({ empresaId, empresaNome, competencia, c
   const [carregando, setCarregando] = useState(false)
   const [semComp, setSemComp] = useState(false)
   const [contas, setContas] = useState(null)
+  const [exportando, setExportando] = useState('') // '' | 'zip'
 
   useEffect(() => {
     setContas(null); setSemComp(false)
@@ -93,33 +95,69 @@ export default function BookComposicoes({ empresaId, empresaNome, competencia, c
     } catch (e) { alert('Não consegui abrir o documento: ' + (e?.message || e)) }
   }
 
-  function exportar() {
-    if (!contas) return
-    const sub = `${empresaNome} · CNPJ ${fmtCnpj(cnpj)} · competência ${competencia}`
-    const colunas = [
-      { nome: 'Conta / item', largura: 16 },
-      { nome: 'Nome / histórico', largura: 46, wrap: true },
-      { nome: 'Saldo / valor', alinhar: 'right', moeda: true },
-      { nome: 'Documento', alinhar: 'right', moeda: true },
-      { nome: 'Diferença', alinhar: 'right', moeda: true },
-    ]
-    const secoes = [{
-      titulo: 'Amarração geral — contas patrimoniais',
-      linhas: contas.map(c => [c.conta, c.nome, num(c.saldo_final), c.saldo_documento == null ? '' : num(c.saldo_documento), c.dif == null ? '' : num(c.dif)]),
-    }]
-    for (const c of contas.filter(c => c.composicao.length)) {
-      secoes.push({
-        titulo: `${c.conta} · ${c.nome} — composição (títulos em aberto)`,
-        linhas: c.composicao.map(i => [dataBR(i.data), i.historico, num(i.debito) - num(i.credito), '', '']),
-        totais: ['', 'Saldo da conta', num(c.saldo_final), '', ''],
-      })
+  // Gera um .zip com a planilha timbrada + a pasta anexos/ com os PDFs originais.
+  // A planilha traz um link relativo por conta ("anexos/<conta>_<doc>.pdf"): ao
+  // descompactar, clicar na célula abre o documento — offline e sem expirar.
+  async function exportar() {
+    if (!contas || exportando) return
+    setExportando('zip')
+    try {
+      const zip = new JSZip()
+      const pasta = zip.folder('anexos')
+      const linkDe = {}
+      for (const c of contas) {
+        if (!c.documento_path) continue
+        try {
+          const { data, error } = await supabase.storage.from('extratos').download(c.documento_path)
+          if (error || !data) continue
+          const ext = (c.documento_path.match(/\.[a-z0-9]+$/i)?.[0]) || (c.documento?.match(/\.[a-z0-9]+$/i)?.[0]) || '.pdf'
+          const base = String(c.documento || 'documento').replace(/\.[a-z0-9]+$/i, '').replace(/[^\w.-]+/g, '_').slice(0, 40)
+          const fname = `${c.conta}_${base}${ext}`
+          pasta.file(fname, await data.arrayBuffer())
+          linkDe[c.conta] = `anexos/${fname}`
+        } catch { /* pula anexo com erro, segue os demais */ }
+      }
+
+      const sub = `${empresaNome} · CNPJ ${fmtCnpj(cnpj)} · competência ${competencia}`
+      const colunas = [
+        { nome: 'Conta / item', largura: 16 },
+        { nome: 'Nome / histórico', largura: 44, wrap: true },
+        { nome: 'Saldo / valor', alinhar: 'right', moeda: true },
+        { nome: 'Documento', alinhar: 'right', moeda: true },
+        { nome: 'Diferença', alinhar: 'right', moeda: true },
+        { nome: 'Anexo (PDF)', largura: 22 },
+      ]
+      const secoes = [{
+        titulo: 'Amarração geral — contas patrimoniais',
+        linhas: contas.map(c => [
+          c.conta, c.nome, num(c.saldo_final),
+          c.saldo_documento == null ? '' : num(c.saldo_documento),
+          c.dif == null ? '' : num(c.dif),
+          linkDe[c.conta] ? { text: 'Abrir PDF', hyperlink: linkDe[c.conta] } : (c.documento_path ? '(anexo indisponível)' : ''),
+        ]),
+      }]
+      for (const c of contas.filter(c => c.composicao.length)) {
+        secoes.push({
+          titulo: `${c.conta} · ${c.nome} — composição (títulos em aberto)`,
+          linhas: c.composicao.map(i => [dataBR(i.data), i.historico, num(i.debito) - num(i.credito), '', '', '']),
+          totais: ['', 'Saldo da conta', num(c.saldo_final), '', '', ''],
+        })
+      }
+      const buf = await gerarExcelTimbrado({ titulo: 'Book de Composições — contas patrimoniais', sub, colunas, secoes, aba: 'Book', retornarBuffer: true })
+      const nomeBase = `book_composicoes_${(empresaNome || 'cliente').toLowerCase().replace(/[^a-z0-9]+/g, '_').slice(0, 30)}_${competencia.replace('/', '-')}`
+      zip.file(`${nomeBase}.xlsx`, buf)
+
+      const blob = await zip.generateAsync({ type: 'blob' })
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(blob)
+      a.download = `${nomeBase}.zip`
+      document.body.appendChild(a); a.click(); document.body.removeChild(a)
+      URL.revokeObjectURL(a.href)
+    } catch (e) {
+      alert('Não consegui gerar o pacote: ' + (e?.message || e))
+    } finally {
+      setExportando('')
     }
-    gerarExcelTimbrado({
-      titulo: 'Book de Composições — contas patrimoniais',
-      sub, colunas, secoes,
-      arquivo: `book_composicoes_${competencia.replace('/', '-')}.xlsx`,
-      aba: 'Book',
-    })
   }
 
   if (semComp) return <Aviso icon="ti-file-import" texto="Importe o razão desta competência primeiro." />
@@ -141,7 +179,11 @@ export default function BookComposicoes({ empresaId, empresaNome, competencia, c
             : <span style={{ color: theme.yellow }}>{pendentes} conta(s) sem documento/amarração</span>}
         </p>
         <div className="no-print" style={{ display: 'flex', gap: 8 }}>
-          <button className="btn-ghost" onClick={exportar} style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><i className="ti ti-file-spreadsheet" /> Excel</button>
+          <button className="btn-ghost" onClick={exportar} disabled={!!exportando}
+            title="Baixa um .zip com a planilha timbrada + os PDFs originais (pasta anexos/)"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 8, opacity: exportando ? .6 : 1 }}>
+            <i className={`ti ${exportando ? 'ti-loader-2' : 'ti-file-zip'}`} /> {exportando ? 'Gerando ZIP…' : 'Excel + PDFs (.zip)'}
+          </button>
           <button className="btn-ghost" onClick={() => window.print()} style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><i className="ti ti-file-type-pdf" /> PDF</button>
         </div>
       </div>

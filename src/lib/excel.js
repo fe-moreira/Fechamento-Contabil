@@ -24,7 +24,10 @@ function baixar(buffer, nome) {
 // - linhas:  array de arrays (use NÚMEROS nas colunas de moeda p/ formatar certo).
 // - secoes:  [{ titulo, linhas, totais? }] → relatório em blocos (ex.: por cliente).
 // - totais:  array de células do rodapé da tabela (TOTAL GERAL).
-export async function gerarExcelTimbrado({ titulo, sub = '', colunas, linhas, secoes, totais, arquivo, aba = 'Relatório' }) {
+// Passe `retornarBuffer: true` para receber o ArrayBuffer do .xlsx (em vez de baixar) —
+// usado para empacotar a planilha num .zip junto com os anexos. Uma célula pode ser um
+// objeto { text, hyperlink } → vira um link clicável (ex.: caminho relativo "anexos/x.pdf").
+export async function gerarExcelTimbrado({ titulo, sub = '', colunas, linhas, secoes, totais, arquivo, aba = 'Relatório', retornarBuffer = false }) {
   const ExcelJS = (await import('exceljs')).default
   const wb = new ExcelJS.Workbook()
   wb.creator = 'Attentive Contabilidade'
@@ -70,9 +73,11 @@ export async function gerarExcelTimbrado({ titulo, sub = '', colunas, linhas, se
       const cell = row.getCell(i + 1)
       const col = colunas[i] || {}
       const val = cells[i]
+      const ehLink = val && typeof val === 'object' && val.hyperlink
       cell.value = (val === undefined || val === null) ? '' : val
       cell.border = borda
       cell.alignment = { horizontal: col.alinhar === 'right' ? 'right' : 'left', vertical: 'top', wrapText: !!col.wrap }
+      if (ehLink) cell.font = { color: { argb: 'FF0563C1' }, underline: true }
       if (col.moeda && typeof val === 'number') cell.numFmt = '#,##0.00'
       if (opt.fill) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: opt.fill } }
       if (opt.bold) cell.font = { bold: true }
@@ -104,5 +109,7 @@ export async function gerarExcelTimbrado({ titulo, sub = '', colunas, linhas, se
   const foot = ws.getCell(r, 1)
   foot.value = RODAPE; foot.font = { size: 8, color: { argb: 'FF888888' } }; foot.alignment = { horizontal: 'center' }
 
-  baixar(await wb.xlsx.writeBuffer(), arquivo)
+  const buffer = await wb.xlsx.writeBuffer()
+  if (retornarBuffer) return buffer
+  baixar(buffer, arquivo)
 }
