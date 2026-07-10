@@ -101,11 +101,19 @@ export function montarHistorico(entrada, partes) {
 // (ex.: Origem = CAR/CAP) ou pelo sinal do valor.
 function decidirEntrada(r, p) {
   const es = p.es || { modo: 'sinal' }
+  if (es.modo === 'natureza' && es.col != null && es.col >= 0) {
+    // FINANCEIRO (extrato): natureza C (crédito) = ENTRADA, D (débito) = SAÍDA.
+    // É o INVERSO da contabilidade — aqui é o extrato bancário do cliente.
+    const v = String(r[es.col] ?? '').trim().toUpperCase()
+    if (v.startsWith('C')) return true
+    if (v.startsWith('D')) return false
+    return parseValor(r[p.colValor]) >= 0 // sem indicador na linha → cai no sinal
+  }
   if (es.modo === 'coluna' && es.col != null && es.col >= 0) {
     const v = String(r[es.col] ?? '').trim().toUpperCase()
     return (es.entrada || []).map(x => String(x).toUpperCase()).includes(v)
   }
-  return parseValor(r[p.colValor]) >= 0
+  return parseValor(r[p.colValor]) >= 0 // sinal: negativo = saída, positivo = entrada
 }
 
 // Limpa a categoria (coluna mesclada): tira o código contábil do começo e o
@@ -132,10 +140,23 @@ export function catByRowDeMerges(merges, arr) {
 // [{ historico, credor, valor, entrada, data, contra }] classificado pela memória
 // (casando pelo credor/devedor). Se houver coluna de categoria (mesclada), ela é
 // arrastada pra baixo (forward-fill) e entra no histórico.
+// O documento já está no histórico? (para não duplicar ao juntar). Compara o texto e,
+// como reforço, os dígitos — TAR/COB 14/01 no histórico casa com o documento "1401".
+function contemDoc(hist, doc) {
+  const h = String(hist || '').toUpperCase()
+  const d = String(doc || '').trim().toUpperCase()
+  if (!d) return true
+  if (h.includes(d)) return true
+  const dig = d.replace(/\D/g, '')
+  return dig.length >= 2 && h.replace(/\D/g, '').includes(dig)
+}
+
 export function aplicarPerfil(arr, perfil, memoria, catByRow, adiantContas) {
   const p = perfil || {}
   const temAdiant = adiantContas && adiantContas.size > 0
   const ini = Number.isInteger(p.linhaInicio) ? p.linhaInicio : 1
+  const colHist = (p.colHist != null && p.colHist >= 0) ? p.colHist : -1
+  // Compat: perfis antigos sem coluna de Histórico montam por [credor, documento].
   const histCols = (p.histCols && p.histCols.length ? p.histCols : [p.colCredor, p.colDoc]).filter(c => c != null && c >= 0)
   const temCat = p.colCategoria != null && p.colCategoria >= 0
   const rows = arr || []
@@ -154,12 +175,24 @@ export function aplicarPerfil(arr, perfil, memoria, catByRow, adiantContas) {
     if (p.filtro?.pularVazio && p.filtro.col != null && p.filtro.col >= 0 && !String(r[p.filtro.col] ?? '').trim()) continue
     const entrada = decidirEntrada(r, p)
     const credor = p.colCredor != null && p.colCredor >= 0 ? String(r[p.colCredor] ?? '').trim() : ''
-    const partes = temCat ? [limparCategoria(categoria), ...histCols.map(c => r[c])] : histCols.map(c => r[c])
+    const doc = p.colDoc != null && p.colDoc >= 0 ? String(r[p.colDoc] ?? '').trim() : ''
+    // Base do histórico: a coluna de Histórico (nova) OU o modo antigo (credor+doc).
+    // O DOCUMENTO só é juntado quando o histórico AINDA NÃO o contém (evita duplicar) —
+    // planilhas com o documento fora do histórico continuam recebendo o documento.
+    let partesBase
+    if (colHist >= 0) {
+      const h = String(r[colHist] ?? '').trim()
+      partesBase = [h]
+      if (credor && !contemDoc(h, credor)) partesBase.push(credor)
+      if (doc && !contemDoc(h, doc)) partesBase.push(doc)
+    } else {
+      partesBase = histCols.map(c => r[c])
+    }
+    const partes = temCat ? [limparCategoria(categoria), ...partesBase] : partesBase
     const historico = montarHistorico(entrada, partes)
     const valor = Math.abs(parseValor(r[p.colValor]))
     if (!valor) continue
     const data = p.colData != null && p.colData >= 0 ? dataISO(r[p.colData]) : ''
-    const doc = p.colDoc != null && p.colDoc >= 0 ? String(r[p.colDoc] ?? '').trim() : ''
     let contra = casarHistorico(credor || historico, memoria)
     // Regra: se a linha tem nota/documento, não é adiantamento (adiantamento é
     // quando ainda não há nota). Evita "adiantamento a fornecedor/cliente" errado.

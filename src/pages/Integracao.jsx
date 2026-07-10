@@ -1102,16 +1102,28 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
       if (nums > best) { best = nums; colValor = j }
       if (colData < 0 && rows.filter(r => dataISO(r?.[j])).length > rows.length / 3) colData = j
     }
-    // Credor/Devedor = coluna de TEXTO (nome), excluindo valor, data e colunas que SÃO
+    // Histórico = coluna de TEXTO (descrição), excluindo valor, data e colunas que SÃO
     // datas (Date vira "Mon Jun 01…", que tem letras e enganava a detecção antiga).
     const pareceData = j => rows.filter(r => (r?.[j] instanceof Date) || dataISO(r?.[j])).length > rows.length / 3
-    let colCredor = -1, bestLen = 0
+    let colHist = -1, bestLen = 0
     for (let j = 0; j < nc; j++) {
       if (j === colValor || j === colData || pareceData(j)) continue
       const avg = rows.reduce((s, r) => { const t = (r?.[j] instanceof Date) ? '' : String(r?.[j] ?? ''); return s + (/[A-Za-zÀ-ú]{3,}/.test(t) ? t.length : 0) }, 0) / (rows.length || 1)
-      if (avg > bestLen) { bestLen = avg; colCredor = j }
+      if (avg > bestLen) { bestLen = avg; colHist = j }
     }
-    return { linhaInicio: ini, colValor, colData, colCredor, colDoc: -1, colCategoria: -1, histCols: [], es: { modo: 'sinal', col: -1, entrada: [] }, filtro: { col: -1, pularVazio: false } }
+    // Coluna de NATUREZA (D/C): células curtas só com D ou C. No extrato, C = Entrada e
+    // D = Saída. Se existir e o valor vier sempre positivo, usa a natureza; senão, o sinal.
+    let colDC = -1
+    for (let j = 0; j < nc; j++) {
+      if (j === colValor || j === colData || j === colHist) continue
+      const dc = rows.filter(r => /^[dc]$/i.test(String(r?.[j] ?? '').trim())).length
+      if (dc > rows.length / 2) { colDC = j; break }
+    }
+    const temNegativo = rows.some(r => parseValor(r?.[colValor]) < 0)
+    const es = (colDC >= 0 && !temNegativo)
+      ? { modo: 'natureza', col: colDC, entrada: [] }
+      : { modo: 'sinal', col: -1, entrada: [] }
+    return { linhaInicio: ini, colValor, colData, colHist, colCredor: -1, colDoc: -1, colCategoria: -1, histCols: [], es, filtro: { col: -1, pularVazio: false } }
   }
 
   // Aplica o perfil já salvo a um extrato por banco e segue (marca o banco).
@@ -2215,9 +2227,9 @@ function PerfilExtratoCfg({ arr, catByRow, adiantContas, nome, bancoNome, perfil
   // Papel de cada coluna (para marcar na prévia) — mostra o que o sistema entendeu.
   const roles = {}
   const setRole = (j, txt) => { if (j != null && j >= 0) roles[j] = txt }
-  setRole(p.colValor, 'Valor'); setRole(p.colData, 'Data'); setRole(p.colCredor, 'Contrapartida')
-  setRole(p.colDoc, 'Documento'); setRole(p.colCategoria, 'Categoria')
-  if (p.es?.modo === 'coluna') setRole(p.es?.col, 'Entrada/Saída')
+  setRole(p.colData, 'Data'); setRole(p.colHist, 'Histórico'); setRole(p.colValor, 'Valor')
+  setRole(p.colCredor, 'Credor/Devedor'); setRole(p.colDoc, 'Documento'); setRole(p.colCategoria, 'Categoria')
+  if (p.es?.modo === 'coluna' || p.es?.modo === 'natureza') setRole(p.es?.col, p.es.modo === 'natureza' ? 'Natureza (D/C)' : 'Entrada/Saída')
   const amostras = arr.slice(ini, ini + 3)
   const Sel = ({ val, on, vazio = '—' }) => (
     <select className="input" style={{ padding: '7px 9px', fontSize: 12 }} value={val ?? -1} onChange={e => on(Number(e.target.value))}>
@@ -2268,25 +2280,32 @@ function PerfilExtratoCfg({ arr, catByRow, adiantContas, nome, bancoNome, perfil
           </table>
         </div>
 
-        <p style={{ color: theme.sub, fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: .4, margin: '0 0 6px' }}>Diga qual coluna é qual</p>
+        <p style={{ color: theme.sub, fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: .4, margin: '0 0 6px' }}>Diga qual coluna é qual — o essencial é <span style={{ color: theme.text }}>Data</span>, <span style={{ color: theme.text }}>Histórico</span> e <span style={{ color: theme.text }}>Valor</span></p>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))', gap: 10 }}>
-          <div><label>Linha de início (dados)</label><input className="input" type="number" min="1" style={{ fontSize: 12 }} value={ini + 1} onChange={e => set({ linhaInicio: Math.max(0, (Number(e.target.value) || 1) - 1) })} /></div>
-          <div><label>Valor <span style={{ color: theme.red }}>*</span></label><Sel val={p.colValor} on={v => set({ colValor: v })} /><small style={dicaS}>o valor do lançamento (R$)</small></div>
           <div><label>Data <span style={{ color: theme.red }}>*</span></label><Sel val={p.colData} on={v => set({ colData: v })} /><small style={dicaS}>a data do lançamento</small></div>
-          <div><label>Credor/Devedor (contrapartida)</label><Sel val={p.colCredor} on={v => set({ colCredor: v })} /><small style={dicaS}>nome do cliente/fornecedor — acha a conta na memória. Sem nome? Deixe “—”.</small></div>
-          <div><label>Documento (opc.)</label><Sel val={p.colDoc} on={v => set({ colDoc: v })} /><small style={dicaS}>nº da NF/documento, se houver</small></div>
-          <div><label>Categoria (coluna mesclada, opc.)</label><Sel val={p.colCategoria} on={v => set({ colCategoria: v })} /><small style={dicaS}>grupo/histórico do extrato, se houver</small></div>
+          <div><label>Histórico <span style={{ color: theme.red }}>*</span></label><Sel val={p.colHist} on={v => set({ colHist: v })} /><small style={dicaS}>a descrição do lançamento — vira o histórico e ajuda a achar a conta na memória</small></div>
+          <div><label>Valor <span style={{ color: theme.red }}>*</span></label><Sel val={p.colValor} on={v => set({ colValor: v })} /><small style={dicaS}>o valor do lançamento (R$)</small></div>
+          <div><label>Documento (opc.)</label><Sel val={p.colDoc} on={v => set({ colDoc: v })} /><small style={dicaS}>nº da NF/documento — só é juntado ao histórico se ele ainda não o tiver</small></div>
+          <div><label>Credor/Devedor (opc.)</label><Sel val={p.colCredor} on={v => set({ colCredor: v })} /><small style={dicaS}>coluna separada com o nome do cliente/fornecedor, se houver</small></div>
+          <div><label>Categoria (mesclada, opc.)</label><Sel val={p.colCategoria} on={v => set({ colCategoria: v })} /><small style={dicaS}>grupo/histórico do extrato, se houver</small></div>
+        </div>
+        <div style={{ marginTop: 10 }}>
+          <label>Linha de início (onde começam os lançamentos)</label>
+          <input className="input" type="number" min="1" style={{ fontSize: 12, maxWidth: 160 }} value={ini + 1} onChange={e => set({ linhaInicio: Math.max(0, (Number(e.target.value) || 1) - 1) })} />
+          <small style={dicaS}>número da 1ª linha de dados — pula o cabeçalho/títulos. Ex.: cabeçalho na linha 1 → comece em <b>2</b>.</small>
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))', gap: 10, marginTop: 12, alignItems: 'end' }}>
           <div>
-            <label>Entrada × Saída</label>
+            <label>Entrada × Saída (financeiro)</label>
             <select className="input" style={{ fontSize: 12 }} value={p.es?.modo || 'sinal'} onChange={e => set({ es: { ...(p.es || {}), modo: e.target.value } })}>
-              <option value="sinal">Pelo sinal do valor</option>
-              <option value="coluna">Por uma coluna</option>
+              <option value="sinal">Pelo sinal do valor (− saída, + entrada)</option>
+              <option value="natureza">Pela natureza D/C (C = entrada, D = saída)</option>
+              <option value="coluna">Por uma coluna (valores de entrada)</option>
             </select>
+            <small style={dicaS}>No extrato, <b>C = entrada</b> e <b>D = saída</b> — é o inverso da contabilidade.</small>
           </div>
-          {p.es?.modo === 'coluna' && <div><label>Coluna do indicador</label><Sel val={p.es?.col} on={v => set({ es: { ...(p.es || {}), col: v } })} /></div>}
+          {(p.es?.modo === 'coluna' || p.es?.modo === 'natureza') && <div><label>Coluna do indicador {p.es?.modo === 'natureza' ? '(D/C)' : ''}</label><Sel val={p.es?.col} on={v => set({ es: { ...(p.es || {}), col: v } })} /></div>}
           {p.es?.modo === 'coluna' && <div><label>Valores que são ENTRADA (vírgula)</label><input className="input" style={{ fontSize: 12 }} placeholder="ex.: CAR, LAN" value={(p.es?.entrada || []).join(', ')} onChange={e => set({ es: { ...(p.es || {}), entrada: e.target.value.split(',').map(s => s.trim()).filter(Boolean) } })} /></div>}
           <div>
             <label>Ignorar linha quando esta coluna estiver vazia</label>
