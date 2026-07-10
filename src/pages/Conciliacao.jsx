@@ -467,7 +467,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
       supabase.from('razao').select('id, data, contrapartida, historico, debito, credito').eq('competencia_id', compId).eq('conta', conta.conta).order('data'),
       supabase.from('ajuste_leitura').select('razao_id, nf, entidade, historico').eq('competencia_id', compId),
       supabase.from('lancamentos').select('id, data, conta_debito, conta_credito, valor, historico, razao_id, origem').eq('competencia_id', compId),
-      composicaoAbertura(empresaId, compId, conta.conta, conta.classifRaw),
+      composicaoAbertura(empresaId, compId, conta.conta, conta.classifRaw, conta.nome),
     ])
     const ajById = {}; for (const a of (aj || [])) ajById[a.razao_id] = a
     // Correções pendentes (estornos/acertos) que tocam ESTA conta entram na composição

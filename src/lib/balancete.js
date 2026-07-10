@@ -1,4 +1,5 @@
 import { supabase } from './supabase'
+import { itensAbertosConta } from './aberturaArrasto'
 
 const baixa = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
 
@@ -266,33 +267,43 @@ export async function competenciaAnterior(empresaId, compId) {
   return melhor ? melhor.id : null
 }
 
-// Títulos em aberto de ABERTURA de uma conta (só na competência inicial), devolvidos como
-// lançamentos sintéticos: entram na conciliação como "saldo anterior" e casam por NF com as
-// baixas do mês (recebimento/pagamento), zerando o que já foi liquidado.
-export async function composicaoAbertura(empresaId, compId, contaCod, classifRaw) {
-  if (!(await ehCompetenciaInicial(empresaId, compId))) return []
-  const { composicoes } = await carregarCargaInicial(empresaId)
-  if (!composicoes.length) return []
-  const alvo = new Set([soDig(contaCod), soDig(classifRaw)].filter(Boolean))
-  const out = []
-  let i = 0
-  for (const r of composicoes) {
-    if (!alvo.has(soDig(codConta(r)))) continue
-    const valor = saldoSinalAb(campoPor(r, /valor|saldo/), campoPor(r, /^d\/?c$|natureza/))
-    if (Math.abs(valor) < 0.005) continue
-    const cliente = String(campoPor(r, /cliente|fornec|nome|descri|histor/) || '').trim()
-    const nf = String(campoPor(r, /\bnf\b|nota|document/) || '').trim()
-    // Data REAL do título (jan/fev/mar…), mesmo sem os meses anteriores fechados.
-    // Tudo isso compõe o saldo inicial (entendido como o último dia antes da abertura).
-    const dt = dataCelulaISO(campoPor(r, /data/))
-    out.push({
-      id: `abertura-${i++}`, data: dt || 'abertura', contrapartida: '',
-      historico: `Saldo anterior · ${cliente}${nf ? ' · NF ' + nf : ''}`,
-      debito: valor > 0 ? valor : 0, credito: valor < 0 ? -valor : 0, abertura: true,
-      leitura: { nf, entidade: cliente, ident: !!cliente, conf: (cliente && nf) ? 'alta' : cliente ? 'media' : 'baixa', abertura: true },
-    })
+// Títulos em aberto de ABERTURA de uma conta como lançamentos sintéticos: entram na
+// conciliação como "saldo anterior" e casam por NF com as baixas do mês (recebimento/
+// pagamento), zerando o que já foi liquidado.
+// - Competência INICIAL do cliente: vêm da CARGA INICIAL (composições informadas).
+// - Demais competências: ARRASTO — o que ficou em aberto no mês ANTERIOR (recursivo).
+//   Assim, se você mexer no mês anterior, a abertura deste mês atualiza sozinha.
+export async function composicaoAbertura(empresaId, compId, contaCod, classifRaw, contaNome = '', _depth = 0) {
+  if (await ehCompetenciaInicial(empresaId, compId)) {
+    const { composicoes } = await carregarCargaInicial(empresaId)
+    if (!composicoes.length) return []
+    const alvo = new Set([soDig(contaCod), soDig(classifRaw)].filter(Boolean))
+    const out = []
+    let i = 0
+    for (const r of composicoes) {
+      if (!alvo.has(soDig(codConta(r)))) continue
+      const valor = saldoSinalAb(campoPor(r, /valor|saldo/), campoPor(r, /^d\/?c$|natureza/))
+      if (Math.abs(valor) < 0.005) continue
+      const cliente = String(campoPor(r, /cliente|fornec|nome|descri|histor/) || '').trim()
+      const nf = String(campoPor(r, /\bnf\b|nota|document/) || '').trim()
+      // Data REAL do título (jan/fev/mar…), mesmo sem os meses anteriores fechados.
+      // Tudo isso compõe o saldo inicial (entendido como o último dia antes da abertura).
+      const dt = dataCelulaISO(campoPor(r, /data/))
+      out.push({
+        id: `abertura-${i++}`, data: dt || 'abertura', contrapartida: '',
+        historico: `Saldo anterior · ${cliente}${nf ? ' · NF ' + nf : ''}`,
+        debito: valor > 0 ? valor : 0, credito: valor < 0 ? -valor : 0, abertura: true,
+        leitura: { nf, entidade: cliente, ident: !!cliente, conf: (cliente && nf) ? 'alta' : cliente ? 'media' : 'baixa', abertura: true },
+      })
+    }
+    return out
   }
-  return out
+  // Fora da competência inicial: arrasta o que ficou em aberto no mês anterior.
+  if (_depth > 24) return []
+  const ant = await competenciaAnterior(empresaId, compId)
+  if (!ant) return []
+  const aberturaAnt = await composicaoAbertura(empresaId, ant, contaCod, classifRaw, contaNome, _depth + 1)
+  return await itensAbertosConta(ant, contaCod, contaNome, classifRaw, aberturaAnt)
 }
 
 // Balancete hierárquico (sintéticas + analíticas) de uma competência.
