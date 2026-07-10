@@ -375,6 +375,7 @@ export default function CompMovimento() {
               <tbody>
                 {contas.map(({ reduzido, classif, classifRaw, nome, sintetica }) => {
                   const linha = matriz[classifRaw] || {}
+                  const tot = totalConta(classifRaw)
                   return (
                     <tr key={classifRaw} style={{ borderTop: `1px solid ${theme.border}`, background: sintetica ? theme.input : 'transparent', fontWeight: sintetica ? 700 : 400 }}>
                       <td style={{ ...td, color: theme.sub, fontSize: 11 }}>{reduzido || ''}</td>
@@ -382,7 +383,8 @@ export default function CompMovimento() {
                       <td style={{ ...td, fontWeight: sintetica ? 700 : 400, maxWidth: 320 }}>{nome || '—'}</td>
                       {mesesVis.map(c => {
                         const v = linha[c.mes]
-                        const vazio = v == null
+                        // Saldo nulo OU zero conta como vazio → mostra "—" (igual aos demais meses).
+                        const vazio = v == null || Number(v) === 0
                         // Sintética: total do grupo — "—" quando não há saldo, sem clique.
                         if (sintetica) {
                           return <td key={c.mes} style={{ ...td, textAlign: 'right', fontWeight: 700, color: vazio ? theme.sub : undefined }}>{vazio ? '—' : moneyDC(v)}</td>
@@ -412,7 +414,7 @@ export default function CompMovimento() {
                           </td>
                         )
                       })}
-                      {mostraTotal && <td style={{ ...td, textAlign: 'right', fontWeight: sintetica ? 700 : 600 }}>{moneyDC(totalConta(classifRaw))}</td>}
+                      {mostraTotal && <td style={{ ...td, textAlign: 'right', fontWeight: sintetica ? 700 : 600, color: tot === 0 ? theme.sub : undefined }}>{tot === 0 ? '—' : moneyDC(tot)}</td>}
                     </tr>
                   )
                 })}
