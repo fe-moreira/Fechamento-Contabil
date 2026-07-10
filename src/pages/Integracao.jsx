@@ -971,6 +971,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   const [msg, setMsg] = useState('')
   const [perfil, setPerfil] = useState(null)     // perfil de leitura do extrato deste cliente
   const [cfg, setCfg] = useState(null)           // { raw, banco, perfil } — painel de mapeamento aberto
+  const [reconfig, setReconfig] = useState(false)// força abrir a config no próximo import (após desfazer)
   const [fSem, setFSem] = useState(false)        // filtro: só linhas sem contrapartida
   const [fHist, setFHist] = useState('')         // filtro por histórico
   const [fMode, setFMode] = useState('contem')   // 'contem' | 'exato'
@@ -1170,7 +1171,10 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     else if (modo === 'combinado') { const e = { ...est }; delete e.combinado; onEstado(e) }
     setRaw(null); setLinhas([]); setSel(new Set())
     setFSem(false); setFHist(''); setFData(''); setFES(''); setFConta(''); setLote('')
-    setErro(''); setMsg('Importação desfeita — pode iniciar uma nova.')
+    // Ao subir um arquivo NOVO, reabrir a tela de configuração (como na 1ª vez) —
+    // o novo arquivo pode ter outro layout; o usuário confere/ajusta e salva.
+    setReconfig(true)
+    setErro(''); setMsg('Importação desfeita — no próximo arquivo você confirma a leitura (configuração).')
   }
 
   async function importar(file, bancoFixo) {
@@ -1186,8 +1190,11 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
       // Extrato por banco: cada cliente exporta diferente → usa o perfil salvo;
       // se ainda não houver, abre o mapeamento (uma vez por cliente).
       if (modo === 'porBanco' && bancoFixo) {
-        if (perfil) return aplicarEProsseguir(arr, file.name, bancoFixo, perfil, catByRow)
-        setCfg({ arr, catByRow, nome: file.name, banco: bancoFixo, perfil: perfilPadrao(arr) })
+        // Com perfil salvo, importa direto — MENOS quando o usuário desfez para subir um
+        // arquivo novo (reconfig): aí abre a configuração partindo do perfil salvo.
+        if (perfil && !reconfig) return aplicarEProsseguir(arr, file.name, bancoFixo, perfil, catByRow)
+        setReconfig(false)
+        setCfg({ arr, catByRow, nome: file.name, banco: bancoFixo, perfil: perfil || perfilPadrao(arr) })
         return
       }
       const header = arr[0] || []
