@@ -1386,10 +1386,12 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     setMsg(`Conta ${cod} aplicada em ${n} linha(s). Pronto para a próxima seleção.`)
   }
 
-  // Aprende: guarda credor/devedor → contrapartida das linhas classificadas
-  // (casa pelo nome da empresa; cai no histórico montado se não houver credor).
+  // Aprende: guarda HISTÓRICO → contrapartida das linhas classificadas (o histórico já
+  // traz a descrição/entidade). Antes usava `credor || historico`, e um credor mal
+  // mapeado (ex.: coluna C/D = "D") fazia aprender o termo "D" — que é rejeitado, então
+  // nada era salvo. Aprende tanto as que a memória trouxe quanto as que você preencheu.
   async function aprenderSalvar() {
-    const novas = linhas.filter(l => l.contra && (l.credor || l.historico)).map(l => ({ historico: l.credor || l.historico, conta: l.contra }))
+    const novas = linhas.filter(l => l.contra && l.historico).map(l => ({ historico: l.historico, conta: l.contra }))
     if (!novas.length) { setMsg('Classifique ao menos uma linha (contrapartida) antes de salvar.'); return }
     const mem = aprender(memoria, novas)
     await salvarMemoria(mem, { nomeArquivo: memMeta.nomeArquivo, semCarga: false })
