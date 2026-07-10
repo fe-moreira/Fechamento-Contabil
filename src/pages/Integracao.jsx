@@ -1082,7 +1082,8 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
       const valor = mapX.valor >= 0 ? parseValor(cells[mapX.valor]) : 0
       const data = mapX.data >= 0 ? dataISO(cells[mapX.data]) : ''
       return { banco, historico, valor: Math.abs(valor), entrada: valor >= 0, contra: casarHistorico(historico, memX, banco ? new Set([String(banco)]) : null), data }
-    })
+    // "SALDO ANTERIOR/INICIAL" não é lançamento (só valida o saldo) — fora da lista.
+    }).filter(l => !/saldo\s+(anterior|inicial)/i.test(String(l.historico).normalize('NFD').replace(/[̀-ͯ]/g, '')))
   }
 
   // Palpite inicial do perfil (o usuário confere/ajusta no painel de mapeamento).
@@ -1305,13 +1306,15 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     return true
   }
   const toggleUm = i => setSel(prev => { const n = new Set(prev); n.has(i) ? n.delete(i) : n.add(i); return n })
-  // Saldo de abertura do banco (balancete da competência) para conferência do extrato.
+  // Saldo de abertura do banco para conferir o extrato — o MESMO da conciliação
+  // (montarBalancete faz o arrasto do mês anterior), não a tabela crua (saldo_inicial 0).
   async function carregarSaldoAnterior(banco) {
     const [mes, ano] = (competencia || '').split('/').map(Number)
     const { data: comp } = await supabase.from('competencias').select('id').eq('cliente_id', empresaId).eq('ano', ano).eq('mes', mes).maybeSingle()
     if (!comp) { setSaldoAnterior(null); return }
-    const { data: bal } = await supabase.from('balancete').select('saldo_inicial').eq('competencia_id', comp.id).eq('conta', String(banco)).limit(1).maybeSingle()
-    setSaldoAnterior(bal ? Number(bal.saldo_inicial) : null)
+    const { linhas } = await montarBalancete(empresaId, comp.id)
+    const l = (linhas || []).find(x => String(x.reduzido) === String(banco))
+    setSaldoAnterior(l ? Number(l.saldo_inicial) : null)
   }
   useEffect(() => { if (raw?.banco) carregarSaldoAnterior(raw.banco); else { setSaldoAnterior(null); setSaldoExtrato(''); setCruza(null); setCruzaOpen(false) } }, [raw?.banco, competencia]) // eslint-disable-line react-hooks/exhaustive-deps
 
