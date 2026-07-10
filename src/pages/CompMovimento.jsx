@@ -90,7 +90,10 @@ export default function CompMovimento() {
       const findCol = (...dicas) => headers.findIndex(hd => { const hl = norm(hd); return dicas.some(d => hl.includes(d)) })
       const col = {
         data: findCol('data'),
-        conta: headers.findIndex(hd => { const hl = norm(hd); return hl === 'clasc' || (hl.includes('conta') && !hl.includes('contra') && !hl.includes('nome')) }),
+        // CÓDIGO REDUZIDO da conta (col. D · "codic") — é o que casa com o código do plano.
+        reduzido: headers.findIndex(hd => { const hl = norm(hd); return hl === 'codic' || hl.includes('reduz') || (hl.includes('codigo') && hl.includes('conta')) }),
+        // Classificação (col. B · "clasc") — fallback quando não houver o código reduzido.
+        clasc: headers.findIndex(hd => { const hl = norm(hd); return hl === 'clasc' || (hl.includes('conta') && !hl.includes('contra') && !hl.includes('nome') && !hl.includes('cod')) }),
         nome: headers.findIndex(hd => { const hl = norm(hd); return hl === 'nomec' || hl.includes('nome da conta') || hl.includes('nome conta') }),
         contrapartida: findCol('contrapartida', 'contra partida', 'contrap'),
         historico: findCol('histor', 'complemento'),
@@ -99,16 +102,17 @@ export default function CompMovimento() {
         comp: findCol('compet', 'mes', 'mês'),
         mascara: findCol('mascara', 'máscara'),
       }
-      if (col.conta < 0 || (col.debito < 0 && col.credito < 0)) { setImpMsg('Não identifiquei as colunas (preciso de Conta/Classificação e Débito/Crédito).'); setImpBusy(false); return }
+      if ((col.reduzido < 0 && col.clasc < 0) || (col.debito < 0 && col.credito < 0)) { setImpMsg('Não identifiquei as colunas (preciso do Código da conta e Débito/Crédito).'); setImpBusy(false); return }
       const { data: cli } = await supabase.from('clientes').select('competencia_inicio').eq('id', empresaId).maybeSingle()
       const iniM = String(normalizaCompetencia(cli?.competencia_inicio) || '').match(/^(\d{2})\/(\d{4})$/)
       const mesInicio = iniM ? Number(iniM[1]) : 99 // sem início definido → importa todos os meses do arquivo
       const porMes = {}
       for (const r of arr.slice(h + 1)) {
-        // Mesma regra do razão da conciliação: pega o CÓDIGO/CLASSIFICAÇÃO da conta; se
-        // vier só em dígitos e houver coluna "máscara", aplica a máscara (vira classificação).
-        let conta = String(r[col.conta] ?? '').trim()
-        if (col.mascara >= 0 && /^\d+$/.test(conta)) conta = applyMask(conta, r[col.mascara])
+        // A conta é o CÓDIGO REDUZIDO (casa com o plano por reduzido). Sem o reduzido, usa a
+        // classificação (aplicando a máscara quando vier só em dígitos).
+        let conta
+        if (col.reduzido >= 0) conta = String(r[col.reduzido] ?? '').trim()
+        else { conta = String(r[col.clasc] ?? '').trim(); if (col.mascara >= 0 && /^\d+$/.test(conta)) conta = applyMask(conta, r[col.mascara]) }
         const debito = col.debito >= 0 ? numBR(r[col.debito]) : 0
         const credito = col.credito >= 0 ? numBR(r[col.credito]) : 0
         if (!conta || (!debito && !credito)) continue // linha sem conta ou sem valor não entra
