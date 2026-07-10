@@ -262,6 +262,15 @@ export default function CompMovimento() {
     })
   }
 
+  // Desfaz o ajuste: devolve a célula à contagem de pendências (atualiza na hora).
+  function marcarNaoJustificada(conta, mes) {
+    setJustificadas(prev => {
+      const next = new Set(prev)
+      next.delete(chaveCelula(conta, mes))
+      return next
+    })
+  }
+
   // Filtro por mês (todos ou um só). A coluna "Total" só faz sentido com >1 mês.
   const mesesVis = filtroMes === 'todos' ? comps : comps.filter(c => c.mes === Number(filtroMes))
   const mostraTotal = mesesVis.length > 1
@@ -424,6 +433,7 @@ export default function CompMovimento() {
           getCompetenciaId={getCompetenciaId}
           jaJustificada={justificadas.has(chaveCelula(detalhe.conta, detalhe.mes))}
           onJustificada={() => marcarJustificada(detalhe.conta, detalhe.mes)}
+          onDesfeita={() => marcarNaoJustificada(detalhe.conta, detalhe.mes)}
           onClose={() => setDetalhe(null)}
         />
       )}
@@ -431,12 +441,13 @@ export default function CompMovimento() {
   )
 }
 
-function ModalRazao({ detalhe, compsAnteriores, usuario, getCompetenciaId, jaJustificada, onJustificada, onClose }) {
+function ModalRazao({ detalhe, compsAnteriores, usuario, getCompetenciaId, jaJustificada, onJustificada, onDesfeita, onClose }) {
   const { conta, nome, mes, compId } = detalhe
   const [carregando, setCarregando] = useState(true)
   const [linhas, setLinhas] = useState([])
   const [registro, setRegistro] = useState(null) // 'Justificativa' | 'Correção'
   const [salvando, setSalvando] = useState(false)
+  const [tratada, setTratada] = useState(jaJustificada)
   const [msg, setMsg] = useState('')
 
   async function registrar(tipo, detalheTxt) {
@@ -454,9 +465,29 @@ function ModalRazao({ detalhe, compsAnteriores, usuario, getCompetenciaId, jaJus
       if (error) throw error
       setMsg(`${tipo} registrada na auditoria.`)
       setRegistro(null)
+      setTratada(true)
       onJustificada()
     } catch (e) {
       setMsg('Erro ao registrar: ' + (e.message || e))
+    } finally {
+      setSalvando(false)
+    }
+  }
+
+  // Desfaz o ajuste: apaga o(s) registro(s) desta conta/mês na auditoria do Comparativo
+  // (o item identifica unicamente conta + mês). A célula volta a contar como pendência.
+  async function desfazer() {
+    setSalvando(true)
+    try {
+      const { error } = await supabase.from('auditoria').delete()
+        .eq('modulo', 'Comparativo')
+        .eq('item', `${conta} · ${MESES[mes - 1]}/${ANO}`)
+      if (error) throw error
+      setMsg('Ajuste desfeito — variação voltou a pendente.')
+      setTratada(false)
+      onDesfeita()
+    } catch (e) {
+      setMsg('Erro ao desfazer: ' + (e.message || e))
     } finally {
       setSalvando(false)
     }
@@ -568,11 +599,16 @@ function ModalRazao({ detalhe, compsAnteriores, usuario, getCompetenciaId, jaJus
           <span style={{ fontSize: 12.5, minHeight: 16, color: msg ? (msg.startsWith('Erro') ? theme.red : theme.green) : theme.sub }}>
             {msg
               ? <><i className={`ti ${msg.startsWith('Erro') ? 'ti-alert-triangle' : 'ti-circle-check'}`} /> {msg}</>
-              : jaJustificada
+              : tratada
                 ? <><i className="ti ti-circle-check" style={{ color: theme.green }} /> Variação já tratada na auditoria.</>
                 : 'Justifique ou corrija esta variação — fica registrada na auditoria.'}
           </span>
           <div style={{ display: 'flex', gap: 8 }}>
+            {tratada && (
+              <button className="btn btn-ghost" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: theme.red }} disabled={salvando} onClick={desfazer}>
+                <i className="ti ti-arrow-back-up" /> {salvando ? 'Desfazendo…' : 'Desfazer ajuste'}
+              </button>
+            )}
             <button className="btn btn-ghost" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }} onClick={() => { setMsg(''); setRegistro('Justificativa') }}>
               <i className="ti ti-flag" /> Justificar
             </button>
