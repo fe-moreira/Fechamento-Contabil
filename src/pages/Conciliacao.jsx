@@ -452,6 +452,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
   const [plano, setPlano] = useState([])   // [{ cod, nome }] para os seletores de conta
   const [partidas, setPartidas] = useState({}) // chave (data|histórico) -> lançamentos da partida (p/ contrapartida)
   const [msg, setMsg] = useState('')
+  const [verComposic, setVerComposic] = useState(null) // { titulo, itens } — composição de um saldo
   const [tratados, setTratados] = useState(new Set()) // razao_ids já corrigidos/estornados/justificados
 
   async function carregarTratados() {
@@ -689,10 +690,12 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
 
       {/* Resumo + amarração — débito/crédito/saldo já incluem as correções pendentes. */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(150px,1fr))', gap: 12, marginBottom: Math.abs(ajNet) > 0.005 ? 6 : 16 }}>
-        <Tile label="Saldo inicial" v={moneyDC(conta.saldo_inicial)} />
+        <Tile label="Saldo inicial" v={moneyDC(conta.saldo_inicial)} hint="Ver a composição de abertura (arrastada do mês anterior)"
+          onClick={() => setVerComposic({ titulo: `Composição do saldo inicial · ${conta.conta} ${conta.nome}`, itens: lanc.filter(l => l._abertura) })} />
         <Tile label="Débito" v={money((Number(conta.debito) || 0) + ajDeb)} cor={theme.green} />
         <Tile label="Crédito" v={money((Number(conta.credito) || 0) + ajCred)} cor={theme.red} />
-        <Tile label="Saldo atual" v={moneyDC((Number(conta.saldo_final) || 0) + ajNet)} />
+        <Tile label="Saldo atual" v={moneyDC((Number(conta.saldo_final) || 0) + ajNet)} hint="Ver a composição do saldo final (o que segue em aberto — arrasta para o próximo mês)"
+          onClick={() => setVerComposic({ titulo: `Composição do saldo final · ${conta.conta} ${conta.nome}`, itens: emAbertoTodos })} />
         <Tile label="Diferença (amarração)" v={money(dif)} cor={Math.abs(dif) < 0.01 ? theme.green : theme.yellow} />
       </div>
       {Math.abs(ajNet) > 0.005 && <p style={{ color: theme.accent, fontSize: 11.5, margin: '0 0 16px' }}>
@@ -860,7 +863,70 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
         <ModalCorrigido linha={verCorr} conta={conta} compId={compId} planoMap={planoMap}
           onClose={() => setVerCorr(null)} onDesfazer={() => desfazerCorrecao(verCorr.id)} />
       )}
+      {verComposic && (
+        <ModalComposicao titulo={verComposic.titulo} itens={verComposic.itens} onClose={() => setVerComposic(null)} />
+      )}
     </Wrapper>
+  )
+}
+
+// Composição de um saldo (inicial ou final): lista os títulos/lançamentos que o compõem,
+// com saldo acumulado. O saldo inicial traz a abertura (arrastada do mês anterior); o saldo
+// final, o que segue em aberto (arrasta para o próximo mês). Sem movimento no mês, são iguais.
+function ModalComposicao({ titulo, itens, onClose }) {
+  let saldo = 0
+  const totD = itens.reduce((s, l) => s + (Number(l.debito) || 0), 0)
+  const totC = itens.reduce((s, l) => s + (Number(l.credito) || 0), 0)
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, zIndex: 70 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, width: 'min(840px, 96vw)', maxHeight: '86vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', borderBottom: `0.5px solid ${theme.cb}` }}>
+          <h3 style={{ fontSize: 14, margin: 0 }}>{titulo}</h3>
+          <button className="btn-ghost" onClick={onClose} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><i className="ti ti-x" /> Fechar</button>
+        </div>
+        <div style={{ overflow: 'auto' }}>
+          {itens.length === 0 ? (
+            <p style={{ color: theme.sub, fontSize: 13, padding: '18px 20px' }}>Sem composição de títulos em aberto (conta de saldo, sem itens a compor).</p>
+          ) : (
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 680 }}>
+              <thead>
+                <tr style={{ background: theme.input }}>
+                  <th style={th}>Data</th><th style={th}>Histórico / NF</th>
+                  <th style={thR}>Débito</th><th style={thR}>Crédito</th><th style={thR}>Saldo</th>
+                </tr>
+              </thead>
+              <tbody>
+                {itens.map((l, i) => {
+                  saldo += (Number(l.debito) || 0) - (Number(l.credito) || 0)
+                  const nf = l.leitura?.nf
+                  return (
+                    <tr key={i} style={{ borderTop: `1px solid ${theme.border}`, background: l._abertura ? 'rgba(74,124,255,0.06)' : undefined }}>
+                      <td style={{ ...td, whiteSpace: 'nowrap' }}>{l.data || ''}</td>
+                      <td style={{ ...td, maxWidth: 400, whiteSpace: 'normal' }}>
+                        {l._abertura && <span style={{ color: theme.accent, fontSize: 10, fontWeight: 700, marginRight: 6 }}>SALDO ANT.</span>}
+                        {l.historico || ''}
+                        {nf && !String(l.historico || '').replace(/\D/g, '').includes(String(nf).replace(/\D/g, '')) ? <span style={{ color: theme.sub }}> · NF {nf}</span> : null}
+                      </td>
+                      <td style={{ ...tdR }}>{Number(l.debito) ? money(l.debito) : ''}</td>
+                      <td style={{ ...tdR }}>{Number(l.credito) ? money(l.credito) : ''}</td>
+                      <td style={{ ...tdR, color: saldo < 0 ? theme.red : theme.text }}>{money(saldo)}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+              <tfoot>
+                <tr style={{ borderTop: `1px solid ${theme.border}`, background: theme.input }}>
+                  <td style={{ ...td, fontWeight: 700 }} colSpan={2}>Total</td>
+                  <td style={{ ...tdR, fontWeight: 700 }}>{money(totD)}</td>
+                  <td style={{ ...tdR, fontWeight: 700 }}>{money(totC)}</td>
+                  <td style={{ ...tdR, fontWeight: 700 }}>{money(totD - totC)}</td>
+                </tr>
+              </tfoot>
+            </table>
+          )}
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -1698,10 +1764,13 @@ const td = { padding: '11px 14px', fontSize: 12.5, color: theme.text, verticalAl
 const tdR = { ...td, textAlign: 'right', whiteSpace: 'nowrap' }
 
 function Dot({ c }) { return <span style={{ display: 'inline-block', width: 11, height: 11, borderRadius: '50%', background: c }} /> }
-function Tile({ label, v, cor }) {
+function Tile({ label, v, cor, onClick, hint }) {
   return (
-    <div style={{ background: theme.input, borderRadius: 10, padding: 14 }}>
-      <p style={{ color: theme.sub, fontSize: 10.5, textTransform: 'uppercase', letterSpacing: .4, margin: 0 }}>{label}</p>
+    <div onClick={onClick} title={onClick ? (hint || 'Ver composição') : undefined}
+      style={{ background: theme.input, borderRadius: 10, padding: 14, cursor: onClick ? 'pointer' : 'default', border: `1px solid ${onClick ? theme.cb : 'transparent'}` }}>
+      <p style={{ color: theme.sub, fontSize: 10.5, textTransform: 'uppercase', letterSpacing: .4, margin: 0, display: 'flex', alignItems: 'center', gap: 5 }}>
+        {label}{onClick && <i className="ti ti-eye" style={{ fontSize: 12, color: theme.accent }} />}
+      </p>
       <p style={{ color: cor || theme.text, fontSize: 15, fontWeight: 600, margin: '4px 0 0' }}>{v}</p>
     </div>
   )
