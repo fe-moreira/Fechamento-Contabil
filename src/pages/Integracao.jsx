@@ -2319,14 +2319,14 @@ function PerfilExtratoCfg({ arr, catByRow, adiantContas, nome, bancoNome, perfil
         </div>
         <div style={{ border: `0.5px solid ${theme.cb}`, borderRadius: 10, overflow: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 640 }}>
-            <thead><tr style={{ background: theme.input }}><th style={fth}>E/S</th><th style={{ ...fth, textAlign: 'right' }}>Valor</th><th style={fth}>Data</th><th style={fth}>Histórico montado</th><th style={fth}>Contrap.</th></tr></thead>
+            <thead><tr style={{ background: theme.input }}><th style={fth}>E/S</th><th style={{ ...fth, textAlign: 'right' }}>Valor</th><th style={fth}>Data</th><th style={{ ...fth, minWidth: 380 }}>Histórico montado</th><th style={fth}>Contrap.</th></tr></thead>
             <tbody>
               {prev.map((l, i) => (
                 <tr key={i} style={{ borderTop: `1px solid ${theme.border}` }}>
                   <td style={{ ...ftd, fontSize: 11, color: l.entrada ? theme.green : theme.red }}>{l.entrada ? 'Entrada' : 'Saída'}</td>
                   <td style={{ ...ftd, textAlign: 'right', whiteSpace: 'nowrap' }}>{money(l.valor)}</td>
                   <td style={{ ...ftd, fontSize: 11, color: theme.sub, whiteSpace: 'nowrap' }}>{l.data ? l.data.split('-').reverse().join('/') : '—'}</td>
-                  <td style={{ ...ftd, fontSize: 11, color: theme.sub, maxWidth: 320 }}>{l.historico || '—'}</td>
+                  <td style={{ ...ftd, fontSize: 11, color: theme.text, minWidth: 380, whiteSpace: 'normal', lineHeight: 1.35 }}>{l.historico || '—'}</td>
                   <td style={{ ...ftd, fontSize: 11.5 }}>{l.contra || '—'}</td>
                 </tr>
               ))}
