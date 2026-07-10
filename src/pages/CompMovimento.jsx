@@ -3,7 +3,7 @@ import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { theme, money, moneyDC } from '../lib/theme'
-import { montarBalancete, normalizaCompetencia } from '../lib/balancete'
+import { montarBalancete, normalizaCompetencia, applyMask } from '../lib/balancete'
 
 // Data (Date do Excel ou "dd/mm/aaaa") → ISO "aaaa-mm-dd".
 function toISO(v) {
@@ -97,25 +97,31 @@ export default function CompMovimento() {
         debito: findCol('debito', 'valdeb', 'vlr deb'),
         credito: findCol('credito', 'valcre', 'vlr cred'),
         comp: findCol('compet', 'mes', 'mês'),
+        mascara: findCol('mascara', 'máscara'),
       }
-      if (col.conta < 0 || (col.debito < 0 && col.credito < 0)) { setImpMsg('Não identifiquei as colunas (preciso de Conta e Débito/Crédito).'); setImpBusy(false); return }
+      if (col.conta < 0 || (col.debito < 0 && col.credito < 0)) { setImpMsg('Não identifiquei as colunas (preciso de Conta/Classificação e Débito/Crédito).'); setImpBusy(false); return }
       const { data: cli } = await supabase.from('clientes').select('competencia_inicio').eq('id', empresaId).maybeSingle()
       const iniM = String(normalizaCompetencia(cli?.competencia_inicio) || '').match(/^(\d{2})\/(\d{4})$/)
       const mesInicio = iniM ? Number(iniM[1]) : 99 // sem início definido → importa todos os meses do arquivo
       const porMes = {}
       for (const r of arr.slice(h + 1)) {
-        const contaCod = String(r[col.conta] ?? '').trim(); if (!contaCod) continue
+        // Mesma regra do razão da conciliação: pega o CÓDIGO/CLASSIFICAÇÃO da conta; se
+        // vier só em dígitos e houver coluna "máscara", aplica a máscara (vira classificação).
+        let conta = String(r[col.conta] ?? '').trim()
+        if (col.mascara >= 0 && /^\d+$/.test(conta)) conta = applyMask(conta, r[col.mascara])
+        const debito = col.debito >= 0 ? numBR(r[col.debito]) : 0
+        const credito = col.credito >= 0 ? numBR(r[col.credito]) : 0
+        if (!conta || (!debito && !credito)) continue // linha sem conta ou sem valor não entra
         let mes = null
         if (col.comp >= 0) { const mm = String(r[col.comp] ?? '').match(/(\d{1,2})/); if (mm) mes = Number(mm[1]) }
         if (!mes) { const iso = toISO(r[col.data]); if (iso) mes = Number(iso.slice(5, 7)) }
         if (!mes || mes < 1 || mes > 12 || mes >= mesInicio) continue // só meses ANTERIORES ao início
         ;(porMes[mes] ||= []).push({
-          data: toISO(r[col.data]), conta: contaCod,
+          data: toISO(r[col.data]), conta,
           nome: col.nome >= 0 ? String(r[col.nome] ?? '').trim() : null,
           contrapartida: col.contrapartida >= 0 ? limpaContra(r[col.contrapartida]) : null,
           historico: col.historico >= 0 ? String(r[col.historico] ?? '').trim() : '',
-          debito: col.debito >= 0 ? numBR(r[col.debito]) : 0,
-          credito: col.credito >= 0 ? numBR(r[col.credito]) : 0,
+          debito, credito,
         })
       }
       const meses = Object.keys(porMes).map(Number).sort((a, b) => a - b)
