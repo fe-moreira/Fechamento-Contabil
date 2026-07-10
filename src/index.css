@@ -50,6 +50,14 @@ input, select, textarea { font-family: inherit; }
 .btn-ghost { background: transparent; border: 1px solid var(--c-btnghost-border); color: var(--c-text); }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
 
+/* Feedback de interação: passar o mouse "acende" o botão; clicar "afunda" (pressiona). */
+.btn, .btn-ghost { cursor: pointer; transition: filter .12s ease, transform .06s ease, background .12s ease, box-shadow .12s ease; }
+.btn:hover:not(:disabled) { filter: brightness(1.09); box-shadow: 0 2px 10px rgba(0,0,0,.20); }
+.btn:active:not(:disabled) { transform: translateY(1px) scale(.98); filter: brightness(.93); box-shadow: none; }
+.btn-ghost:hover:not(:disabled) { background: var(--c-input); }
+.btn-ghost:active:not(:disabled) { transform: translateY(1px) scale(.98); filter: brightness(.93); }
+.btn:disabled, .btn-ghost:disabled { transform: none; filter: none; box-shadow: none; }
+
 .input {
   width: 100%; background: var(--c-input); border: 1px solid var(--c-input-border);
   border-radius: 8px; padding: 9px 11px; color: var(--c-text); font-size: 14px;
