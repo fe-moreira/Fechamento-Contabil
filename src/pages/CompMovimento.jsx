@@ -131,11 +131,13 @@ export default function CompMovimento() {
         const { data: ex } = await supabase.from('competencias').select('id').eq('cliente_id', empresaId).eq('ano', ANO).eq('mes', mes).maybeSingle()
         if (ex) compId = ex.id
         else { const { data: cr, error } = await supabase.from('competencias').insert({ cliente_id: empresaId, ano: ANO, mes }).select('id').single(); if (error) throw error; compId = cr.id }
-        const regs = porMes[mes].map(x => ({ competencia_id: compId, data: x.data, conta: x.conta, nome: x.nome, contrapartida: x.contrapartida, historico: x.historico, debito: x.debito, credito: x.credito }))
+        const itens = porMes[mes]
+        // A tabela `razao` NÃO tem coluna `nome` (igual à conciliação): grava sem o nome.
+        const paraRazao = itens.map(x => ({ competencia_id: compId, data: x.data, conta: x.conta, contrapartida: x.contrapartida, historico: x.historico, debito: x.debito, credito: x.credito }))
         await supabase.from('razao').delete().eq('competencia_id', compId)
-        for (let i = 0; i < regs.length; i += 500) { const { error } = await supabase.from('razao').insert(regs.slice(i, i + 500)); if (error) throw error }
+        for (let i = 0; i < paraRazao.length; i += 500) { const { error } = await supabase.from('razao').insert(paraRazao.slice(i, i + 500)); if (error) throw error }
         const porConta = {}
-        for (const r of regs) { const c = porConta[r.conta] || (porConta[r.conta] = { conta: r.conta, nome: r.nome || null, debito: 0, credito: 0 }); if (!c.nome && r.nome) c.nome = r.nome; c.debito += r.debito; c.credito += r.credito }
+        for (const r of itens) { const c = porConta[r.conta] || (porConta[r.conta] = { conta: r.conta, nome: r.nome || null, debito: 0, credito: 0 }); if (!c.nome && r.nome) c.nome = r.nome; c.debito += r.debito; c.credito += r.credito }
         const bal = Object.values(porConta).map(c => ({ competencia_id: compId, conta: c.conta, nome: c.nome || null, saldo_inicial: 0, debito: c.debito, credito: c.credito, saldo_final: c.debito - c.credito }))
         await supabase.from('balancete').delete().eq('competencia_id', compId)
         for (let i = 0; i < bal.length; i += 500) { const { error } = await supabase.from('balancete').insert(bal.slice(i, i + 500)); if (error) throw error }
