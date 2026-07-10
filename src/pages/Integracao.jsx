@@ -1543,6 +1543,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
 
   // Gera a partida completa para o Domínio (banco + contrapartida, por entrada/saída).
   function gerar() {
+    if (!concluido) { setErro('Conclua o banco antes de gerar o arquivo do Domínio.'); return }
     const prontasL = linhas.filter(l => l.banco && l.contra && l.valor > 0)
     if (!prontasL.length) { setErro('Nenhuma linha com banco e contrapartida para gerar.'); return }
     const semData = prontasL.filter(l => !l.data).length
@@ -1562,10 +1563,9 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   function gerarTodos() {
     const bancosSt = est?.bancos || {}
     const lanc = []
-    const naoConcl = []
-    for (const [cod, s] of Object.entries(bancosSt)) {
-      if (!Array.isArray(s?.draft) || !s.draft.length) continue
-      if (!s.concluido) naoConcl.push(nomeBanco(cod))
+    for (const [, s] of Object.entries(bancosSt)) {
+      // Só entram bancos CONCLUÍDOS (para gerar, o banco tem que estar concluído).
+      if (!s?.concluido || !Array.isArray(s?.draft)) continue
       for (const l of s.draft) {
         if (!(l.banco && l.contra && Number(l.valor) > 0)) continue
         lanc.push({
@@ -1576,15 +1576,14 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
         })
       }
     }
-    if (!lanc.length) { setErro('Nenhum banco com lançamentos prontos. Importe e classifique os bancos antes.'); return }
-    if (naoConcl.length && !window.confirm(`${naoConcl.length} banco(s) ainda NÃO concluído(s) (${naoConcl.slice(0, 4).join(', ')}${naoConcl.length > 4 ? '…' : ''}). Gerar assim mesmo?`)) return
+    if (!lanc.length) { setErro('Nenhum banco CONCLUÍDO para gerar. Conclua os bancos antes.'); return }
     const semData = lanc.filter(l => !l.data).length
     if (semData && !window.confirm(`Atenção: ${semData} lançamento(s) SEM DATA vão sair sem data. Gerar assim mesmo?`)) return
     gerarDominioCSV(lanc, `financeiro_dominio_TODOS_${competencia.replace('/', '-')}.csv`)
     setErro(''); setMsg(`Arquivo do Domínio gerado com ${lanc.length} lançamento(s) de todos os bancos.`)
   }
   // Total de lançamentos prontos somando todos os bancos (para o botão "todos").
-  const prontasTodos = Object.values(est?.bancos || {}).reduce((n, s) => n + (Array.isArray(s?.draft) ? s.draft.filter(l => l.banco && l.contra && Number(l.valor) > 0).length : 0), 0)
+  const prontasTodos = Object.values(est?.bancos || {}).reduce((n, s) => n + (s?.concluido && Array.isArray(s?.draft) ? s.draft.filter(l => l.banco && l.contra && Number(l.valor) > 0).length : 0), 0)
 
   const prontas = linhas.filter(l => l.banco && l.contra && l.valor > 0).length
   const semContra = linhas.filter(l => !l.contra).length
@@ -1707,8 +1706,8 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
             {prontasTodos > 0 && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 14, padding: '10px 12px', background: theme.input, borderRadius: 8 }}>
                 <i className="ti ti-files" style={{ color: theme.accent }} />
-                <span style={{ fontSize: 12.5, color: theme.sub, flex: 1, minWidth: 200 }}>Gere <b style={{ color: theme.text }}>um único arquivo</b> do Domínio com <b style={{ color: theme.text }}>todos os bancos</b> ({prontasTodos} lançamento(s)) para importar de uma vez.</span>
-                <button className="btn" style={{ fontSize: 12.5 }} onClick={gerarTodos}><i className="ti ti-file-export" /> Gerar Domínio — todos os bancos</button>
+                <span style={{ fontSize: 12.5, color: theme.sub, flex: 1, minWidth: 200 }}>Gere <b style={{ color: theme.text }}>um único arquivo</b> do Domínio com os <b style={{ color: theme.text }}>bancos concluídos</b> ({prontasTodos} lançamento(s)) para importar de uma vez.</span>
+                <button className="btn" style={{ fontSize: 12.5 }} onClick={gerarTodos}><i className="ti ti-file-export" /> Gerar Domínio — bancos concluídos</button>
               </div>
             )}
             </>
@@ -1860,8 +1859,8 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
               ? <button className="btn btn-ghost" style={{ color: theme.yellow, borderColor: theme.yellow }} onClick={reabrirBanco}><i className="ti ti-lock-open" /> Reabrir banco</button>
               : <button className="btn btn-ghost" style={{ color: theme.green, borderColor: theme.green }} onClick={concluirBanco}><i className="ti ti-circle-check" /> Concluir banco</button>)}
             <button className="btn btn-ghost" onClick={exportarExcel}><i className="ti ti-file-spreadsheet" /> Exportar Excel</button>
-            <button className="btn btn-ghost" disabled={!prontas || (temExtrato && Math.abs(difSaldo) >= 0.005)}
-              title={temExtrato && Math.abs(difSaldo) >= 0.005 ? 'O saldo do extrato ainda não confere — zere a diferença antes de gerar.' : ''}
+            <button className="btn btn-ghost" disabled={!concluido || !prontas || (temExtrato && Math.abs(difSaldo) >= 0.005)}
+              title={!concluido ? 'Conclua o banco antes de gerar o arquivo do Domínio.' : (temExtrato && Math.abs(difSaldo) >= 0.005 ? 'O saldo do extrato ainda não confere — zere a diferença antes de gerar.' : '')}
               onClick={gerar}><i className="ti ti-file-export" /> Gerar arquivo do Domínio ({prontas})</button>
           </div>
           <p style={{ color: theme.sub, fontSize: 11.5, margin: '10px 0 0' }}>Preencha a contrapartida das linhas que faltam e clique em <b style={{ color: theme.text }}>Aprender e salvar</b> — no próximo mês elas já vêm classificadas. Entrada = D banco / C contrapartida; Saída = D contrapartida / C banco.</p>
