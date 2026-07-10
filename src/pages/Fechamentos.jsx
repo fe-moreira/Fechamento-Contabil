@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
 import { fechaSozinho } from '../lib/clientes'
+import { normalizaCompetencia } from '../lib/balancete'
 import { theme } from '../lib/theme'
 
 const MESES = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
@@ -40,7 +41,15 @@ export default function Fechamentos() {
     return <Wrapper><Aviso texto="Selecione uma empresa no menu lateral para ver os fechamentos." /></Wrapper>
   }
 
-  const filtrada = lista.filter(c => (fAno === 'todos' || c.ano === +fAno) && (fMes === 'todos' || c.mes === +fMes))
+  // Meses ANTERIORES ao início do cliente não são fechamentos — foram importados só
+  // para alimentar o Comparativo de Movimento. Ficam guardados (mantêm razão/balancete
+  // do comparativo), mas não aparecem na lista de fechamentos nem contam nos resumos.
+  const iniM = String(normalizaCompetencia(cli?.competencia_inicio) || '').match(/^(\d{2})\/(\d{4})$/)
+  const iniMes = iniM ? +iniM[1] : null
+  const iniAno = iniM ? +iniM[2] : null
+  const anteriorAoInicio = c => iniAno != null && (c.ano < iniAno || (c.ano === iniAno && c.mes < iniMes))
+
+  const filtrada = lista.filter(c => !anteriorAoInicio(c) && (fAno === 'todos' || c.ano === +fAno) && (fMes === 'todos' || c.mes === +fMes))
   // Só é "em andamento" depois de importar o razão; sem razão (e não fechado) → "pendente".
   const efet = c => c.status === 'fechado' ? 'fechado' : (c.razao_importado ? 'andamento' : 'pendente')
   const cont = { fechado: 0, andamento: 0, pendente: 0 }
