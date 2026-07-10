@@ -98,9 +98,17 @@ export function aprender(memoria, novas) {
 // de uma base de lançamentos, casando pelo nome da empresa (sinal da contrapartida).
 export function extrairEntidade(s) {
   let e = String(s ?? '')
-  const parts = e.split(/\s-\s/)
-  if (parts.length > 1) e = parts[parts.length - 1]
-  e = e.replace(/\bC[F]?\.?\s*NF.*/i, '').replace(/\bNF.*/i, '').replace(/\bN[ºo°]\.?.*/i, '').replace(/\bREF\.?.*/i, '')
+  // Tira prefixo de operação (PGTO./PAGTO./RECEB.) e o bloco de documento (DOC/CF/NF/Nº/REF).
+  e = e.replace(/^\s*(VALOR\s+REFERENTE\s+A\s+)?(PAGAMENTO|PAGTO|PGTO|RECEBIMENTO|RECEBTO|RECEB)\.?\s+/i, '')
+  e = e.replace(/\bC[F]?\.?\s*NF.*/i, '').replace(/\bNF.*/i, '').replace(/\bN[ºo°]\.?.*/i, '').replace(/\bREF\.?.*/i, '').replace(/\bDOC.*/i, '')
+  // "categoria - entidade": pega a entidade (último trecho). Mas se o último trecho for só
+  // sufixo societário (ME/EPP/LTDA/SA) ou muito curto, a entidade é o trecho ANTERIOR
+  // (ex.: "LEILA DOMINGUES GARCIA - ME" → "LEILA DOMINGUES GARCIA").
+  const parts = e.split(/\s[-–]\s/)
+  if (parts.length > 1) {
+    const ult = parts[parts.length - 1].trim()
+    e = (/^(ME|EPP|EIRELI|LTDA|S\/?A|S\/?S)\.?$/i.test(ult) || normHist(ult).length < 4) ? parts[parts.length - 2] : ult
+  }
   return normHist(e)
 }
 
