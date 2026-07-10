@@ -24,20 +24,35 @@ export function tokensHist(s) {
 }
 
 // Casa um histórico com a memória por TOKENS significativos (não por substring, que
-// quebrava com "PGTO" × "PAGAMENTO" e deixava lixo de 1 letra casar tudo). Um termo
-// casa quando TODOS os seus tokens significativos estão no histórico; vence o termo
-// com MAIS tokens (mais específico). Termo sem token significativo é ignorado.
-export function casarHistorico(historico, memoria) {
+// quebrava com "PGTO" × "PAGAMENTO" e deixava lixo de 1 letra casar tudo).
+// `excluir` = conta(s) que NÃO podem ser contrapartida — o BANCO DO PRÓPRIO EXTRATO
+// (ele já é um lado da partida). Outro banco pode ser contrapartida (ex.: transferência).
+// 1) termo com TODOS os tokens no histórico vence (o mais específico);
+// 2) fallback por SEMELHANÇA: o termo com mais palavras em comum (≥2 e ≥60% do termo)
+//    — traz a conta quando "o nome tem muitas coisas iguais" (ex.: Attentive).
+export function casarHistorico(historico, memoria, excluir) {
   const htoks = new Set(tokensHist(historico))
   if (!htoks.size) return ''
+  const banida = c => excluir && excluir.has && excluir.has(String(c))
   let best = null, bestScore = 0
   for (const m of (memoria || [])) {
+    if (banida(m.conta)) continue
     const tt = tokensHist(m.termo)
     if (!tt.length) continue
     if (!tt.every(t => htoks.has(t))) continue
     if (tt.length > bestScore) { bestScore = tt.length; best = m }
   }
-  return best ? String(best.conta || '') : ''
+  if (best) return String(best.conta || '')
+  let alt = null, altShared = 0, altFrac = 0
+  for (const m of (memoria || [])) {
+    if (banida(m.conta)) continue
+    const tt = tokensHist(m.termo)
+    if (tt.length < 2) continue
+    const shared = tt.filter(t => htoks.has(t)).length
+    const frac = shared / tt.length
+    if (shared >= 2 && frac >= 0.6 && (shared > altShared || (shared === altShared && frac > altFrac))) { altShared = shared; altFrac = frac; alt = m }
+  }
+  return alt ? String(alt.conta || '') : ''
 }
 
 // Valor em formato BR ("1.234,56") ou US ("1234.56"); negativo por sinal ou (parênteses).
@@ -161,7 +176,7 @@ function contemDoc(hist, doc) {
   return dig.length >= 2 && h.replace(/\D/g, '').includes(dig)
 }
 
-export function aplicarPerfil(arr, perfil, memoria, catByRow, adiantContas) {
+export function aplicarPerfil(arr, perfil, memoria, catByRow, adiantContas, bancos) {
   const p = perfil || {}
   const temAdiant = adiantContas && adiantContas.size > 0
   const ini = Number.isInteger(p.linhaInicio) ? p.linhaInicio : 1
@@ -203,7 +218,7 @@ export function aplicarPerfil(arr, perfil, memoria, catByRow, adiantContas) {
     const valor = Math.abs(parseValor(r[p.colValor]))
     if (!valor) continue
     const data = p.colData != null && p.colData >= 0 ? dataISO(r[p.colData]) : ''
-    let contra = casarHistorico(credor || historico, memoria)
+    let contra = casarHistorico(credor || historico, memoria, bancos)
     // Regra: se a linha tem nota/documento, não é adiantamento (adiantamento é
     // quando ainda não há nota). Evita "adiantamento a fornecedor/cliente" errado.
     if (doc && contra && temAdiant && adiantContas.has(String(contra))) contra = ''

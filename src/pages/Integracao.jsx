@@ -1081,7 +1081,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
       const historico = mapX.hist >= 0 ? String(cells[mapX.hist] ?? '').trim() : ''
       const valor = mapX.valor >= 0 ? parseValor(cells[mapX.valor]) : 0
       const data = mapX.data >= 0 ? dataISO(cells[mapX.data]) : ''
-      return { banco, historico, valor: Math.abs(valor), entrada: valor >= 0, contra: casarHistorico(historico, memX), data }
+      return { banco, historico, valor: Math.abs(valor), entrada: valor >= 0, contra: casarHistorico(historico, memX, banco ? new Set([String(banco)]) : null), data }
     })
   }
 
@@ -1130,7 +1130,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   function aplicarEProsseguir(arr, nome, bancoFixo, perf, catByRow) {
     // A contrapartida NUNCA pode ser a própria conta do banco (o banco já é um lado da
     // partida). Se a memória/perfil devolver o próprio banco, limpa para classificar à mão.
-    const norm = aplicarPerfil(arr, perf, memoria, catByRow, adiantContas)
+    const norm = aplicarPerfil(arr, perf, memoria, catByRow, adiantContas, new Set([String(bancoFixo)]))
       .map(l => ({ ...l, banco: bancoFixo, contra: String(l.contra || '') === String(bancoFixo) ? '' : l.contra }))
     // Reimport do mesmo arquivo: preserva as contrapartidas já preenchidas no
     // rascunho (mesmo arquivo → mesma ordem), atualizando histórico/valor/data.
@@ -1820,7 +1820,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
 
       {cfg && (
         <PerfilExtratoCfg
-          arr={cfg.arr} catByRow={cfg.catByRow} adiantContas={adiantContas} nome={cfg.nome} bancoNome={nomeBanco(cfg.banco)} perfilInicial={cfg.perfil} memoria={memoria}
+          arr={cfg.arr} catByRow={cfg.catByRow} adiantContas={adiantContas} nome={cfg.nome} bancoNome={nomeBanco(cfg.banco)} bancoCod={cfg.banco} perfilInicial={cfg.perfil} memoria={memoria}
           onCancelar={() => setCfg(null)}
           onSalvar={async (perf) => { await salvarPerfil(perf); setCfg(null); aplicarEProsseguir(cfg.arr, cfg.nome, cfg.banco, perf, cfg.catByRow) }}
         />
@@ -2212,7 +2212,7 @@ function ModalQuebra({ linha, nomeBanco, planoMap, onClose, onConfirmar }) {
 
 // Painel de mapeamento por cliente: define como ler o extrato (linha de início,
 // colunas, entrada/saída) e monta o histórico no padrão do Domínio. Prévia ao vivo.
-function PerfilExtratoCfg({ arr, catByRow, adiantContas, nome, bancoNome, perfilInicial, memoria, onCancelar, onSalvar }) {
+function PerfilExtratoCfg({ arr, catByRow, adiantContas, nome, bancoNome, bancoCod, perfilInicial, memoria, onCancelar, onSalvar }) {
   const [p, setP] = useState(perfilInicial)
   const set = patch => setP(x => ({ ...x, ...patch }))
   const nc = (arr || []).reduce((m, r) => Math.max(m, (r || []).length), 0)
@@ -2237,7 +2237,7 @@ function PerfilExtratoCfg({ arr, catByRow, adiantContas, nome, bancoNome, perfil
       {cols.map(c => <option key={c.j} value={c.j}>{c.label}</option>)}
     </select>
   )
-  const todas = aplicarPerfil(arr, p, memoria, catByRow, adiantContas)
+  const todas = aplicarPerfil(arr, p, memoria, catByRow, adiantContas, bancoCod ? new Set([String(bancoCod)]) : null)
   const prev = todas.slice(0, 6)
   const total = todas.length
   const casadas = todas.filter(l => l.contra).length
