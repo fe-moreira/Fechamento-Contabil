@@ -1755,8 +1755,8 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
                     <td style={{ ...ftd, textAlign: 'center' }}><input type="checkbox" checked={sel.has(i)} onChange={() => toggleUm(i)} /></td>
                     <td style={{ ...ftd, fontSize: 11.5, whiteSpace: 'nowrap', color: theme.sub }}>{dataBR(l.data) || '—'}</td>
                     <td style={{ ...ftd, fontSize: 11.5 }}>{l.banco ? `${l.banco} · ${nomeBanco(l.banco)}` : <span style={{ color: theme.yellow }}>sem banco</span>}</td>
-                    <td style={{ ...ftd, minWidth: 240, maxWidth: 340 }}>
-                      <input className="input" style={{ fontSize: 11.5, padding: '4px 7px', width: '100%' }} value={l.historico || ''} disabled={concluido} onChange={e => setLinha(i, { historico: e.target.value })} title="Editar histórico" />
+                    <td style={{ ...ftd, minWidth: 420 }}>
+                      <input className="input" style={{ fontSize: 11.5, padding: '4px 7px', width: '100%', minWidth: 400 }} value={l.historico || ''} disabled={concluido} onChange={e => setLinha(i, { historico: e.target.value })} title={l.historico || 'Editar histórico'} />
                     </td>
                     <td style={{ ...ftd, textAlign: 'right', whiteSpace: 'nowrap' }}>{money(l.valor)}</td>
                     <td style={{ ...ftd }}>
