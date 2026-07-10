@@ -118,14 +118,15 @@ export default function BookComposicoes({ empresaId, empresaNome, competencia, c
         } catch { /* pula anexo com erro, segue os demais */ }
       }
 
-      const sub = `${empresaNome} · CNPJ ${fmtCnpj(cnpj)} · competência ${competencia}`
+      const totSaldo = contas.reduce((s, c) => s + c.saldo_final, 0)
+      const sub = `${empresaNome} · CNPJ ${fmtCnpj(cnpj)} · competência ${competencia} · ${contas.length} contas patrimoniais`
       const colunas = [
         { nome: 'Conta / item', largura: 16 },
         { nome: 'Nome / histórico', largura: 44, wrap: true },
         { nome: 'Saldo / valor', alinhar: 'right', moeda: true },
         { nome: 'Documento', alinhar: 'right', moeda: true },
         { nome: 'Diferença', alinhar: 'right', moeda: true },
-        { nome: 'Anexo (PDF)', largura: 22 },
+        { nome: 'Situação / anexo', largura: 26 },
       ]
       const secoes = [{
         titulo: 'Amarração geral — contas patrimoniais',
@@ -133,14 +134,29 @@ export default function BookComposicoes({ empresaId, empresaNome, competencia, c
           c.conta, c.nome, num(c.saldo_final),
           c.saldo_documento == null ? '' : num(c.saldo_documento),
           c.dif == null ? '' : num(c.dif),
-          linkDe[c.conta] ? { text: 'Abrir PDF', hyperlink: linkDe[c.conta] } : (c.documento_path ? '(anexo indisponível)' : ''),
+          linkDe[c.conta] ? { text: 'Abrir PDF', hyperlink: linkDe[c.conta] } : statusConta(c).txt,
         ]),
+        totais: ['', 'Total patrimonial', num(totSaldo), '', '', ''],
       }]
-      for (const c of contas.filter(c => c.composicao.length)) {
+      // Uma folha por conta patrimonial — TODAS, espelhando a tela: composição (quando
+      // houver), amarração (saldo × documento × diferença × situação) e documento-suporte
+      // (nome do arquivo ou justificativa). Contas sem composição vêm só com o saldo.
+      for (const c of contas) {
+        const anexo = linkDe[c.conta] ? { text: 'Abrir PDF', hyperlink: linkDe[c.conta] } : (c.documento_path ? '(anexo indisponível)' : '')
+        const st = statusConta(c)
+        const linhasSec = []
+        if (c.composicao.length) {
+          for (const i of c.composicao) linhasSec.push([dataBR(i.data), i.historico, num(i.debito) - num(i.credito), '', '', ''])
+          linhasSec.push(['', 'Saldo da conta (composição)', num(c.saldo_final), '', '', ''])
+        }
+        linhasSec.push(['Amarração', `saldo × documento × diferença · ${st.txt}`, num(c.saldo_final),
+          c.saldo_documento == null ? '' : num(c.saldo_documento), c.dif == null ? '' : num(c.dif), anexo])
+        const sup = c.documento ? `Documento: ${c.documento}`
+          : (c.justificativa ? `Justificativa: ${c.justificativa}` : 'Sem documento nem justificativa anexados')
+        linhasSec.push(['Documento-suporte', sup, '', '', '', anexo])
         secoes.push({
-          titulo: `${c.conta} · ${c.nome} — composição (títulos em aberto)`,
-          linhas: c.composicao.map(i => [dataBR(i.data), i.historico, num(i.debito) - num(i.credito), '', '', '']),
-          totais: ['', 'Saldo da conta', num(c.saldo_final), '', '', ''],
+          titulo: `${c.conta} · ${c.nome} — ${c.grupo} (natureza ${c.natureza})`,
+          linhas: linhasSec,
         })
       }
       const buf = await gerarExcelTimbrado({ titulo: 'Book de Composições — contas patrimoniais', sub, colunas, secoes, aba: 'Book', retornarBuffer: true })
