@@ -151,6 +151,19 @@ create table if not exists public.ajuste_leitura (
 );
 create index if not exists ajuste_leitura_comp_idx on public.ajuste_leitura(competencia_id);
 
+-- ---------- COMENTÁRIOS POR CONTA (histórico que acompanha a conta em todos os meses) ----------
+-- Independe da competência: por cliente + conta, vai acumulando a cada fechamento. Escrito na
+-- Conciliação e exibido no Book de Composições (tela e Excel).
+create table if not exists public.conta_comentario (
+  id          uuid primary key default gen_random_uuid(),
+  cliente_id  uuid not null references public.clientes(id) on delete cascade,
+  conta       text not null,                 -- código reduzido da conta
+  texto       text not null,                 -- o comentário / observação
+  usuario     text,
+  created_at  timestamptz not null default now()
+);
+create index if not exists conta_comentario_cliente_conta_idx on public.conta_comentario(cliente_id, conta, created_at desc);
+
 -- ============================================================
 -- OUTRAS CONTABILIZAÇÕES (contratos/processos por cliente)
 -- Os lançamentos gerados usam a tabela public.lancamentos.
@@ -289,11 +302,12 @@ alter table public.lancamentos     enable row level security;
 alter table public.auditoria       enable row level security;
 alter table public.conciliacao_conta enable row level security;
 alter table public.ajuste_leitura   enable row level security;
+alter table public.conta_comentario  enable row level security;
 
 do $$
 declare t text;
 begin
-  foreach t in array array['clientes','competencias','cargas_cadastro','razao','balancete','lancamentos','auditoria','conciliacao_conta','ajuste_leitura']
+  foreach t in array array['clientes','competencias','cargas_cadastro','razao','balancete','lancamentos','auditoria','conciliacao_conta','ajuste_leitura','conta_comentario']
   loop
     execute format('drop policy if exists "auth_all_%1$s" on public.%1$s;', t);
     execute format(
