@@ -91,3 +91,12 @@ table { width: 100%; border-collapse: collapse; }
   cursor: pointer; padding: 0; appearance: none; -webkit-appearance: none;
 }
 .ghost-select option { color: #111; }
+
+/* Impressão / PDF: esconde a navegação e os botões de ação para gerar um
+   documento limpo para o cliente (usado pelo botão PDF de Relatórios e do
+   Dashboard do Cliente). */
+@media print {
+  aside { display: none !important; }
+  .no-print { display: none !important; }
+  main { overflow: visible !important; }
+}
