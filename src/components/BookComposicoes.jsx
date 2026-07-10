@@ -344,10 +344,10 @@ function Folha({ c, onAbrir }) {
         {/* Comentários da conta (histórico que acompanha a conta em todos os meses) */}
         {c.comentarios && c.comentarios.length > 0 && (
           <div style={{ marginTop: 16 }}>
-            <div style={blkT}>Comentários da conta</div>
-            <div style={{ border: `1px solid ${theme.border}`, borderRadius: 9, overflow: 'hidden' }}>
+            <div style={{ ...blkT, color: theme.accent }}><i className="ti ti-message-2" style={{ marginRight: 5 }} />Comentários da conta</div>
+            <div style={{ border: `1px solid rgba(74,124,255,.28)`, borderLeft: `3px solid ${theme.accent}`, background: 'rgba(74,124,255,.06)', borderRadius: 9, overflow: 'hidden' }}>
               {c.comentarios.map((m, j) => (
-                <div key={j} style={{ padding: '9px 12px', borderTop: j ? `1px solid ${theme.border}` : 'none' }}>
+                <div key={j} style={{ padding: '9px 12px', borderTop: j ? `1px solid rgba(74,124,255,.18)` : 'none' }}>
                   <div style={{ fontSize: 12.5, color: theme.text, whiteSpace: 'pre-wrap' }}>{m.texto}</div>
                   <div style={{ fontSize: 11, color: theme.sub, marginTop: 3 }}>{dataBRhora(m.created_at)}{m.usuario ? ` · ${String(m.usuario).split('@')[0]}` : ''}</div>
                 </div>
