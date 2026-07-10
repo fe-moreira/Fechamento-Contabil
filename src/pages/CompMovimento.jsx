@@ -230,14 +230,18 @@ export default function CompMovimento() {
     return () => { vivo = false }
   }, [empresaId, refresh])
 
-  // Uma célula desvia se difere mais de 10% da média da conta nos meses carregados.
-  function desviante(conta, valor) {
+  // Uma célula desvia se difere mais de 10% do MÊS ANTERIOR (mês a mês: fev × jan,
+  // mar × fev…). O primeiro mês nunca fica vermelho — não há com o que comparar.
+  // Mês sem saldo conta como 0: sumir de um mês que tinha movimento é variação (justificar).
+  function desviante(conta, mes) {
+    const idx = comps.findIndex(c => c.mes === mes)
+    if (idx <= 0) return false // primeiro mês (ou fora da lista) — sem mês anterior
     const linha = matriz[conta] || {}
-    const valores = comps.map(c => linha[c.mes]).filter(v => v != null)
-    if (valores.length < 2) return false
-    const media = valores.reduce((s, v) => s + v, 0) / valores.length
-    if (media === 0) return valor !== 0
-    return Math.abs(valor - media) / Math.abs(media) > 0.1
+    const a = linha[mes] == null ? 0 : Number(linha[mes]) || 0
+    const p = linha[comps[idx - 1].mes] == null ? 0 : Number(linha[comps[idx - 1].mes]) || 0
+    if (a === 0 && p === 0) return false // sem movimento nos dois meses
+    if (p === 0) return a !== 0          // apareceu do zero
+    return Math.abs(a - p) / Math.abs(p) > 0.1
   }
 
   // Conta as células desviantes (vermelhas) ainda não justificadas/corrigidas.
@@ -245,11 +249,8 @@ export default function CompMovimento() {
   let pendentes = 0
   for (const { reduzido, classifRaw, sintetica } of contas) {
     if (sintetica) continue
-    const linha = matriz[classifRaw] || {}
     for (const c of comps) {
-      const v = linha[c.mes]
-      if (v == null) continue
-      if (desviante(classifRaw, v) && !justificadas.has(chaveCelula(reduzido, c.mes))) pendentes++
+      if (desviante(classifRaw, c.mes) && !justificadas.has(chaveCelula(reduzido, c.mes))) pendentes++
     }
   }
 
@@ -348,7 +349,7 @@ export default function CompMovimento() {
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
             <p style={{ color: theme.sub, fontSize: 12.5, margin: 0, flex: 1, minWidth: 240 }}>
-              Contas de resultado. Valores em <b style={{ color: theme.red }}>vermelho</b> desviam mais de 10% da média da conta. Clique num valor para ver o razão e o provável culpado.
+              Contas de resultado. Valores em <b style={{ color: theme.red }}>vermelho</b> desviam mais de 10% do <b>mês anterior</b> (fev × jan, mar × fev…) — o primeiro mês não é comparado. Mês sem saldo aparece como <b>—</b>; fica vermelho quando o mês anterior tinha movimento. Clique num valor para ver o razão e o provável culpado.
             </p>
             <label style={{ fontSize: 12, color: theme.sub, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
               <i className="ti ti-filter" /> Mês:
@@ -381,12 +382,17 @@ export default function CompMovimento() {
                       <td style={{ ...td, fontWeight: sintetica ? 700 : 400, maxWidth: 320 }}>{nome || '—'}</td>
                       {mesesVis.map(c => {
                         const v = linha[c.mes]
-                        if (v == null) return <td key={c.mes} style={{ ...td, textAlign: 'right' }} />
+                        const vazio = v == null
+                        // Sintética: total do grupo — "—" quando não há saldo, sem clique.
                         if (sintetica) {
-                          return <td key={c.mes} style={{ ...td, textAlign: 'right', fontWeight: 700 }}>{moneyDC(v)}</td>
+                          return <td key={c.mes} style={{ ...td, textAlign: 'right', fontWeight: 700, color: vazio ? theme.sub : undefined }}>{vazio ? '—' : moneyDC(v)}</td>
                         }
-                        const red = desviante(classifRaw, v)
+                        const red = desviante(classifRaw, c.mes)
                         const ok = red && justificadas.has(chaveCelula(reduzido, c.mes))
+                        // Sem saldo e sem variação: traço apagado, sem clique.
+                        if (vazio && !red) {
+                          return <td key={c.mes} style={{ ...td, textAlign: 'right', color: theme.sub }}>—</td>
+                        }
                         return (
                           <td key={c.mes} style={{ ...td, textAlign: 'right' }}>
                             <button
@@ -398,10 +404,10 @@ export default function CompMovimento() {
                                 color: red ? theme.red : theme.text,
                                 fontWeight: red ? 700 : 400,
                               }}
-                              title={ok ? 'Variação justificada — ver razão da conta neste mês' : 'Ver razão da conta neste mês'}
+                              title={ok ? 'Variação justificada — ver razão da conta neste mês' : (vazio ? 'Mês sem movimento nesta conta — variação a justificar' : 'Ver razão da conta neste mês')}
                             >
                               {ok && <i className="ti ti-circle-check" style={{ color: theme.green, fontSize: 13 }} />}
-                              {moneyDC(v)}
+                              {vazio ? '—' : moneyDC(v)}
                             </button>
                           </td>
                         )

@@ -37,15 +37,18 @@ export async function apurarVariacoes(empresaId) {
     if (conta && mes) just.add(`${conta}|${mes}`)
   }
 
+  // Variação mês a mês: cada mês compara com o mês ANTERIOR (fev × jan, mar × fev…).
+  // O primeiro mês nunca desvia. Mês sem saldo conta como 0 — sumir de um mês que tinha
+  // movimento é variação a justificar.
   const itens = []
   for (const [conta, linha] of Object.entries(matriz)) {
-    const vals = mesesComDados.map(m => linha[m]).filter(v => v != null)
-    if (vals.length < 2) continue
-    const media = vals.reduce((s, v) => s + v, 0) / vals.length
-    for (const m of mesesComDados) {
-      const v = linha[m]; if (v == null) continue
-      const dv = media === 0 ? (v !== 0 ? 1 : 0) : Math.abs(v - media) / Math.abs(media)
-      if (dv > 0.10 && !just.has(`${conta}|${m}`)) itens.push({ conta, nome: nomes[conta] || '', mes: m, valor: v })
+    for (let i = 1; i < mesesComDados.length; i++) {
+      const m = mesesComDados[i], mAnt = mesesComDados[i - 1]
+      const a = linha[m] == null ? 0 : Number(linha[m]) || 0
+      const p = linha[mAnt] == null ? 0 : Number(linha[mAnt]) || 0
+      if (a === 0 && p === 0) continue // sem movimento nos dois meses
+      const desvia = p === 0 ? a !== 0 : Math.abs(a - p) / Math.abs(p) > 0.10
+      if (desvia && !just.has(`${conta}|${m}`)) itens.push({ conta, nome: nomes[conta] || '', mes: m, valor: linha[m] ?? 0 })
     }
   }
 
