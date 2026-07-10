@@ -211,14 +211,14 @@ export default function CompMovimento() {
             .in('competencia_id', compIds).eq('modulo', 'Comparativo')
           if (!vivo) return
           if (audits && audits.length) {
-            const mesPorComp = {}
-            for (const c of compsComDados) mesPorComp[c.id] = c.mes
             const set = new Set()
             for (const a of audits) {
-              // item no formato `${conta} · ${MES}/${ano}` — extrai a conta e usa o mês da competência.
-              const conta = String(a.item || '').split(' · ')[0].trim()
-              const mes = mesPorComp[a.competencia_id]
-              if (conta && mes) set.add(chaveCelula(conta, mes))
+              // item no formato `${conta} · ${MES}/${ano}` — o mês vem do PRÓPRIO item
+              // (fonte da verdade, igual ao desfazer e à célula), não da competência anexada.
+              const [contaPart, periodo] = String(a.item || '').split(' · ')
+              const conta = (contaPart || '').trim()
+              const idx = MESES.indexOf((periodo || '').trim().slice(0, 3))
+              if (conta && idx >= 0) set.add(chaveCelula(conta, idx + 1))
             }
             setJustificadas(set)
           }
@@ -461,9 +461,11 @@ function ModalRazao({ detalhe, compsAnteriores, usuario, getCompetenciaId, jaJus
   async function registrar(tipo, detalheTxt) {
     setSalvando(true)
     try {
-      const competencia_id = await getCompetenciaId()
+      // Grava na competência DA CÉLULA (compId) — assim o mês do registro casa com o
+      // mês do item e com o preload/desfazer. (Antes usava o fechamento ativo, o que
+      // marcava o check no mês errado e impedia o desfazer.)
       const { error } = await supabase.from('auditoria').insert({
-        competencia_id,
+        competencia_id: compId,
         modulo: 'Comparativo',
         item: `${conta} · ${MESES[mes - 1]}/${ANO}`,
         tipo,
@@ -485,6 +487,7 @@ function ModalRazao({ detalhe, compsAnteriores, usuario, getCompetenciaId, jaJus
   // Desfaz o ajuste: apaga o(s) registro(s) desta conta/mês na auditoria do Comparativo
   // (o item identifica unicamente conta + mês). A célula volta a contar como pendência.
   async function desfazer() {
+    if (!window.confirm(`Desfazer o ajuste da conta ${conta} em ${MESES[mes - 1]}/${ANO}? A variação volta a contar como pendência.`)) return
     setSalvando(true)
     try {
       const { error } = await supabase.from('auditoria').delete()
