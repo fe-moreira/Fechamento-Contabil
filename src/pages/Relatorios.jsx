@@ -6,6 +6,7 @@ import { apurarBancoResultado } from '../lib/bancoResultado'
 import { apurarVariacoes } from '../lib/variacoes'
 import { parsePlano, contasConciliacaoAbertas } from '../lib/balancete'
 import { gerarExcelTimbrado } from '../lib/excel'
+import BookComposicoes from '../components/BookComposicoes'
 import { theme, money } from '../lib/theme'
 
 const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
@@ -22,7 +23,7 @@ function dataPtBR(iso) {
 const RELATORIOS = [
   { id: 'balancete', nome: 'Balancete', icon: 'ti-table', desc: 'Saldos por conta (inicial, movimento e final).' },
   { id: 'dre', nome: 'DRE (resumo)', icon: 'ti-report-money', desc: 'Demonstração de resultado simplificada por prefixo de conta.' },
-  { id: 'book', nome: 'Book de Composições', icon: 'ti-book', desc: 'Contas do balancete com saldo final diferente de zero.' },
+  { id: 'book', nome: 'Book de Composições', icon: 'ti-book', desc: 'Contas patrimoniais: composição, amarração e documento-suporte para auditoria.' },
   { id: 'balanco', nome: 'Balanço Patrimonial', icon: 'ti-scale', desc: 'Ativo e Passivo + Patrimônio Líquido por conta (saldo final).' },
   { id: 'comparativo', nome: 'Comparativo de Movimento', icon: 'ti-arrows-diff', desc: 'Saldo de cada conta ao longo dos meses do ano.' },
   { id: 'pendencias', nome: 'Relatório de Pendências', icon: 'ti-alert-triangle', desc: 'Documentos da competência ainda não recebidos.' },
@@ -33,7 +34,8 @@ const RELATORIOS = [
 ]
 
 export default function Relatorios() {
-  const { empresaId, empresaNome, competencia } = useAppData()
+  const { empresaId, empresaNome, competencia, empresas } = useAppData()
+  const cnpj = empresas?.find(e => e.id === empresaId)?.cnpj
   const [carregando, setCarregando] = useState(false)
   const [temComp, setTemComp] = useState(null) // null = não checado, false = sem competência
   const [linhas, setLinhas] = useState([])      // balancete
@@ -124,9 +126,6 @@ export default function Relatorios() {
     .reduce((s, l) => s + (Number(l.saldo_final) || 0), 0)
   const resultado = receitas - despesas - custos
 
-  // Book de Composições: contas com saldo final != 0.
-  const book = linhas.filter(l => Math.abs(Number(l.saldo_final) || 0) >= 0.005)
-
   // Balanço: Ativo (prefixo 1) × Passivo + PL (prefixo 2).
   const ativo = linhas.filter(l => String(l.conta || '').startsWith('1'))
   const passivo = linhas.filter(l => String(l.conta || '').startsWith('2'))
@@ -177,18 +176,6 @@ export default function Relatorios() {
       totais: ['Resultado', num(resultado)],
       arquivo: `dre_${compSlug}.xlsx`,
       aba: 'DRE',
-    })
-  }
-
-  function exportarBook() {
-    xls('Book de Composições', [
-      { nome: 'Conta', largura: 14 },
-      { nome: 'Nome', largura: 44 },
-      { nome: 'Saldo final', alinhar: 'right', moeda: true },
-    ], {
-      linhas: book.map(l => [l.conta, l.nome, num(l.saldo_final)]),
-      arquivo: `book_composicoes_${compSlug}.xlsx`,
-      aba: 'Book',
     })
   }
 
@@ -302,7 +289,7 @@ export default function Relatorios() {
 
   const semBalancete = !carregando && temComp && linhas.length === 0
   // Relatórios que dependem só do balancete.
-  const dependeBalancete = aba === 'balancete' || aba === 'dre' || aba === 'book' || aba === 'balanco'
+  const dependeBalancete = aba === 'balancete' || aba === 'dre' || aba === 'balanco'
 
   return (
     <Wrapper>
@@ -411,34 +398,12 @@ export default function Relatorios() {
         </Secao>
       )}
 
-      {/* Book de Composições */}
-      {!carregando && temComp && linhas.length > 0 && aba === 'book' && (
-        <Secao titulo="Book de Composições" onExportar={book.length ? exportarBook : null}>
-          {book.length === 0 ? (
-            <Aviso icon="ti-circle-check" texto="Nenhuma conta com saldo final em aberto nesta competência." />
-          ) : (
-            <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr style={{ background: theme.input }}>
-                    <th style={th}>Conta</th>
-                    <th style={th}>Nome</th>
-                    <th style={thNum}>Saldo final</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {book.map((l, i) => (
-                    <tr key={i} style={{ borderTop: `1px solid ${theme.border}` }}>
-                      <td style={td}>{l.conta}</td>
-                      <td style={td}>{l.nome || '—'}</td>
-                      <td style={tdNum}>{money(l.saldo_final)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </Secao>
+      {/* Book de Composições (auditoria) — componente próprio, carrega sob demanda */}
+      {aba === 'book' && (
+        <>
+          <h2 style={{ fontSize: 15, fontWeight: 600, margin: '0 0 12px' }}>Book de Composições</h2>
+          <BookComposicoes empresaId={empresaId} empresaNome={empresaNome} competencia={competencia} cnpj={cnpj} />
+        </>
       )}
 
       {/* Balanço Patrimonial */}
