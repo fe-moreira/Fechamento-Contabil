@@ -986,12 +986,13 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   const [cruzaOpen, setCruzaOpen] = useState(false)        // modal do cruzamento aberto (dá p/ reabrir)
   const [novoLanc, setNovoLanc] = useState(false)          // modal de incluir lançamento manual
   const [sugAprend, setSugAprend] = useState(null)         // { itens } sugestões após aprender
+  const [editLanc, setEditLanc] = useState(null)           // { i, linha } editar lançamento inteiro
   const refsContra = useRef({})                  // foco: Enter pula para a próxima linha
 
   const nomeBanco = cod => planoMap[String(cod)]?.nome || (cod ? `Conta ${cod}` : '—')
   const bancosEst = est?.bancos || {}
   // Banco concluído (validado): trava edição/inclusão/exclusão até reabrir.
-  const concluido = !!(raw?.banco && bancosEst[raw.banco]?.estado === 'validado')
+  const concluido = !!(raw?.banco && bancosEst[raw.banco]?.concluido === true)
   // Contas de adiantamento (nome contém "adiant") — usadas para a regra: com nota não é adiantamento.
   const adiantContas = new Set(Object.entries(planoMap).filter(([, pl]) => /adiant/i.test(pl?.nome || '')).map(([cod]) => cod))
 
@@ -1061,9 +1062,12 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   }
   // Salva o banco com o rascunho da classificação (linhas), para continuar depois.
   // estado 'rascunho' = em andamento (ainda pendente no Status); 'validado' = concluído.
-  function salvarBancoDraft(conta, estadoB, doc, draftLinhas) {
+  function salvarBancoDraft(conta, estadoB, doc, draftLinhas, concluidoFlag) {
     const bancos = { ...(est?.bancos || {}) }
-    bancos[conta] = { estado: estadoB, doc: doc || null, usuario: user?.email || null, draft: draftLinhas || null, saldoExtrato: saldoExtrato || null, cruza: cruza || null }
+    const prev = bancos[conta] || {}
+    // `concluido` (trava de edição) é um flag PRÓPRIO — não se confunde com `estado`
+    // ('validado' também é setado no import). Só o botão Concluir liga; Reabrir desliga.
+    bancos[conta] = { estado: estadoB, doc: doc || null, usuario: user?.email || null, draft: draftLinhas || null, saldoExtrato: saldoExtrato || null, cruza: cruza || null, concluido: concluidoFlag ?? prev.concluido ?? false }
     onEstado({ ...est, bancos })
   }
   function marcarCombinado(doc) { onEstado({ ...est, combinado: { estado: 'validado', doc, usuario: user?.email || null } }) }
@@ -1136,16 +1140,19 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   // Conclui o banco (marca como contabilizado) — some do pendente no Status.
   function concluirBanco() {
     if (!raw?.banco) return
+    const semData = linhas.filter(l => !l.data).length
+    if (semData && !window.confirm(`Atenção: ${semData} lançamento(s) SEM DATA. O Domínio precisa da data. Concluir assim mesmo?`)) return
     const faltam = linhas.filter(l => !l.contra).length
     if (faltam && !window.confirm(`Ainda há ${faltam} linha(s) sem contrapartida. Concluir assim mesmo?`)) return
-    salvarBancoDraft(raw.banco, 'validado', raw.nome, linhas)
+    if (!window.confirm('Concluir o banco? Ele fica travado para edição — para alterar depois, use Reabrir banco.')) return
+    salvarBancoDraft(raw.banco, 'validado', raw.nome, linhas, true)
     setMsg('Banco concluído — travado para edição. Para alterar, clique em Reabrir banco.')
   }
   // Reabre o banco concluído: volta a rascunho e libera edição/inclusão/exclusão.
   function reabrirBanco() {
     if (!raw?.banco) return
     if (!window.confirm('Reabrir este banco? Ele volta a "em andamento" e você poderá editar, incluir e excluir lançamentos.')) return
-    salvarBancoDraft(raw.banco, 'rascunho', raw.nome, linhas)
+    salvarBancoDraft(raw.banco, 'rascunho', raw.nome, linhas, false)
     setMsg('Banco reaberto — edição liberada.')
   }
   // Continua um rascunho salvo (carrega as linhas para a tela).
@@ -1245,6 +1252,13 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     setMsg('Lançamento excluído.')
   }
   // Inclui um lançamento manual (confirmado no modal) — ex.: um que faltou.
+  // Salva a edição de um lançamento inteiro (data/histórico/valor/E-S/contrapartida).
+  function salvarEdicaoLanc(i, patch) {
+    if (concluido) return
+    const novas = linhas.map((l, j) => j === i ? { ...l, ...patch } : l)
+    setLinhas(novas); persistirLinhas(novas); setEditLanc(null)
+    setMsg('Lançamento atualizado.')
+  }
   function adicionarLinha(nova) {
     if (concluido) return
     const novas = [...linhas, nova]
@@ -1480,6 +1494,8 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   function gerar() {
     const prontasL = linhas.filter(l => l.banco && l.contra && l.valor > 0)
     if (!prontasL.length) { setErro('Nenhuma linha com banco e contrapartida para gerar.'); return }
+    const semData = prontasL.filter(l => !l.data).length
+    if (semData && !window.confirm(`Atenção: ${semData} lançamento(s) SEM DATA vão sair sem data no arquivo do Domínio. Gerar assim mesmo? (recomendo entrar no lançamento e informar a data antes)`)) return
     const lanc = prontasL.map(l => ({
       data: l.data || null,
       conta_debito: l.entrada ? l.banco : l.contra,   // entrada: D banco; saída: D contrapartida
@@ -1720,14 +1736,17 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
                     </td>
                     <td style={{ ...ftd, textAlign: 'right', whiteSpace: 'nowrap' }}>{money(l.valor)}</td>
                     <td style={{ ...ftd }}>
-                      <button className="btn btn-ghost" style={{ fontSize: 11, padding: '3px 8px', color: l.entrada ? theme.green : theme.red, borderColor: l.entrada ? theme.green : theme.red }} disabled={concluido} onClick={() => setLinha(i, { entrada: !l.entrada })}>{l.entrada ? 'Entrada' : 'Saída'}</button>
+                      <button className="btn btn-ghost" style={{ fontSize: 11, padding: '3px 8px', color: l.entrada ? theme.green : theme.red, borderColor: l.entrada ? theme.green : theme.red }} disabled={concluido}
+                        onClick={() => { if (window.confirm(`Trocar para ${l.entrada ? 'Saída' : 'Entrada'}? Isso inverte a contrapartida (D/C) deste lançamento.`)) setLinha(i, { entrada: !l.entrada }) }}>{l.entrada ? 'Entrada' : 'Saída'}</button>
                     </td>
                     <td style={{ ...ftd, minWidth: 180 }}>
                       <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
                         <div style={{ flex: 1 }}><ContraCell value={l.contra} disabled={concluido} onCommit={v => setLinha(i, { contra: v })}
                           inputRef={el => { refsContra.current[pos] = el }} onEnter={() => refsContra.current[pos + 1]?.focus()} /></div>
+                        {!concluido && <i className="ti ti-pencil" title="Editar o lançamento (data, histórico, valor…)" onClick={() => setEditLanc({ i, linha: l })} style={{ color: theme.accent, cursor: 'pointer', fontSize: 15, flexShrink: 0 }} />}
                         {!concluido && <i className="ti ti-arrows-split-2" title="Dividir em vários lançamentos" onClick={() => setQuebra({ i, linha: l })} style={{ color: theme.sub, cursor: 'pointer', fontSize: 16, flexShrink: 0 }} />}
                         {!concluido && <i className="ti ti-trash" title="Excluir lançamento" onClick={() => excluirLinha(i)} style={{ color: theme.red, cursor: 'pointer', fontSize: 15, flexShrink: 0 }} />}
+                        {!l.data && <i className="ti ti-calendar-exclamation" title="Sem data — clique no lápis para informar antes de gerar o Domínio" style={{ color: theme.yellow, fontSize: 15, flexShrink: 0 }} />}
                       </div>
                     </td>
                     <td style={{ ...ftd, fontSize: 11.5, maxWidth: 220 }}>
@@ -1771,6 +1790,9 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
 
       {sugAprend && <ModalSugestoes itens={sugAprend.itens} planoMap={planoMap}
         onClose={() => setSugAprend(null)} onConfirmar={aplicarSugestoes} />}
+
+      {editLanc && <ModalEditarLanc linha={editLanc.linha} banco={raw?.banco} nomeBanco={nomeBanco} competencia={competencia} planoMap={planoMap}
+        onClose={() => setEditLanc(null)} onSalvar={patch => salvarEdicaoLanc(editLanc.i, patch)} />}
 
       {cfg && (
         <PerfilExtratoCfg
@@ -2055,6 +2077,65 @@ function ModalNovoLancamento({ banco, nomeBanco, competencia, planoMap, onClose,
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
           <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
           <button className="btn" onClick={confirmar}><i className="ti ti-check" /> Confirmar e incluir</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Editar um lançamento inteiro antes de gravar/gerar: data, histórico, valor, E/S e
+// contrapartida. Permite informar a DATA que faltou. Só grava ao clicar em Salvar.
+function ModalEditarLanc({ linha, banco, nomeBanco, competencia, planoMap, onClose, onSalvar }) {
+  const [mes, ano] = (competencia || '').split('/').map(Number)
+  const [data, setData] = useState(linha.data || '')
+  const [valor, setValor] = useState(linha.valor != null ? String(linha.valor) : '')
+  const [entrada, setEntrada] = useState(!!linha.entrada)
+  const [historico, setHistorico] = useState(linha.historico || '')
+  const [contra, setContra] = useState(linha.contra || '')
+  const [erro, setErro] = useState('')
+  const v = parseValor(valor)
+  const nomeC = planoMap[String(contra).trim()]?.nome || ''
+  function salvar() {
+    if (!(v > 0)) { setErro('Informe um valor maior que zero.'); return }
+    if (data) {
+      const [dy, dm] = data.split('-').map(Number)
+      if (mes && ano && (dm !== mes || dy !== ano)) { setErro(`A data deve estar na competência ${competencia}.`); return }
+    }
+    if (!historico.trim()) { setErro('Informe o histórico.'); return }
+    onSalvar({ data: data || null, historico: historico.trim(), valor: Math.abs(v), entrada, contra: String(contra).trim() })
+  }
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 16, zIndex: 60 }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 'min(560px,96vw)', maxHeight: '90vh', overflow: 'auto', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 22 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+          <h2 style={{ fontSize: 16, margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}><i className="ti ti-pencil" style={{ color: theme.accent }} /> Editar lançamento</h2>
+          <span onClick={onClose} style={{ cursor: 'pointer', color: theme.sub, fontSize: 20 }}><i className="ti ti-x" /></span>
+        </div>
+        <p style={{ color: theme.sub, fontSize: 12, margin: '0 0 12px' }}>{banco ? `${banco} · ${nomeBanco(banco)}` : 'Banco'} · competência {competencia}</p>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          <div>
+            <label style={{ fontSize: 12, color: theme.sub }}>Data</label>
+            <input className="input" type="date" value={data} onChange={e => setData(e.target.value)} />
+            {!data && <p style={{ color: theme.yellow, fontSize: 11, margin: '4px 0 0' }}><i className="ti ti-alert-triangle" /> Sem data — o Domínio precisa da data.</p>}
+          </div>
+          <div><label style={{ fontSize: 12, color: theme.sub }}>Valor</label><input className="input" type="number" step="0.01" value={valor} onChange={e => setValor(e.target.value)} placeholder="0,00" /></div>
+          <div style={{ gridColumn: 'span 2' }}>
+            <label style={{ fontSize: 12, color: theme.sub }}>Tipo</label>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button className={entrada ? 'btn' : 'btn btn-ghost'} style={{ fontSize: 12, flex: 1 }} onClick={() => setEntrada(true)}>Entrada (D banco)</button>
+              <button className={!entrada ? 'btn' : 'btn btn-ghost'} style={{ fontSize: 12, flex: 1 }} onClick={() => setEntrada(false)}>Saída (C banco)</button>
+            </div>
+          </div>
+          <div style={{ gridColumn: 'span 2' }}><label style={{ fontSize: 12, color: theme.sub }}>Histórico</label><input className="input" value={historico} onChange={e => setHistorico(e.target.value)} placeholder="Descrição do lançamento" /></div>
+          <div style={{ gridColumn: 'span 2' }}>
+            <label style={{ fontSize: 12, color: theme.sub }}>Contrapartida {nomeC && <span style={{ color: theme.green }}>· {nomeC}</span>}</label>
+            <CampoConta value={contra} onChange={setContra} placeholder="Conta (F4)" />
+          </div>
+        </div>
+        {erro && <p style={{ color: theme.red, fontSize: 12.5, marginTop: 10 }}>{erro}</p>}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
+          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+          <button className="btn" onClick={salvar}><i className="ti ti-device-floppy" /> Salvar alterações</button>
         </div>
       </div>
     </div>
