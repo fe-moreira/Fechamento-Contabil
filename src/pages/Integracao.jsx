@@ -1096,12 +1096,19 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     }
     const rows = arr.slice(ini, ini + 60)
     const nc = arr.reduce((m, r) => Math.max(m, (r || []).length), 0)
-    let colValor = -1, colData = -1, colCredor = -1, best = 0, bestLen = 0
+    let colValor = -1, colData = -1, best = 0
     for (let j = 0; j < nc; j++) {
       const nums = rows.filter(r => { const v = parseValor(r?.[j]); return v && Math.abs(v) >= 1 }).length
       if (nums > best) { best = nums; colValor = j }
       if (colData < 0 && rows.filter(r => dataISO(r?.[j])).length > rows.length / 3) colData = j
-      const avg = rows.reduce((s, r) => { const t = String(r?.[j] ?? ''); return s + (/[A-Za-z]{3,}/.test(t) ? t.length : 0) }, 0) / (rows.length || 1)
+    }
+    // Credor/Devedor = coluna de TEXTO (nome), excluindo valor, data e colunas que SÃO
+    // datas (Date vira "Mon Jun 01…", que tem letras e enganava a detecção antiga).
+    const pareceData = j => rows.filter(r => (r?.[j] instanceof Date) || dataISO(r?.[j])).length > rows.length / 3
+    let colCredor = -1, bestLen = 0
+    for (let j = 0; j < nc; j++) {
+      if (j === colValor || j === colData || pareceData(j)) continue
+      const avg = rows.reduce((s, r) => { const t = (r?.[j] instanceof Date) ? '' : String(r?.[j] ?? ''); return s + (/[A-Za-zÀ-ú]{3,}/.test(t) ? t.length : 0) }, 0) / (rows.length || 1)
       if (avg > bestLen) { bestLen = avg; colCredor = j }
     }
     return { linhaInicio: ini, colValor, colData, colCredor, colDoc: -1, colCategoria: -1, histCols: [], es: { modo: 'sinal', col: -1, entrada: [] }, filtro: { col: -1, pularVazio: false } }
@@ -1109,7 +1116,10 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
 
   // Aplica o perfil já salvo a um extrato por banco e segue (marca o banco).
   function aplicarEProsseguir(arr, nome, bancoFixo, perf, catByRow) {
-    const norm = aplicarPerfil(arr, perf, memoria, catByRow, adiantContas).map(l => ({ ...l, banco: bancoFixo }))
+    // A contrapartida NUNCA pode ser a própria conta do banco (o banco já é um lado da
+    // partida). Se a memória/perfil devolver o próprio banco, limpa para classificar à mão.
+    const norm = aplicarPerfil(arr, perf, memoria, catByRow, adiantContas)
+      .map(l => ({ ...l, banco: bancoFixo, contra: String(l.contra || '') === String(bancoFixo) ? '' : l.contra }))
     // Reimport do mesmo arquivo: preserva as contrapartidas já preenchidas no
     // rascunho (mesmo arquivo → mesma ordem), atualizando histórico/valor/data.
     const prevBanco = (est?.bancos || {})[bancoFixo]
@@ -2195,8 +2205,20 @@ function PerfilExtratoCfg({ arr, catByRow, adiantContas, nome, bancoNome, perfil
   const set = patch => setP(x => ({ ...x, ...patch }))
   const nc = (arr || []).reduce((m, r) => Math.max(m, (r || []).length), 0)
   const ini = Number.isInteger(p.linhaInicio) ? p.linhaInicio : 1
-  const amostra = (j) => { for (const r of arr.slice(ini, ini + 60)) { const v = String(r?.[j] ?? '').trim(); if (v) return v } return '' }
-  const cols = Array.from({ length: nc }, (_, j) => ({ j, label: `Col ${j + 1} · ${amostra(j).slice(0, 26) || '—'}` }))
+  const fmtVal = v => {
+    if (v == null || v === '') return ''
+    if (v instanceof Date) return v.toLocaleDateString('pt-BR')
+    return String(v).trim()
+  }
+  const amostra = (j) => { for (const r of arr.slice(ini, ini + 60)) { const v = fmtVal(r?.[j]); if (v) return v } return '' }
+  const cols = Array.from({ length: nc }, (_, j) => ({ j, label: `Col ${j + 1} · ${amostra(j).slice(0, 24) || '(vazia)'}` }))
+  // Papel de cada coluna (para marcar na prévia) — mostra o que o sistema entendeu.
+  const roles = {}
+  const setRole = (j, txt) => { if (j != null && j >= 0) roles[j] = txt }
+  setRole(p.colValor, 'Valor'); setRole(p.colData, 'Data'); setRole(p.colCredor, 'Contrapartida')
+  setRole(p.colDoc, 'Documento'); setRole(p.colCategoria, 'Categoria')
+  if (p.es?.modo === 'coluna') setRole(p.es?.col, 'Entrada/Saída')
+  const amostras = arr.slice(ini, ini + 3)
   const Sel = ({ val, on, vazio = '—' }) => (
     <select className="input" style={{ padding: '7px 9px', fontSize: 12 }} value={val ?? -1} onChange={e => on(Number(e.target.value))}>
       <option value={-1}>{vazio}</option>
@@ -2214,15 +2236,46 @@ function PerfilExtratoCfg({ arr, catByRow, adiantContas, nome, bancoNome, perfil
           <h2 style={{ fontSize: 16, margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}><i className="ti ti-adjustments" style={{ color: theme.accent }} /> Perfil de leitura — {bancoNome}</h2>
           <span onClick={onCancelar} style={{ cursor: 'pointer', color: theme.sub, fontSize: 20 }}><i className="ti ti-x" /></span>
         </div>
-        <p style={{ color: theme.sub, fontSize: 12, margin: '0 0 14px' }}>Diga como ler <b style={{ color: theme.text }}>{nome}</b>. Salvo no cliente — nos próximos meses o extrato entra sozinho, no layout do Domínio.</p>
+        <p style={{ color: theme.sub, fontSize: 12, margin: '0 0 10px' }}>Diga como ler <b style={{ color: theme.text }}>{nome}</b>. Salvo no cliente — nos próximos meses o extrato entra sozinho, no layout do Domínio.</p>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 10 }}>
+        {/* Prévia das colunas do arquivo — veja o que tem em cada uma e confira, abaixo,
+            o papel que o sistema deu a ela (selo azul). Assim o mapeamento fica claro. */}
+        <p style={{ color: theme.sub, fontSize: 11.5, margin: '0 0 6px' }}><i className="ti ti-table" style={{ color: theme.accent }} /> Prévia do arquivo — confira o que tem em cada coluna. O selo azul mostra o que o sistema entendeu (ajuste nos campos abaixo).</p>
+        <div style={{ margin: '0 0 14px', border: `0.5px solid ${theme.cb}`, borderRadius: 10, overflow: 'auto' }}>
+          <table style={{ borderCollapse: 'collapse', width: '100%' }}>
+            <thead>
+              <tr style={{ background: theme.input }}>
+                {cols.map(c => (
+                  <th key={c.j} style={{ ...fth, borderLeft: `1px solid ${theme.border}`, textAlign: 'left' }}>
+                    Col {c.j + 1}
+                    {roles[c.j] && <div style={{ marginTop: 3, color: theme.accent, fontWeight: 700, fontSize: 10, textTransform: 'none', letterSpacing: 0 }}><i className="ti ti-arrow-down-circle" /> {roles[c.j]}</div>}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {amostras.map((r, ri) => (
+                <tr key={ri} style={{ borderTop: `1px solid ${theme.border}` }}>
+                  {cols.map(c => (
+                    <td key={c.j} style={{ ...ftd, fontSize: 11, color: roles[c.j] ? theme.text : theme.sub, borderLeft: `1px solid ${theme.border}`, whiteSpace: 'nowrap', maxWidth: 170, overflow: 'hidden', textOverflow: 'ellipsis', background: roles[c.j] ? 'rgba(74,124,255,0.05)' : undefined }}>
+                      {fmtVal(r?.[c.j]) || '—'}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+              {!amostras.length && <tr><td style={{ ...ftd, color: theme.yellow, fontSize: 12 }}>Sem linhas para prever — ajuste a linha de início.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+
+        <p style={{ color: theme.sub, fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: .4, margin: '0 0 6px' }}>Diga qual coluna é qual</p>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))', gap: 10 }}>
           <div><label>Linha de início (dados)</label><input className="input" type="number" min="1" style={{ fontSize: 12 }} value={ini + 1} onChange={e => set({ linhaInicio: Math.max(0, (Number(e.target.value) || 1) - 1) })} /></div>
-          <div><label>Valor</label><Sel val={p.colValor} on={v => set({ colValor: v })} /></div>
-          <div><label>Data</label><Sel val={p.colData} on={v => set({ colData: v })} /></div>
-          <div><label>Credor/Devedor (contrapartida)</label><Sel val={p.colCredor} on={v => set({ colCredor: v })} /></div>
-          <div><label>Documento (opc.)</label><Sel val={p.colDoc} on={v => set({ colDoc: v })} /></div>
-          <div><label>Categoria (coluna mesclada, opc.)</label><Sel val={p.colCategoria} on={v => set({ colCategoria: v })} /></div>
+          <div><label>Valor <span style={{ color: theme.red }}>*</span></label><Sel val={p.colValor} on={v => set({ colValor: v })} /><small style={dicaS}>o valor do lançamento (R$)</small></div>
+          <div><label>Data <span style={{ color: theme.red }}>*</span></label><Sel val={p.colData} on={v => set({ colData: v })} /><small style={dicaS}>a data do lançamento</small></div>
+          <div><label>Credor/Devedor (contrapartida)</label><Sel val={p.colCredor} on={v => set({ colCredor: v })} /><small style={dicaS}>nome do cliente/fornecedor — acha a conta na memória. Sem nome? Deixe “—”.</small></div>
+          <div><label>Documento (opc.)</label><Sel val={p.colDoc} on={v => set({ colDoc: v })} /><small style={dicaS}>nº da NF/documento, se houver</small></div>
+          <div><label>Categoria (coluna mesclada, opc.)</label><Sel val={p.colCategoria} on={v => set({ colCategoria: v })} /><small style={dicaS}>grupo/histórico do extrato, se houver</small></div>
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))', gap: 10, marginTop: 12, alignItems: 'end' }}>
@@ -2274,6 +2327,7 @@ function PerfilExtratoCfg({ arr, catByRow, adiantContas, nome, bancoNome, perfil
 
 const fth = { textAlign: 'left', padding: '9px 12px', fontSize: 11, color: theme.sub, textTransform: 'uppercase', letterSpacing: .3, whiteSpace: 'nowrap' }
 const ftd = { padding: '7px 12px', fontSize: 12.5, color: theme.text, verticalAlign: 'middle' }
+const dicaS = { display: 'block', color: theme.sub, fontSize: 10, marginTop: 3, lineHeight: 1.3 }
 
 // Documento "virtual" que marca uma conta como validada pela integração de patrimônio.
 const DOC_PATRIMONIO = 'Resumo da Depreciação Fiscal · Patrimônio'
