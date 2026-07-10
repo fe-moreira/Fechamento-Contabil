@@ -1176,8 +1176,9 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   // Conclui o banco (marca como contabilizado) — some do pendente no Status.
   async function concluirBanco() {
     if (!raw?.banco) return
-    // Não conclui se o saldo do extrato não estiver batendo (diferença ≠ 0).
-    if (temExtrato && Math.abs(difSaldo) >= 0.005) { setErro(`Não dá para concluir: o saldo do extrato não confere (diferença ${money(difSaldo)}). Zere a diferença antes de concluir.`); return }
+    // Concluir exige o saldo do extrato INFORMADO e SEM diferença.
+    if (!temExtrato) { setErro('Informe o saldo do extrato para concluir o banco.'); return }
+    if (Math.abs(difSaldo) >= 0.005) { setErro(`Não dá para concluir: o saldo do extrato não confere (diferença ${money(difSaldo)}). Zere a diferença antes de concluir.`); return }
     const semData = linhas.filter(l => !l.data).length
     if (semData && !window.confirm(`Atenção: ${semData} lançamento(s) SEM DATA. O Domínio precisa da data. Concluir assim mesmo?`)) return
     const faltam = linhas.filter(l => !l.contra).length
@@ -1859,8 +1860,8 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
             <button className="btn" onClick={aprenderSalvar}><i className="ti ti-brain" /> Aprender e salvar</button>
             {raw.banco && (concluido
               ? <button className="btn btn-ghost" style={{ color: theme.yellow, borderColor: theme.yellow }} onClick={reabrirBanco}><i className="ti ti-lock-open" /> Reabrir banco</button>
-              : <button className="btn btn-ghost" style={{ color: theme.green, borderColor: theme.green }} disabled={temExtrato && Math.abs(difSaldo) >= 0.005}
-                  title={temExtrato && Math.abs(difSaldo) >= 0.005 ? 'O saldo do extrato não confere — zere a diferença antes de concluir.' : ''}
+              : <button className="btn btn-ghost" style={{ color: theme.green, borderColor: theme.green }} disabled={!temExtrato || Math.abs(difSaldo) >= 0.005}
+                  title={!temExtrato ? 'Informe o saldo do extrato para concluir.' : (Math.abs(difSaldo) >= 0.005 ? 'O saldo do extrato não confere — zere a diferença antes de concluir.' : '')}
                   onClick={concluirBanco}><i className="ti ti-circle-check" /> Concluir banco</button>)}
             <button className="btn btn-ghost" onClick={exportarExcel}><i className="ti ti-file-spreadsheet" /> Exportar Excel</button>
             <button className="btn btn-ghost" disabled={!concluido || !prontas || (temExtrato && Math.abs(difSaldo) >= 0.005)}
