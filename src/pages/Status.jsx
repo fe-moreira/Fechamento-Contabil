@@ -235,10 +235,17 @@ export default function Status() {
       key: 'variacoes',
       nome: 'Variações sem justificativa',
       icon: 'ti-arrows-diff',
-      descricao: 'Contas com variação acima de 10% da média ainda não justificadas (Comp. Movimento).',
-      itens: (dados.variacoes?.itens || []).map(v => ({
-        item: `${v.conta}${v.nome ? ' · ' + v.nome : ''} · ${MESES[v.mes - 1]} · ${money(v.valor)}`,
-        detalhe: 'Variação acima de 10% da média do ano. Justifique ou corrija no Comp. Movimento.',
+      descricao: 'Contas com variação acima de 10% em relação ao mês anterior, ainda não justificadas (Comp. Movimento).',
+      // Uma linha por CONTA (não por lançamento): é a conta que distorce; o culpado
+      // exato o usuário confere no Comp. Movimento. Os meses afetados vão no detalhe.
+      itens: Object.values((dados.variacoes?.itens || []).reduce((acc, v) => {
+        const k = String(v.conta)
+        if (!acc[k]) acc[k] = { conta: v.conta, nome: v.nome, meses: [] }
+        if (!acc[k].meses.includes(v.mes)) acc[k].meses.push(v.mes)
+        return acc
+      }, {})).map(g => ({
+        item: `${g.conta}${g.nome ? ' · ' + g.nome : ''}`,
+        detalhe: `Variação acima de 10% do mês anterior em ${g.meses.sort((a, b) => a - b).map(m => MESES[m - 1]).join(', ')}. Justifique ou corrija no Comp. Movimento.`,
       })),
     },
     {
