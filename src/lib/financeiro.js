@@ -226,7 +226,10 @@ export function aplicarPerfil(arr, perfil, memoria, catByRow, adiantContas, banc
     const valor = Math.abs(parseValor(r[p.colValor]))
     if (!valor) continue
     const data = p.colData != null && p.colData >= 0 ? dataISO(r[p.colData]) : ''
-    let contra = casarHistorico(credor || historico, memoria, bancos)
+    // Sempre casa pelo HISTÓRICO (que já traz a descrição/entidade via colHist). Antes
+    // usava `credor || historico`, e um credor mal mapeado (ex.: a coluna C/D = "D")
+    // fazia casar por "D" e não achar nada.
+    let contra = casarHistorico(historico, memoria, bancos)
     // Regra: se a linha tem nota/documento, não é adiantamento (adiantamento é
     // quando ainda não há nota). Evita "adiantamento a fornecedor/cliente" errado.
     if (doc && contra && temAdiant && adiantContas.has(String(contra))) contra = ''
