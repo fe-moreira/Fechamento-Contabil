@@ -3,7 +3,8 @@ import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { theme, money, moneyDC } from '../lib/theme'
-import { montarBalancete, normalizaCompetencia, applyMask } from '../lib/balancete'
+import { montarBalancete, normalizaCompetencia, applyMask, erroContaSintetica } from '../lib/balancete'
+import CampoConta from '../components/CampoConta'
 
 // Data (Date do Excel ou "dd/mm/aaaa") → ISO "aaaa-mm-dd".
 function toISO(v) {
@@ -58,7 +59,7 @@ function analisarCulpados(linhas, historicosAnteriores) {
 }
 
 export default function CompMovimento() {
-  const { empresaId, empresaNome, getCompetenciaId } = useAppData()
+  const { empresaId, empresaNome, getCompetenciaId, plano } = useAppData()
   const { user } = useAuth()
 
   const [carregando, setCarregando] = useState(false)
@@ -414,7 +415,17 @@ export default function CompMovimento() {
                           </td>
                         )
                       })}
-                      {mostraTotal && <td style={{ ...td, textAlign: 'right', fontWeight: sintetica ? 700 : 600, color: tot === 0 ? theme.sub : undefined }}>{tot === 0 ? '—' : moneyDC(tot)}</td>}
+                      {mostraTotal && (
+                        (sintetica || tot === 0)
+                          ? <td style={{ ...td, textAlign: 'right', fontWeight: sintetica ? 700 : 600, color: tot === 0 ? theme.sub : undefined }}>{tot === 0 ? '—' : moneyDC(tot)}</td>
+                          : <td style={{ ...td, textAlign: 'right' }}>
+                              <button
+                                onClick={() => setDetalhe({ conta: reduzido, classif, nome, todos: true, compIds: comps.map(x => x.id), mesPorComp: Object.fromEntries(comps.map(x => [x.id, x.mes])) })}
+                                style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: 12.5, fontFamily: 'inherit', fontWeight: 600, color: theme.text, textDecoration: 'underline', textDecorationStyle: 'dotted', textUnderlineOffset: 3 }}
+                                title="Ver todos os lançamentos da conta (todos os meses)"
+                              >{moneyDC(tot)}</button>
+                            </td>
+                      )}
                     </tr>
                   )
                 })}
@@ -442,6 +453,8 @@ export default function CompMovimento() {
           jaJustificada={justificadas.has(chaveCelula(detalhe.conta, detalhe.mes))}
           onJustificada={() => marcarJustificada(detalhe.conta, detalhe.mes)}
           onDesfeita={() => marcarNaoJustificada(detalhe.conta, detalhe.mes)}
+          onCorrigido={() => setRefresh(x => x + 1)}
+          plano={plano}
           onClose={() => setDetalhe(null)}
         />
       )}
@@ -449,81 +462,155 @@ export default function CompMovimento() {
   )
 }
 
-function ModalRazao({ detalhe, compsAnteriores, usuario, getCompetenciaId, jaJustificada, onJustificada, onDesfeita, onClose }) {
-  const { conta, nome, mes, compId } = detalhe
+function ModalRazao({ detalhe, compsAnteriores, usuario, jaJustificada, onJustificada, onDesfeita, onCorrigido, plano, onClose }) {
+  const { conta, nome, mes, compId, todos, compIds, mesPorComp } = detalhe
   const [carregando, setCarregando] = useState(true)
   const [linhas, setLinhas] = useState([])
-  const [registro, setRegistro] = useState(null) // 'Justificativa' | 'Correção'
+  const [correcoes, setCorrecoes] = useState({}) // razao_id → lançamento de correção
+  const [registro, setRegistro] = useState(null) // 'Justificativa'
   const [salvando, setSalvando] = useState(false)
   const [tratada, setTratada] = useState(jaJustificada)
   const [msg, setMsg] = useState('')
+  const [acaoLanc, setAcaoLanc] = useState(null) // { modo:'novo'|'ver', linha, corr }
+
+  const mesDoLanc = l => todos ? (mesPorComp?.[l.competencia_id]) : mes
+
+  async function carregarLinhas() {
+    setCarregando(true)
+    const ids = todos ? compIds : [compId]
+    const { data } = await supabase
+      .from('razao').select('id, competencia_id, data, conta, historico, debito, credito')
+      .in('competencia_id', ids).eq('conta', conta)
+      .order('data', { ascending: true })
+    const rows = data || []
+    // Correções já geradas para estes lançamentos (para marcar/desfazer).
+    const razaoIds = rows.map(r => r.id)
+    let corrMap = {}
+    if (razaoIds.length) {
+      const { data: corr } = await supabase.from('lancamentos')
+        .select('id, competencia_id, conta_debito, conta_credito, valor, historico, razao_id')
+        .in('razao_id', razaoIds).eq('origem', 'correcao')
+      for (const c of (corr || [])) corrMap[c.razao_id] = c
+    }
+    let anteriores = []
+    if (!todos && compsAnteriores && compsAnteriores.length) {
+      const { data: ant } = await supabase.from('razao').select('historico')
+        .in('competencia_id', compsAnteriores).eq('conta', conta)
+      anteriores = (ant || []).map(r => r.historico)
+    }
+    setCorrecoes(corrMap)
+    setLinhas(analisarCulpados(rows, anteriores))
+    setCarregando(false)
+  }
+
+  useEffect(() => {
+    let vivo = true
+    ;(async () => { if (vivo) await carregarLinhas() })()
+    return () => { vivo = false }
+  }, [compId, conta, todos]) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function registrar(tipo, detalheTxt) {
     setSalvando(true)
     try {
-      // Grava na competência DA CÉLULA (compId) — assim o mês do registro casa com o
-      // mês do item e com o preload/desfazer. (Antes usava o fechamento ativo, o que
-      // marcava o check no mês errado e impedia o desfazer.)
+      // Grava na competência DA CÉLULA (compId) — o mês do registro casa com o item.
       const { error } = await supabase.from('auditoria').insert({
-        competencia_id: compId,
-        modulo: 'Comparativo',
-        item: `${conta} · ${MESES[mes - 1]}/${ANO}`,
-        tipo,
-        detalhe: detalheTxt,
-        usuario,
+        competencia_id: compId, modulo: 'Comparativo',
+        item: `${conta} · ${MESES[mes - 1]}/${ANO}`, tipo, detalhe: detalheTxt, usuario,
       })
       if (error) throw error
       setMsg(`${tipo} registrada na auditoria.`)
-      setRegistro(null)
-      setTratada(true)
-      onJustificada()
-    } catch (e) {
-      setMsg('Erro ao registrar: ' + (e.message || e))
-    } finally {
-      setSalvando(false)
-    }
+      setRegistro(null); setTratada(true); onJustificada()
+    } catch (e) { setMsg('Erro ao registrar: ' + (e.message || e)) } finally { setSalvando(false) }
   }
 
-  // Desfaz o ajuste: apaga o(s) registro(s) desta conta/mês na auditoria do Comparativo
-  // (o item identifica unicamente conta + mês). A célula volta a contar como pendência.
   async function desfazer() {
     if (!window.confirm(`Desfazer o ajuste da conta ${conta} em ${MESES[mes - 1]}/${ANO}? A variação volta a contar como pendência.`)) return
     setSalvando(true)
     try {
       const { error } = await supabase.from('auditoria').delete()
-        .eq('modulo', 'Comparativo')
-        .eq('item', `${conta} · ${MESES[mes - 1]}/${ANO}`)
+        .eq('modulo', 'Comparativo').eq('item', `${conta} · ${MESES[mes - 1]}/${ANO}`)
       if (error) throw error
-      setMsg('Ajuste desfeito — variação voltou a pendente.')
-      setTratada(false)
-      onDesfeita()
-    } catch (e) {
-      setMsg('Erro ao desfazer: ' + (e.message || e))
-    } finally {
-      setSalvando(false)
+      setMsg('Ajuste desfeito — variação voltou a pendente.'); setTratada(false); onDesfeita()
+    } catch (e) { setMsg('Erro ao desfazer: ' + (e.message || e)) } finally { setSalvando(false) }
+  }
+
+  // Aplica um delta de débito/crédito no cache do balancete de uma conta (competência),
+  // recalculando o saldo_final — é o que faz a correção refletir na conciliação e no
+  // comparativo (que leem o balancete). Cria a linha se a conta ainda não tiver saldo.
+  async function aplicarNoBalancete(competencia_id, cod, dDeb, dCred) {
+    const { data: row } = await supabase.from('balancete')
+      .select('id, debito, credito, saldo_final').eq('competencia_id', competencia_id).eq('conta', cod).maybeSingle()
+    if (row) {
+      await supabase.from('balancete').update({
+        debito: (Number(row.debito) || 0) + dDeb,
+        credito: (Number(row.credito) || 0) + dCred,
+        saldo_final: (Number(row.saldo_final) || 0) + dDeb - dCred,
+      }).eq('id', row.id)
+    } else {
+      const p = (plano || []).find(x => String(x.cod) === String(cod))
+      await supabase.from('balancete').insert({
+        competencia_id, conta: cod, nome: p?.nome || null,
+        saldo_inicial: 0, debito: dDeb, credito: dCred, saldo_final: dDeb - dCred,
+      })
     }
   }
 
-  useEffect(() => {
-    let vivo = true
-    ;(async () => {
-      setCarregando(true)
-      const { data } = await supabase
-        .from('razao').select('data, conta, historico, debito, credito')
-        .eq('competencia_id', compId).eq('conta', conta)
-        .order('data', { ascending: true })
-      let anteriores = []
-      if (compsAnteriores && compsAnteriores.length) {
-        const { data: ant } = await supabase.from('razao').select('historico')
-          .in('competencia_id', compsAnteriores).eq('conta', conta)
-        anteriores = (ant || []).map(r => r.historico)
-      }
-      if (!vivo) return
-      setLinhas(analisarCulpados(data || [], anteriores))
-      setCarregando(false)
-    })()
-    return () => { vivo = false }
-  }, [compId, conta]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Gera o lançamento de CORREÇÃO (partida dobrada) que reclassifica o valor da conta
+  // errada para a conta certa — é o lançamento que vai ser importado no Domínio.
+  async function gerarCorrecao(l, { contaCerta, valor, historico }) {
+    setSalvando(true)
+    try {
+      const eSint = erroContaSintetica(plano, contaCerta, conta)
+      if (eSint) { setMsg(eSint); setSalvando(false); return }
+      const v = Number(valor) || 0
+      if (v <= 0) { setMsg('Erro: informe um valor maior que zero.'); setSalvando(false); return }
+      const foiDebito = Number(l.debito) > 0
+      // Débito na conta errada → credita a errada e debita a certa (e vice-versa).
+      const conta_debito = foiDebito ? contaCerta : conta
+      const conta_credito = foiDebito ? conta : contaCerta
+      const cid = l.competencia_id
+      const mesL = mesDoLanc(l)
+      const { error } = await supabase.from('lancamentos').insert({
+        competencia_id: cid, data: l.data || null,
+        conta_debito, conta_credito, valor: v,
+        historico: historico || `Reclassificação ref. ${l.historico || ''}`.trim(),
+        origem: 'correcao', razao_id: l.id, usuario,
+      })
+      if (error) throw error
+      // Propaga para o balancete (conciliação + comparativo leem daqui).
+      await aplicarNoBalancete(cid, conta_debito, v, 0)
+      await aplicarNoBalancete(cid, conta_credito, 0, v)
+      // Trilha de auditoria.
+      await supabase.from('auditoria').insert({
+        competencia_id: cid, modulo: 'Comparativo',
+        item: `${conta} · ${MESES[(mesL || 1) - 1]}/${ANO}`, tipo: 'Correção',
+        detalhe: `Reclassificação ${conta} → ${contaCerta} · ${money(v)}${historico ? ' · ' + historico : ''}`,
+        razao_id: l.id, usuario,
+      })
+      setMsg('Correção gerada — lançamento no painel Contabilizar e saldos atualizados.')
+      setAcaoLanc(null)
+      await carregarLinhas()
+      onCorrigido && onCorrigido()
+    } catch (e) { setMsg('Erro ao gerar correção: ' + (e.message || e)) } finally { setSalvando(false) }
+  }
+
+  // Desfaz a correção: remove o lançamento, reverte o balancete e apaga a auditoria.
+  async function desfazerCorrecao(l, corr) {
+    if (!window.confirm('Desfazer esta correção? O lançamento de correção será removido e os saldos revertidos.')) return
+    setSalvando(true)
+    try {
+      const v = Number(corr.valor) || 0
+      await supabase.from('lancamentos').delete().eq('id', corr.id)
+      await aplicarNoBalancete(corr.competencia_id, corr.conta_debito, -v, 0)
+      await aplicarNoBalancete(corr.competencia_id, corr.conta_credito, 0, -v)
+      await supabase.from('auditoria').delete()
+        .eq('modulo', 'Comparativo').eq('tipo', 'Correção').eq('razao_id', l.id)
+      setMsg('Correção desfeita — saldos revertidos.')
+      setAcaoLanc(null)
+      await carregarLinhas()
+      onCorrigido && onCorrigido()
+    } catch (e) { setMsg('Erro ao desfazer correção: ' + (e.message || e)) } finally { setSalvando(false) }
+  }
 
   let saldo = 0
   const totDeb = linhas.reduce((s, l) => s + (Number(l.debito) || 0), 0)
@@ -537,13 +624,13 @@ function ModalRazao({ detalhe, compsAnteriores, usuario, getCompetenciaId, jaJus
     >
       <div
         onClick={e => e.stopPropagation()}
-        style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, width: 'min(900px, 96vw)', maxHeight: '88vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
+        style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, width: 'min(940px, 96vw)', maxHeight: '88vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
       >
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', padding: '18px 22px', borderBottom: `0.5px solid ${theme.cb}` }}>
           <div>
             <h3 style={{ fontSize: 15, marginBottom: 4 }}>Razão — conta {conta}</h3>
             <p style={{ color: theme.sub, fontSize: 12.5 }}>
-              {nome ? `${nome} · ` : ''}{MESES[mes - 1]}/{ANO}
+              {nome ? `${nome} · ` : ''}{todos ? 'Todos os meses' : `${MESES[mes - 1]}/${ANO}`}
             </p>
           </div>
           <button className="btn-ghost" onClick={onClose} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
@@ -551,24 +638,31 @@ function ModalRazao({ detalhe, compsAnteriores, usuario, getCompetenciaId, jaJus
           </button>
         </div>
 
+        <div style={{ margin: '14px 22px 0', background: 'rgba(74,124,255,0.08)', border: `1px solid ${theme.accent}`, borderRadius: 10, padding: '10px 14px' }}>
+          <p style={{ color: theme.text, fontSize: 12.5, margin: 0 }}>
+            <i className="ti ti-click" style={{ color: theme.accent }} /> Clique num lançamento para <b>corrigir</b> — o sistema gera um lançamento de reclassificação (para importar no Domínio) e atualiza os saldos.
+          </p>
+        </div>
+
         {!carregando && suspeitos.length > 0 && (
-          <div style={{ margin: '14px 22px 0', background: 'rgba(245,166,35,0.10)', border: '1px solid rgba(245,166,35,0.4)', borderRadius: 10, padding: '12px 14px' }}>
+          <div style={{ margin: '10px 22px 0', background: 'rgba(245,166,35,0.10)', border: '1px solid rgba(245,166,35,0.4)', borderRadius: 10, padding: '12px 14px' }}>
             <p style={{ color: theme.yellow, fontSize: 13, fontWeight: 600, margin: 0 }}>
               <i className="ti ti-alert-triangle" /> {suspeitos.length} lançamento(s) provável(is) culpado(s) desta variação
             </p>
-            <p style={{ color: theme.sub, fontSize: 12, margin: '4px 0 0' }}>Destacados abaixo. Use “Corrigir” para reclassificar, ou “Justificar” se a variação é esperada.</p>
+            <p style={{ color: theme.sub, fontSize: 12, margin: '4px 0 0' }}>Destacados abaixo. Clique no lançamento para reclassificar, ou “Justificar” se a variação é esperada.</p>
           </div>
         )}
 
-        <div style={{ overflow: 'auto', padding: '0 0 4px' }}>
+        <div style={{ overflow: 'auto', padding: '10px 0 4px' }}>
           {carregando ? (
             <p style={{ color: theme.sub, fontSize: 13, padding: '18px 22px' }}><i className="ti ti-loader" /> Carregando…</p>
           ) : linhas.length === 0 ? (
-            <p style={{ color: theme.sub, fontSize: 13, padding: '18px 22px' }}>Nenhum lançamento de razão para esta conta neste mês.</p>
+            <p style={{ color: theme.sub, fontSize: 13, padding: '18px 22px' }}>Nenhum lançamento de razão para esta conta.</p>
           ) : (
             <table style={{ borderCollapse: 'collapse', width: '100%' }}>
               <thead>
                 <tr style={{ background: theme.input }}>
+                  {todos && <th style={th}>Mês</th>}
                   <th style={th}>Data</th>
                   <th style={th}>Histórico</th>
                   <th style={{ ...th, textAlign: 'right' }}>Débito</th>
@@ -579,13 +673,21 @@ function ModalRazao({ detalhe, compsAnteriores, usuario, getCompetenciaId, jaJus
               <tbody>
                 {linhas.map((l, i) => {
                   saldo += (Number(l.debito) || 0) - (Number(l.credito) || 0)
+                  const corr = correcoes[l.id]
                   return (
-                    <tr key={i} style={{ borderTop: `1px solid ${theme.border}`, background: l.suspeito ? 'rgba(245,166,35,0.07)' : undefined }}>
+                    <tr key={l.id || i}
+                      onClick={() => { setMsg(''); setAcaoLanc(corr ? { modo: 'ver', linha: l, corr } : { modo: 'novo', linha: l }) }}
+                      style={{ borderTop: `1px solid ${theme.border}`, cursor: 'pointer', background: corr ? 'rgba(48,164,108,0.08)' : l.suspeito ? 'rgba(245,166,35,0.07)' : undefined }}
+                      title={corr ? 'Corrigido — clique para ver/desfazer' : 'Clique para corrigir (reclassificar)'}
+                    >
+                      {todos && <td style={{ ...td, whiteSpace: 'nowrap', color: theme.sub }}>{MESES[(mesDoLanc(l) || 1) - 1]}</td>}
                       <td style={{ ...td, whiteSpace: 'nowrap' }}>{l.data || ''}</td>
-                      <td style={{ ...td, maxWidth: 380, whiteSpace: 'normal' }}>
-                        {l.suspeito && <i className="ti ti-alert-triangle" style={{ color: theme.yellow, marginRight: 6 }} title="Provável culpado" />}
+                      <td style={{ ...td, maxWidth: 360, whiteSpace: 'normal' }}>
+                        {corr && <i className="ti ti-circle-check" style={{ color: theme.green, marginRight: 6 }} title="Corrigido" />}
+                        {l.suspeito && !corr && <i className="ti ti-alert-triangle" style={{ color: theme.yellow, marginRight: 6 }} title="Provável culpado" />}
                         {l.historico || ''}
-                        {l.suspeito && <div style={{ color: theme.yellow, fontSize: 11, marginTop: 2 }}>provável culpado — {l.motivo}</div>}
+                        {corr && <div style={{ color: theme.green, fontSize: 11, marginTop: 2 }}>corrigido — {corr.conta_debito} (D) / {corr.conta_credito} (C) · {money(corr.valor)}</div>}
+                        {l.suspeito && !corr && <div style={{ color: theme.yellow, fontSize: 11, marginTop: 2 }}>provável culpado — {l.motivo}</div>}
                       </td>
                       <td style={{ ...td, textAlign: 'right' }}>{Number(l.debito) ? money(l.debito) : ''}</td>
                       <td style={{ ...td, textAlign: 'right' }}>{Number(l.credito) ? money(l.credito) : ''}</td>
@@ -596,7 +698,7 @@ function ModalRazao({ detalhe, compsAnteriores, usuario, getCompetenciaId, jaJus
               </tbody>
               <tfoot>
                 <tr style={{ borderTop: `1px solid ${theme.border}`, background: theme.input }}>
-                  <td style={{ ...td, fontWeight: 700 }} colSpan={2}>Total</td>
+                  <td style={{ ...td, fontWeight: 700 }} colSpan={todos ? 3 : 2}>Total</td>
                   <td style={{ ...td, textAlign: 'right', fontWeight: 700 }}>{money(totDeb)}</td>
                   <td style={{ ...td, textAlign: 'right', fontWeight: 700 }}>{money(totCred)}</td>
                   <td style={{ ...td, textAlign: 'right', fontWeight: 700 }}>{money(totDeb - totCred)}</td>
@@ -610,36 +712,111 @@ function ModalRazao({ detalhe, compsAnteriores, usuario, getCompetenciaId, jaJus
           <span style={{ fontSize: 12.5, minHeight: 16, color: msg ? (msg.startsWith('Erro') ? theme.red : theme.green) : theme.sub }}>
             {msg
               ? <><i className={`ti ${msg.startsWith('Erro') ? 'ti-alert-triangle' : 'ti-circle-check'}`} /> {msg}</>
-              : tratada
-                ? <><i className="ti ti-circle-check" style={{ color: theme.green }} /> Variação já tratada na auditoria.</>
-                : 'Justifique ou corrija esta variação — fica registrada na auditoria.'}
+              : todos
+                ? 'Todos os lançamentos da conta no ano. Clique num lançamento para corrigir.'
+                : tratada
+                  ? <><i className="ti ti-circle-check" style={{ color: theme.green }} /> Variação já tratada na auditoria.</>
+                  : 'Justifique a variação, ou clique num lançamento para corrigir.'}
           </span>
-          <div style={{ display: 'flex', gap: 8 }}>
-            {tratada && (
-              <button className="btn btn-ghost" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: theme.red }} disabled={salvando} onClick={desfazer}>
-                <i className="ti ti-arrow-back-up" /> {salvando ? 'Desfazendo…' : 'Desfazer ajuste'}
+          {!todos && (
+            <div style={{ display: 'flex', gap: 8 }}>
+              {tratada && (
+                <button className="btn btn-ghost" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: theme.red }} disabled={salvando} onClick={desfazer}>
+                  <i className="ti ti-arrow-back-up" /> {salvando ? 'Desfazendo…' : 'Desfazer ajuste'}
+                </button>
+              )}
+              <button className="btn btn-ghost" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }} onClick={() => { setMsg(''); setRegistro('Justificativa') }}>
+                <i className="ti ti-flag" /> Justificar
               </button>
-            )}
-            <button className="btn btn-ghost" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }} onClick={() => { setMsg(''); setRegistro('Justificativa') }}>
-              <i className="ti ti-flag" /> Justificar
-            </button>
-            <button className="btn" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }} onClick={() => { setMsg(''); setRegistro('Correção') }}>
-              <i className="ti ti-pencil-bolt" /> Corrigir
-            </button>
-          </div>
+            </div>
+          )}
         </div>
       </div>
 
       {registro && (
         <ModalRegistro
-          tipo={registro}
-          salvando={salvando}
-          conta={conta}
-          mes={mes}
-          onClose={() => setRegistro(null)}
-          onConfirmar={txt => registrar(registro, txt)}
+          tipo={registro} salvando={salvando} conta={conta} mes={mes}
+          onClose={() => setRegistro(null)} onConfirmar={txt => registrar(registro, txt)}
         />
       )}
+
+      {acaoLanc && (
+        <ModalCorrecao
+          acao={acaoLanc} conta={conta} salvando={salvando}
+          onClose={() => setAcaoLanc(null)}
+          onGerar={dados => gerarCorrecao(acaoLanc.linha, dados)}
+          onDesfazer={() => desfazerCorrecao(acaoLanc.linha, acaoLanc.corr)}
+        />
+      )}
+    </div>
+  )
+}
+
+// Correção de um lançamento: gera um NOVO lançamento (partida dobrada) reclassificando
+// o valor da conta errada para a conta certa — o que será importado no Domínio.
+function ModalCorrecao({ acao, conta, salvando, onClose, onGerar, onDesfazer }) {
+  const { modo, linha, corr } = acao
+  const foiDebito = Number(linha.debito) > 0
+  const valorBase = foiDebito ? Number(linha.debito) : Number(linha.credito)
+  const [contaCerta, setContaCerta] = useState('')
+  const [valor, setValor] = useState(valorBase ? valorBase.toFixed(2).replace('.', ',') : '')
+  const [historico, setHistorico] = useState(`Reclassificação ref. ${linha.historico || ''}`.trim())
+  const v = numBR(valor)
+  const contaDeb = foiDebito ? (contaCerta || '—') : conta
+  const contaCred = foiDebito ? conta : (contaCerta || '—')
+
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 60 }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 'min(520px,96vw)', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
+        <h2 style={{ fontSize: 17, marginBottom: 4 }}>{modo === 'ver' ? 'Correção do lançamento' : 'Corrigir lançamento'}</h2>
+        <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 14 }}>
+          {linha.data || ''} · {linha.historico || ''} · {foiDebito ? 'Débito' : 'Crédito'} {money(valorBase)} na conta <b style={{ color: theme.text }}>{conta}</b>.
+        </p>
+
+        {modo === 'ver' ? (
+          <>
+            <div style={{ background: theme.input, border: `0.5px solid ${theme.cb}`, borderRadius: 10, padding: '12px 14px', fontSize: 13 }}>
+              <p style={{ margin: 0, color: theme.text }}>Lançamento de correção gerado:</p>
+              <p style={{ margin: '6px 0 0', color: theme.sub }}>Débito <b style={{ color: theme.text }}>{corr.conta_debito}</b> · Crédito <b style={{ color: theme.text }}>{corr.conta_credito}</b> · <b style={{ color: theme.text }}>{money(corr.valor)}</b></p>
+              {corr.historico && <p style={{ margin: '6px 0 0', color: theme.sub }}>{corr.historico}</p>}
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
+              <button className="btn btn-ghost" onClick={onClose} disabled={salvando}>Fechar</button>
+              <button className="btn btn-ghost" style={{ color: theme.red }} onClick={onDesfazer} disabled={salvando}>
+                <i className="ti ti-arrow-back-up" /> {salvando ? 'Desfazendo…' : 'Desfazer correção'}
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <label style={{ fontSize: 12.5, color: theme.sub }}>Conta certa (reclassificar para)</label>
+            <div style={{ marginTop: 4 }}>
+              <CampoConta value={contaCerta} onChange={setContaCerta} autoFocus />
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 10, marginTop: 12 }}>
+              <div>
+                <label style={{ fontSize: 12.5, color: theme.sub }}>Valor</label>
+                <input className="input" value={valor} onChange={e => setValor(e.target.value)} placeholder="0,00" style={{ marginTop: 4 }} />
+              </div>
+              <div>
+                <label style={{ fontSize: 12.5, color: theme.sub }}>Histórico</label>
+                <textarea className="input" rows={2} value={historico} onChange={e => setHistorico(e.target.value)} style={{ marginTop: 4 }} />
+              </div>
+            </div>
+            <div style={{ background: theme.input, border: `0.5px solid ${theme.cb}`, borderRadius: 10, padding: '10px 14px', fontSize: 12.5, marginTop: 12 }}>
+              <p style={{ margin: 0, color: theme.sub }}>Lançamento que será gerado:</p>
+              <p style={{ margin: '5px 0 0', color: theme.text }}>Débito <b>{contaDeb}</b> · Crédito <b>{contaCred}</b> · <b>{money(v)}</b></p>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
+              <button className="btn btn-ghost" onClick={onClose} disabled={salvando}>Cancelar</button>
+              <button className="btn" disabled={salvando || !contaCerta.trim() || v <= 0}
+                onClick={() => onGerar({ contaCerta: contaCerta.trim(), valor: v, historico: historico.trim() })}>
+                {salvando ? 'Gerando…' : 'Gerar correção'}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
     </div>
   )
 }
