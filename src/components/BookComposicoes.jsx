@@ -18,7 +18,7 @@ const fmtCnpj = c => { const s = String(c || '').replace(/\D/g, ''); return s.le
 // Situação da amarração de uma conta patrimonial.
 function statusConta(c) {
   if (c.dif != null && Math.abs(c.dif) < 0.05 && c.documento_path) return { txt: 'Conciliado — documento', cor: theme.green }
-  if (c.conciliada && c.justificativa) return { txt: 'Conciliado — justificativa', cor: theme.green }
+  if (c.conciliada && c.justificativa) return { txt: 'Conciliado — justificativa', cor: theme.yellow }
   if (c.dif != null && Math.abs(c.dif) >= 0.05) return { txt: 'Diferença a resolver', cor: theme.red }
   return { txt: 'Sem documento', cor: theme.yellow }
 }
@@ -135,7 +135,7 @@ export default function BookComposicoes({ empresaId, empresaNome, competencia, c
       const secoes = [{
         titulo: 'Amarração geral — contas patrimoniais',
         linhas: contas.map(c => [
-          c.conta, c.nome, num(c.saldo_final),
+          c.conta, `${c.comentarios?.length ? '* ' : ''}${c.nome}`, num(c.saldo_final),
           c.saldo_documento == null ? '' : num(c.saldo_documento),
           c.dif == null ? '' : num(c.dif),
           linkDe[c.conta] ? { text: 'Abrir PDF', hyperlink: linkDe[c.conta] } : statusConta(c).txt,
@@ -230,7 +230,7 @@ export default function BookComposicoes({ empresaId, empresaNome, competencia, c
               return (
                 <tr key={i} style={{ borderTop: `1px solid ${theme.border}` }}>
                   <td style={td}>{c.conta}</td>
-                  <td style={td}>{c.nome || '—'}</td>
+                  <td style={td}>{c.nome || '—'}{c.comentarios?.length > 0 && <span title={`${c.comentarios.length} comentário(s) nesta conta`} style={{ color: theme.accent, fontWeight: 800, marginLeft: 5 }}>* com comentário</span>}</td>
                   <td style={tdNum}>{money(c.saldo_final)}</td>
                   <td style={tdNum}>{c.saldo_documento == null ? '—' : money(c.saldo_documento)}</td>
                   <td style={{ ...tdNum, color: c.dif == null ? theme.sub : Math.abs(c.dif) < 0.05 ? theme.green : theme.red }}>{c.dif == null ? '—' : money(c.dif)}</td>
@@ -271,7 +271,10 @@ function Folha({ c, onAbrir }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, padding: '14px 18px', borderBottom: `1px solid ${theme.border}`, background: theme.input }}>
         <div>
           <div style={{ fontSize: 11, color: theme.sub, fontWeight: 700 }}>{c.conta} · {c.grupo}</div>
-          <div style={{ fontSize: 16, fontWeight: 700, marginTop: 2 }}>{c.nome || 'Conta sem nome no plano'}</div>
+          <div style={{ fontSize: 16, fontWeight: 700, marginTop: 2 }}>
+            {c.nome || 'Conta sem nome no plano'}
+            {c.comentarios?.length > 0 && <span title={`${c.comentarios.length} comentário(s)`} style={{ color: theme.accent, fontWeight: 800, marginLeft: 6, fontSize: 13 }}>* com comentário</span>}
+          </div>
         </div>
         <div style={{ textAlign: 'right', flexShrink: 0 }}>
           <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: .5, color: theme.sub, fontWeight: 700 }}>Saldo contábil</div>
