@@ -206,6 +206,9 @@ export function aplicarPerfil(arr, perfil, memoria, catByRow, adiantContas, banc
     }
     if (!r || !r.some(c => c !== '' && c != null)) continue
     if (p.filtro?.pularVazio && p.filtro.col != null && p.filtro.col >= 0 && !String(r[p.filtro.col] ?? '').trim()) continue
+    // "SALDO ANTERIOR/INICIAL" não é lançamento — é a abertura do extrato (só valida o saldo).
+    const descr = colHist >= 0 ? String(r[colHist] ?? '') : histCols.length ? String(r[histCols[0]] ?? '') : ''
+    if (/saldo\s+(anterior|inicial)/i.test(descr.normalize('NFD').replace(/[̀-ͯ]/g, ''))) continue
     const entrada = decidirEntrada(r, p)
     const credor = p.colCredor != null && p.colCredor >= 0 ? String(r[p.colCredor] ?? '').trim() : ''
     const doc = p.colDoc != null && p.colDoc >= 0 ? String(r[p.colDoc] ?? '').trim() : ''
