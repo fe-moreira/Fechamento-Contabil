@@ -4,7 +4,7 @@ import { useAppData } from '../lib/appData'
 import { apurarDistribuicao } from '../lib/distribuicao'
 import { apurarBancoResultado } from '../lib/bancoResultado'
 import { apurarVariacoes } from '../lib/variacoes'
-import { parsePlano } from '../lib/balancete'
+import { parsePlano, contasConciliacaoAbertas } from '../lib/balancete'
 import { gerarExcelTimbrado } from '../lib/excel'
 import { theme, money } from '../lib/theme'
 
@@ -43,11 +43,12 @@ export default function Relatorios() {
   const [dist, setDist] = useState(null)            // apuração de distribuição de lucros
   const [br, setBr] = useState(null)                // apuração banco × resultado
   const [comparativo, setComparativo] = useState(null) // matriz conta × mês do ano
+  const [concOk, setConcOk] = useState(null)        // conciliação finalizada? (null = checando)
   const [aba, setAba] = useState('balancete')
 
   // Resolve a competência (READ-ONLY) e lê balancete + documentos + auditoria.
   useEffect(() => {
-    setLinhas([]); setDocumentos([]); setConcPend([]); setAuditoria([]); setDist(null); setBr(null); setComparativo(null); setTemComp(null)
+    setLinhas([]); setDocumentos([]); setConcPend([]); setAuditoria([]); setDist(null); setBr(null); setComparativo(null); setConcOk(null); setTemComp(null)
     if (!empresaId) return
     let vivo = true
     ;(async () => {
@@ -60,6 +61,10 @@ export default function Relatorios() {
         if (!comp) { setTemComp(false); return }
         setTemComp(true)
         setDocumentos(Array.isArray(comp.documentos) ? comp.documentos : [])
+
+        // Tick verde do Book de Composições: acende só quando a conciliação está
+        // finalizada (nenhuma conta de Ativo/Passivo em aberto — mesma régua do Status).
+        contasConciliacaoAbertas(empresaId, comp.id).then(ab => { if (vivo) setConcOk(ab.length === 0) }).catch(() => { if (vivo) setConcOk(null) })
 
         const [{ data: bal }, { data: aud }] = await Promise.all([
           supabase.from('balancete')
@@ -324,8 +329,15 @@ export default function Relatorios() {
             }}
           >
             <i className={`ti ${r.icon}`} style={{ fontSize: 20, color: theme.accent, marginTop: 2 }} />
-            <div>
-              <div style={{ fontSize: 13.5, fontWeight: 600, color: theme.text, marginBottom: 4 }}>{r.nome}</div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 600, color: theme.text, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
+                {r.nome}
+                {r.id === 'book' && concOk !== null && (
+                  <i className={`ti ${concOk ? 'ti-circle-check-filled' : 'ti-circle-dashed'}`}
+                    title={concOk ? 'Conciliação finalizada — book pronto' : 'Conclua a conciliação para liberar o book'}
+                    style={{ fontSize: 16, color: concOk ? theme.green : theme.sub }} />
+                )}
+              </div>
               <div style={{ fontSize: 12, color: theme.sub, lineHeight: 1.4 }}>{r.desc}</div>
             </div>
           </button>
