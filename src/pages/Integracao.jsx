@@ -985,10 +985,13 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   const [cruza, setCruza] = useState(null)                 // resultado do cruzamento por dia com o extrato
   const [cruzaOpen, setCruzaOpen] = useState(false)        // modal do cruzamento aberto (dá p/ reabrir)
   const [novoLanc, setNovoLanc] = useState(false)          // modal de incluir lançamento manual
+  const [sugAprend, setSugAprend] = useState(null)         // { itens } sugestões após aprender
   const refsContra = useRef({})                  // foco: Enter pula para a próxima linha
 
   const nomeBanco = cod => planoMap[String(cod)]?.nome || (cod ? `Conta ${cod}` : '—')
   const bancosEst = est?.bancos || {}
+  // Banco concluído (validado): trava edição/inclusão/exclusão até reabrir.
+  const concluido = !!(raw?.banco && bancosEst[raw.banco]?.estado === 'validado')
   // Contas de adiantamento (nome contém "adiant") — usadas para a regra: com nota não é adiantamento.
   const adiantContas = new Set(Object.entries(planoMap).filter(([, pl]) => /adiant/i.test(pl?.nome || '')).map(([cod]) => cod))
 
@@ -1136,7 +1139,14 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     const faltam = linhas.filter(l => !l.contra).length
     if (faltam && !window.confirm(`Ainda há ${faltam} linha(s) sem contrapartida. Concluir assim mesmo?`)) return
     salvarBancoDraft(raw.banco, 'validado', raw.nome, linhas)
-    setMsg('Banco concluído — lançamentos contabilizados.')
+    setMsg('Banco concluído — travado para edição. Para alterar, clique em Reabrir banco.')
+  }
+  // Reabre o banco concluído: volta a rascunho e libera edição/inclusão/exclusão.
+  function reabrirBanco() {
+    if (!raw?.banco) return
+    if (!window.confirm('Reabrir este banco? Ele volta a "em andamento" e você poderá editar, incluir e excluir lançamentos.')) return
+    salvarBancoDraft(raw.banco, 'rascunho', raw.nome, linhas)
+    setMsg('Banco reaberto — edição liberada.')
   }
   // Continua um rascunho salvo (carrega as linhas para a tela).
   function continuarRascunho(conta) {
@@ -1220,7 +1230,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
       setMsg(`${cl.length} linha(s) · competência ${competencia} conferida.`)
     }
   }
-  const setLinha = (i, patch) => setLinhas(ls => ls.map((l, j) => j === i ? { ...l, ...patch } : l))
+  const setLinha = (i, patch) => { if (concluido) return; setLinhas(ls => ls.map((l, j) => j === i ? { ...l, ...patch } : l)) }
 
   // Salva as linhas no rascunho do banco (mantém estado/doc atuais).
   function persistirLinhas(novas) {
@@ -1228,6 +1238,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   }
   // Exclui um lançamento (com confirmação) — para corrigir direto antes de gerar.
   function excluirLinha(i) {
+    if (concluido) return
     if (!window.confirm('Tem certeza que deseja excluir este lançamento?')) return
     const novas = linhas.filter((_, j) => j !== i)
     setLinhas(novas); setSel(new Set()); persistirLinhas(novas)
@@ -1235,6 +1246,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   }
   // Inclui um lançamento manual (confirmado no modal) — ex.: um que faltou.
   function adicionarLinha(nova) {
+    if (concluido) return
     const novas = [...linhas, nova]
     setLinhas(novas); persistirLinhas(novas); setNovoLanc(false)
     setMsg('Lançamento incluído.')
@@ -1317,6 +1329,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   }
   // Divide um lançamento em vários (ex.: 1 DARF → 3 lançamentos contábeis).
   function confirmarQuebra(i, partes) {
+    if (concluido) return
     const base = linhas[i]
     const novas = partes.map(p => ({ ...base, valor: Math.abs(Number(p.valor) || 0), contra: String(p.contra || '').trim() }))
     setLinhas(ls => [...ls.slice(0, i), ...novas, ...ls.slice(i + 1)])
@@ -1324,6 +1337,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     setMsg(`Lançamento dividido em ${novas.length}.`)
   }
   function aplicarLote() {
+    if (concluido) return
     const cod = String(lote || '').trim()
     if (!cod) { setMsg('Informe a conta para aplicar em lote.'); return }
     if (!sel.size) { setMsg('Selecione as linhas (caixas à esquerda) para aplicar a conta.'); return }
@@ -1341,7 +1355,28 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     if (!novas.length) { setMsg('Classifique ao menos uma linha (contrapartida) antes de salvar.'); return }
     const mem = aprender(memoria, novas)
     await salvarMemoria(mem, { nomeArquivo: memMeta.nomeArquivo, semCarga: false })
-    setMsg(`Memória atualizada — ${novas.length} classificação(ões) aprendida(s).`)
+    // Com o novo aprendizado, tenta classificar as linhas que ainda estão SEM contrapartida.
+    // Não aplica na hora — mostra para o usuário confirmar (pode não estar de acordo).
+    const achados = []
+    linhas.forEach((l, i) => {
+      if (l.contra) return
+      const cod = casarHistorico(l.historico, mem)
+      if (cod) achados.push({ i, historico: l.historico, valor: l.valor, entrada: l.entrada, data: l.data, contra: cod })
+    })
+    if (achados.length && !concluido) {
+      setSugAprend({ itens: achados, aprendidas: novas.length })
+      setMsg(`Memória atualizada (${novas.length} aprendida(s)). Encontrei ${achados.length} lançamento(s) que este aprendizado também classifica — confirme abaixo.`)
+    } else {
+      setMsg(`Memória atualizada — ${novas.length} classificação(ões) aprendida(s).`)
+    }
+  }
+  // Aplica as sugestões que o usuário confirmou (após "Aprender e salvar").
+  function aplicarSugestoes(itensConfirmados) {
+    if (concluido || !itensConfirmados?.length) { setSugAprend(null); return }
+    const mapa = {}; for (const it of itensConfirmados) mapa[it.i] = it.contra
+    const novas = linhas.map((l, j) => mapa[j] != null ? { ...l, contra: mapa[j] } : l)
+    setLinhas(novas); persistirLinhas(novas); setSugAprend(null)
+    setMsg(`${Object.keys(mapa).length} lançamento(s) classificado(s) pelo aprendizado.`)
   }
 
   // Semeia/complementa a memória a partir do layout de lançamentos do Domínio
@@ -1624,7 +1659,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
             <span style={{ fontSize: 12, color: theme.sub }}>Aplicar às selecionadas:</span>
             <CampoConta value={lote} onChange={setLote} onEnter={aplicarLote} placeholder="Conta (F4)" style={{ width: 190 }} />
             {lote.trim() && <span style={{ fontSize: 11.5, maxWidth: 220, color: planoMap[String(lote).trim()]?.nome ? theme.green : theme.red }}>{planoMap[String(lote).trim()]?.nome || 'conta não encontrada'}</span>}
-            <button className="btn" style={{ fontSize: 12, padding: '5px 10px' }} disabled={!sel.size} onClick={aplicarLote}><i className="ti ti-wand" /> Aplicar ({sel.size})</button>
+            <button className="btn" style={{ fontSize: 12, padding: '5px 10px' }} disabled={!sel.size || concluido} onClick={aplicarLote}><i className="ti ti-wand" /> Aplicar ({sel.size})</button>
           </div>
 
           <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 12.5, margin: '0 0 6px' }}>
@@ -1634,7 +1669,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
             {filtroAtivo && <span style={{ color: theme.sub }}>{fData ? `dia ${fData}: ` : 'filtro: '}<b style={{ color: theme.green }}>+{money(totVisEnt)}</b> · <b style={{ color: theme.red }}>−{money(totVisSai)}</b> · líquido <b style={{ color: theme.text }}>{money(totVisEnt - totVisSai)}</b></span>}
             {sel.size > 0 && <button className="btn btn-ghost" style={{ fontSize: 11.5, padding: '3px 8px', color: theme.sub }} onClick={() => setSel(new Set())}>limpar seleção</button>}
             <span style={{ flex: 1 }} />
-            <button className="btn btn-ghost" style={{ fontSize: 11.5, padding: '3px 9px' }} onClick={() => setNovoLanc(true)}><i className="ti ti-plus" /> Incluir lançamento</button>
+            <button className="btn btn-ghost" style={{ fontSize: 11.5, padding: '3px 9px' }} disabled={concluido} onClick={() => setNovoLanc(true)}><i className="ti ti-plus" /> Incluir lançamento</button>
           </div>
           <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center', fontSize: 12.5, margin: '0 0 10px', padding: '10px 12px', background: theme.input, borderRadius: 8 }}>
             <span style={{ color: theme.sub }}>Saldo anterior {raw.banco ? `(${raw.banco} · ${nomeBanco(raw.banco)})` : ''}: <b style={{ color: theme.text }}>{saldoAnterior == null ? '—' : money(saldoAnterior)}</b></span>
@@ -1657,6 +1692,14 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
           </div>
           {saldoAnterior == null && <p style={{ color: theme.yellow, fontSize: 11.5, margin: '-4px 0 10px' }}>Saldo anterior indisponível (balancete da competência não importado) — o saldo final considera abertura zero.</p>}
 
+          {concluido && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'rgba(48,164,108,0.10)', border: `1px solid ${theme.green}`, borderRadius: 10, padding: '10px 14px', margin: '0 0 10px' }}>
+              <i className="ti ti-lock" style={{ color: theme.green, fontSize: 18 }} />
+              <span style={{ fontSize: 12.5, color: theme.text, flex: 1 }}><b>Banco concluído.</b> Não é possível alterar, incluir ou excluir lançamentos. Clique em <b>Reabrir banco</b> para editar.</span>
+              <button className="btn btn-ghost" style={{ fontSize: 11.5, padding: '4px 10px', color: theme.yellow, borderColor: theme.yellow }} onClick={reabrirBanco}><i className="ti ti-lock-open" /> Reabrir banco</button>
+            </div>
+          )}
+
           {/* Tabela de classificação */}
           <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'auto', maxHeight: 460 }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 820 }}>
@@ -1673,18 +1716,18 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
                     <td style={{ ...ftd, fontSize: 11.5, whiteSpace: 'nowrap', color: theme.sub }}>{dataBR(l.data) || '—'}</td>
                     <td style={{ ...ftd, fontSize: 11.5 }}>{l.banco ? `${l.banco} · ${nomeBanco(l.banco)}` : <span style={{ color: theme.yellow }}>sem banco</span>}</td>
                     <td style={{ ...ftd, minWidth: 240, maxWidth: 340 }}>
-                      <input className="input" style={{ fontSize: 11.5, padding: '4px 7px', width: '100%' }} value={l.historico || ''} onChange={e => setLinha(i, { historico: e.target.value })} title="Editar histórico" />
+                      <input className="input" style={{ fontSize: 11.5, padding: '4px 7px', width: '100%' }} value={l.historico || ''} disabled={concluido} onChange={e => setLinha(i, { historico: e.target.value })} title="Editar histórico" />
                     </td>
                     <td style={{ ...ftd, textAlign: 'right', whiteSpace: 'nowrap' }}>{money(l.valor)}</td>
                     <td style={{ ...ftd }}>
-                      <button className="btn btn-ghost" style={{ fontSize: 11, padding: '3px 8px', color: l.entrada ? theme.green : theme.red, borderColor: l.entrada ? theme.green : theme.red }} onClick={() => setLinha(i, { entrada: !l.entrada })}>{l.entrada ? 'Entrada' : 'Saída'}</button>
+                      <button className="btn btn-ghost" style={{ fontSize: 11, padding: '3px 8px', color: l.entrada ? theme.green : theme.red, borderColor: l.entrada ? theme.green : theme.red }} disabled={concluido} onClick={() => setLinha(i, { entrada: !l.entrada })}>{l.entrada ? 'Entrada' : 'Saída'}</button>
                     </td>
                     <td style={{ ...ftd, minWidth: 180 }}>
                       <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                        <div style={{ flex: 1 }}><ContraCell value={l.contra} onCommit={v => setLinha(i, { contra: v })}
+                        <div style={{ flex: 1 }}><ContraCell value={l.contra} disabled={concluido} onCommit={v => setLinha(i, { contra: v })}
                           inputRef={el => { refsContra.current[pos] = el }} onEnter={() => refsContra.current[pos + 1]?.focus()} /></div>
-                        <i className="ti ti-arrows-split-2" title="Dividir em vários lançamentos" onClick={() => setQuebra({ i, linha: l })} style={{ color: theme.sub, cursor: 'pointer', fontSize: 16, flexShrink: 0 }} />
-                        <i className="ti ti-trash" title="Excluir lançamento" onClick={() => excluirLinha(i)} style={{ color: theme.red, cursor: 'pointer', fontSize: 15, flexShrink: 0 }} />
+                        {!concluido && <i className="ti ti-arrows-split-2" title="Dividir em vários lançamentos" onClick={() => setQuebra({ i, linha: l })} style={{ color: theme.sub, cursor: 'pointer', fontSize: 16, flexShrink: 0 }} />}
+                        {!concluido && <i className="ti ti-trash" title="Excluir lançamento" onClick={() => excluirLinha(i)} style={{ color: theme.red, cursor: 'pointer', fontSize: 15, flexShrink: 0 }} />}
                       </div>
                     </td>
                     <td style={{ ...ftd, fontSize: 11.5, maxWidth: 220 }}>
@@ -1703,7 +1746,9 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
           <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
             {raw.banco && <button className="btn btn-ghost" onClick={salvarRascunho}><i className="ti ti-device-floppy" /> Salvar e continuar depois</button>}
             <button className="btn" onClick={aprenderSalvar}><i className="ti ti-brain" /> Aprender e salvar</button>
-            {raw.banco && <button className="btn btn-ghost" style={{ color: theme.green, borderColor: theme.green }} onClick={concluirBanco}><i className="ti ti-circle-check" /> Concluir banco</button>}
+            {raw.banco && (concluido
+              ? <button className="btn btn-ghost" style={{ color: theme.yellow, borderColor: theme.yellow }} onClick={reabrirBanco}><i className="ti ti-lock-open" /> Reabrir banco</button>
+              : <button className="btn btn-ghost" style={{ color: theme.green, borderColor: theme.green }} onClick={concluirBanco}><i className="ti ti-circle-check" /> Concluir banco</button>)}
             <button className="btn btn-ghost" onClick={exportarExcel}><i className="ti ti-file-spreadsheet" /> Exportar Excel</button>
             <button className="btn btn-ghost" disabled={!prontas || (temExtrato && Math.abs(difSaldo) >= 0.005)}
               title={temExtrato && Math.abs(difSaldo) >= 0.005 ? 'O saldo do extrato ainda não confere — zere a diferença antes de gerar.' : ''}
@@ -1723,6 +1768,9 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
 
       {novoLanc && <ModalNovoLancamento banco={raw?.banco} nomeBanco={nomeBanco} competencia={competencia} planoMap={planoMap}
         onClose={() => setNovoLanc(false)} onConfirmar={adicionarLinha} />}
+
+      {sugAprend && <ModalSugestoes itens={sugAprend.itens} planoMap={planoMap}
+        onClose={() => setSugAprend(null)} onConfirmar={aplicarSugestoes} />}
 
       {cfg && (
         <PerfilExtratoCfg
@@ -1898,10 +1946,11 @@ function ModalCruzaSaldo({ cruza, linhas, planoMap, titulo, onClose, onVerDia })
 
 // Campo da contrapartida na tabela: só confirma (grava na linha) ao apertar Enter,
 // sair do campo ou escolher pelo F4 — enquanto digita não é interpretado como lançado.
-function ContraCell({ value, onCommit, onEnter, inputRef }) {
+function ContraCell({ value, onCommit, onEnter, inputRef, disabled }) {
   const [v, setV] = useState(value ?? '')
   useEffect(() => { setV(value ?? '') }, [value])
   const commit = val => { const s = String(val ?? '').trim(); if (s !== String(value ?? '')) onCommit(s) }
+  if (disabled) return <input className="input" value={value ?? ''} disabled readOnly style={{ fontSize: 11.5, padding: '4px 7px', width: '100%' }} />
   return (
     <CampoConta value={v} onChange={setV} inputRef={inputRef}
       onPick={p => { setV(p.cod); onCommit(p.cod) }}
@@ -1912,6 +1961,52 @@ function ContraCell({ value, onCommit, onEnter, inputRef }) {
 
 // Inclui um lançamento manual na classificação (ex.: um que faltou, identificado
 // no cruzamento). Confirma antes de subir. Data precisa estar na competência.
+// Após "Aprender e salvar": lista os lançamentos que o novo aprendizado também classifica
+// (estavam sem contrapartida). O usuário marca os que estão de acordo e confirma.
+function ModalSugestoes({ itens, planoMap, onClose, onConfirmar }) {
+  const [marcados, setMarcados] = useState(() => new Set(itens.map((_, i) => i)))
+  const toggle = i => setMarcados(s => { const n = new Set(s); n.has(i) ? n.delete(i) : n.add(i); return n })
+  const todos = marcados.size === itens.length
+  const selecionados = itens.filter((_, i) => marcados.has(i))
+  const fmtData = iso => iso ? String(iso).split('-').reverse().join('/') : '—'
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, zIndex: 70 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, width: 'min(780px, 96vw)', maxHeight: '86vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <div style={{ padding: '16px 20px', borderBottom: `0.5px solid ${theme.cb}` }}>
+          <h3 style={{ fontSize: 15, margin: 0 }}><i className="ti ti-brain" style={{ color: theme.accent, marginRight: 6 }} />Este aprendizado classifica mais {itens.length} lançamento(s)</h3>
+          <p style={{ color: theme.sub, fontSize: 12.5, margin: '6px 0 0' }}>Confira e marque os que estiverem de acordo — só os selecionados recebem a contrapartida.</p>
+        </div>
+        <div style={{ overflow: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 640 }}>
+            <thead>
+              <tr style={{ background: theme.input, position: 'sticky', top: 0 }}>
+                <th style={{ ...fth, width: 34, textAlign: 'center' }}><input type="checkbox" checked={todos} onChange={() => setMarcados(todos ? new Set() : new Set(itens.map((_, i) => i)))} /></th>
+                <th style={fth}>Data</th><th style={fth}>Histórico</th><th style={{ ...fth, textAlign: 'right' }}>Valor</th><th style={fth}>E/S</th><th style={fth}>Contrapartida</th>
+              </tr>
+            </thead>
+            <tbody>
+              {itens.map((it, i) => (
+                <tr key={i} style={{ borderTop: `1px solid ${theme.border}` }}>
+                  <td style={{ ...ftd, textAlign: 'center' }}><input type="checkbox" checked={marcados.has(i)} onChange={() => toggle(i)} /></td>
+                  <td style={{ ...ftd, fontSize: 11.5, whiteSpace: 'nowrap', color: theme.sub }}>{fmtData(it.data)}</td>
+                  <td style={{ ...ftd, maxWidth: 320 }}>{it.historico || ''}</td>
+                  <td style={{ ...ftd, textAlign: 'right', whiteSpace: 'nowrap' }}>{money(it.valor)}</td>
+                  <td style={{ ...ftd, color: it.entrada ? theme.green : theme.red }}>{it.entrada ? 'Entrada' : 'Saída'}</td>
+                  <td style={{ ...ftd, fontSize: 11.5 }}>{it.contra} · {planoMap[String(it.contra)]?.nome || <span style={{ color: theme.red }}>conta não encontrada</span>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ padding: '12px 20px', borderTop: `0.5px solid ${theme.cb}`, display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <button className="btn btn-ghost" onClick={onClose}>Agora não</button>
+          <button className="btn" disabled={!selecionados.length} onClick={() => onConfirmar(selecionados)}><i className="ti ti-check" /> Classificar {selecionados.length} selecionado(s)</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function ModalNovoLancamento({ banco, nomeBanco, competencia, planoMap, onClose, onConfirmar }) {
   const [mes, ano] = (competencia || '').split('/').map(Number)
   const ultimo = (mes && ano) ? new Date(ano, mes, 0).getDate() : 1
