@@ -1735,7 +1735,12 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
           {raw.viaPerfil ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', margin: '14px 0 6px' }}>
               <span style={{ fontSize: 12, color: theme.sub }}><i className="ti ti-adjustments" style={{ color: theme.accent }} /> Extrato normalizado pelo perfil de leitura deste cliente.</span>
-              {Array.isArray(raw.arr) && <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => setCfg({ arr: raw.arr, catByRow: raw.catByRow, nome: raw.nome, banco: raw.banco, perfil: perfil || perfilPadrao(raw.arr) })}><i className="ti ti-adjustments" /> Ajustar leitura</button>}
+              {Array.isArray(raw.arr)
+                ? <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => setCfg({ arr: raw.arr, catByRow: raw.catByRow, nome: raw.nome, banco: raw.banco, perfil: perfil || perfilPadrao(raw.arr) })}><i className="ti ti-adjustments" /> Ajustar leitura</button>
+                : <label className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', cursor: 'pointer' }} title="Rascunho aberto sem o arquivo — reimporte o extrato para ajustar a leitura">
+                    <i className="ti ti-adjustments" /> Ajustar leitura (reimportar)
+                    <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={e => raw.banco && importar(e.target.files?.[0], raw.banco)} />
+                  </label>}
             </div>
           ) : (
             /* Mapa de colunas (auto-detectado, ajustável) — modo combinado/legado */
