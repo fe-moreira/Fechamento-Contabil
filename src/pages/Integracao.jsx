@@ -1734,7 +1734,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
           {raw.viaPerfil ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', margin: '14px 0 6px' }}>
               <span style={{ fontSize: 12, color: theme.sub }}><i className="ti ti-adjustments" style={{ color: theme.accent }} /> Extrato normalizado pelo perfil de leitura deste cliente.</span>
-              <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => setCfg({ arr: raw.arr, catByRow: raw.catByRow, nome: raw.nome, banco: raw.banco, perfil: perfil || perfilPadrao(raw.arr) })}><i className="ti ti-adjustments" /> Ajustar leitura</button>
+              {Array.isArray(raw.arr) && <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => setCfg({ arr: raw.arr, catByRow: raw.catByRow, nome: raw.nome, banco: raw.banco, perfil: perfil || perfilPadrao(raw.arr) })}><i className="ti ti-adjustments" /> Ajustar leitura</button>}
             </div>
           ) : (
             /* Mapa de colunas (auto-detectado, ajustável) — modo combinado/legado */
@@ -2292,7 +2292,7 @@ function PerfilExtratoCfg({ arr, catByRow, adiantContas, nome, bancoNome, bancoC
     if (v instanceof Date) return v.toLocaleDateString('pt-BR')
     return String(v).trim()
   }
-  const amostra = (j) => { for (const r of arr.slice(ini, ini + 60)) { const v = fmtVal(r?.[j]); if (v) return v } return '' }
+  const amostra = (j) => { for (const r of (arr || []).slice(ini, ini + 60)) { const v = fmtVal(r?.[j]); if (v) return v } return '' }
   const cols = Array.from({ length: nc }, (_, j) => ({ j, label: `Col ${j + 1} · ${amostra(j).slice(0, 24) || '(vazia)'}` }))
   // Papel de cada coluna (para marcar na prévia) — mostra o que o sistema entendeu.
   const roles = {}
@@ -2300,7 +2300,7 @@ function PerfilExtratoCfg({ arr, catByRow, adiantContas, nome, bancoNome, bancoC
   setRole(p.colData, 'Data'); setRole(p.colHist, 'Histórico'); setRole(p.colValor, 'Valor')
   setRole(p.colCredor, 'Credor/Devedor'); setRole(p.colDoc, 'Documento'); setRole(p.colCategoria, 'Categoria')
   if (p.es?.modo === 'coluna' || p.es?.modo === 'natureza') setRole(p.es?.col, p.es.modo === 'natureza' ? 'Natureza (D/C)' : 'Entrada/Saída')
-  const amostras = arr.slice(ini, ini + 3)
+  const amostras = (arr || []).slice(ini, ini + 3)
   const Sel = ({ val, on, vazio = '—' }) => (
     <select className="input" style={{ padding: '7px 9px', fontSize: 12 }} value={val ?? -1} onChange={e => on(Number(e.target.value))}>
       <option value={-1}>{vazio}</option>
