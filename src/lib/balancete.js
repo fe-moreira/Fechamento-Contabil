@@ -244,6 +244,28 @@ export async function ehCompetenciaInicial(empresaId, compId) {
   return comp.mes === +m[1] && comp.ano === +m[2]
 }
 
+// Competência imediatamente ANTERIOR (mesmo cliente) para o arrasto de saldos, mas só
+// a partir do mês seguinte ao início — antes do início são meses só do comparativo, que
+// não arrastam. Devolve o id da competência anterior (>= início) ou null.
+export async function competenciaAnterior(empresaId, compId) {
+  const [{ data: atual }, { data: cli }] = await Promise.all([
+    supabase.from('competencias').select('ano, mes').eq('id', compId).maybeSingle(),
+    supabase.from('clientes').select('competencia_inicio').eq('id', empresaId).maybeSingle(),
+  ])
+  if (!atual) return null
+  const ord = atual.ano * 12 + atual.mes
+  const mi = normalizaCompetencia(cli?.competencia_inicio).match(/^(\d{2})\/(\d{4})$/)
+  const ordInicio = mi ? (+mi[2]) * 12 + (+mi[1]) : -Infinity
+  if (ord <= ordInicio) return null // início (ou antes) não arrasta de meses anteriores
+  const { data: comps } = await supabase.from('competencias').select('id, ano, mes').eq('cliente_id', empresaId)
+  let melhor = null
+  for (const c of (comps || [])) {
+    const o = c.ano * 12 + c.mes
+    if (o < ord && o >= ordInicio && (!melhor || o > melhor.o)) melhor = { id: c.id, o }
+  }
+  return melhor ? melhor.id : null
+}
+
 // Títulos em aberto de ABERTURA de uma conta (só na competência inicial), devolvidos como
 // lançamentos sintéticos: entram na conciliação como "saldo anterior" e casam por NF com as
 // baixas do mês (recebimento/pagamento), zerando o que já foi liquidado.
@@ -277,7 +299,7 @@ export async function composicaoAbertura(empresaId, compId, contaCod, classifRaw
 // Os movimentos (razão/balancete) vêm pelo CÓDIGO da conta (reduzido); o plano traduz
 // cada código para a sua CLASSIFICAÇÃO hierárquica (coluna O) e nome, e as sintéticas
 // são os totais agregados por prefixo da classificação (segundo a máscara).
-export async function montarBalancete(empresaId, compId) {
+export async function montarBalancete(empresaId, compId, _depth = 0) {
   const { data: planoCarga } = await supabase.from('cargas_cadastro').select('dados')
     .eq('cliente_id', empresaId).eq('tipo', 'plano').order('created_at', { ascending: false }).limit(1).maybeSingle()
   const plano = parsePlano(planoCarga?.dados)
@@ -359,6 +381,30 @@ export async function montarBalancete(empresaId, compId) {
         if (!folha.reduzido) folha.reduzido = p?.reduzido || cod
         folha.saldo_inicial += val
         if (p) { for (const corte of cortes) { if (corte < classif.length) ensure(classif.slice(0, corte)).saldo_inicial += val } }
+        else { const segs = classif.split('.'); for (let i = 1; i < segs.length; i++) ensure(segs.slice(0, i).join('.')).saldo_inicial += val }
+      }
+    }
+  } else if (_depth < 24) {
+    // ARRASTO DE SALDOS (rollforward): fora da competência inicial, o saldo inicial de
+    // cada conta PATRIMONIAL (Ativo 1 / Passivo+PL 2) = saldo FINAL do mês anterior,
+    // calculado AO VIVO (recursivo). Se você mexer no mês anterior, o saldo inicial deste
+    // mês — e a conciliação — se atualizam sozinhos. Contas de RESULTADO (3/4/5) NÃO
+    // arrastam: o comparativo mostra o movimento do mês.
+    const ant = await competenciaAnterior(empresaId, compId)
+    if (ant) {
+      const { linhas: linhasAnt } = await montarBalancete(empresaId, ant, _depth + 1)
+      for (const lp of linhasAnt) {
+        if (lp.sintetica) continue // sintéticas são recompostas por agregação abaixo
+        const d = String(lp.classifRaw || '').trim()[0]
+        if (d !== '1' && d !== '2') continue // só patrimoniais arrastam
+        const val = Number(lp.saldo_final) || 0
+        if (Math.abs(val) < 0.005) continue
+        const classif = lp.classifRaw
+        const folha = ensure(classif); folha.folha = true
+        if (!folha.nome && lp.nome) folha.nome = lp.nome
+        if (!folha.reduzido) folha.reduzido = lp.reduzido
+        folha.saldo_inicial += val
+        if (temPlano) { for (const corte of cortes) { if (corte < classif.length) ensure(classif.slice(0, corte)).saldo_inicial += val } }
         else { const segs = classif.split('.'); for (let i = 1; i < segs.length; i++) ensure(segs.slice(0, i).join('.')).saldo_inicial += val }
       }
     }
