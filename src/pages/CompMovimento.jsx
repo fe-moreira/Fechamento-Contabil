@@ -245,14 +245,13 @@ export default function CompMovimento() {
     return Math.abs(a - p) / Math.abs(p) > 0.1
   }
 
-  // Conta as células desviantes (vermelhas) ainda não justificadas/corrigidas.
+  // Conta por CONTA (não por célula/mês): uma conta com qualquer mês desviante ainda
+  // não justificado conta 1 — mesmo conceito do Status e do badge do menu.
   // Só nas analíticas — as sintéticas são totais (não se justificam diretamente).
   let pendentes = 0
   for (const { reduzido, classifRaw, sintetica } of contas) {
     if (sintetica) continue
-    for (const c of comps) {
-      if (desviante(classifRaw, c.mes) && !justificadas.has(chaveCelula(reduzido, c.mes))) pendentes++
-    }
+    if (comps.some(c => desviante(classifRaw, c.mes) && !justificadas.has(chaveCelula(reduzido, c.mes)))) pendentes++
   }
 
   // Marca uma célula como justificada/corrigida localmente (atualiza o contador na hora).
@@ -334,7 +333,7 @@ export default function CompMovimento() {
                 padding: '6px 13px', fontSize: 12.5, fontWeight: 600,
               }}>
                 <i className="ti ti-alert-triangle" />
-                {pendentes} variação(ões) a justificar
+                {pendentes} conta(s) com variação a justificar
               </span>
             ) : (
               <span style={{

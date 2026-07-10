@@ -1,10 +1,12 @@
 import { supabase } from './supabase'
+import { parsePlano } from './balancete'
 
 const ANO = 2026
 
-// Monta a matriz conta × mês (saldo final) do ano e aponta as variações > 10% da
-// média ainda não justificadas no Comparativo (auditoria). Usada no gate Variações
-// do Status e no relatório Comparativo.
+// Monta a matriz conta × mês (saldo final) do ano e aponta as variações > 10% do mês
+// anterior ainda não justificadas no Comparativo (auditoria). Usada no gate Variações
+// do Status e no relatório Comparativo. Só CONTAS DE RESULTADO (3/4/5) — mesmo escopo
+// da tela Comp. Movimento (para o badge/Status baterem com o header do comparativo).
 export async function apurarVariacoes(empresaId) {
   const vazio = { itens: [], meses: [], contas: [], matriz: {} }
   if (!empresaId) return vazio
@@ -13,6 +15,21 @@ export async function apurarVariacoes(empresaId) {
     .eq('cliente_id', empresaId).eq('ano', ANO).order('mes', { ascending: true })
   if (!comps || !comps.length) return vazio
 
+  // Plano p/ classificar cada conta (reduzido → classificação) e filtrar só resultado.
+  const { data: planoCarga } = await supabase.from('cargas_cadastro').select('dados')
+    .eq('cliente_id', empresaId).eq('tipo', 'plano').order('created_at', { ascending: false }).limit(1).maybeSingle()
+  const plano = parsePlano(planoCarga?.dados)
+  const temPlano = plano.length > 0
+  const classifDe = {}
+  for (const p of plano) if (p.reduzido && !(p.reduzido in classifDe)) classifDe[p.reduzido] = p.classif
+  const ehResultado = cod => {
+    if (!temPlano) return true            // sem plano não dá pra classificar — não filtra
+    const cl = classifDe[String(cod)]
+    if (!cl) return false                 // conta fora do plano → ignora
+    const d = String(cl).trim()[0]
+    return d === '3' || d === '4' || d === '5'
+  }
+
   const matriz = {}, nomes = {}, mesPorComp = {}, mesesComDados = []
   for (const c of comps) {
     mesPorComp[c.id] = c.mes
@@ -20,7 +37,7 @@ export async function apurarVariacoes(empresaId) {
     if (!bal || !bal.length) continue
     mesesComDados.push(c.mes)
     for (const b of bal) {
-      if (!b.conta) continue
+      if (!b.conta || !ehResultado(b.conta)) continue
       ;(matriz[b.conta] ||= {})[c.mes] = Number(b.saldo_final) || 0
       if (b.nome && !nomes[b.conta]) nomes[b.conta] = b.nome
     }
