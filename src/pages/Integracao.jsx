@@ -1428,33 +1428,35 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
       const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' })
       const arr = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' })
       const header = arr[0] || []
-      const iCompl = achaColuna(header, /complement/)
-      const iDeb = achaColuna(header, /conta.*debito/)
-      const iCred = achaColuna(header, /conta.*credito/)
+      // Reconhece tanto o layout Domínio ("Complemento Histórico" + "Cód. Conta Débito/
+      // Crédito") quanto a base simples ("DATA;DEBITO;CREDITO;VALOR;HIST").
+      const iHist = achaColuna(header, /complement|hist|descri|memo/)
+      const iDeb = achaColuna(header, /debito/)
+      const iCred = achaColuna(header, /credito/)
+      const iVal = achaColuna(header, /valor|montante/)
       const novas = []
-      if (iCompl >= 0 && iDeb >= 0 && iCred >= 0) {
-        // Layout do Domínio: descobre o banco (contas cadastradas; se não houver,
-        // infere pelo código de conta mais frequente — o banco aparece em quase
-        // toda linha) e aprende histórico → contrapartida (o lado não-banco).
+      if (iHist >= 0 && iDeb >= 0 && iCred >= 0) {
         const rows = arr.slice(1).filter(r => r.some(c => c !== '' && c != null))
-        let bancos = new Set(contas.map(c => String(c.conta_contabil).trim()))
-        if (!bancos.size) {
-          const freq = {}
-          for (const r of rows) for (const i of [iDeb, iCred]) { const v = String(r[i] ?? '').trim(); if (v) freq[v] = (freq[v] || 0) + 1 }
-          const top = Object.entries(freq).sort((a, b) => b[1] - a[1])[0]
-          if (top) bancos = new Set([top[0]])
-        }
+        // Banco = contas cadastradas E TAMBÉM o código mais frequente nas colunas D/C: numa
+        // base bancária o banco é sempre um dos lados, então aparece em quase toda linha.
+        // A contrapartida é o lado que NÃO é o banco (regra robusta — o sinal do VALOR nesta
+        // base é inconsistente: o mesmo pagamento aparece + num mês e − no outro).
+        // Entrada: banco no débito → contrapartida é o CRÉDITO (col C).
+        // Saída:   banco no crédito → contrapartida é o DÉBITO (col B).
+        const bancos = new Set(contas.map(c => String(c.conta_contabil).trim()).filter(Boolean))
+        const freq = {}
+        for (const r of rows) for (const i of [iDeb, iCred]) { const v = String(r[i] ?? '').trim(); if (v) freq[v] = (freq[v] || 0) + 1 }
+        const top = Object.entries(freq).sort((a, b) => b[1] - a[1])[0]
+        if (top && top[1] >= rows.length * 0.4) bancos.add(top[0]) // aparece em ≥40% das linhas → é o banco
         for (const r of rows) {
-          const compl = String(r[iCompl] ?? '').trim()
+          const h = String(r[iHist] ?? '').trim()
           const d = String(r[iDeb] ?? '').trim(), c = String(r[iCred] ?? '').trim()
-          if (!compl) continue
+          if (!h) continue
           const contra = bancos.has(d) ? c : bancos.has(c) ? d : ''
-          const ent = extrairEntidade(compl)
-          // Não aprende credor→adiantamento: adiantamento é contextual (sem nota),
-          // não é regra fixa do credor. Pula pela conta (nome "adiant") e pela
-          // categoria da linha (trecho antes do " - " no complemento).
-          const catBase = String(compl).split(/\s-\s/)[0]
-          if (contra && ent && ehEmpresa(ent) && !adiantContas.has(String(contra)) && !/adiant/i.test(catBase)) novas.push({ historico: ent, conta: contra })
+          const ent = extrairEntidade(h)
+          const catBase = String(h).split(/\s-\s/)[0]
+          // Nunca aprende o BANCO como contrapartida; pula adiantamento (contextual).
+          if (contra && !bancos.has(contra) && ent && !adiantContas.has(String(contra)) && !/adiant/i.test(catBase)) novas.push({ historico: ent, conta: contra })
         }
       } else {
         // Planilha simples: Histórico | Conta contrapartida.
