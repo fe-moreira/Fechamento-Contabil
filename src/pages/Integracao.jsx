@@ -309,11 +309,8 @@ export default function Integracao() {
   }
   // Uma integração está OK (verde) quando validada ou marcada sem movimento.
   function integracaoOk(key) {
-    if (key === 'financeira') {
-      if (['validado', 'sem_movimento'].includes(estado.financeira?.estado)) return true // via sistema / confirmada
-      const arr = estado.financeira?.bancos ? Object.values(estado.financeira.bancos) : []
-      return arr.length > 0 && arr.every(x => x.estado === 'validado' || x.estado === 'sem_movimento')
-    }
+    // Financeira: o próprio componente mantém `estado` = 'validado' só quando TODAS as
+    // contas bancárias estão concluídas ou sem movimento (fonte única de verdade).
     return ['validado', 'sem_movimento'].includes(estado[key]?.estado)
   }
   if (!empresaId) {
@@ -996,6 +993,22 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   // Contas de adiantamento (nome contém "adiant") — usadas para a regra: com nota não é adiantamento.
   const adiantContas = new Set(Object.entries(planoMap).filter(([, pl]) => /adiant/i.test(pl?.nome || '')).map(([cod]) => cod))
 
+  // A FINANCEIRA só fica VERDE (validado) quando TODAS as contas bancárias cadastradas
+  // estiverem CONCLUÍDAS (concluido) ou marcadas como SEM MOVIMENTO. Mantém est.estado
+  // como fonte única (Status, badge e farol da tela leem daqui).
+  function statusFinanceira(bancos) {
+    const bm = bancos || {}
+    if (!contas.length) return est?.estado === 'sem_movimento' ? 'sem_movimento' : null
+    const todas = contas.every(c => { const s = bm[String(c.conta_contabil).trim()]; return s && (s.concluido === true || s.estado === 'sem_movimento') })
+    return todas ? 'validado' : null
+  }
+  useEffect(() => {
+    if (carregReg) return
+    const novo = statusFinanceira(est?.bancos || {})
+    if ((est?.estado || null) !== (novo || null)) onEstado({ ...est, estado: novo })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contas, est?.bancos, carregReg])
+
   useEffect(() => {
     setCarregReg(true); setRaw(null); setLinhas([]); setErro(''); setMsg('')
     Promise.all([
@@ -1544,6 +1557,35 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     gerarDominioCSV(lanc, `financeiro_dominio_${competencia.replace('/', '-')}.csv`)
   }
 
+  // Gera UM único arquivo do Domínio com TODOS os bancos (drafts salvos de cada banco),
+  // para importar de uma vez só. Usa o que já foi classificado em cada banco.
+  function gerarTodos() {
+    const bancosSt = est?.bancos || {}
+    const lanc = []
+    const naoConcl = []
+    for (const [cod, s] of Object.entries(bancosSt)) {
+      if (!Array.isArray(s?.draft) || !s.draft.length) continue
+      if (!s.concluido) naoConcl.push(nomeBanco(cod))
+      for (const l of s.draft) {
+        if (!(l.banco && l.contra && Number(l.valor) > 0)) continue
+        lanc.push({
+          data: l.data || null,
+          conta_debito: l.entrada ? l.banco : l.contra,
+          conta_credito: l.entrada ? l.contra : l.banco,
+          valor: l.valor, historico: l.historico,
+        })
+      }
+    }
+    if (!lanc.length) { setErro('Nenhum banco com lançamentos prontos. Importe e classifique os bancos antes.'); return }
+    if (naoConcl.length && !window.confirm(`${naoConcl.length} banco(s) ainda NÃO concluído(s) (${naoConcl.slice(0, 4).join(', ')}${naoConcl.length > 4 ? '…' : ''}). Gerar assim mesmo?`)) return
+    const semData = lanc.filter(l => !l.data).length
+    if (semData && !window.confirm(`Atenção: ${semData} lançamento(s) SEM DATA vão sair sem data. Gerar assim mesmo?`)) return
+    gerarDominioCSV(lanc, `financeiro_dominio_TODOS_${competencia.replace('/', '-')}.csv`)
+    setErro(''); setMsg(`Arquivo do Domínio gerado com ${lanc.length} lançamento(s) de todos os bancos.`)
+  }
+  // Total de lançamentos prontos somando todos os bancos (para o botão "todos").
+  const prontasTodos = Object.values(est?.bancos || {}).reduce((n, s) => n + (Array.isArray(s?.draft) ? s.draft.filter(l => l.banco && l.contra && Number(l.valor) > 0).length : 0), 0)
+
   const prontas = linhas.filter(l => l.banco && l.contra && l.valor > 0).length
   const semContra = linhas.filter(l => !l.contra).length
   const totEnt = linhas.filter(l => l.entrada).reduce((s, l) => s + (l.valor || 0), 0)
@@ -1631,15 +1673,18 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
         contas.length === 0
           ? <p style={{ color: theme.yellow, fontSize: 12.5, margin: '0 0 12px' }}>Cadastre as contas bancárias acima para liberar um slot de importação por banco.</p>
           : (
+            <>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(280px,1fr))', gap: 12, marginBottom: 14 }}>
               {contas.map(c => {
                 const s = bancosEst[c.conta_contabil]
-                const cor = s?.estado === 'validado' ? theme.green : s?.estado === 'sem_movimento' ? theme.sub : s?.estado === 'rascunho' ? theme.yellow : theme.red
                 const quem = s?.usuario ? ` · por ${String(s.usuario).split('@')[0]}` : ''
-                const txt = s?.estado === 'validado' ? `Concluído${s.doc ? ` · ${s.doc}` : ''}` : s?.estado === 'sem_movimento' ? 'Sem movimento no mês' : s?.estado === 'rascunho' ? `Em andamento${quem}${s.draft ? ` · ${s.draft.length} lançto(s)` : ''}` : 'Pendente'
-                const icon = s?.estado === 'validado' ? 'ti-circle-check' : s?.estado === 'sem_movimento' ? 'ti-circle-minus' : s?.estado === 'rascunho' ? 'ti-progress' : 'ti-alert-triangle'
+                const done = s?.concluido === true, semMov = s?.estado === 'sem_movimento'
+                const andamento = !done && !semMov && (s?.estado === 'rascunho' || s?.estado === 'validado' || !!s?.draft)
+                const cor = done ? theme.green : semMov ? theme.sub : andamento ? theme.yellow : theme.red
+                const txt = done ? `Concluído${s.doc ? ` · ${s.doc}` : ''}` : semMov ? 'Sem movimento no mês' : andamento ? `Em andamento${quem}${s.draft ? ` · ${s.draft.length} lançto(s)` : ''}` : 'Pendente'
+                const icon = done ? 'ti-circle-check' : semMov ? 'ti-circle-minus' : andamento ? 'ti-progress' : 'ti-alert-triangle'
                 return (
-                  <div key={c.conta_contabil} style={{ background: theme.card, border: `1px solid ${s?.estado === 'sem_movimento' ? theme.cb : cor}`, borderRadius: 12, padding: 14 }}>
+                  <div key={c.conta_contabil} style={{ background: theme.card, border: `1px solid ${semMov ? theme.cb : cor}`, borderRadius: 12, padding: 14 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
                       <i className="ti ti-building-bank" style={{ color: theme.accent }} />
                       <span style={{ fontWeight: 600, fontSize: 13 }}>{c.conta_contabil} · {nomeBanco(c.conta_contabil)}</span>
@@ -1659,6 +1704,14 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
                 )
               })}
             </div>
+            {prontasTodos > 0 && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 14, padding: '10px 12px', background: theme.input, borderRadius: 8 }}>
+                <i className="ti ti-files" style={{ color: theme.accent }} />
+                <span style={{ fontSize: 12.5, color: theme.sub, flex: 1, minWidth: 200 }}>Gere <b style={{ color: theme.text }}>um único arquivo</b> do Domínio com <b style={{ color: theme.text }}>todos os bancos</b> ({prontasTodos} lançamento(s)) para importar de uma vez.</span>
+                <button className="btn" style={{ fontSize: 12.5 }} onClick={gerarTodos}><i className="ti ti-file-export" /> Gerar Domínio — todos os bancos</button>
+              </div>
+            )}
+            </>
           )
       ) : (
         <>
