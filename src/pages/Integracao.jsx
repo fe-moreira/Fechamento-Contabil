@@ -1161,15 +1161,22 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     setMsg('Rascunho salvo — você pode fechar e continuar depois.')
   }
   // Conclui o banco (marca como contabilizado) — some do pendente no Status.
-  function concluirBanco() {
+  async function concluirBanco() {
     if (!raw?.banco) return
     const semData = linhas.filter(l => !l.data).length
     if (semData && !window.confirm(`Atenção: ${semData} lançamento(s) SEM DATA. O Domínio precisa da data. Concluir assim mesmo?`)) return
     const faltam = linhas.filter(l => !l.contra).length
     if (faltam && !window.confirm(`Ainda há ${faltam} linha(s) sem contrapartida. Concluir assim mesmo?`)) return
     if (!window.confirm('Concluir o banco? Ele fica travado para edição — para alterar depois, use Reabrir banco.')) return
+    // Ao concluir, JÁ APRENDE (não depende de lembrar de "Aprender e salvar"): grava
+    // histórico → contrapartida de todas as linhas classificadas na memória do cliente.
+    let aprendidas = 0
+    const novas = linhas.filter(l => l.contra && l.historico).map(l => ({ historico: l.historico, conta: l.contra }))
+    if (novas.length) {
+      try { await salvarMemoria(aprender(memoria, novas), { nomeArquivo: memMeta.nomeArquivo, semCarga: false }); aprendidas = novas.length } catch { /* não bloqueia a conclusão */ }
+    }
     salvarBancoDraft(raw.banco, 'validado', raw.nome, linhas, true)
-    setMsg('Banco concluído — travado para edição. Para alterar, clique em Reabrir banco.')
+    setMsg(`Banco concluído${aprendidas ? ` — ${aprendidas} classificação(ões) aprendidas na memória` : ''}. Travado para edição; para alterar, use Reabrir banco.`)
   }
   // Reabre o banco concluído: volta a rascunho e libera edição/inclusão/exclusão.
   function reabrirBanco() {
