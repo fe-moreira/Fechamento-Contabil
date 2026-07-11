@@ -954,7 +954,7 @@ function ModalRazao({ detalhe, compsAnteriores, compIdAnterior, usuario, jaJusti
         <ModalRegistro
           tipo={registro} salvando={salvando} conta={conta} mes={mes}
           textoAtual={registro === 'Justificativa' && tratada ? justTextoAtual : ''}
-          sugestao={registro === 'Justificativa' ? montarSugestaoJust({ varInfo: detalhe.varInfo, nome, conta, suspeitos, movers }) : ''}
+          sugestao={registro === 'Justificativa' ? montarSugestaoJust({ varInfo: detalhe.varInfo, nome, conta, suspeitos, movers, linhas }) : ''}
           onClose={() => setRegistro(null)} onConfirmar={txt => registrar(registro, txt)}
         />
       )}
@@ -1056,15 +1056,39 @@ function fraseRazao(m) {
   return s
 }
 
-function montarSugestaoJust({ varInfo, nome, conta, suspeitos, movers }) {
+// Quando a diferença bate (±2%) com o valor de UM lançamento do mês, é quase certo que a
+// variação é aquele lançamento — retorna-o para apontar direto na justificativa.
+function lancDaDiferenca(linhas, delta) {
+  const alvo = Math.abs(delta || 0)
+  if (!linhas || !linhas.length || alvo < 0.005) return null
+  let best = null
+  for (const l of linhas) {
+    const v = Math.abs((Number(l.debito) || 0) - (Number(l.credito) || 0))
+    if (v < 0.005) continue
+    const dif = Math.abs(v - alvo)
+    if (dif <= Math.max(0.02, alvo * 0.02) && (!best || dif < best.dif)) best = { l, v, dif }
+  }
+  return best ? best.l : null
+}
+
+function montarSugestaoJust({ varInfo, nome, conta, suspeitos, movers, linhas }) {
   if (!varInfo) return ''
   const { atual, anterior, mesAtual, mesAnterior } = varInfo
   const nm = nome ? `A conta ${nome}` : `A conta ${conta}`
-  // Se há quebra por cliente, já escreve o motivo com os nomes; senão, aponta o provável
-  // lançamento culpado e deixa o "em razão de" em branco para preenchimento manual.
+  const deltaAbs = Math.abs(Math.abs(atual) - Math.abs(anterior == null ? 0 : anterior))
+  const valLanc = l => Math.abs((Number(l.debito) || 0) - (Number(l.credito) || 0))
+  const lanc = lancDaDiferenca(linhas, deltaAbs)
+  // Maior lançamento do mês — fallback claro quando nada bate exatamente (sempre traz algo).
+  const maiorLanc = (linhas || []).filter(l => l.historico && valLanc(l) > 0.005).sort((a, b) => valLanc(b) - valLanc(a))[0]
+  // Prioridade: (1) a diferença bate com um lançamento → aponta ele; (2) quebra por cliente;
+  // (3) o maior lançamento do mês; (4) provável culpado; senão deixa em branco.
   let razao
-  if (movers && movers.length) {
+  if (lanc) {
+    razao = ` Variação em razão do lançamento de ${money(valLanc(lanc))} — ${lanc.historico || 'sem histórico'}.`
+  } else if (movers && movers.length) {
     razao = ` Variação em razão de: ${movers.map(fraseRazao).join('; ')}.`
+  } else if (maiorLanc) {
+    razao = ` Variação principalmente pelo lançamento de ${money(valLanc(maiorLanc))} — ${maiorLanc.historico}.`
   } else {
     const culpado = (suspeitos || []).find(s => s.suspeito && s.historico)
     razao = (culpado ? ` Possível origem: ${culpado.historico}${culpado.motivo ? ` (${culpado.motivo})` : ''}.` : '')
