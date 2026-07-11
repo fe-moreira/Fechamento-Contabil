@@ -241,14 +241,13 @@ export default function Relatorios() {
   // abertura, relação dos itens pendentes agrupados por origem e o reforço da importância
   // de enviar a documentação para o fechamento ficar completo.
   function gerarCartaPendencias() {
-    // Na carta ao cliente NÃO entram as justificativas/observações técnicas internas
-    // (ex.: como lançamos a diferença) — essas ficam só na tela e no Excel, para a
-    // auditoria. Aqui listamos apenas o que o cliente precisa providenciar.
+    // A carta traz as pendências EXATAMENTE como estão escritas no relatório interno
+    // (inclusive as justificativas), para o time revisar/ajustar a redação depois.
     const grupos = [
       { titulo: 'Documentos não recebidos', itens: pendencias.map(d => `${d.name}${d.cat ? ` (${d.cat})` : ''}`) },
-      { titulo: 'Documentos de comprovação de saldos', itens: concPend.map(c => `Documento de suporte da conta ${c.conta}${c.nome ? ` · ${c.nome}` : ''}`) },
-      { titulo: 'Contratos pendentes de envio', itens: contratoPend.map(a => `${a.item}`) },
-      { titulo: 'Outras pendências', itens: despesaPend.map(a => `${a.item}`) },
+      { titulo: 'Conciliação — saldos sem documento', itens: concPend.map(c => `Conciliação · ${c.conta}${c.nome ? ` · ${c.nome}` : ''}${c.justificativa ? ` — ${c.justificativa}` : ''}`) },
+      { titulo: 'Contratos pendentes de envio', itens: contratoPend.map(a => `${a.item}${a.detalhe ? ` — ${a.detalhe}` : ''}`) },
+      { titulo: 'Outras pendências do cliente', itens: despesaPend.map(a => `${a.item}${a.detalhe ? ` — ${a.detalhe}` : ''}`) },
     ]
     const [mes, ano] = competencia.split('/').map(Number)
     const nomesMes = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro']
