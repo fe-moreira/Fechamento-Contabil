@@ -32,6 +32,23 @@ const th = { textAlign: 'left', padding: '9px 12px', fontSize: 11, color: theme.
 const td = { padding: '10px 12px', fontSize: 13, color: theme.text, borderBottom: `1px solid ${theme.border}`, verticalAlign: 'top' }
 function Card({ children, style }) { return <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: 12, padding: 18, ...style }}>{children}</div> }
 function SecTitle({ children }) { return <p style={{ fontSize: 15, fontWeight: 700, margin: '0 0 2px', display: 'flex', alignItems: 'center', gap: 8 }}>{children}</p> }
+// Card de cadastro colapsável: cabeçalho com título + botão Recolher/Expandir; o corpo
+// (formulário) some ao recolher, dando mais espaço à lista abaixo.
+function FormCard({ titulo, children }) {
+  const [aberto, setAberto] = useState(true)
+  return (
+    <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: 12, padding: 18 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+        <SecTitle>{titulo}</SecTitle>
+        <button type="button" className="btn-ghost" onClick={() => setAberto(a => !a)} title={aberto ? 'Recolher o cadastro' : 'Expandir o cadastro'}
+          style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, padding: '5px 11px' }}>
+          <i className={`ti ${aberto ? 'ti-chevrons-up' : 'ti-chevrons-down'}`} /> {aberto ? 'Recolher' : 'Expandir'}
+        </button>
+      </div>
+      {aberto && children}
+    </div>
+  )
+}
 function SecSub({ children }) { return <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 14px' }}>{children}</p> }
 function Field({ label, children, col }) { return <div style={{ gridColumn: col ? `span ${col}` : 'auto' }}><label>{label}</label>{children}</div> }
 // Aceita BR ("1.234,56") e US/simples ("3467.12", vindo de String(numero)):
@@ -268,7 +285,6 @@ export default function OutrasContabilizacoes() {
   const planoMap = Object.fromEntries((plano || []).map(p => [String(p.cod), p]))
   const { user } = useAuth()
   const [tab, setTab] = useState('seguro')
-  const [cardsAberto, setCardsAberto] = useState(true) // recolher os cards do topo p/ dar espaço
   const [gerar, setGerar] = useState(null) // {campos, titulo}
   const [versao, setVersao] = useState(0)  // incrementa após gerar lançamento → recarrega status "Apropriado"
   const [msg, setMsg] = useState('')
@@ -322,15 +338,6 @@ export default function OutrasContabilizacoes() {
 
       <ObservacoesConciliacao clienteId={empresaId} competencia={competencia} user={user} irPara={setTab} />
 
-      <div style={{ display: 'flex', alignItems: 'center', marginBottom: cardsAberto ? 12 : 14 }}>
-        <button className="btn-ghost" onClick={() => setCardsAberto(v => !v)}
-          title={cardsAberto ? 'Recolher os cards para ganhar espaço' : 'Mostrar os cards'}
-          style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12.5, padding: '6px 12px' }}>
-          <i className={`ti ${cardsAberto ? 'ti-chevrons-up' : 'ti-chevrons-down'}`} /> {cardsAberto ? 'Recolher' : 'Expandir'}
-        </button>
-      </div>
-
-      {cardsAberto && (
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(168px,1fr))', gap: 12, marginBottom: 18 }}>
         {BLOCOS.map(b => {
           const on = tab === b.key
@@ -345,7 +352,6 @@ export default function OutrasContabilizacoes() {
           )
         })}
       </div>
-      )}
 
       <div style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${theme.border}`, marginBottom: 20, flexWrap: 'wrap' }}>
         {BLOCOS.map(b => (
@@ -516,8 +522,7 @@ function PaneSeguro({ clienteId, user, competencia, abrirGerar, enviarSaldoInici
   }
   return (
     <div style={{ display: 'grid', gap: 14 }}>
-      <Card>
-        <SecTitle><i className="ti ti-shield-half" style={{ color: ACC.seguro }} /> {editId ? 'Editar contrato de seguro' : 'Novo contrato de seguro'}</SecTitle>
+      <FormCard titulo={<><i className="ti ti-shield-half" style={{ color: ACC.seguro }} /> {editId ? 'Editar contrato de seguro' : 'Novo contrato de seguro'}</>}>
         <SecSub>Cadastre a apólice — depois gere a apropriação do mês, que vira lançamento.{editId && <b style={{ color: ACC.seguro }}> Editando um contrato.</b>}</SecSub>
         {!editId && <LeitorIA tipo="seguro" acento={ACC.seguro} onExtraido={d => aplicarIA(setF, d)} />}
         <form onSubmit={salvar} style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10 }}>
@@ -539,7 +544,7 @@ function PaneSeguro({ clienteId, user, competencia, abrirGerar, enviarSaldoInici
             {editId && <button type="button" className="btn btn-ghost" onClick={cancelarEdicao}>Cancelar edição</button>}
           </div>
         </form>
-      </Card>
+      </FormCard>
       <Card>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
           <SecTitle>Contratos de seguro ({rows.length})</SecTitle>
@@ -598,8 +603,7 @@ function PaneDespesaApropriar({ clienteId, user, competencia, abrirGerar, enviar
   }
   return (
     <div style={{ display: 'grid', gap: 14 }}>
-      <Card>
-        <SecTitle><i className="ti ti-calendar-repeat" style={{ color: ACC.despesa }} /> {editId ? 'Editar despesa a apropriar' : 'Nova despesa a apropriar'}</SecTitle>
+      <FormCard titulo={<><i className="ti ti-calendar-repeat" style={{ color: ACC.despesa }} /> {editId ? 'Editar despesa a apropriar' : 'Nova despesa a apropriar'}</>}>
         <SecSub>IPVA, IPTU, aluguel antecipado, licenças… Cadastre uma vez e gere a apropriação do mês. O saldo que falta apropriar pode ir direto ao saldo inicial.{editId && <b style={{ color: ACC.despesa }}> Editando.</b>}</SecSub>
         <form onSubmit={salvar} style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10 }}>
           <Field label="Tipo (IPVA, IPTU…)"><input className="input" value={f.tipo} onChange={on('tipo')} placeholder="IPVA" required /></Field>
@@ -620,7 +624,7 @@ function PaneDespesaApropriar({ clienteId, user, competencia, abrirGerar, enviar
             {editId && <button type="button" className="btn btn-ghost" onClick={cancelarEdicao}>Cancelar edição</button>}
           </div>
         </form>
-      </Card>
+      </FormCard>
       <Card>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
           <SecTitle>Despesas a apropriar ({rows.length})</SecTitle>
@@ -663,8 +667,7 @@ function PaneImportacao({ clienteId, user, competencia, abrirGerar }) {
   async function salvarAdiant(e) { e.preventDefault(); try { await inserir('adiantamentos_importacao', { cliente_id: clienteId, fornecedor: fa.fornecedor, data: fa.data || null, valor: num(fa.valor), usuario: user?.email }); resetA(); adiant.recarregar() } catch (er) { alert(er.message) } }
   return (
     <div style={{ display: 'grid', gap: 14 }}>
-      <Card>
-        <SecTitle><i className="ti ti-cash" style={{ color: ACC.importacao }} /> Adiantamento de importação</SecTitle>
+      <FormCard titulo={<><i className="ti ti-cash" style={{ color: ACC.importacao }} /> Adiantamento de importação</>}>
         <SecSub>Registre o adiantamento ao fornecedor do exterior. Fica em controle até o processo chegar.</SecSub>
         <form onSubmit={salvarAdiant} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr auto', gap: 10, alignItems: 'flex-end' }}>
           <Field label="Fornecedor (exterior)"><input className="input" value={fa.fornecedor} onChange={ona('fornecedor')} required /></Field>
@@ -677,9 +680,8 @@ function PaneImportacao({ clienteId, user, competencia, abrirGerar }) {
             <tr key={r.id}><td style={td}><b>{r.fornecedor}</b></td><td style={td}>{r.data || ''}</td><td style={{ ...td, textAlign: 'right' }}>{money(r.valor)}</td><td style={td}>{r.processo_id ? 'vinculado' : 'aguardando processo'}</td><td style={{ ...td, textAlign: 'right' }}><DelBtn onClick={() => adiant.excluir(r.id)} /></td></tr>
           ))}
         </tbody></table></div>
-      </Card>
-      <Card>
-        <SecTitle><i className="ti ti-ship" style={{ color: ACC.importacao }} /> Novo processo de importação</SecTitle>
+      </FormCard>
+      <FormCard titulo={<><i className="ti ti-ship" style={{ color: ACC.importacao }} /> Novo processo de importação</>}>
         <LeitorIA tipo="importacao" acento={ACC.importacao} onExtraido={d => aplicarIA(setF, d)} />
         <form onSubmit={salvarProc} style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10 }}>
           <Field label="Nº processo"><input className="input" value={f.numero} onChange={on('numero')} required /></Field>
@@ -692,7 +694,7 @@ function PaneImportacao({ clienteId, user, competencia, abrirGerar }) {
           <Field label="Custo total (R$)"><input className="input" value={f.custo_total} onChange={on('custo_total')} placeholder="0,00" /></Field>
           <div style={{ gridColumn: 'span 4' }}><button className="btn">＋ Salvar processo</button></div>
         </form>
-      </Card>
+      </FormCard>
       <Card>
         <SecTitle>Processos armazenados ({proc.rows.length})</SecTitle>
         <div style={{ overflowX: 'auto' }}><table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 640 }}><thead><tr>{['Processo', 'Fornecedor', 'Custo', 'Status', ''].map((h, i) => <th key={i} style={th}>{h}</th>)}</tr></thead><tbody>
@@ -716,8 +718,7 @@ function PaneEmprestimo({ clienteId, user }) {
   async function salvar(e) { e.preventDefault(); try { await inserir('emprestimos', { cliente_id: clienteId, banco: f.banco, contrato: f.contrato, modalidade: f.modalidade, valor: num(f.valor), prazo: Number(f.prazo) || null, taxa_mensal: num(f.taxa_mensal), valor_parcela: num(f.valor_parcela), saldo_devedor: num(f.saldo_devedor), usuario: user?.email }); reset(); recarregar() } catch (er) { alert(er.message) } }
   return (
     <div style={{ display: 'grid', gap: 14 }}>
-      <Card>
-        <SecTitle><i className="ti ti-building-bank" style={{ color: ACC.emprestimo }} /> Novo contrato de empréstimo</SecTitle>
+      <FormCard titulo={<><i className="ti ti-building-bank" style={{ color: ACC.emprestimo }} /> Novo contrato de empréstimo</>}>
         <SecSub>O empréstimo <b>não gera lançamento</b> — serve de referência para conferir com a Conciliação.</SecSub>
         <LeitorIA tipo="emprestimo" acento={ACC.emprestimo} onExtraido={d => aplicarIA(setF, d)} />
         <form onSubmit={salvar} style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10 }}>
@@ -731,7 +732,7 @@ function PaneEmprestimo({ clienteId, user }) {
           <Field label="Saldo devedor"><input className="input" value={f.saldo_devedor} onChange={on('saldo_devedor')} placeholder="0,00" /></Field>
           <div style={{ gridColumn: 'span 4' }}><button className="btn">＋ Salvar contrato</button></div>
         </form>
-      </Card>
+      </FormCard>
       <Card>
         <SecTitle>Contratos armazenados ({rows.length})</SecTitle>
         <div style={{ overflowX: 'auto' }}><table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 640 }}><thead><tr>{['Banco', 'Contrato', 'Saldo devedor', 'Parcela', ''].map((h, i) => <th key={i} style={th}>{h}</th>)}</tr></thead><tbody>
@@ -751,8 +752,7 @@ function PaneParcelamento({ clienteId, user, competencia, abrirGerar }) {
   async function salvar(e) { e.preventDefault(); try { await inserir('parcelamentos', { cliente_id: clienteId, orgao: f.orgao, numero: f.numero, tributo: f.tributo, consolidado: num(f.consolidado), num_parcelas: Number(f.num_parcelas) || null, valor_parcela: num(f.valor_parcela), saldo_devedor: num(f.saldo_devedor), juros_multa_mes: num(f.juros_multa_mes), conta_despesa: f.conta_despesa, conta_passivo: f.conta_passivo, usuario: user?.email }); reset(); recarregar() } catch (er) { alert(er.message) } }
   return (
     <div style={{ display: 'grid', gap: 14 }}>
-      <Card>
-        <SecTitle><i className="ti ti-receipt" style={{ color: ACC.parcelamento }} /> Novo parcelamento de impostos</SecTitle>
+      <FormCard titulo={<><i className="ti ti-receipt" style={{ color: ACC.parcelamento }} /> Novo parcelamento de impostos</>}>
         <SecSub>A única contabilização é a <b>atualização de juros e multa</b>. A parcela (principal) vem do banco, na conciliação.</SecSub>
         <LeitorIA tipo="parcelamento" acento={ACC.parcelamento} onExtraido={d => aplicarIA(setF, d)} />
         <form onSubmit={salvar} style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10 }}>
@@ -766,7 +766,7 @@ function PaneParcelamento({ clienteId, user, competencia, abrirGerar }) {
           <Field label="Juros/multa do mês"><input className="input" value={f.juros_multa_mes} onChange={on('juros_multa_mes')} placeholder="0,00" /></Field>
           <div style={{ gridColumn: 'span 4' }}><button className="btn">＋ Salvar parcelamento</button></div>
         </form>
-      </Card>
+      </FormCard>
       <Card>
         <SecTitle>Parcelamentos armazenados ({rows.length})</SecTitle>
         <div style={{ overflowX: 'auto' }}><table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 680 }}><thead><tr>{['Órgão', 'Nº', 'Saldo', 'Juros/multa mês', ''].map((h, i) => <th key={i} style={th}>{h}</th>)}</tr></thead><tbody>
@@ -803,8 +803,7 @@ function PaneEquivalencia({ clienteId, user, competencia, abrirGerar }) {
   }
   return (
     <div style={{ display: 'grid', gap: 14 }}>
-      <Card>
-        <SecTitle><i className="ti ti-scale" style={{ color: ACC.equivalencia }} /> Nova participação societária</SecTitle>
+      <FormCard titulo={<><i className="ti ti-scale" style={{ color: ACC.equivalencia }} /> Nova participação societária</>}>
         <SecSub>Cadastre a investida. Para gerar a MEP, informe o <b>resultado da investida no mês</b> na tabela abaixo.</SecSub>
         <LeitorIA tipo="participacao" acento={ACC.equivalencia} onExtraido={d => aplicarIA(setF, d)} />
         <form onSubmit={salvar} style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10 }}>
@@ -814,7 +813,7 @@ function PaneEquivalencia({ clienteId, user, competencia, abrirGerar }) {
           <Field label="Valor investimento"><input className="input" value={f.valor_investimento} onChange={on('valor_investimento')} placeholder="0,00" /></Field>
           <div style={{ gridColumn: 'span 4' }}><button className="btn">＋ Salvar participação</button></div>
         </form>
-      </Card>
+      </FormCard>
       <Card>
         <SecTitle>Participações ({rows.length})</SecTitle>
         <div style={{ overflowX: 'auto' }}><table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }}><thead><tr>{['Investida', 'Vínculo', '%', 'Resultado da investida (mês)', ''].map((h, i) => <th key={i} style={th}>{h}</th>)}</tr></thead><tbody>
@@ -833,8 +832,7 @@ function PaneEquivalencia({ clienteId, user, competencia, abrirGerar }) {
 function PaneOutros({ competencia, abrirGerar }) {
   const [f, on] = useForm({ data: dataComp(competencia), conta_debito: '', conta_credito: '', valor: '', historico: '' })
   return (
-    <Card>
-      <SecTitle><i className="ti ti-pencil-plus" style={{ color: ACC.outros }} /> Lançamento avulso</SecTitle>
+    <FormCard titulo={<><i className="ti ti-pencil-plus" style={{ color: ACC.outros }} /> Lançamento avulso</>}>
       <SecSub>Escreva a partida. Ao gerar, entra em Lançamentos e alimenta o Status → Domínio.</SecSub>
       <div style={{ display: 'grid', gridTemplateColumns: '130px 1fr 1fr 130px', gap: 10 }}>
         <Field label="Data"><input className="input" type="date" value={f.data} onChange={on('data')} /></Field>
@@ -846,7 +844,7 @@ function PaneOutros({ competencia, abrirGerar }) {
       <div style={{ marginTop: 14 }}>
         <button className="btn" onClick={() => abrirGerar({ data: f.data, conta_debito: f.conta_debito, conta_credito: f.conta_credito, valor: num(f.valor), historico: f.historico, origem: 'manual', documento: '' }, 'Lançamento avulso')}><i className="ti ti-file-plus" /> Gerar lançamento</button>
       </div>
-    </Card>
+    </FormCard>
   )
 }
 
