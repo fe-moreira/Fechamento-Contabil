@@ -7,7 +7,7 @@ import { apurarVariacoes } from '../lib/variacoes'
 import { parsePlano, contasConciliacaoAbertas, montarBalancete } from '../lib/balancete'
 import { gerarExcelTimbrado } from '../lib/excel'
 import { abreBalanceteDominio, abreDreDominio } from '../lib/pdf'
-import { montarDRE } from '../lib/dre'
+import { montarDRE, montarResumoBalancete } from '../lib/dre'
 import BookComposicoes from '../components/BookComposicoes'
 import { theme, money, moneyDC } from '../lib/theme'
 
@@ -129,6 +129,7 @@ export default function Relatorios() {
   // DRE estruturada (Receita Bruta → Líquida → Lucro Bruto → EBITDA → LAIR → Lucro Líquido),
   // montada da hierarquia do balancete (mesma estrutura do Domínio).
   const dreRows = hier.length ? montarDRE(hier) : []
+  const resumoBal = hier.length ? montarResumoBalancete(hier) : null
 
   // Balanço: Ativo (prefixo 1) × Passivo + PL (prefixo 2).
   const ativo = linhas.filter(l => String(l.conta || '').startsWith('1'))
@@ -184,6 +185,7 @@ export default function Relatorios() {
         periodoIni: `01/${String(mes).padStart(2, '0')}/${ano}`,
         periodoFim: `${String(ult).padStart(2, '0')}/${String(mes).padStart(2, '0')}/${ano}`,
         linhas: linhasHier,
+        resumo: (hier.length ? resumoBal : montarResumoBalancete(linhasHier)),
       })
     } finally {
       setGerandoDom(false)
@@ -430,6 +432,7 @@ export default function Relatorios() {
             </table>
             )}
           </div>
+          {resumoBal && <ResumoBalancete r={resumoBal} />}
         </Secao>
       )}
 
@@ -759,6 +762,43 @@ function LinhaDRE({ label, valor }) {
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0' }}>
       <span style={{ fontSize: 13.5, color: theme.sub }}>{label}</span>
       <span style={{ fontSize: 14, color: theme.text, fontVariantNumeric: 'tabular-nums' }}>{valor}</span>
+    </div>
+  )
+}
+
+// Resumo do balancete (nosso modelo): grupos + contas devedoras/credoras + resultado.
+function ResumoBalancete({ r }) {
+  const linha = (x, forte, key) => (
+    <tr key={key} style={{ borderTop: `1px solid ${theme.border}`, background: forte ? theme.input : 'transparent', fontWeight: forte ? 700 : 400 }}>
+      <td style={{ ...td, fontWeight: forte ? 700 : 500 }}>{x.label}</td>
+      <td style={tdNum}>{moneyDC(x.ini)}</td>
+      <td style={tdNum}>{money(x.deb)}</td>
+      <td style={tdNum}>{money(x.cred)}</td>
+      <td style={tdNum}>{moneyDC(x.fim)}</td>
+    </tr>
+  )
+  const gap = k => <tr key={k}><td colSpan={5} style={{ height: 10 }}></td></tr>
+  return (
+    <div style={{ marginTop: 18 }}>
+      <h3 style={{ fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: .5, color: theme.sub, margin: '0 0 8px' }}>Resumo do Balancete</h3>
+      <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ background: theme.input }}>
+              <th style={th}>Grupo</th><th style={thNum}>Saldo Anterior</th><th style={thNum}>Débito</th><th style={thNum}>Crédito</th><th style={thNum}>Saldo Atual</th>
+            </tr>
+          </thead>
+          <tbody>
+            {r.grupos.map((g, i) => linha(g, false, 'g' + i))}
+            {gap('gap1')}
+            {linha(r.devedoras, true, 'dev')}
+            {linha(r.credoras, true, 'cred')}
+            {gap('gap2')}
+            {linha(r.resultadoMes, true, 'rmes')}
+            {linha(r.resultadoExerc, true, 'rex')}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }
