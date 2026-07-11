@@ -322,6 +322,22 @@ end $$;
 alter table if exists public.dist_lucros_config add column if not exists ata jsonb;
 
 -- ============================================================
+-- Modelos de RELATÓRIO GERENCIAL (biblioteca) + vínculo no cliente.
+-- Por enquanto o modelo é só um nome/rótulo; o cliente vinculado libera o
+-- card "Relatório Gerencial" em Relatórios.
+-- ============================================================
+create table if not exists public.modelos_relatorio_gerencial (
+  id uuid primary key default gen_random_uuid(),
+  nome text not null,
+  usuario text,
+  created_at timestamptz default now()
+);
+alter table public.modelos_relatorio_gerencial enable row level security;
+drop policy if exists "auth_all_modelos_relatorio_gerencial" on public.modelos_relatorio_gerencial;
+create policy "auth_all_modelos_relatorio_gerencial" on public.modelos_relatorio_gerencial for all to authenticated using (true) with check (true);
+alter table public.clientes add column if not exists modelo_rel_gerencial_id uuid references public.modelos_relatorio_gerencial(id) on delete set null;
+
+-- ============================================================
 -- (Opcional) Seed mínimo para testar o cadastro de clientes.
 -- Descomente se quiser dados de exemplo.
 -- ============================================================

@@ -10,7 +10,7 @@ const vazio = {
   codigo_dominio: '', tipo: 'Matriz', codigo_matriz: '', razao_social: '',
   nome_fantasia: '', cnpj: '', regime_tributario: 'SIMPLES NACIONAL',
   competencia_inicio: '', sistema_financeiro: '', integracao_financeira: 'Não usa',
-  usa_centro_custo: false,
+  usa_centro_custo: false, modelo_rel_gerencial_id: '',
   analista: '', observacoes: '', prazo_entrega: '', tipo_fechamento: 'Consolidado',
 }
 
@@ -72,6 +72,7 @@ export default function Clientes() {
   const [aberto, setAberto] = useState(false)
   const [importMsg, setImportMsg] = useState('')
   const [busca, setBusca] = useState('')
+  const [modelosRG, setModelosRG] = useState([])
   const [preview, setPreview] = useState(null)   // resumo da importação p/ confirmação
   const [aplicando, setAplicando] = useState(false)
   const fileRef = useRef(null)
@@ -85,6 +86,7 @@ export default function Clientes() {
     setLoading(false)
   }
   useEffect(() => { carregar() }, [])
+  useEffect(() => { supabase.from('modelos_relatorio_gerencial').select('id, nome').order('nome', { ascending: true }).then(({ data }) => setModelosRG(data || [])) }, [])
 
   // Lê a planilha e monta um RESUMO (novos, divergências, inválidos) para confirmação.
   // Nada é gravado aqui — só depois que o usuário confirma em "Aplicar importação".
@@ -256,6 +258,7 @@ export default function Clientes() {
     payload.cnpj = formatarCnpj(payload.cnpj)
     payload.competencia_inicio = normalizaCompetencia(payload.competencia_inicio) || payload.competencia_inicio
     payload.prazo_entrega = payload.prazo_entrega ? Number(payload.prazo_entrega) : null
+    payload.modelo_rel_gerencial_id = payload.modelo_rel_gerencial_id || null
     let res
     if (editId) res = await supabase.from('clientes').update(payload).eq('id', editId)
     else res = await supabase.from('clientes').insert(payload)
@@ -387,6 +390,12 @@ export default function Clientes() {
               <Campo label="Usa centro de custo?">
                 <select className="input" value={form.usa_centro_custo ? 'Sim' : 'Não'} onChange={e => setForm(f => ({ ...f, usa_centro_custo: e.target.value === 'Sim' }))}>
                   <option>Não</option><option>Sim</option>
+                </select>
+              </Campo>
+              <Campo label="Modelo de relatório gerencial">
+                <select className="input" value={form.modelo_rel_gerencial_id || ''} onChange={set('modelo_rel_gerencial_id')}>
+                  <option value="">— nenhum —</option>
+                  {modelosRG.map(m => <option key={m.id} value={m.id}>{m.nome}</option>)}
                 </select>
               </Campo>
               <Campo label="Analista" req><input className="input" value={form.analista || ''} onChange={set('analista')} required /></Campo>
