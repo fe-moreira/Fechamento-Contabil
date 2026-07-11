@@ -58,6 +58,39 @@ function analisarCulpados(linhas, historicosAnteriores) {
   })
 }
 
+// Seletor de MÚLTIPLOS meses (marque os que quer ver). Vazio = todos.
+function MultiMesSelect({ comps, sel, onChange }) {
+  const [aberto, setAberto] = useState(false)
+  const toggle = m => { const n = new Set(sel); n.has(m) ? n.delete(m) : n.add(m); onChange(n) }
+  const marcados = comps.filter(c => sel.has(c.mes)).map(c => MESES[c.mes - 1])
+  const label = sel.size === 0 ? 'Todos os meses' : marcados.length <= 3 ? marcados.join(', ') : `${marcados.length} meses`
+  const linha = { display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', fontSize: 12.5, cursor: 'pointer', borderRadius: 6 }
+  return (
+    <div style={{ position: 'relative', display: 'inline-block' }}>
+      <button className="btn btn-ghost" onClick={() => setAberto(a => !a)}
+        style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12, padding: '6px 12px' }}>
+        {label} <i className="ti ti-chevron-down" style={{ fontSize: 14 }} />
+      </button>
+      {aberto && (
+        <>
+          <div onClick={() => setAberto(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+          <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: 6, background: theme.card, border: `1px solid ${theme.cb}`, borderRadius: 10, padding: 8, zIndex: 41, minWidth: 180, maxHeight: 320, overflow: 'auto', boxShadow: '0 8px 24px rgba(0,0,0,.28)' }}>
+            <label style={{ ...linha, fontWeight: 600 }} onClick={() => onChange(new Set())}>
+              <input type="checkbox" readOnly checked={sel.size === 0} /> Todos os meses
+            </label>
+            <div style={{ height: 1, background: theme.border, margin: '6px 0' }} />
+            {comps.map(c => (
+              <label key={c.mes} style={linha} onClick={() => toggle(c.mes)}>
+                <input type="checkbox" readOnly checked={sel.has(c.mes)} /> {MESES[c.mes - 1]}/{ANO}
+              </label>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 export default function CompMovimento() {
   const { empresaId, empresaNome, getCompetenciaId, plano } = useAppData()
   const { user } = useAuth()
@@ -73,7 +106,7 @@ export default function CompMovimento() {
   const [refresh, setRefresh] = useState(0)     // recarrega após importar meses anteriores
   const [impBusy, setImpBusy] = useState(false)
   const [impMsg, setImpMsg] = useState('')
-  const [filtroMes, setFiltroMes] = useState('todos') // 'todos' | número do mês
+  const [mesesSel, setMesesSel] = useState(() => new Set()) // vazio = todos os meses
 
   // Importa o razão dos MESES ANTERIORES (ex.: jan–abr) num único arquivo, agrupando por
   // mês (coluna de competência/mês ou o mês da data). Cria a competência de cada mês e
@@ -285,7 +318,7 @@ export default function CompMovimento() {
   }
 
   // Filtro por mês (todos ou um só). A coluna "Total" só faz sentido com >1 mês.
-  const mesesVis = filtroMes === 'todos' ? comps : comps.filter(c => c.mes === Number(filtroMes))
+  const mesesVis = mesesSel.size === 0 ? comps : comps.filter(c => mesesSel.has(c.mes))
   const mostraTotal = mesesVis.length > 1
   const totalConta = key => { const linha = matriz[key] || {}; return mesesVis.reduce((s, c) => s + (linha[c.mes] || 0), 0) }
   // Lucro (ou prejuízo) do mês = −(soma dos saldos das contas de resultado analíticas).
@@ -371,13 +404,10 @@ export default function CompMovimento() {
                 <option value="tudo">Tudo (todas as contas)</option>
               </select>
             </label>
-            <label style={{ fontSize: 12, color: theme.sub, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              <i className="ti ti-filter" /> Mês:
-              <select className="input" style={{ width: 'auto', fontSize: 12, padding: '6px 10px' }} value={filtroMes} onChange={e => setFiltroMes(e.target.value)}>
-                <option value="todos">Todos os meses</option>
-                {comps.map(c => <option key={c.mes} value={c.mes}>{MESES[c.mes - 1]}</option>)}
-              </select>
-            </label>
+            <div style={{ fontSize: 12, color: theme.sub, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <i className="ti ti-filter" /> Meses:
+              <MultiMesSelect comps={comps} sel={mesesSel} onChange={setMesesSel} />
+            </div>
           </div>
           <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'auto', maxWidth: '100%' }}>
             <table style={{ borderCollapse: 'collapse', width: '100%' }}>
