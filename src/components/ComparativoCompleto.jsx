@@ -66,7 +66,7 @@ export default function ComparativoCompleto({ empresaId, empresaNome, competenci
           .eq('cliente_id', empresaId).eq('ano', ano).order('mes', { ascending: true })
         if (!vivo) return
         if (!comps || !comps.length) { setDados({ meses: [], contas: [], mov: {}, sf: {} }); return }
-        const meta = {}, mov = {}, sf = {}, meses = []
+        const meta = {}, mov = {}, sf = {}, si = {}, meses = []
         for (const c of comps) {
           const { linhas } = await montarBalancete(empresaId, c.id)
           if (!vivo) return
@@ -78,11 +78,12 @@ export default function ComparativoCompleto({ empresaId, empresaNome, competenci
             else { if (!meta[key].nome && l.nome) meta[key].nome = l.nome; if (!meta[key].reduzido && l.reduzido) meta[key].reduzido = l.reduzido; meta[key].sintetica = meta[key].sintetica && l.sintetica }
             ;(mov[key] ||= {})[c.mes] = num(l.debito) - num(l.credito)
             ;(sf[key] ||= {})[c.mes] = num(l.saldo_final)
+            ;(si[key] ||= {})[c.mes] = num(l.saldo_inicial)
           }
         }
         meses.sort((a, b) => a - b)
         const contas = Object.values(meta).sort((a, b) => a.classifRaw < b.classifRaw ? -1 : a.classifRaw > b.classifRaw ? 1 : 0)
-        if (vivo) setDados({ meses, contas, mov, sf })
+        if (vivo) setDados({ meses, contas, mov, sf, si })
       } finally {
         if (vivo) setCarregando(false)
       }
@@ -98,9 +99,14 @@ export default function ComparativoCompleto({ empresaId, empresaNome, competenci
     </div>
   )
 
-  const { meses, contas, mov, sf } = dados
+  const { meses, contas, mov, sf, si } = dados
   const mesesVis = mesesSel.size ? meses.filter(m => mesesSel.has(m)) : meses
   const niveisSint = [...new Set(contas.filter(c => c.sintetica).map(c => c.grau))].sort((a, b) => a - b)
+
+  // Abertura = saldo inicial do 1º mês em que a conta tem saldo anterior (= saldo de 30/04,
+  // o "balancete de abril" que é o saldo anterior de maio). Só as contas patrimoniais têm.
+  const abertura = key => { for (const m of meses) { const v = si[key]?.[m]; if (v != null && Math.abs(v) > 0.005) return v } return null }
+  const temAbertura = contas.some(c => abertura(c.classifRaw) != null)
 
   const valorMes = (key, mes) => {
     if (modo === 'saldo') { const v = sf[key]?.[mes]; return v == null ? null : v }
@@ -133,12 +139,14 @@ export default function ComparativoCompleto({ empresaId, empresaNome, competenci
     const { ini, fim } = periodo()
     const colunas = [
       { nome: 'Código', largura: 10 }, { nome: 'Classificação', largura: 16 }, { nome: 'Descrição da conta', largura: 40 },
+      ...(temAbertura ? [{ nome: 'Abertura', alinhar: 'right', moeda: true }] : []),
       ...mesesVis.map(m => ({ nome: `${MES[m - 1]}/${String(ano).slice(2)}`, alinhar: 'right', moeda: true })),
       { nome: 'Total', alinhar: 'right', moeda: true },
     ]
-    const linhas = contasVis.map(c => [c.reduzido || '', c.classif || '', c.nome || '', ...mesesVis.map(m => { const v = valorMes(c.classifRaw, m); return v == null ? '' : v }), total(c.classifRaw) ?? ''])
-    linhas.push(['', '', 'RESULTADO DO MES', ...mesesVis.map(m => resMes(m)), resMesTotal])
-    linhas.push(['', '', 'RESULTADO DO EXERCÍCIO', ...mesesVis.map(m => resExerc(m)), resMesTotal])
+    const ab = c => temAbertura ? [abertura(c.classifRaw) ?? ''] : []
+    const linhas = contasVis.map(c => [c.reduzido || '', c.classif || '', c.nome || '', ...ab(c), ...mesesVis.map(m => { const v = valorMes(c.classifRaw, m); return v == null ? '' : v }), total(c.classifRaw) ?? ''])
+    linhas.push(['', '', 'RESULTADO DO MES', ...(temAbertura ? [''] : []), ...mesesVis.map(m => resMes(m)), resMesTotal])
+    linhas.push(['', '', 'RESULTADO DO EXERCÍCIO', ...(temAbertura ? [''] : []), ...mesesVis.map(m => resExerc(m)), resMesTotal])
     const sint = new Set(contasVis.map((c, i) => c.sintetica ? i : -1).filter(i => i >= 0))
     sint.add(contasVis.length); sint.add(contasVis.length + 1)
     gerarExcelDominio({
@@ -150,10 +158,11 @@ export default function ComparativoCompleto({ empresaId, empresaNome, competenci
 
   function exportarPDF() {
     const { ini, fim } = periodo()
-    const rows = contasVis.map(c => ({ cod: c.reduzido, classif: c.classif, nome: c.nome, sintetica: c.sintetica, vals: [...mesesVis.map(m => valorMes(c.classifRaw, m)), total(c.classifRaw)] }))
-    rows.push({ cod: '', classif: '', nome: 'RESULTADO DO MES', sintetica: true, vals: [...mesesVis.map(m => resMes(m)), resMesTotal] })
-    rows.push({ cod: '', classif: '', nome: 'RESULTADO DO EXERCÍCIO', sintetica: true, vals: [...mesesVis.map(m => resExerc(m)), resMesTotal] })
-    abreComparativoDominio({ empresa: empresaNome, cnpj: fmtCnpj(cnpj), periodoIni: ini, periodoFim: fim, meses: [...mesesVis.map(m => `${MES[m - 1]}/${String(ano).slice(2)}`), 'Total'], rows })
+    const ab = c => temAbertura ? [abertura(c.classifRaw)] : []
+    const rows = contasVis.map(c => ({ cod: c.reduzido, classif: c.classif, nome: c.nome, sintetica: c.sintetica, vals: [...ab(c), ...mesesVis.map(m => valorMes(c.classifRaw, m)), total(c.classifRaw)] }))
+    rows.push({ cod: '', classif: '', nome: 'RESULTADO DO MES', sintetica: true, vals: [...(temAbertura ? [null] : []), ...mesesVis.map(m => resMes(m)), resMesTotal] })
+    rows.push({ cod: '', classif: '', nome: 'RESULTADO DO EXERCÍCIO', sintetica: true, vals: [...(temAbertura ? [null] : []), ...mesesVis.map(m => resExerc(m)), resMesTotal] })
+    abreComparativoDominio({ empresa: empresaNome, cnpj: fmtCnpj(cnpj), periodoIni: ini, periodoFim: fim, meses: [...(temAbertura ? ['Abertura'] : []), ...mesesVis.map(m => `${MES[m - 1]}/${String(ano).slice(2)}`), 'Total'], rows })
   }
 
   const celTxt = v => (v == null || v === 0) ? '—' : moneyDC(v)
@@ -194,6 +203,7 @@ export default function ComparativoCompleto({ empresaId, empresaNome, competenci
               <th style={{ ...th, position: 'sticky', left: 0, background: theme.input }}>Código</th>
               <th style={th}>Classificação</th>
               <th style={th}>Descrição da conta</th>
+              {temAbertura && <th style={thNum} title="Saldo anterior de maio (posição de 30/04)">Abertura</th>}
               {mesesVis.map(m => <th key={m} style={thNum}>{MES[m - 1]}</th>)}
               <th style={{ ...thNum, color: theme.text }}>Total</th>
             </tr>
@@ -204,6 +214,7 @@ export default function ComparativoCompleto({ empresaId, empresaNome, competenci
                 <td style={{ ...td, color: theme.sub, position: 'sticky', left: 0, background: c.sintetica ? theme.input : theme.card }}>{c.reduzido || ''}</td>
                 <td style={{ ...td, color: theme.sub, fontSize: 11 }}>{c.classif}</td>
                 <td style={{ ...td, paddingLeft: 14 + Math.max(0, (c.grau || 1) - 1) * 12 }}>{c.nome || '—'}</td>
+                {temAbertura && <td style={{ ...tdNum, color: theme.sub }}>{celTxt(abertura(c.classifRaw))}</td>}
                 {mesesVis.map(m => <td key={m} style={tdNum}>{celTxt(valorMes(c.classifRaw, m))}</td>)}
                 <td style={{ ...tdNum, fontWeight: 700 }}>{celTxt(total(c.classifRaw))}</td>
               </tr>
@@ -212,11 +223,13 @@ export default function ComparativoCompleto({ empresaId, empresaNome, competenci
           <tfoot>
             <tr style={{ borderTop: `2px solid ${theme.border}`, background: theme.input, fontWeight: 700 }}>
               <td style={{ ...td }} colSpan={3}>RESULTADO DO MÊS</td>
+              {temAbertura && <td style={tdNum}>—</td>}
               {mesesVis.map(m => <td key={m} style={tdNum}>{celTxt(resMes(m))}</td>)}
               <td style={{ ...tdNum }}>{celTxt(resMesTotal)}</td>
             </tr>
             <tr style={{ borderTop: `1px solid ${theme.border}`, background: theme.input, fontWeight: 800 }}>
               <td style={{ ...td }} colSpan={3}>RESULTADO DO EXERCÍCIO</td>
+              {temAbertura && <td style={tdNum}>—</td>}
               {mesesVis.map(m => <td key={m} style={tdNum}>{celTxt(resExerc(m))}</td>)}
               <td style={{ ...tdNum }}>{celTxt(resMesTotal)}</td>
             </tr>
