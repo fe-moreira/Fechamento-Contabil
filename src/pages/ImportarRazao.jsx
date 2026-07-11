@@ -13,6 +13,7 @@ const ALVOS = [
   { key: 'historico', label: 'Histórico', dicas: ['histor', 'complemento'] },
   { key: 'debito', label: 'Débito', dicas: ['débito', 'debito', 'valdeb', 'valor débito', 'vlr deb'] },
   { key: 'credito', label: 'Crédito', dicas: ['crédito', 'credito', 'valcre', 'valor crédito', 'vlr cred'] },
+  { key: 'centro_custo', label: 'Centro de custo (opcional)', dicas: ['centro de custo', 'centro custo', 'codi_ccu', 'ccu', 'cencus', 'c.custo', 'cto custo'] },
 ]
 
 // Aplica a máscara do Domínio (ex.: "9.9.9.999.9999") a um código sem pontos.
@@ -160,6 +161,7 @@ export default function ImportarRazao() {
         historico: String(valorCol(l, 'historico') ?? '').trim() || null,
         debito: num(valorCol(l, 'debito')),
         credito: num(valorCol(l, 'credito')),
+        centro_custo: String(valorCol(l, 'centro_custo') ?? '').trim() || null,
         nome: String(valorCol(l, 'nome') ?? '').trim() || null,   // só para o balancete
       })).filter(r => r.conta && (r.debito || r.credito))
 

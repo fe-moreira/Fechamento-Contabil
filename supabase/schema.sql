@@ -76,6 +76,9 @@ create table if not exists public.razao (
 );
 create index if not exists razao_comp_idx on public.razao(competencia_id);
 create index if not exists razao_conta_idx on public.razao(competencia_id, conta);
+-- Centro de custo do lançamento (opcional; vem do razão do Domínio) — base do Relatório Gerencial por CC.
+alter table public.razao add column if not exists centro_custo text;
+create index if not exists razao_ccu_idx on public.razao(competencia_id, centro_custo);
 
 -- ---------- BALANCETE ----------
 create table if not exists public.balancete (
