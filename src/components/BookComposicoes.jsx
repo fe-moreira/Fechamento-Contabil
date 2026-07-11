@@ -115,8 +115,11 @@ export default function BookComposicoes({ empresaId, empresaNome, competencia, c
           const { data, error } = await supabase.storage.from('extratos').download(c.documento_path)
           if (error || !data) continue
           const ext = (c.documento_path.match(/\.[a-z0-9]+$/i)?.[0]) || (c.documento?.match(/\.[a-z0-9]+$/i)?.[0]) || '.pdf'
-          const base = String(c.documento || 'documento').replace(/\.[a-z0-9]+$/i, '').replace(/[^\w.-]+/g, '_').slice(0, 40)
-          const fname = `${c.conta}_${base}${ext}`
+          // Nome do anexo = código da conta + nome da conta (sem acento/espaço), para
+          // localizar fácil na pasta. Ex.: "374_banco_itau_cc.pdf".
+          const cod = String(c.conta).replace(/[^\w.-]+/g, '_')
+          const nomeConta = baixa(c.nome || '').replace(/[^\w.-]+/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '').slice(0, 50)
+          const fname = `${cod}_${nomeConta || 'documento'}${ext}`
           pasta.file(fname, await data.arrayBuffer())
           linkDe[c.conta] = `anexos/${fname}`
         } catch { /* pula anexo com erro, segue os demais */ }
