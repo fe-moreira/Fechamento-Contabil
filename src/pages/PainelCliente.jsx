@@ -4,6 +4,7 @@ import { useAppData } from '../lib/appData'
 import { apurarVariacoes } from '../lib/variacoes'
 import { apurarDistribuicao } from '../lib/distribuicao'
 import { montarBalancete } from '../lib/balancete'
+import { montarDRE } from '../lib/dre'
 import { extrairEntidade } from '../lib/financeiro'
 import { gerarExcelTimbrado } from '../lib/excel'
 import { theme, money } from '../lib/theme'
@@ -76,6 +77,22 @@ export default function PainelCliente() {
         const serie = (comparativo.meses || []).map(m => ({ mes: m, receita: receitaMes(m), despesa: despesaMes(m), resultado: resMes(m) }))
         const resultado = resMes(mes)
         const acumulado = (comparativo.meses || []).filter(m => m <= mes).reduce((s, m) => s + resMes(m), 0)
+
+        // Série do gráfico de desempenho (combo): por mês, a DRE dá Receita Líquida,
+        // EBITDA e Lucro Líquido; as margens saem sobre a receita líquida. Reaproveita
+        // montarDRE alimentando linhas sintéticas com o movimento do mês.
+        const classifRawDe = {}
+        for (const l of analit) if (!classifRawDe[String(l.reduzido)]) classifRawDe[String(l.reduzido)] = l.classifRaw
+        const dreMes = m => {
+          const linhasMes = (comparativo.contas || []).map(c => ({ sintetica: false, classifRaw: classifRawDe[String(c.conta)] || '', saldo_final: comparativo.matriz[c.conta]?.[m] || 0 }))
+          const rows = montarDRE(linhasMes)
+          const val = lbl => (rows.find(r => r.label === lbl)?.valor) || 0
+          return { receitaLiq: val('RECEITA LÍQUIDA'), ebitda: val('RESULTADO OPERACIONAL (EBITDA)'), lucroLiq: val('LUCRO LÍQUIDO DO EXERCÍCIO') }
+        }
+        const serieCombo = (comparativo.meses || []).map(m => {
+          const r = dreMes(m)
+          return { mes: m, rotulo: MESES[m - 1], ...r, margemEbitda: r.receitaLiq ? (r.ebitda / r.receitaLiq) * 100 : 0, margemLiquida: r.receitaLiq ? (r.lucroLiq / r.receitaLiq) * 100 : 0 }
+        })
 
         // Nível 1 resumido do mês da competência.
         const faturamento = receitaMes(mes)
@@ -157,7 +174,7 @@ export default function PainelCliente() {
 
         if (!vivo) return
         setD({
-          faturamento, custo, despesa, resultado, lucro, acumulado, serie,
+          faturamento, custo, despesa, resultado, lucro, acumulado, serie, serieCombo,
           totAtivo, totPassivo, clientes, fornecedores,
           impostos, disponiveis, totDispIni, totDispFim, geracaoCaixa, dataIni, dataFim,
           indices, dist, distTotal, ata: dist.ata || { distribuido: 0, pago: 0, pagoMes: 0, saldo: 0 },
@@ -271,6 +288,7 @@ export default function PainelCliente() {
       {!carregando && d && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
           <BlocoResultado d={d} />
+          <BlocoDesempenho d={d} />
           <BlocoComparativo d={d} />
           <BlocoBalanco d={d} />
           <BlocoFinanceiro d={d} />
@@ -398,6 +416,87 @@ function BlocoComparativo({ d }) {
               </span>
             ))}
           </div>
+        </div>
+      </div>
+    </Secao>
+  )
+}
+
+// Gráfico combinado (estilo "Desempenho Financeiro"): barras de Receita Líquida,
+// EBITDA e Lucro Líquido por mês + linhas de Margem EBITDA e Margem Líquida no eixo %.
+function BlocoDesempenho({ d }) {
+  const s = d.serieCombo || []
+  if (s.length === 0) return null
+  const W = 1000, H = 380, mL = 78, mR = 54, mT = 18, mB = 40
+  const x0 = mL, x1 = W - mR, y1 = H - mB
+  const plotH = y1 - mT, plotW = x1 - x0
+  const n = s.length, gw = plotW / n
+  const maxR = Math.max(1, ...s.map(p => Math.max(p.receitaLiq, p.ebitda, p.lucroLiq))) * 1.12
+  const maxPctR = Math.max(10, Math.ceil(Math.max(...s.flatMap(p => [p.margemEbitda, p.margemLiquida, 0])) / 10) * 10)
+  const yR = v => y1 - (Math.max(0, v) / maxR) * plotH
+  const yP = v => y1 - (v / maxPctR) * plotH
+  const cx = i => x0 + gw * i + gw / 2
+  const bars = [
+    { key: 'receitaLiq', label: 'Receita Líquida', cor: '#E6A9A4' },
+    { key: 'ebitda', label: 'EBITDA', cor: '#A23232' },
+    { key: 'lucroLiq', label: 'Lucro Líquido', cor: '#CD5C5C' },
+  ]
+  const linhas = [
+    { key: 'margemEbitda', label: 'Margem EBITDA', cor: '#8a2b2b', dash: '7 4' },
+    { key: 'margemLiquida', label: 'Margem Líquida', cor: '#4f1414', dash: '2 4' },
+  ]
+  const bw = (gw * 0.62) / 3
+  const money0 = v => `R$ ${Math.round(v).toLocaleString('pt-BR')}`
+  return (
+    <Secao titulo="Desempenho financeiro">
+      <div style={{ ...card, overflowX: 'auto' }}>
+        <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ minWidth: 680, display: 'block' }}>
+          {/* grades + eixo R$ (esq) e % (dir) */}
+          {Array.from({ length: 6 }).map((_, i) => {
+            const vR = maxR * i / 5, y = yR(vR), vP = maxPctR * i / 5
+            return (
+              <g key={i}>
+                <line x1={x0} y1={y} x2={x1} y2={y} stroke={theme.border} strokeWidth="1" />
+                <text x={x0 - 8} y={y + 3.5} textAnchor="end" fontSize="10" fill={theme.sub}>{money0(vR)}</text>
+                <text x={x1 + 8} y={yP(vP) + 3.5} textAnchor="start" fontSize="10" fill={theme.sub}>{vP.toFixed(0)}%</text>
+              </g>
+            )
+          })}
+          {/* barras */}
+          {s.map((p, i) => bars.map((b, bi) => {
+            const v = p[b.key], y = yR(v), bx = cx(i) - (bw * 3) / 2 + bi * bw
+            return <rect key={i + b.key} x={bx} y={y} width={Math.max(1, bw - 1)} height={Math.max(0, y1 - y)} fill={b.cor} rx="1">
+              <title>{`${p.rotulo} · ${b.label}: ${money(v)}`}</title>
+            </rect>
+          }))}
+          {/* linhas de margem + rótulos */}
+          {linhas.map(ln => (
+            <g key={ln.key}>
+              <polyline points={s.map((p, i) => `${cx(i)},${yP(p[ln.key])}`).join(' ')} fill="none" stroke={ln.cor} strokeWidth="2" strokeDasharray={ln.dash} />
+              {s.map((p, i) => (
+                <g key={i}>
+                  <circle cx={cx(i)} cy={yP(p[ln.key])} r="2.6" fill={ln.cor} />
+                  <text x={cx(i)} y={yP(p[ln.key]) - 7} textAnchor="middle" fontSize="9.5" fontWeight="600" fill={theme.text}>{p[ln.key].toFixed(2)}%</text>
+                </g>
+              ))}
+            </g>
+          ))}
+          {/* meses + eixos */}
+          {s.map((p, i) => <text key={'m' + i} x={cx(i)} y={y1 + 16} textAnchor="middle" fontSize="10.5" fill={theme.sub}>{p.rotulo}</text>)}
+          <line x1={x0} y1={mT} x2={x0} y2={y1} stroke={theme.border} />
+          <line x1={x1} y1={mT} x2={x1} y2={y1} stroke={theme.border} />
+        </svg>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, justifyContent: 'center', marginTop: 12 }}>
+          {bars.map(b => (
+            <span key={b.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: theme.sub }}>
+              <span style={{ width: 14, height: 11, borderRadius: 3, background: b.cor }} /> {b.label}
+            </span>
+          ))}
+          {linhas.map(ln => (
+            <span key={ln.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: theme.sub }}>
+              <span style={{ width: 18, height: 0, borderTop: `2px ${ln.dash.startsWith('2') ? 'dotted' : 'dashed'} ${ln.cor}` }} /> {ln.label}
+            </span>
+          ))}
         </div>
       </div>
     </Secao>
