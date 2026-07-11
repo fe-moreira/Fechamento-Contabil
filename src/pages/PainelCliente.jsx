@@ -57,7 +57,7 @@ export default function PainelCliente() {
         const g = l => String(l.classifRaw || '')[0] // grupo pela CLASSIFICAÇÃO (não pelo reduzido)
 
         const comparativo = await apurarVariacoes(empresaId)
-        const dist = await apurarDistribuicao(empresaId, comp.id)
+        const dist = await apurarDistribuicao(empresaId, comp.id, ano, mes)
 
         // --- Resultado: mesma magnitude da última linha do Comparativo de Movimento, mas
         // com sinal contábil de gestão: LUCRO positivo, PREJUÍZO negativo. No comparativo o
@@ -157,7 +157,7 @@ export default function PainelCliente() {
           faturamento, custo, despesa, resultado, lucro, acumulado, serie,
           totAtivo, totPassivo, clientes, fornecedores,
           impostos, disponiveis, totDispIni, totDispFim, geracaoCaixa, dataIni, dataFim,
-          indices, dist, distTotal,
+          indices, dist, distTotal, ata: dist.ata || { distribuido: 0, pago: 0, pagoMes: 0, saldo: 0 },
           comparativo,
           variacoesConta: new Set((comparativo.itens || []).map(i => String(i.conta))).size,
           topClientes, totReceitaRazao,
@@ -196,7 +196,10 @@ export default function PainelCliente() {
         ['Total do passivo + PL', num(d.totPassivo)],
         ['Clientes (a receber)', num(d.clientes)],
         ['Fornecedores (a pagar)', num(d.fornecedores)],
-        ['Distribuição de lucros', num(d.distTotal)],
+        ['Distribuição de lucros (pago no mês)', num(d.ata.pagoMes || d.distTotal)],
+        ['Ata — distribuído', num(d.ata.distribuido)],
+        ['Ata — total pago', num(d.ata.pago)],
+        ['Ata — saldo a pagar', num(d.ata.saldo)],
       ],
     })
     secoes.push({
@@ -340,7 +343,9 @@ function BlocoBalanco({ d }) {
           cor={ativoBate ? theme.green : theme.yellow} sub={ativoBate ? 'balanço fechado' : 'diferença a revisar'} />
         <Tile label="Clientes (a receber)" valor={money(d.clientes)} cor={theme.green} />
         <Tile label="Fornecedores (a pagar)" valor={money(d.fornecedores)} cor={theme.red} />
-        <Tile label="Distribuição de lucros" valor={money(d.distTotal)} sub="conforme ata / campo de distribuição" />
+        <Tile label="Distribuição de lucros (mês)" valor={money(d.ata.pagoMes || d.distTotal)} sub="pago aos sócios no mês" />
+        <Tile label="Ata — saldo a pagar" valor={money(d.ata.saldo)} cor={d.ata.saldo > 0.005 ? theme.yellow : theme.green}
+          sub={`distribuído ${money(d.ata.distribuido)} · pago ${money(d.ata.pago)}`} />
       </div>
       <p style={{ fontSize: 11, color: theme.sub, margin: '8px 2px 0' }}>Saldos da última coluna da conciliação (saldo final da competência).</p>
     </Secao>
