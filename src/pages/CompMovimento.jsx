@@ -69,6 +69,7 @@ export default function CompMovimento() {
   const [detalhe, setDetalhe] = useState(null)  // { conta, nome, mes, compId }
   const [justificadas, setJustificadas] = useState(() => new Set()) // 'conta|mes' já justificadas/corrigidas localmente
   const [justTextos, setJustTextos] = useState(() => ({}))          // 'conta|mes' -> texto da justificativa (p/ tooltip)
+  const [expandido, setExpandido] = useState(true)                  // false = só sintéticas (totais)
   const [refresh, setRefresh] = useState(0)     // recarrega após importar meses anteriores
   const [impBusy, setImpBusy] = useState(false)
   const [impMsg, setImpMsg] = useState('')
@@ -359,6 +360,11 @@ export default function CompMovimento() {
             <p style={{ color: theme.sub, fontSize: 12.5, margin: 0, flex: 1, minWidth: 240 }}>
               Contas de resultado. Valores em <b style={{ color: theme.red }}>vermelho</b> desviam mais de 10% do <b>mês anterior</b> (fev × jan, mar × fev…) — o primeiro mês não é comparado. Mês sem saldo aparece como <b>—</b>; fica vermelho quando o mês anterior tinha movimento. Clique num valor para ver o razão e o provável culpado.
             </p>
+            <button className="btn btn-ghost" onClick={() => setExpandido(v => !v)}
+              title={expandido ? 'Recolher: mostrar só as contas sintéticas (totais)' : 'Expandir: mostrar todas as contas'}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, padding: '6px 12px' }}>
+              <i className={`ti ${expandido ? 'ti-fold' : 'ti-fold-down'}`} /> {expandido ? 'Recolher (só sintéticas)' : 'Expandir (todas)'}
+            </button>
             <label style={{ fontSize: 12, color: theme.sub, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
               <i className="ti ti-filter" /> Mês:
               <select className="input" style={{ width: 'auto', fontSize: 12, padding: '6px 10px' }} value={filtroMes} onChange={e => setFiltroMes(e.target.value)}>
@@ -381,7 +387,7 @@ export default function CompMovimento() {
                 </tr>
               </thead>
               <tbody>
-                {contas.map(({ reduzido, classif, classifRaw, nome, sintetica }) => {
+                {contas.filter(c => expandido || c.sintetica).map(({ reduzido, classif, classifRaw, nome, sintetica }) => {
                   const linha = matriz[classifRaw] || {}
                   const tot = totalConta(classifRaw)
                   return (
