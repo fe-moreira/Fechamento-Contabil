@@ -261,3 +261,85 @@ export function abreBalanceteDominio({ empresa = '', cnpj = '', periodoIni = '',
   if (!w) { alert('Permita pop-ups para gerar o PDF.'); return }
   w.document.write(html); w.document.close()
 }
+
+// ---------------------------------------------------------------------------
+// CARTA DE PENDÊNCIAS ao cliente — documento apresentável, no papel timbrado, para
+// enviar ao cliente após o fechamento cobrando a documentação que falta. Traz um
+// texto de abertura, a relação dos itens pendentes (agrupados por origem) e um
+// parágrafo reforçando a importância de enviar a documentação.
+// grupos: [{ titulo, itens: [string] }] (só entram grupos com itens).
+export function abreCartaPendencias({ empresa = '', cnpj = '', competencia = '', competenciaExtenso = '', dataHoje = '', grupos = [], responsavel = '' }) {
+  const esc = s => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))
+  const comItens = (grupos || []).filter(g => g && (g.itens || []).length)
+  const totalItens = comItens.reduce((s, g) => s + g.itens.length, 0)
+  const periodo = competenciaExtenso || competencia
+
+  const listaHtml = comItens.map(g => `
+    <div class="grupo">
+      <div class="grupo-t">${esc(g.titulo)}</div>
+      <ul>${g.itens.map(it => `<li>${esc(it)}</li>`).join('')}</ul>
+    </div>`).join('')
+
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Carta de Pendências - ${esc(empresa)}</title>
+    <style>
+      @page { margin: 96px 34px 70px; }
+      * { box-sizing: border-box; }
+      body { font-family: Arial, Helvetica, sans-serif; color:#1a1a1a; margin:0; font-size:12.5px; line-height:1.65; }
+      .hdr { position: fixed; top:0; left:0; right:0; height:70px; }
+      .hdr img { width:100%; height:70px; object-fit:cover; display:block; }
+      .ftr { position: fixed; bottom:0; left:0; right:0; text-align:center; color:#555; font-size:9px; padding:8px 24px; border-top:1px solid #e3e3e3; }
+      .data { text-align:right; color:#555; font-size:11.5px; margin:0 0 18px; }
+      .dest { margin:0 0 4px; font-size:12.5px; }
+      .dest b { color:#1b2a4a; }
+      h1 { font-size:15px; color:#1b2a4a; margin:20px 0 14px; letter-spacing:.2px; }
+      p { margin:0 0 12px; text-align:justify; }
+      .grupos { margin:8px 0 16px; }
+      .grupo { margin:0 0 12px; border:1px solid #e2e7f0; border-left:4px solid #1b2a4a; border-radius:6px; padding:10px 14px 6px; background:#f7f9fc; page-break-inside: avoid; }
+      .grupo-t { font-weight:bold; color:#1b2a4a; font-size:12px; text-transform:uppercase; letter-spacing:.4px; margin-bottom:4px; }
+      ul { margin:4px 0 6px; padding-left:20px; }
+      li { margin:0 0 4px; }
+      .assinatura { margin-top:34px; }
+      .assinatura .linha { border-top:1px solid #999; width:260px; margin-bottom:4px; }
+      .assinatura b { color:#1b2a4a; }
+      .semitem { color:#2e7d32; font-weight:bold; }
+    </style></head>
+    <body>
+      <div class="hdr"><img src="${HEADER_IMG}" /></div>
+      <div class="ftr">${esc(RODAPE)}</div>
+
+      <p class="data">São Paulo, ${esc(dataHoje)}.</p>
+      <p class="dest">${empresa ? `À <b>${esc(empresa)}</b>` : 'Ao cliente'}${cnpj ? `<br/>CNPJ ${esc(cnpj)}` : ''}</p>
+
+      <h1>Relação de documentos pendentes — competência ${esc(periodo)}</h1>
+
+      <p>Prezado(a) cliente,</p>
+
+      <p>Concluímos o processamento do <b>fechamento contábil da competência ${esc(periodo)}</b>.
+      Para finalizá-lo integralmente — com todas as contas devidamente conciliadas e
+      amarradas ao respectivo documento-suporte — ainda dependemos do envio de alguns
+      documentos e informações da sua parte.</p>
+
+      ${totalItens ? `<p>Segue abaixo a relação dos itens pendentes${totalItens > 1 ? ` (${totalItens} itens)` : ''}:</p>
+      <div class="grupos">${listaHtml}</div>` : `<p class="semitem">Não há documentos pendentes nesta competência. Agradecemos a colaboração!</p>`}
+
+      ${totalItens ? `<p>O envio da documentação é <b>essencial para manter o fechamento completo e íntegro</b>:
+      cada saldo precisa estar respaldado por documento hábil, o que garante segurança fiscal,
+      evita retrabalho e mantém a sua contabilidade sempre em dia e pronta para eventual
+      fiscalização. Assim que recebermos os itens acima, concluímos a amarração e arquivamos
+      o suporte de cada conta — deixando o fechamento todo certo e organizado.</p>
+
+      <p>Pedimos a gentileza de nos encaminhar os documentos <b>o quanto antes</b>.
+      Ficamos à disposição para qualquer esclarecimento.</p>` : ''}
+
+      <div class="assinatura">
+        <div class="linha"></div>
+        <div><b>${esc(responsavel || 'Attentive Contabilidade')}</b></div>
+        <div style="color:#555; font-size:11px;">Departamento Contábil · Attentive Contabilidade</div>
+      </div>
+
+      <script>window.onload=function(){setTimeout(function(){window.print()},250)}</script>
+    </body></html>`
+  const w = window.open('', '_blank')
+  if (!w) { alert('Permita pop-ups para gerar o PDF.'); return }
+  w.document.write(html); w.document.close()
+}

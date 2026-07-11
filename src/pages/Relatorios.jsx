@@ -6,7 +6,7 @@ import { apurarBancoResultado } from '../lib/bancoResultado'
 import { apurarVariacoes } from '../lib/variacoes'
 import { parsePlano, contasConciliacaoAbertas, montarBalancete } from '../lib/balancete'
 import { gerarExcelTimbrado } from '../lib/excel'
-import { abreBalanceteDominio, abreDreDominio } from '../lib/pdf'
+import { abreBalanceteDominio, abreDreDominio, abreCartaPendencias } from '../lib/pdf'
 import { montarDRE, montarResumoBalancete } from '../lib/dre'
 import BookComposicoes from '../components/BookComposicoes'
 import ComparativoCompleto from '../components/ComparativoCompleto'
@@ -234,6 +234,29 @@ export default function Relatorios() {
       ],
       arquivo: `pendencias_${compSlug}.xlsx`,
       aba: 'Pendências',
+    })
+  }
+
+  // Carta de pendências apresentável para enviar ao cliente (PDF timbrado): texto de
+  // abertura, relação dos itens pendentes agrupados por origem e o reforço da importância
+  // de enviar a documentação para o fechamento ficar completo.
+  function gerarCartaPendencias() {
+    const grupos = [
+      { titulo: 'Documentos não recebidos', itens: pendencias.map(d => `${d.name}${d.cat ? ` (${d.cat})` : ''}`) },
+      { titulo: 'Conciliação — saldos sem documento', itens: concPend.map(c => `Conta ${c.conta}${c.nome ? ` · ${c.nome}` : ''}${c.justificativa ? ` — ${c.justificativa}` : ''}`) },
+      { titulo: 'Contratos pendentes de envio', itens: contratoPend.map(a => `${a.item}${a.detalhe ? ` — ${a.detalhe}` : ''}`) },
+      { titulo: 'Outras pendências do cliente', itens: despesaPend.map(a => `${a.item}${a.detalhe ? ` — ${a.detalhe}` : ''}`) },
+    ]
+    const [mes, ano] = competencia.split('/').map(Number)
+    const nomesMes = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro']
+    const hoje = new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' })
+    abreCartaPendencias({
+      empresa: empresaNome,
+      cnpj: cnpj || '',
+      competencia,
+      competenciaExtenso: `${nomesMes[mes - 1] || competencia} de ${ano}`,
+      dataHoje: hoje,
+      grupos,
     })
   }
 
@@ -546,7 +569,12 @@ export default function Relatorios() {
 
       {/* Relatório de Pendências */}
       {!carregando && temComp && aba === 'pendencias' && (
-        <Secao titulo="Relatório de Pendências" onExportar={(pendencias.length || concPend.length || contratoPend.length || despesaPend.length) ? exportarPendencias : null}>
+        <Secao titulo="Relatório de Pendências" onExportar={(pendencias.length || concPend.length || contratoPend.length || despesaPend.length) ? exportarPendencias : null}
+          acoes={<button className="btn-ghost" onClick={gerarCartaPendencias}
+            title="Gera uma carta timbrada, pronta para enviar ao cliente, com a relação das pendências"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            <i className="ti ti-mail" /> Carta ao cliente
+          </button>}>
           {pendencias.length === 0 && concPend.length === 0 && contratoPend.length === 0 && despesaPend.length === 0 ? (
             <Aviso icon="ti-circle-check" texto="Nenhuma pendência nesta competência." />
           ) : (
@@ -708,12 +736,14 @@ const td = { padding: '9px 14px', fontSize: 12.5, color: theme.text, whiteSpace:
 const tdNum = { ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }
 
 // Cabeçalho de seção com botões Excel (.xlsx timbrado) e PDF (window.print).
-function Secao({ titulo, onExportar, children }) {
+// `acoes` = botões extras (ex.: "Carta ao cliente") mostrados antes do Excel.
+function Secao({ titulo, onExportar, acoes, children }) {
   return (
     <>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginBottom: 12 }}>
         <h2 style={{ fontSize: 15, fontWeight: 600, margin: 0 }}>{titulo}</h2>
         <div style={{ display: 'flex', gap: 8 }}>
+          {acoes}
           <button
             className="btn-ghost"
             onClick={() => onExportar && onExportar()}
