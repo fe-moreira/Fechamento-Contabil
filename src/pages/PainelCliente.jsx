@@ -90,14 +90,30 @@ export default function PainelCliente() {
         const fornecedores = somaFiltro(passivoLinhas, RE_PAGAR)
         const impostos = somaFiltro(passivoLinhas, RE_IMPOSTO)
 
-        // --- Disponibilidades e geração de caixa (saldo final − saldo inicial) ---
-        const disponiveis = ativoLinhas.filter(l => RE_DISP.test(l.nome || ''))
+        // --- Disponibilidades: TODAS as analíticas da sintética "Disponível" (o totalizador
+        // de caixa/bancos/aplicações), como na conciliação — não por nome solto (que pegava
+        // contas erradas, tipo IRRF/PROV. IR). Acha a sintética Disponível e soma as filhas
+        // pela classificação; se não achar, cai no 1.1.1 padrão e, por fim, no filtro de nome.
+        const sintDisp = (hier || [])
+          .filter(l => l.sintetica && g(l) === '1' && /dispon|caixa\s*e\s*equival|disponibilidad/i.test(l.nome || ''))
+          .sort((a, b) => String(a.classifRaw || '').length - String(b.classifRaw || '').length)[0]
+        let dispPrefix = sintDisp?.classifRaw
+        if (!dispPrefix && analit.some(l => String(l.classifRaw || '').startsWith('111'))) dispPrefix = '111'
+        const ehDisp = l => dispPrefix ? String(l.classifRaw || '').startsWith(dispPrefix) : RE_DISP.test(l.nome || '')
+        const disponiveis = ativoLinhas.filter(ehDisp)
           .map(l => ({ nome: l.nome || l.reduzido, ini: num(l.saldo_inicial), fim: num(l.saldo_final) }))
           .filter(l => Math.abs(l.ini) > 0.005 || Math.abs(l.fim) > 0.005)
           .sort((a, b) => b.fim - a.fim)
         const totDispIni = disponiveis.reduce((s, l) => s + l.ini, 0)
         const totDispFim = disponiveis.reduce((s, l) => s + l.fim, 0)
         const geracaoCaixa = totDispFim - totDispIni
+
+        // Datas dos saldos: coluna 1 = fim do mês anterior (saldo inicial); coluna 2 = fim da
+        // competência. Ex.: 30/04/2026 e 31/05/2026.
+        const ultDia = (a, m) => new Date(a, m, 0).getDate()
+        const fmtDia = (a, m) => `${String(ultDia(a, m)).padStart(2, '0')}/${String(m).padStart(2, '0')}/${a}`
+        const mAnt = mes === 1 ? 12 : mes - 1, aAnt = mes === 1 ? ano - 1 : ano
+        const dataIni = fmtDia(aAnt, mAnt), dataFim = fmtDia(ano, mes)
 
         // --- Índices (última coluna da conciliação; classificação mascarada) ---
         const somaClassif = pref => analit.filter(l => String(l.classif || '').startsWith(pref))
@@ -139,7 +155,7 @@ export default function PainelCliente() {
         setD({
           faturamento, custo, despesa, resultado, lucro, acumulado, serie,
           totAtivo, totPassivo, clientes, fornecedores,
-          impostos, disponiveis, totDispIni, totDispFim, geracaoCaixa,
+          impostos, disponiveis, totDispIni, totDispFim, geracaoCaixa, dataIni, dataFim,
           indices, dist, distTotal,
           comparativo,
           variacoesConta: new Set((comparativo.itens || []).map(i => String(i.conta))).size,
@@ -341,7 +357,7 @@ function BlocoFinanceiro({ d }) {
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ background: theme.input }}>
-                  <th style={th}>Conta</th><th style={thNum}>Saldo inicial</th><th style={thNum}>Saldo final</th>
+                  <th style={th}>Conta</th><th style={thNum}>{d.dataIni}</th><th style={thNum}>{d.dataFim}</th>
                 </tr>
               </thead>
               <tbody>
