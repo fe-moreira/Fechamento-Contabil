@@ -8,7 +8,7 @@ import { parsePlano, contasConciliacaoAbertas, montarBalancete } from '../lib/ba
 import { gerarExcelTimbrado } from '../lib/excel'
 import { abreBalanceteDominio } from '../lib/pdf'
 import BookComposicoes from '../components/BookComposicoes'
-import { theme, money } from '../lib/theme'
+import { theme, money, moneyDC } from '../lib/theme'
 
 const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
 
@@ -39,7 +39,8 @@ export default function Relatorios() {
   const cnpj = empresas?.find(e => e.id === empresaId)?.cnpj
   const [carregando, setCarregando] = useState(false)
   const [temComp, setTemComp] = useState(null) // null = não checado, false = sem competência
-  const [linhas, setLinhas] = useState([])      // balancete
+  const [linhas, setLinhas] = useState([])      // balancete (tabela crua)
+  const [hier, setHier] = useState([])          // balancete hierárquico (montarBalancete: sint. + analít.)
   const [documentos, setDocumentos] = useState([]) // competencias.documentos
   const [concPend, setConcPend] = useState([])     // contas de conciliação marcadas como pendência do cliente
   const [auditoria, setAuditoria] = useState([])    // auditoria desta competência
@@ -53,7 +54,7 @@ export default function Relatorios() {
 
   // Resolve a competência (READ-ONLY) e lê balancete + documentos + auditoria.
   useEffect(() => {
-    setLinhas([]); setDocumentos([]); setConcPend([]); setAuditoria([]); setDist(null); setBr(null); setComparativo(null); setConcOk(null); setCompId(null); setTemComp(null)
+    setLinhas([]); setHier([]); setDocumentos([]); setConcPend([]); setAuditoria([]); setDist(null); setBr(null); setComparativo(null); setConcOk(null); setCompId(null); setTemComp(null)
     if (!empresaId) return
     let vivo = true
     ;(async () => {
@@ -67,6 +68,9 @@ export default function Relatorios() {
         setTemComp(true)
         setCompId(comp.id)
         setDocumentos(Array.isArray(comp.documentos) ? comp.documentos : [])
+
+        // Balancete hierárquico (sintéticas + analíticas, com Saldo Anterior por arrasto).
+        montarBalancete(empresaId, comp.id).then(r => { if (vivo) setHier(r.linhas || []) }).catch(() => { if (vivo) setHier([]) })
 
         // Tick verde do Book de Composições: acende só quando a conciliação está
         // finalizada (nenhuma conta de Ativo/Passivo em aberto — mesma régua do Status).
@@ -152,16 +156,18 @@ export default function Relatorios() {
   const xls = (titulo, colunas, args) => gerarExcelTimbrado({ titulo, sub: subRel, colunas, ...args })
 
   function exportarBalancete() {
+    const base = hier.length ? hier : linhas.map(l => ({ reduzido: l.conta, classif: l.conta, nome: l.nome, saldo_inicial: l.saldo_inicial, debito: l.debito, credito: l.credito, saldo_final: l.saldo_final, sintetica: false }))
     xls('Balancete', [
-      { nome: 'Conta', largura: 14 },
-      { nome: 'Nome', largura: 40 },
-      { nome: 'Saldo inicial', alinhar: 'right', moeda: true },
+      { nome: 'Conta', largura: 12 },
+      { nome: 'Classificação', largura: 16 },
+      { nome: 'Descrição da conta', largura: 42 },
+      { nome: 'Saldo Anterior', alinhar: 'right', moeda: true },
       { nome: 'Débito', alinhar: 'right', moeda: true },
       { nome: 'Crédito', alinhar: 'right', moeda: true },
-      { nome: 'Saldo final', alinhar: 'right', moeda: true },
+      { nome: 'Saldo Atual', alinhar: 'right', moeda: true },
     ], {
-      linhas: linhas.map(l => [l.conta, l.nome, num(l.saldo_inicial), num(l.debito), num(l.credito), num(l.saldo_final)]),
-      totais: ['', 'TOTAIS', '', num(totDeb), num(totCred), ''],
+      linhas: base.map(l => [l.reduzido || '', l.classif || '', l.nome || '', num(l.saldo_inicial), num(l.debito), num(l.credito), num(l.saldo_final)]),
+      totais: ['', '', 'TOTAIS', '', num(totDeb), num(totCred), ''],
       arquivo: `balancete_${compSlug}.xlsx`,
       aba: 'Balancete',
     })
@@ -173,7 +179,7 @@ export default function Relatorios() {
     if (!compId || gerandoDom) return
     setGerandoDom(true)
     try {
-      const { linhas: hier } = await montarBalancete(empresaId, compId)
+      const linhasHier = hier.length ? hier : (await montarBalancete(empresaId, compId)).linhas
       const [mes, ano] = competencia.split('/').map(Number)
       const ult = new Date(ano, mes, 0).getDate()
       abreBalanceteDominio({
@@ -181,7 +187,7 @@ export default function Relatorios() {
         cnpj: cnpj || '',
         periodoIni: `01/${String(mes).padStart(2, '0')}/${ano}`,
         periodoFim: `${String(ult).padStart(2, '0')}/${String(mes).padStart(2, '0')}/${ano}`,
-        linhas: hier,
+        linhas: linhasHier,
       })
     } finally {
       setGerandoDom(false)
@@ -378,38 +384,44 @@ export default function Relatorios() {
             <span style={{ marginLeft: 10, fontSize: 12, color: theme.sub }}>PDF com a mesma cara do relatório do Domínio (hierarquia, D/C, Saldo Anterior por arrasto).</span>
           </div>
           <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'auto' }}>
+            {hier.length === 0 ? (
+              <p style={{ color: theme.sub, fontSize: 13, padding: 16 }}>Montando a estrutura do balancete…</p>
+            ) : (
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ background: theme.input }}>
                   <th style={th}>Conta</th>
-                  <th style={th}>Nome</th>
-                  <th style={thNum}>Saldo inicial</th>
+                  <th style={th}>Classificação</th>
+                  <th style={th}>Descrição da conta</th>
+                  <th style={thNum}>Saldo Anterior</th>
                   <th style={thNum}>Débito</th>
                   <th style={thNum}>Crédito</th>
-                  <th style={thNum}>Saldo final</th>
+                  <th style={thNum}>Saldo Atual</th>
                 </tr>
               </thead>
               <tbody>
-                {linhas.map((l, i) => (
-                  <tr key={i} style={{ borderTop: `1px solid ${theme.border}` }}>
-                    <td style={td}>{l.conta}</td>
-                    <td style={td}>{l.nome || '—'}</td>
-                    <td style={tdNum}>{money(l.saldo_inicial)}</td>
+                {hier.map((l, i) => (
+                  <tr key={i} style={{ borderTop: `1px solid ${theme.border}`, background: l.sintetica ? theme.input : 'transparent', fontWeight: l.sintetica ? 700 : 400 }}>
+                    <td style={{ ...td, color: theme.sub }}>{l.reduzido || ''}</td>
+                    <td style={{ ...td, color: theme.sub, fontSize: 11 }}>{l.classif}</td>
+                    <td style={{ ...td, fontWeight: l.sintetica ? 700 : 400, paddingLeft: 14 + Math.max(0, (l.grau || 1) - 1) * 14 }}>{l.nome || '—'}</td>
+                    <td style={tdNum}>{moneyDC(l.saldo_inicial)}</td>
                     <td style={tdNum}>{money(l.debito)}</td>
                     <td style={tdNum}>{money(l.credito)}</td>
-                    <td style={tdNum}>{money(l.saldo_final)}</td>
+                    <td style={tdNum}>{moneyDC(l.saldo_final)}</td>
                   </tr>
                 ))}
               </tbody>
               <tfoot>
                 <tr style={{ borderTop: `1px solid ${theme.border}`, background: theme.input }}>
-                  <td style={{ ...td, fontWeight: 700 }} colSpan={3}>Totais</td>
+                  <td style={{ ...td, fontWeight: 700 }} colSpan={4}>Totais</td>
                   <td style={{ ...tdNum, fontWeight: 700 }}>{money(totDeb)}</td>
                   <td style={{ ...tdNum, fontWeight: 700 }}>{money(totCred)}</td>
                   <td style={tdNum}></td>
                 </tr>
               </tfoot>
             </table>
+            )}
           </div>
         </Secao>
       )}
