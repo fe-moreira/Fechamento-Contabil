@@ -113,3 +113,47 @@ export async function gerarExcelTimbrado({ titulo, sub = '', colunas, linhas, se
   if (retornarBuffer) return buffer
   baixar(buffer, arquivo)
 }
+
+// Excel no PADRÃO DOMÍNIO (sem timbre): cabeçalho Empresa/CNPJ/Período, título e a
+// tabela com cabeçalho cinza. linhas: array de arrays; `sint` (índices em negrito) marca
+// as linhas sintéticas. colunas: [{ nome, alinhar?, moeda?, largura? }].
+export async function gerarExcelDominio({ empresa = '', cnpj = '', periodo = '', titulo, colunas, linhas, sint = new Set(), arquivo, aba = 'Relatório' }) {
+  const ExcelJS = (await import('exceljs')).default
+  const wb = new ExcelJS.Workbook()
+  const ws = wb.addWorksheet(String(aba).slice(0, 28) || 'Relatório', { views: [{ showGridLines: false }] })
+  const n = colunas.length
+  ws.columns = colunas.map(c => ({ width: c.largura || (c.moeda ? 15 : 22) }))
+
+  ws.getCell(1, 1).value = `Empresa: ${empresa}`
+  ws.getCell(2, 1).value = `C.N.P.J.: ${cnpj}`
+  ws.getCell(3, 1).value = `Período: ${periodo}`
+  for (let r = 1; r <= 3; r++) ws.getCell(r, 1).font = { size: 10, bold: r === 1 }
+  ws.mergeCells(5, 1, 5, n)
+  const t = ws.getCell(5, 1); t.value = titulo; t.font = { bold: true, size: 12 }; t.alignment = { horizontal: 'center' }
+
+  const hdr = ws.getRow(7); hdr.height = 18
+  colunas.forEach((c, i) => {
+    const cell = hdr.getCell(i + 1)
+    cell.value = c.nome
+    cell.font = { bold: true }
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE6E6E6' } }
+    cell.alignment = { horizontal: c.alinhar === 'right' ? 'right' : 'left' }
+    cell.border = { top: { style: 'thin' }, bottom: { style: 'thin' } }
+  })
+  let r = 8
+  for (let li = 0; li < (linhas || []).length; li++) {
+    const row = ws.getRow(r)
+    const negrito = sint.has(li)
+    for (let i = 0; i < n; i++) {
+      const col = colunas[i] || {}
+      const val = linhas[li][i]
+      const cell = row.getCell(i + 1)
+      cell.value = (val === undefined || val === null) ? '' : val
+      cell.alignment = { horizontal: col.alinhar === 'right' ? 'right' : 'left' }
+      if (col.moeda && typeof val === 'number') cell.numFmt = '#,##0.00'
+      if (negrito) cell.font = { bold: true }
+    }
+    r++
+  }
+  baixar(await wb.xlsx.writeBuffer(), arquivo)
+}
