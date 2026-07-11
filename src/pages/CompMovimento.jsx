@@ -647,6 +647,7 @@ export default function CompMovimento() {
           usuario={user?.email}
           getCompetenciaId={getCompetenciaId}
           jaJustificada={justificadas.has(chaveCelula(detalhe.conta, detalhe.mes))}
+          justTextoAtual={justTextos[chaveCelula(detalhe.conta, detalhe.mes)] || ''}
           onJustificada={(texto) => marcarJustificada(detalhe.conta, detalhe.mes, texto)}
           onDesfeita={() => marcarNaoJustificada(detalhe.conta, detalhe.mes)}
           onCorrigido={() => setRefresh(x => x + 1)}
@@ -658,7 +659,7 @@ export default function CompMovimento() {
   )
 }
 
-function ModalRazao({ detalhe, compsAnteriores, compIdAnterior, usuario, jaJustificada, onJustificada, onDesfeita, onCorrigido, plano, onClose }) {
+function ModalRazao({ detalhe, compsAnteriores, compIdAnterior, usuario, jaJustificada, justTextoAtual, onJustificada, onDesfeita, onCorrigido, plano, onClose }) {
   const { conta, nome, mes, compId, todos, compIds, mesPorComp } = detalhe
   const [carregando, setCarregando] = useState(true)
   const [linhas, setLinhas] = useState([])
@@ -724,13 +725,17 @@ function ModalRazao({ detalhe, compsAnteriores, compIdAnterior, usuario, jaJusti
   async function registrar(tipo, detalheTxt) {
     setSalvando(true)
     try {
+      // Remove uma justificativa anterior do mesmo item (evita duplicar e permite EDITAR).
+      await supabase.from('auditoria').delete()
+        .eq('competencia_id', compId).eq('modulo', 'Comparativo')
+        .eq('item', `${conta} · ${MESES[mes - 1]}/${ANO}`).eq('tipo', tipo)
       // Grava na competência DA CÉLULA (compId) — o mês do registro casa com o item.
       const { error } = await supabase.from('auditoria').insert({
         competencia_id: compId, modulo: 'Comparativo',
         item: `${conta} · ${MESES[mes - 1]}/${ANO}`, tipo, detalhe: detalheTxt, usuario,
       })
       if (error) throw error
-      setMsg(`${tipo} registrada na auditoria.`)
+      setMsg(`${tipo} ${tratada ? 'atualizada' : 'registrada'} na auditoria.`)
       setRegistro(null); setTratada(true); onJustificada(detalheTxt)
     } catch (e) { setMsg('Erro ao registrar: ' + (e.message || e)) } finally { setSalvando(false) }
   }
@@ -938,7 +943,7 @@ function ModalRazao({ detalhe, compsAnteriores, compIdAnterior, usuario, jaJusti
                 </button>
               )}
               <button className="btn btn-ghost" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }} onClick={() => { setMsg(''); setRegistro('Justificativa') }}>
-                <i className="ti ti-flag" /> Justificar
+                <i className={`ti ${tratada ? 'ti-pencil' : 'ti-flag'}`} /> {tratada ? 'Editar justificativa' : 'Justificar'}
               </button>
             </div>
           )}
@@ -948,6 +953,7 @@ function ModalRazao({ detalhe, compsAnteriores, compIdAnterior, usuario, jaJusti
       {registro && (
         <ModalRegistro
           tipo={registro} salvando={salvando} conta={conta} mes={mes}
+          textoAtual={registro === 'Justificativa' && tratada ? justTextoAtual : ''}
           sugestao={registro === 'Justificativa' ? montarSugestaoJust({ varInfo: detalhe.varInfo, nome, conta, suspeitos, movers }) : ''}
           onClose={() => setRegistro(null)} onConfirmar={txt => registrar(registro, txt)}
         />
@@ -1077,19 +1083,21 @@ function montarSugestaoJust({ varInfo, nome, conta, suspeitos, movers }) {
     + `(de ${money(Math.abs(anterior))} para ${money(Math.abs(atual))}).${razao}`
 }
 
-function ModalRegistro({ tipo, salvando, conta, mes, sugestao = '', onClose, onConfirmar }) {
-  const [txt, setTxt] = useState(tipo === 'Justificativa' ? sugestao : '')
+function ModalRegistro({ tipo, salvando, conta, mes, sugestao = '', textoAtual = '', onClose, onConfirmar }) {
+  // Editando: abre com o texto já salvo. Novo: abre com a sugestão automática.
+  const [txt, setTxt] = useState(textoAtual || (tipo === 'Justificativa' ? sugestao : ''))
+  const editando = !!textoAtual
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 60 }}>
       <div onClick={e => e.stopPropagation()} style={{ width: 'min(480px,96vw)', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
-        <h2 style={{ fontSize: 17, marginBottom: 4 }}>{tipo}</h2>
+        <h2 style={{ fontSize: 17, marginBottom: 4 }}>{editando ? `Editar ${tipo.toLowerCase()}` : tipo}</h2>
         <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 14 }}>
           Conta <b style={{ color: theme.text }}>{conta}</b> · {MESES[mes - 1]}/{ANO}. Fica registrada na auditoria com seu usuário e a data.
         </p>
         {tipo === 'Justificativa' && sugestao && (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
             <span style={{ fontSize: 11.5, color: theme.accent, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-              <i className="ti ti-sparkles" /> Sugestão automática — confirme ou edite o texto.
+              <i className="ti ti-sparkles" /> {editando ? 'Edite o texto ou restaure a sugestão automática.' : 'Sugestão automática — confirme ou edite o texto.'}
             </span>
             <div style={{ display: 'flex', gap: 6 }}>
               {txt !== sugestao && <button type="button" className="btn-ghost" style={{ fontSize: 11, padding: '3px 9px' }} onClick={() => setTxt(sugestao)}>Restaurar sugestão</button>}
@@ -1102,7 +1110,7 @@ function ModalRegistro({ tipo, salvando, conta, mes, sugestao = '', onClose, onC
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
           <button className="btn btn-ghost" onClick={onClose} disabled={salvando}>Cancelar</button>
           <button className="btn" onClick={() => txt.trim() && onConfirmar(txt.trim())} disabled={salvando || !txt.trim()}>
-            {salvando ? 'Registrando…' : 'Registrar'}
+            {salvando ? 'Salvando…' : editando ? 'Salvar alterações' : 'Registrar'}
           </button>
         </div>
       </div>
