@@ -90,14 +90,41 @@ function analisarMovers(linhasAtual, linhasAnterior) {
   }
   somar(linhasAtual, 'movAtual')
   somar(linhasAnterior, 'movAnterior')
-  const lista = [...acc.values()]
-    .map(g => ({ rep: g.rep, movAtual: g.movAtual, movAnterior: g.movAnterior, delta: g.movAtual - g.movAnterior }))
+  const lista = [...acc.entries()]
+    .map(([key, g]) => ({ key, rep: g.rep, movAtual: g.movAtual, movAnterior: g.movAnterior, delta: g.movAtual - g.movAnterior }))
     .filter(g => Math.abs(g.delta) > 0.005)
     .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))
   if (!lista.length) return []
   // Só mantém quem é relevante frente ao maior movimento (evita citar ruído).
   const topo = Math.abs(lista[0].delta)
   return lista.filter(g => Math.abs(g.delta) >= topo * 0.4).slice(0, 2)
+}
+
+// Para as entidades que CAÍRAM nesta conta, procura a mesma entidade em OUTRA conta no
+// mesmo mês (todos os lançamentos da competência): se o valor reaparece em outra conta,
+// é provável reclassificação (o valor "saiu de uma conta e caiu em outra").
+function anotarReclass(movers, mesTodo, contaAtual, plano) {
+  const idx = new Map() // entidade -> (conta -> movimento no mês)
+  for (const l of mesTodo) {
+    if (String(l.conta) === String(contaAtual)) continue
+    const k = chaveEntidade(l.historico)
+    if (!k) continue
+    const mov = (Number(l.debito) || 0) - (Number(l.credito) || 0)
+    const porConta = idx.get(k) || new Map()
+    porConta.set(String(l.conta), (porConta.get(String(l.conta)) || 0) + mov)
+    idx.set(k, porConta)
+  }
+  return movers.map(m => {
+    const caiu = Math.abs(m.movAtual) < Math.abs(m.movAnterior)
+    if (!caiu || !m.key) return m
+    const porConta = idx.get(m.key)
+    if (!porConta) return m
+    let best = null
+    for (const [c, v] of porConta) if (!best || Math.abs(v) > Math.abs(best.v)) best = { c, v }
+    if (!best || Math.abs(best.v) < 0.005) return m
+    const nomeC = (plano || []).find(p => String(p.cod) === best.c)?.nome
+    return { ...m, reclass: { conta: best.c, nome: nomeC || '', valor: best.v } }
+  })
 }
 
 // Seletor de MÚLTIPLOS meses (marque os que quer ver). Vazio = todos. Por número do
@@ -672,6 +699,12 @@ function ModalRazao({ detalhe, compsAnteriores, compIdAnterior, usuario, jaJusti
       const { data: ant } = await supabase.from('razao').select('historico, debito, credito')
         .eq('competencia_id', compIdAnterior).eq('conta', conta)
       mv = analisarMovers(rows, ant || [])
+      // Se alguma entidade caiu, procura ela em outras contas no mês (reclassificação).
+      if (mv.some(m => Math.abs(m.movAtual) < Math.abs(m.movAnterior))) {
+        const { data: mesTodo } = await supabase.from('razao').select('conta, historico, debito, credito')
+          .eq('competencia_id', compId)
+        mv = anotarReclass(mv, mesTodo || [], conta, plano)
+      }
     }
     setCorrecoes(corrMap)
     setMovers(mv)
@@ -1006,9 +1039,12 @@ function ModalCorrecao({ acao, conta, salvando, onClose, onGerar, onDesfazer }) 
 function fraseMover(m) {
   const a = Math.abs(m.movAtual), p = Math.abs(m.movAnterior)
   const rep = String(m.rep || '').trim().replace(/\s+/g, ' ').slice(0, 48)
-  if (p < 0.005) return `${rep} passou a movimentar ${money(a)}`
-  if (a < 0.005) return `${rep} deixou de movimentar (antes ${money(p)})`
-  return `${rep} ${a > p ? 'subiu' : 'caiu'} de ${money(p)} para ${money(a)}`
+  let base
+  if (p < 0.005) base = `${rep} passou a movimentar ${money(a)}`
+  else if (a < 0.005) base = `${rep} deixou de movimentar (antes ${money(p)})`
+  else base = `${rep} ${a > p ? 'subiu' : 'caiu'} de ${money(p)} para ${money(a)}`
+  if (m.reclass) base += ` — o valor aparece na conta ${m.reclass.conta}${m.reclass.nome ? ` · ${m.reclass.nome}` : ''} no mês (possível reclassificação)`
+  return base
 }
 
 function montarSugestaoJust({ varInfo, nome, conta, suspeitos, movers }) {
