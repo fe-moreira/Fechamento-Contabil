@@ -288,7 +288,6 @@ export default function PainelCliente() {
       {!carregando && d && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
           <BlocoResultado d={d} />
-          <BlocoDesempenho d={d} />
           <BlocoComparativo d={d} />
           <BlocoBalanco d={d} />
           <BlocoFinanceiro d={d} />
@@ -303,16 +302,9 @@ export default function PainelCliente() {
 /* ---------------- Blocos ---------------- */
 
 function BlocoResultado({ d }) {
-  const max = Math.max(1, ...d.serie.flatMap(x => [x.receita, x.despesa, Math.abs(x.resultado)]))
-  const [hov, setHov] = useState(null)
-  const barras = [
-    { key: 'receita', label: 'Receita', cor: theme.accent },
-    { key: 'despesa', label: 'Despesa', cor: LARANJA },
-    { key: 'resultado', label: 'Lucro', cor: theme.green },
-  ]
   return (
     <Secao titulo="Resultado do período">
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1.6fr)', gap: 14 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1.9fr)', gap: 14 }}>
         <div style={{ ...card, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
           <span style={{ color: theme.sub, fontSize: 11, textTransform: 'uppercase', letterSpacing: .5 }}>Resultado da competência</span>
           <b style={{ fontSize: 34, fontWeight: 800, color: corResultado(d.resultado), letterSpacing: -.5 }}>{money(d.resultado)}</b>
@@ -324,45 +316,8 @@ function BlocoResultado({ d }) {
           <span style={{ fontSize: 11, color: theme.sub, marginTop: 8 }}>Mesmo valor da última linha do Comparativo de Movimento (lucro positivo, prejuízo negativo).</span>
         </div>
         <div style={card}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
-            <span style={{ color: theme.sub, fontSize: 11, textTransform: 'uppercase', letterSpacing: .5 }}>Resultado por mês</span>
-            <div style={{ display: 'flex', gap: 12 }}>
-              {barras.map(b => (
-                <span key={b.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: theme.sub }}>
-                  <span style={{ width: 10, height: 10, borderRadius: 3, background: b.cor }} /> {b.label}
-                </span>
-              ))}
-            </div>
-          </div>
-          {d.serie.length === 0 ? (
-            <p style={{ color: theme.sub, fontSize: 13, marginTop: 10 }}>Sem meses no comparativo ainda.</p>
-          ) : (
-            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 22, height: 180, marginTop: 14 }}>
-              {d.serie.map(x => (
-                <div key={x.mes} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, justifyContent: 'flex-end', height: '100%' }}>
-                  <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'center', gap: 0, width: '100%', height: '100%' }}>
-                    {barras.map(b => {
-                      const v = x[b.key]
-                      const cor = b.key === 'resultado' ? corResultado(v) : b.cor
-                      const id = `${x.mes}-${b.key}`
-                      return (
-                        <div key={b.key} onMouseEnter={() => setHov(id)} onMouseLeave={() => setHov(h => (h === id ? null : h))}
-                          style={{ flex: 1, height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', position: 'relative', cursor: 'default' }}>
-                          {hov === id && (
-                            <div style={{ position: 'absolute', top: 0, left: '50%', transform: 'translate(-50%,-100%)', background: theme.card, border: `1px solid ${theme.cb}`, borderRadius: 7, padding: '5px 10px', fontSize: 11.5, whiteSpace: 'nowrap', zIndex: 6, boxShadow: '0 4px 14px rgba(0,0,0,.35)', pointerEvents: 'none' }}>
-                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}><span style={{ width: 8, height: 8, borderRadius: 2, background: cor }} /> {MESES[x.mes - 1]} · {b.label}</span> <b style={{ color: cor, marginLeft: 4 }}>{money(v)}</b>
-                            </div>
-                          )}
-                          <div style={{ height: `${Math.max(2, (Math.abs(v) / max) * 100)}%`, background: cor, minHeight: 2, borderRadius: '3px 3px 0 0' }} />
-                        </div>
-                      )
-                    })}
-                  </div>
-                  <small style={{ fontSize: 11, color: theme.sub }}>{MESES[x.mes - 1]}</small>
-                </div>
-              ))}
-            </div>
-          )}
+          <span style={{ color: theme.sub, fontSize: 11, textTransform: 'uppercase', letterSpacing: .5 }}>Desempenho por mês</span>
+          <GraficoDesempenho s={d.serieCombo} />
         </div>
       </div>
     </Secao>
@@ -422,12 +377,11 @@ function BlocoComparativo({ d }) {
   )
 }
 
-// Gráfico combinado (estilo "Desempenho Financeiro"): barras de Receita Líquida,
-// EBITDA e Lucro Líquido por mês + linhas de Margem EBITDA e Margem Líquida no eixo %.
-function BlocoDesempenho({ d }) {
-  const s = d.serieCombo || []
-  if (s.length === 0) return null
-  const W = 1000, H = 380, mL = 78, mR = 54, mT = 18, mB = 40
+// Gráfico combinado: barras de Receita Líquida, EBITDA e Lucro Líquido por mês +
+// linhas de Margem EBITDA e Margem Líquida no eixo % — na paleta do app.
+function GraficoDesempenho({ s }) {
+  if (!s || s.length === 0) return <p style={{ color: theme.sub, fontSize: 13, marginTop: 10 }}>Sem meses no comparativo ainda.</p>
+  const W = 1000, H = 360, mL = 78, mR = 54, mT = 16, mB = 38
   const x0 = mL, x1 = W - mR, y1 = H - mB
   const plotH = y1 - mT, plotW = x1 - x0
   const n = s.length, gw = plotW / n
@@ -437,20 +391,20 @@ function BlocoDesempenho({ d }) {
   const yP = v => y1 - (v / maxPctR) * plotH
   const cx = i => x0 + gw * i + gw / 2
   const bars = [
-    { key: 'receitaLiq', label: 'Receita Líquida', cor: '#E6A9A4' },
-    { key: 'ebitda', label: 'EBITDA', cor: '#A23232' },
-    { key: 'lucroLiq', label: 'Lucro Líquido', cor: '#CD5C5C' },
+    { key: 'receitaLiq', label: 'Receita Líquida', cor: theme.accent },
+    { key: 'ebitda', label: 'EBITDA', cor: '#7C5CFF' },
+    { key: 'lucroLiq', label: 'Lucro Líquido', cor: theme.green },
   ]
   const linhas = [
-    { key: 'margemEbitda', label: 'Margem EBITDA', cor: '#8a2b2b', dash: '7 4' },
-    { key: 'margemLiquida', label: 'Margem Líquida', cor: '#4f1414', dash: '2 4' },
+    { key: 'margemEbitda', label: 'Margem EBITDA', cor: '#7C5CFF', dash: '7 4' },
+    { key: 'margemLiquida', label: 'Margem Líquida', cor: theme.green, dash: '2 4' },
   ]
   const bw = (gw * 0.62) / 3
   const money0 = v => `R$ ${Math.round(v).toLocaleString('pt-BR')}`
   return (
-    <Secao titulo="Desempenho financeiro">
-      <div style={{ ...card, overflowX: 'auto' }}>
-        <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ minWidth: 680, display: 'block' }}>
+    <>
+      <div style={{ overflowX: 'auto', marginTop: 8 }}>
+        <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ minWidth: 460, display: 'block' }}>
           {/* grades + eixo R$ (esq) e % (dir) */}
           {Array.from({ length: 6 }).map((_, i) => {
             const vR = maxR * i / 5, y = yR(vR), vP = maxPctR * i / 5
@@ -486,20 +440,20 @@ function BlocoDesempenho({ d }) {
           <line x1={x0} y1={mT} x2={x0} y2={y1} stroke={theme.border} />
           <line x1={x1} y1={mT} x2={x1} y2={y1} stroke={theme.border} />
         </svg>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, justifyContent: 'center', marginTop: 12 }}>
-          {bars.map(b => (
-            <span key={b.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: theme.sub }}>
-              <span style={{ width: 14, height: 11, borderRadius: 3, background: b.cor }} /> {b.label}
-            </span>
-          ))}
-          {linhas.map(ln => (
-            <span key={ln.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: theme.sub }}>
-              <span style={{ width: 18, height: 0, borderTop: `2px ${ln.dash.startsWith('2') ? 'dotted' : 'dashed'} ${ln.cor}` }} /> {ln.label}
-            </span>
-          ))}
-        </div>
       </div>
-    </Secao>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, justifyContent: 'center', marginTop: 12 }}>
+        {bars.map(b => (
+          <span key={b.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: theme.sub }}>
+            <span style={{ width: 14, height: 11, borderRadius: 3, background: b.cor }} /> {b.label}
+          </span>
+        ))}
+        {linhas.map(ln => (
+          <span key={ln.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: theme.sub }}>
+            <span style={{ width: 18, height: 0, borderTop: `2px ${ln.dash.startsWith('2') ? 'dotted' : 'dashed'} ${ln.cor}` }} /> {ln.label}
+          </span>
+        ))}
+      </div>
+    </>
   )
 }
 
