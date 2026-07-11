@@ -27,6 +27,8 @@ const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'O
 
 // Chave estável de uma célula (conta × mês) para o set de justificadas.
 const chaveCelula = (conta, mes) => `${conta}|${mes}`
+// Chave ano-mês da matriz multi-ano.
+const amKey = (ano, mes) => `${ano}-${String(mes).padStart(2, '0')}`
 
 // Tokens significativos do histórico (para detectar recorrência nos meses anteriores).
 const STOP = new Set(['VENDA', 'VENDAS', 'COMPRA', 'COMPRAS', 'PAGTO', 'PAGAMENTO', 'RECEB', 'RECEBIMENTO', 'NOTA', 'FISCAL', 'VALOR', 'REFERENTE', 'REF', 'DUPLICATA', 'PARCELA', 'CONTA'])
@@ -58,11 +60,12 @@ function analisarCulpados(linhas, historicosAnteriores) {
   })
 }
 
-// Seletor de MÚLTIPLOS meses (marque os que quer ver). Vazio = todos.
-function MultiMesSelect({ comps, sel, onChange }) {
+// Seletor de MÚLTIPLOS meses (marque os que quer ver). Vazio = todos. Por número do
+// mês (aplica a todos os anos — útil para comparar o mesmo mês entre anos).
+function MultiMesSelect({ meses, sel, onChange }) {
   const [aberto, setAberto] = useState(false)
   const toggle = m => { const n = new Set(sel); n.has(m) ? n.delete(m) : n.add(m); onChange(n) }
-  const marcados = comps.filter(c => sel.has(c.mes)).map(c => MESES[c.mes - 1])
+  const marcados = meses.filter(m => sel.has(m)).map(m => MESES[m - 1])
   const label = sel.size === 0 ? 'Todos os meses' : marcados.length <= 3 ? marcados.join(', ') : `${marcados.length} meses`
   const linha = { display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', fontSize: 12.5, cursor: 'pointer', borderRadius: 6 }
   return (
@@ -79,9 +82,9 @@ function MultiMesSelect({ comps, sel, onChange }) {
               <input type="checkbox" readOnly checked={sel.size === 0} /> Todos os meses
             </label>
             <div style={{ height: 1, background: theme.border, margin: '6px 0' }} />
-            {comps.map(c => (
-              <label key={c.mes} style={linha} onClick={() => toggle(c.mes)}>
-                <input type="checkbox" readOnly checked={sel.has(c.mes)} /> {MESES[c.mes - 1]}/{ANO}
+            {meses.map(m => (
+              <label key={m} style={linha} onClick={() => toggle(m)}>
+                <input type="checkbox" readOnly checked={sel.has(m)} /> {MESES[m - 1]}
               </label>
             ))}
           </div>
@@ -103,6 +106,8 @@ export default function CompMovimento() {
   const [justificadas, setJustificadas] = useState(() => new Set()) // 'conta|mes' já justificadas/corrigidas localmente
   const [justTextos, setJustTextos] = useState(() => ({}))          // 'conta|mes' -> texto da justificativa (p/ tooltip)
   const [nivel, setNivel] = useState('tudo')                        // 'tudo' = todas; número N = sintéticas até o nível N
+  const [agrupar, setAgrupar] = useState('mes')                     // 'mes' | 'trimestre' | 'semestre' | 'ano'
+  const [anosMeses, setAnosMeses] = useState([])                    // [{ ano, mes, id }] de TODOS os anos com dados
   const [refresh, setRefresh] = useState(0)     // recarrega após importar meses anteriores
   const [impBusy, setImpBusy] = useState(false)
   const [impMsg, setImpMsg] = useState('')
@@ -189,23 +194,25 @@ export default function CompMovimento() {
   }
 
   useEffect(() => {
-    setComps([]); setContas([]); setMatriz({}); setDetalhe(null); setJustificadas(new Set())
+    setComps([]); setAnosMeses([]); setContas([]); setMatriz({}); setDetalhe(null); setJustificadas(new Set())
     if (!empresaId) return
     let vivo = true
     ;(async () => {
       setCarregando(true)
       try {
+        // Todos os anos com dados (para comparação multi-ano/por período).
         const { data: competencias } = await supabase
-          .from('competencias').select('id, mes')
-          .eq('cliente_id', empresaId).eq('ano', ANO)
-          .order('mes', { ascending: true })
+          .from('competencias').select('id, ano, mes')
+          .eq('cliente_id', empresaId)
+          .order('ano', { ascending: true }).order('mes', { ascending: true })
 
         if (!vivo) return
         if (!competencias || !competencias.length) { setCarregando(false); return }
 
-        const compsComDados = []
-        const meta = {}   // classifRaw → { reduzido, classif, classifRaw, nome, grau, sintetica }
-        const m = {}      // classifRaw → { mes: saldo_final }
+        const compsComDados = []   // meses do ANO de fechamento (fluxo de justificar)
+        const amArr = []           // [{ ano, mes, id }] de todos os anos com dados
+        const meta = {}            // classifRaw → { reduzido, classif, classifRaw, nome, grau, sintetica }
+        const m = {}               // classifRaw → { 'ano-mm': saldo_final }
 
         for (const c of competencias) {
           const { linhas } = await montarBalancete(empresaId, c.id)
@@ -214,7 +221,8 @@ export default function CompMovimento() {
           const res = linhas.filter(l => { const d = String(l.classifRaw || l.classif).trim()[0]; return d === '3' || d === '4' || d === '5' })
           if (!res.length) continue
 
-          compsComDados.push({ id: c.id, mes: c.mes })
+          amArr.push({ ano: c.ano, mes: c.mes, id: c.id })
+          if (c.ano === ANO) compsComDados.push({ id: c.id, mes: c.mes })
           for (const l of res) {
             const key = l.classifRaw || l.classif
             if (!meta[key]) {
@@ -226,7 +234,7 @@ export default function CompMovimento() {
               meta[key].sintetica = meta[key].sintetica && l.sintetica
             }
             if (!m[key]) m[key] = {}
-            m[key][c.mes] = l.saldo_final
+            m[key][amKey(c.ano, c.mes)] = l.saldo_final
           }
         }
 
@@ -235,6 +243,7 @@ export default function CompMovimento() {
           .sort((a, b) => a.classifRaw < b.classifRaw ? -1 : a.classifRaw > b.classifRaw ? 1 : 0)
 
         setComps(compsComDados)
+        setAnosMeses(amArr)
         setContas(listaContas)
         setMatriz(m)
 
@@ -279,8 +288,8 @@ export default function CompMovimento() {
     const idx = comps.findIndex(c => c.mes === mes)
     if (idx <= 0) return false // primeiro mês (ou fora da lista) — sem mês anterior
     const linha = matriz[conta] || {}
-    const a = linha[mes] == null ? 0 : Number(linha[mes]) || 0
-    const p = linha[comps[idx - 1].mes] == null ? 0 : Number(linha[comps[idx - 1].mes]) || 0
+    const a = linha[amKey(ANO, mes)] == null ? 0 : Number(linha[amKey(ANO, mes)]) || 0
+    const p = linha[amKey(ANO, comps[idx - 1].mes)] == null ? 0 : Number(linha[amKey(ANO, comps[idx - 1].mes)]) || 0
     if (a === 0 && p === 0) return false // sem movimento nos dois meses
     if (p === 0) return a !== 0          // apareceu do zero
     return Math.abs(a - p) / Math.abs(p) > 0.1
@@ -317,14 +326,49 @@ export default function CompMovimento() {
     })
   }
 
-  // Filtro por mês (todos ou um só). A coluna "Total" só faz sentido com >1 mês.
-  const mesesVis = mesesSel.size === 0 ? comps : comps.filter(c => mesesSel.has(c.mes))
-  const mostraTotal = mesesVis.length > 1
-  const totalConta = key => { const linha = matriz[key] || {}; return mesesVis.reduce((s, c) => s + (linha[c.mes] || 0), 0) }
-  // Lucro (ou prejuízo) do mês = −(soma dos saldos das contas de resultado analíticas).
-  // Receita fica com saldo credor (negativo); despesa/custo devedor (positivo) → negar dá o lucro.
-  const lucroDe = mes => -contas.filter(c => !c.sintetica).reduce((s, c) => s + ((matriz[c.classifRaw] || {})[mes] || 0), 0)
-  const lucroTotal = mesesVis.reduce((s, c) => s + lucroDe(c.mes), 0)
+  // Anos e meses disponíveis (para os filtros).
+  const anosDisp = [...new Set(anosMeses.map(a => a.ano))].sort((a, b) => a - b)
+  const mesesDisp = [...new Set(anosMeses.map(a => a.mes))].sort((a, b) => a - b)
+  const compId2026 = Object.fromEntries(comps.map(c => [c.mes, c.id]))
+
+  // Colunas do comparativo conforme o agrupamento (mês/trimestre/semestre/ano) e o filtro
+  // de meses. Cada coluna soma os meses que a compõem; só a coluna de UM mês do ano de
+  // fechamento é "justificável" (mantém o fluxo de clicar/justificar).
+  const colunas = (() => {
+    let base = mesesSel.size ? anosMeses.filter(a => mesesSel.has(a.mes)) : anosMeses
+    base = [...base].sort((a, b) => a.ano - b.ano || a.mes - b.mes)
+    if (agrupar === 'mes') {
+      return base.map(a => ({
+        key: amKey(a.ano, a.mes), label: `${MESES[a.mes - 1]}/${String(a.ano).slice(2)}`,
+        meses: [a], mesJust: a.ano === ANO ? a.mes : null, compId: a.ano === ANO ? compId2026[a.mes] : null,
+      }))
+    }
+    const per = agrupar === 'trimestre' ? 3 : agrupar === 'semestre' ? 6 : 12
+    const bk = new Map()
+    for (const a of base) {
+      const idx = per === 12 ? 1 : Math.floor((a.mes - 1) / per) + 1
+      const k = `${a.ano}-${idx}`
+      if (!bk.has(k)) bk.set(k, { ano: a.ano, idx, meses: [] })
+      bk.get(k).meses.push(a)
+    }
+    return [...bk.values()].sort((x, y) => x.ano - y.ano || x.idx - y.idx).map(b => ({
+      key: `${b.ano}-${b.idx}`,
+      label: agrupar === 'ano' ? `${b.ano}` : `${agrupar === 'trimestre' ? 'T' : 'S'}${b.idx}/${String(b.ano).slice(2)}`,
+      meses: b.meses, mesJust: null, compId: null,
+    }))
+  })()
+
+  const mostraTotal = colunas.length > 1
+  // Valor de uma conta numa coluna = soma dos meses da coluna (null se nenhum tem dado).
+  const valorCol = (key, col) => {
+    const linha = matriz[key] || {}; let has = false, s = 0
+    for (const a of col.meses) { const v = linha[amKey(a.ano, a.mes)]; if (v != null) { has = true; s += Number(v) || 0 } }
+    return has ? s : null
+  }
+  const totalConta = key => colunas.reduce((s, col) => s + (valorCol(key, col) || 0), 0)
+  // Lucro (ou prejuízo) do período = −(soma dos saldos das contas de resultado analíticas).
+  const lucroCol = col => -contas.filter(c => !c.sintetica).reduce((s, c) => s + (valorCol(c.classifRaw, col) || 0), 0)
+  const lucroTotal = colunas.reduce((s, col) => s + lucroCol(col), 0)
 
   if (!empresaId) {
     return (
@@ -337,12 +381,12 @@ export default function CompMovimento() {
     )
   }
 
-  const semDados = !carregando && comps.length === 0
+  const semDados = !carregando && anosMeses.length === 0
 
   return (
     <Wrapper>
       <p style={{ color: theme.sub, fontSize: 13, marginBottom: 12 }}>
-        <b style={{ color: theme.text }}>{empresaNome}</b> · ano <b style={{ color: theme.text }}>{ANO}</b>
+        <b style={{ color: theme.text }}>{empresaNome}</b> · {anosDisp.length ? (anosDisp.length === 1 ? `ano ${anosDisp[0]}` : `anos ${anosDisp[0]}–${anosDisp[anosDisp.length - 1]}`) : `ano ${ANO}`}
       </p>
 
       {/* Carga dos meses anteriores (ex.: jan–abr) — dá histórico para a régua dos 10% */}
@@ -367,7 +411,7 @@ export default function CompMovimento() {
         </div>
       )}
 
-      {!carregando && comps.length > 0 && (
+      {!carregando && anosMeses.length > 0 && (
         <>
           <div style={{ marginBottom: 14 }}>
             {pendentes > 0 ? (
@@ -397,6 +441,15 @@ export default function CompMovimento() {
               Contas de resultado. Valores em <b style={{ color: theme.red }}>vermelho</b> desviam mais de 10% do <b>mês anterior</b> (fev × jan, mar × fev…) — o primeiro mês não é comparado. Mês sem saldo aparece como <b>—</b>; fica vermelho quando o mês anterior tinha movimento. Clique num valor para ver o razão e o provável culpado.
             </p>
             <label style={{ fontSize: 12, color: theme.sub, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <i className="ti ti-calendar-stats" /> Agrupar:
+              <select className="input" style={{ width: 'auto', fontSize: 12, padding: '6px 10px' }} value={agrupar} onChange={e => setAgrupar(e.target.value)}>
+                <option value="mes">Mês</option>
+                <option value="trimestre">Trimestre</option>
+                <option value="semestre">Semestre</option>
+                <option value="ano">Ano</option>
+              </select>
+            </label>
+            <label style={{ fontSize: 12, color: theme.sub, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
               <i className="ti ti-stack-2" /> Nível:
               <select className="input" style={{ width: 'auto', fontSize: 12, padding: '6px 10px' }}
                 value={String(nivel)} onChange={e => setNivel(e.target.value === 'tudo' ? 'tudo' : Number(e.target.value))}>
@@ -406,7 +459,7 @@ export default function CompMovimento() {
             </label>
             <div style={{ fontSize: 12, color: theme.sub, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
               <i className="ti ti-filter" /> Meses:
-              <MultiMesSelect comps={comps} sel={mesesSel} onChange={setMesesSel} />
+              <MultiMesSelect meses={mesesDisp} sel={mesesSel} onChange={setMesesSel} />
             </div>
           </div>
           <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'auto', maxWidth: '100%' }}>
@@ -416,15 +469,14 @@ export default function CompMovimento() {
                   <th style={{ ...th, minWidth: 70 }}>Conta</th>
                   <th style={{ ...th, minWidth: 110 }}>Classificação</th>
                   <th style={{ ...th, minWidth: 220 }}>Nome da Conta</th>
-                  {mesesVis.map(c => (
-                    <th key={c.mes} style={{ ...th, textAlign: 'right' }}>{MESES[c.mes - 1]}</th>
+                  {colunas.map(col => (
+                    <th key={col.key} style={{ ...th, textAlign: 'right' }}>{col.label}</th>
                   ))}
                   {mostraTotal && <th style={{ ...th, textAlign: 'right', color: theme.text }}>Total</th>}
                 </tr>
               </thead>
               <tbody>
                 {contas.filter(c => nivel === 'tudo' ? true : (c.sintetica && c.grau <= nivel)).map(({ reduzido, classif, classifRaw, nome, sintetica, grau }) => {
-                  const linha = matriz[classifRaw] || {}
                   const tot = totalConta(classifRaw)
                   // Destaque por nível: sintética de 1º nível mais forte; níveis mais fundos, mais leves.
                   const bgNivel = !sintetica ? 'transparent' : grau <= 1 ? theme.input : grau === 2 ? 'rgba(74,124,255,0.07)' : 'rgba(74,124,255,0.035)'
@@ -438,24 +490,28 @@ export default function CompMovimento() {
                         {sintetica && <span style={{ fontSize: 9.5, fontWeight: 700, color: theme.accent, background: 'rgba(74,124,255,0.14)', borderRadius: 4, padding: '1px 5px', marginRight: 6 }}>N{grau}</span>}
                         {nome || '—'}
                       </td>
-                      {mesesVis.map(c => {
-                        const v = linha[c.mes]
-                        // Saldo nulo OU zero conta como vazio → mostra "—" (igual aos demais meses).
+                      {colunas.map(col => {
+                        const v = valorCol(classifRaw, col)
                         const vazio = v == null || Number(v) === 0
                         // Sintética: total do grupo — "—" quando não há saldo, sem clique.
                         if (sintetica) {
-                          return <td key={c.mes} style={{ ...td, textAlign: 'right', fontWeight: 700, color: vazio ? theme.sub : undefined }}>{vazio ? '—' : moneyDC(v)}</td>
+                          return <td key={col.key} style={{ ...td, textAlign: 'right', fontWeight: 700, color: vazio ? theme.sub : undefined }}>{vazio ? '—' : moneyDC(v)}</td>
                         }
-                        const red = desviante(classifRaw, c.mes)
-                        const ok = red && justificadas.has(chaveCelula(reduzido, c.mes))
+                        // Coluna agrupada ou de outro ano: só comparação (sem desvio/clique de justificar).
+                        if (col.mesJust == null) {
+                          return <td key={col.key} style={{ ...td, textAlign: 'right', color: vazio ? theme.sub : theme.text }}>{vazio ? '—' : moneyDC(v)}</td>
+                        }
+                        const mes = col.mesJust
+                        const red = desviante(classifRaw, mes)
+                        const ok = red && justificadas.has(chaveCelula(reduzido, mes))
                         // Sem saldo e sem variação: traço apagado, sem clique.
                         if (vazio && !red) {
-                          return <td key={c.mes} style={{ ...td, textAlign: 'right', color: theme.sub }}>—</td>
+                          return <td key={col.key} style={{ ...td, textAlign: 'right', color: theme.sub }}>—</td>
                         }
                         return (
-                          <td key={c.mes} style={{ ...td, textAlign: 'right' }}>
+                          <td key={col.key} style={{ ...td, textAlign: 'right' }}>
                             <button
-                              onClick={() => setDetalhe({ conta: reduzido, classif, nome, mes: c.mes, compId: c.id })}
+                              onClick={() => setDetalhe({ conta: reduzido, classif, nome, mes, compId: col.compId })}
                               style={{
                                 display: 'inline-flex', alignItems: 'center', gap: 4, justifyContent: 'flex-end',
                                 background: 'none', border: 'none', padding: 0, cursor: 'pointer',
@@ -464,7 +520,7 @@ export default function CompMovimento() {
                                 fontWeight: (red && !ok) ? 700 : 400,
                               }}
                               title={ok
-                                ? `Variação justificada${justTextos[chaveCelula(reduzido, c.mes)] ? ' — ' + justTextos[chaveCelula(reduzido, c.mes)] : ''} · clique para ver o razão`
+                                ? `Variação justificada${justTextos[chaveCelula(reduzido, mes)] ? ' — ' + justTextos[chaveCelula(reduzido, mes)] : ''} · clique para ver o razão`
                                 : (vazio ? 'Mês sem movimento nesta conta — variação a justificar' : 'Ver razão da conta neste mês')}
                             >
                               {ok && <i className="ti ti-circle-check" style={{ color: theme.green, fontSize: 13 }} />}
@@ -491,8 +547,8 @@ export default function CompMovimento() {
               <tfoot>
                 <tr style={{ borderTop: `2px solid ${theme.border}`, background: theme.input }}>
                   <td style={{ ...td, fontWeight: 700 }} colSpan={3}>Lucro / Prejuízo do período</td>
-                  {mesesVis.map(c => { const L = lucroDe(c.mes); return (
-                    <td key={c.mes} style={{ ...td, textAlign: 'right', fontWeight: 700, color: L >= 0 ? theme.green : theme.red }}>{money(L)}</td>
+                  {colunas.map(col => { const L = lucroCol(col); return (
+                    <td key={col.key} style={{ ...td, textAlign: 'right', fontWeight: 700, color: L >= 0 ? theme.green : theme.red }}>{money(L)}</td>
                   ) })}
                   {mostraTotal && <td style={{ ...td, textAlign: 'right', fontWeight: 800, color: lucroTotal >= 0 ? theme.green : theme.red }}>{money(lucroTotal)}</td>}
                 </tr>
