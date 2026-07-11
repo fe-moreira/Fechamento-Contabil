@@ -60,6 +60,46 @@ function analisarCulpados(linhas, historicosAnteriores) {
   })
 }
 
+// Chave de agrupamento por entidade a partir do histórico: tira números (NF, datas),
+// acentos e palavras genéricas, sobrando o nome distintivo (cliente/fornecedor). Assim
+// as várias NFs de um mesmo cliente caem no mesmo grupo.
+const RUIDO_ENT = new Set(['NF', 'NFE', 'NFSE', 'NOTA', 'NOTAS', 'FISCAL', 'FISCAIS', 'REF', 'RECTO', 'RECEBIMENTO', 'RECEITA', 'VENDA', 'VENDAS', 'FATURAMENTO', 'SERV', 'SERVICO', 'SERVICOS', 'PREST', 'PRESTACAO', 'DUPL', 'DUPLICATA', 'BAIXA', 'PAGTO', 'PAGAMENTO', 'DE', 'DA', 'DO', 'DAS', 'DOS', 'E', 'LTDA', 'ME', 'EPP', 'SA', 'CIA', 'COMERCIO', 'INDUSTRIA', 'EIRELI'])
+function chaveEntidade(h) {
+  const toks = String(h || '')
+    .toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^A-Z ]+/g, ' ').split(/\s+/)
+    .filter(t => t.length > 1 && !RUIDO_ENT.has(t))
+  return toks.slice(0, 4).join(' ').trim()
+}
+
+// Compara os lançamentos da conta em dois meses, agrupados por entidade, e devolve as
+// entidades que mais explicam a variação (maior mudança de valor entre os meses).
+// Retorna [{ rep, movAtual, movAnterior, delta }] ordenado pela relevância.
+function analisarMovers(linhasAtual, linhasAnterior) {
+  const acc = new Map() // chave -> { movAtual, movAnterior, rep, repVal }
+  const somar = (linhas, campo) => {
+    for (const l of linhas) {
+      const k = chaveEntidade(l.historico)
+      if (!k) continue
+      const mov = (Number(l.debito) || 0) - (Number(l.credito) || 0)
+      const g = acc.get(k) || { movAtual: 0, movAnterior: 0, rep: '', repVal: 0 }
+      g[campo] += mov
+      if (Math.abs(mov) >= Math.abs(g.repVal)) { g.rep = l.historico || k; g.repVal = mov }
+      acc.set(k, g)
+    }
+  }
+  somar(linhasAtual, 'movAtual')
+  somar(linhasAnterior, 'movAnterior')
+  const lista = [...acc.values()]
+    .map(g => ({ rep: g.rep, movAtual: g.movAtual, movAnterior: g.movAnterior, delta: g.movAtual - g.movAnterior }))
+    .filter(g => Math.abs(g.delta) > 0.005)
+    .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))
+  if (!lista.length) return []
+  // Só mantém quem é relevante frente ao maior movimento (evita citar ruído).
+  const topo = Math.abs(lista[0].delta)
+  return lista.filter(g => Math.abs(g.delta) >= topo * 0.4).slice(0, 2)
+}
+
 // Seletor de MÚLTIPLOS meses (marque os que quer ver). Vazio = todos. Por número do
 // mês (aplica a todos os anos — útil para comparar o mesmo mês entre anos).
 function MultiMesSelect({ meses, sel, onChange }) {
@@ -573,6 +613,7 @@ export default function CompMovimento() {
         <ModalRazao
           detalhe={detalhe}
           compsAnteriores={comps.filter(c => c.mes < detalhe.mes).map(c => c.id)}
+          compIdAnterior={comps.find(c => c.mes === detalhe.varInfo?.mesAnterior)?.id || null}
           usuario={user?.email}
           getCompetenciaId={getCompetenciaId}
           jaJustificada={justificadas.has(chaveCelula(detalhe.conta, detalhe.mes))}
@@ -587,10 +628,11 @@ export default function CompMovimento() {
   )
 }
 
-function ModalRazao({ detalhe, compsAnteriores, usuario, jaJustificada, onJustificada, onDesfeita, onCorrigido, plano, onClose }) {
+function ModalRazao({ detalhe, compsAnteriores, compIdAnterior, usuario, jaJustificada, onJustificada, onDesfeita, onCorrigido, plano, onClose }) {
   const { conta, nome, mes, compId, todos, compIds, mesPorComp } = detalhe
   const [carregando, setCarregando] = useState(true)
   const [linhas, setLinhas] = useState([])
+  const [movers, setMovers] = useState([]) // entidades que mais explicam a variação (mês × mês anterior)
   const [correcoes, setCorrecoes] = useState({}) // razao_id → lançamento de correção
   const [registro, setRegistro] = useState(null) // 'Justificativa'
   const [salvando, setSalvando] = useState(false)
@@ -623,7 +665,16 @@ function ModalRazao({ detalhe, compsAnteriores, usuario, jaJustificada, onJustif
         .in('competencia_id', compsAnteriores).eq('conta', conta)
       anteriores = (ant || []).map(r => r.historico)
     }
+    // Comparação por entidade (cliente/fornecedor) com o mês anterior: agrupa os
+    // lançamentos por entidade nos dois meses e aponta quem mais explica a variação.
+    let mv = []
+    if (!todos && compIdAnterior) {
+      const { data: ant } = await supabase.from('razao').select('historico, debito, credito')
+        .eq('competencia_id', compIdAnterior).eq('conta', conta)
+      mv = analisarMovers(rows, ant || [])
+    }
     setCorrecoes(corrMap)
+    setMovers(mv)
     setLinhas(analisarCulpados(rows, anteriores))
     setCarregando(false)
   }
@@ -861,7 +912,7 @@ function ModalRazao({ detalhe, compsAnteriores, usuario, jaJustificada, onJustif
       {registro && (
         <ModalRegistro
           tipo={registro} salvando={salvando} conta={conta} mes={mes}
-          sugestao={registro === 'Justificativa' ? montarSugestaoJust({ varInfo: detalhe.varInfo, nome, conta, suspeitos }) : ''}
+          sugestao={registro === 'Justificativa' ? montarSugestaoJust({ varInfo: detalhe.varInfo, nome, conta, suspeitos, movers }) : ''}
           onClose={() => setRegistro(null)} onConfirmar={txt => registrar(registro, txt)}
         />
       )}
@@ -950,23 +1001,37 @@ function ModalCorrecao({ acao, conta, salvando, onClose, onGerar, onDesfazer }) 
 // Monta uma sugestão de justificativa a partir dos dados da variação (magnitude,
 // direção e comparação com o mês anterior) e do provável lançamento culpado. O
 // contador confirma ou reescreve — serve só para ganhar tempo.
-function montarSugestaoJust({ varInfo, nome, conta, suspeitos }) {
+// Frase de uma entidade que puxou a variação (cliente/fornecedor), com os valores dos
+// dois meses — o "ponto identificado" que o contador confirma.
+function fraseMover(m) {
+  const a = Math.abs(m.movAtual), p = Math.abs(m.movAnterior)
+  const rep = String(m.rep || '').trim().replace(/\s+/g, ' ').slice(0, 48)
+  if (p < 0.005) return `${rep} passou a movimentar ${money(a)}`
+  if (a < 0.005) return `${rep} deixou de movimentar (antes ${money(p)})`
+  return `${rep} ${a > p ? 'subiu' : 'caiu'} de ${money(p)} para ${money(a)}`
+}
+
+function montarSugestaoJust({ varInfo, nome, conta, suspeitos, movers }) {
   if (!varInfo) return ''
   const { atual, anterior, mesAtual, mesAnterior } = varInfo
   const nm = nome ? `A conta ${nome}` : `A conta ${conta}`
+  // Preferimos apontar a entidade (cliente/fornecedor) que mais mudou; se não der,
+  // caímos no lançamento provável culpado.
   const culpado = (suspeitos || []).find(s => s.suspeito && s.historico)
-  const origem = culpado ? ` Possível origem: ${culpado.historico}${culpado.motivo ? ` (${culpado.motivo})` : ''}.` : ''
+  const detalhe = (movers && movers.length)
+    ? ` Destaque: ${movers.map(fraseMover).join('; ')}.`
+    : (culpado ? ` Possível origem: ${culpado.historico}${culpado.motivo ? ` (${culpado.motivo})` : ''}.` : '')
 
   // Sem mês anterior (primeiro mês) ou conta que surgiu do zero.
   if (anterior == null || Math.abs(anterior) < 0.005) {
-    return `${nm} passou a apresentar movimento de ${money(Math.abs(atual))} em ${MESES[mesAtual - 1]}/${ANO}.${origem} Variação esperada em razão de ______.`
+    return `${nm} passou a apresentar movimento de ${money(Math.abs(atual))} em ${MESES[mesAtual - 1]}/${ANO}.${detalhe} Variação esperada em razão de ______.`
   }
   const delta = Math.abs(atual) - Math.abs(anterior)
   const subiu = delta > 0
   const pct = Math.round(Math.abs(delta) / Math.abs(anterior) * 100)
   return `${nm} ${subiu ? 'aumentou' : 'reduziu'} ${money(Math.abs(delta))} (${subiu ? '+' : '−'}${pct}%) em `
     + `${MESES[mesAtual - 1]}/${ANO} na comparação com ${MESES[(mesAnterior || 1) - 1]}/${ANO} `
-    + `(de ${money(Math.abs(anterior))} para ${money(Math.abs(atual))}).${origem} Variação esperada em razão de ______.`
+    + `(de ${money(Math.abs(anterior))} para ${money(Math.abs(atual))}).${detalhe} Variação esperada em razão de ______.`
 }
 
 function ModalRegistro({ tipo, salvando, conta, mes, sugestao = '', onClose, onConfirmar }) {
