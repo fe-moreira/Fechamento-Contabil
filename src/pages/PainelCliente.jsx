@@ -380,6 +380,7 @@ function BlocoComparativo({ d }) {
 // Gráfico combinado: barras de Receita Líquida, EBITDA e Lucro Líquido por mês +
 // linhas de Margem EBITDA e Margem Líquida no eixo % — na paleta do app.
 function GraficoDesempenho({ s }) {
+  const [hov, setHov] = useState(null) // índice do mês em hover
   if (!s || s.length === 0) return <p style={{ color: theme.sub, fontSize: 13, marginTop: 10 }}>Sem meses no comparativo ainda.</p>
   const W = 1000, H = 360, mL = 78, mR = 54, mT = 16, mB = 38
   const x0 = mL, x1 = W - mR, y1 = H - mB
@@ -392,11 +393,11 @@ function GraficoDesempenho({ s }) {
   const cx = i => x0 + gw * i + gw / 2
   const bars = [
     { key: 'receitaLiq', label: 'Receita Líquida', cor: theme.accent },
-    { key: 'ebitda', label: 'EBITDA', cor: '#7C5CFF' },
+    { key: 'ebitda', label: 'EBITDA', cor: theme.red },
     { key: 'lucroLiq', label: 'Lucro Líquido', cor: theme.green },
   ]
   const linhas = [
-    { key: 'margemEbitda', label: 'Margem EBITDA', cor: '#7C5CFF', dash: '7 4' },
+    { key: 'margemEbitda', label: 'Margem EBITDA', cor: theme.red, dash: '7 4' },
     { key: 'margemLiquida', label: 'Margem Líquida', cor: theme.green, dash: '2 4' },
   ]
   const bw = (gw * 0.62) / 3
@@ -439,6 +440,36 @@ function GraficoDesempenho({ s }) {
           {s.map((p, i) => <text key={'m' + i} x={cx(i)} y={y1 + 16} textAnchor="middle" fontSize="10.5" fill={theme.sub}>{p.rotulo}</text>)}
           <line x1={x0} y1={mT} x2={x0} y2={y1} stroke={theme.border} />
           <line x1={x1} y1={mT} x2={x1} y2={y1} stroke={theme.border} />
+          {/* alvos de hover (coluna inteira) */}
+          {s.map((p, i) => (
+            <rect key={'h' + i} x={x0 + gw * i} y={mT} width={gw} height={plotH} fill="transparent"
+              onMouseEnter={() => setHov(i)} onMouseLeave={() => setHov(h => (h === i ? null : h))} style={{ cursor: 'default' }} />
+          ))}
+          {/* tooltip com os valores reais do mês */}
+          {hov != null && s[hov] && (() => {
+            const p = s[hov], bw2 = 186, bh = 98
+            const tx = Math.min(x1 - bw2, Math.max(x0, cx(hov) - bw2 / 2)), ty = mT + 4
+            const linhasT = [
+              ['Receita Líquida', money(p.receitaLiq), theme.accent],
+              ['EBITDA', money(p.ebitda), theme.red],
+              ['Lucro Líquido', money(p.lucroLiq), theme.green],
+              ['Margem EBITDA', `${p.margemEbitda.toFixed(2)}%`, theme.red],
+              ['Margem Líquida', `${p.margemLiquida.toFixed(2)}%`, theme.green],
+            ]
+            return (
+              <g pointerEvents="none">
+                <rect x={tx} y={ty} width={bw2} height={bh} rx="7" fill={theme.card} stroke={theme.cb} />
+                <text x={tx + 10} y={ty + 16} fontSize="11" fontWeight="700" fill={theme.text}>{p.rotulo}</text>
+                {linhasT.map((l, li) => (
+                  <g key={li}>
+                    <rect x={tx + 10} y={ty + 25 + li * 14} width={8} height={8} rx="2" fill={l[2]} />
+                    <text x={tx + 23} y={ty + 32 + li * 14} fontSize="9.5" fill={theme.sub}>{l[0]}</text>
+                    <text x={tx + bw2 - 10} y={ty + 32 + li * 14} textAnchor="end" fontSize="9.5" fontWeight="600" fill={theme.text}>{l[1]}</text>
+                  </g>
+                ))}
+              </g>
+            )
+          })()}
         </svg>
       </div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, justifyContent: 'center', marginTop: 12 }}>
