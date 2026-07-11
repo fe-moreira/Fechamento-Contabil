@@ -57,3 +57,78 @@ export function abrePdfTimbrado({ titulo, sub = '', colunas, linhas, totais, sec
   if (!w) { alert('Permita pop-ups para gerar o PDF.'); return }
   w.document.write(html); w.document.close()
 }
+
+// ---------------------------------------------------------------------------
+// Balancete no PADRÃO DOMÍNIO (mesma cara do relatório que o Domínio emite):
+// cabeçalho Empresa / C.N.P.J. / Período / Folha, título BALANCETE e as colunas
+// Código · Classificação · Descrição da conta · Saldo Anterior · Débito · Crédito
+// · Saldo Atual, com o sufixo D/C nos saldos e a hierarquia (sintéticas + analíticas).
+// linhas: [{ reduzido, classif, nome, saldo_inicial, debito, credito, saldo_final, sintetica }]
+export function abreBalanceteDominio({ empresa = '', cnpj = '', periodoIni = '', periodoFim = '', linhas = [] }) {
+  const esc = s => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))
+  const fmt = v => Math.abs(Number(v) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  const dc = v => { const n = Number(v) || 0; return Math.abs(n) < 0.005 ? '0,00' : fmt(n) + (n >= 0 ? 'D' : 'C') }
+
+  const corpo = (linhas || []).map(l => {
+    const sint = !!l.sintetica
+    return `<tr class="${sint ? 'sint' : ''}">
+      <td class="cod">${esc(l.reduzido || '')}</td>
+      <td class="cla">${esc(l.classif || '')}</td>
+      <td class="desc">${esc(l.nome || '')}</td>
+      <td class="r">${dc(l.saldo_inicial)}</td>
+      <td class="r">${fmt(l.debito)}</td>
+      <td class="r">${fmt(l.credito)}</td>
+      <td class="r">${dc(l.saldo_final)}</td>
+    </tr>`
+  }).join('') || `<tr><td colspan="7">Sem dados no balancete.</td></tr>`
+
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Balancete - ${esc(empresa)}</title>
+    <style>
+      @page { margin: 22px 24px 30px; }
+      * { box-sizing: border-box; }
+      body { font-family: Arial, Helvetica, sans-serif; color:#000; margin:0; font-size:9.2px; }
+      .cab { border:1px solid #000; padding:0; margin-bottom:6px; }
+      .cab table { width:100%; border-collapse:collapse; }
+      .cab td { padding:3px 8px; border:none; font-size:10px; }
+      .cab .lab { color:#000; font-weight:bold; width:70px; }
+      .cab .folha { text-align:right; white-space:nowrap; }
+      .cab .row2 td { border-top:1px solid #000; }
+      h1 { text-align:center; font-size:13px; letter-spacing:2px; margin:8px 0 6px; }
+      table.bal { width:100%; border-collapse:collapse; }
+      table.bal thead th { border-top:1px solid #000; border-bottom:1px solid #000; padding:4px 6px; font-size:9px; text-align:left; background:#eee; }
+      table.bal thead th.r { text-align:right; }
+      table.bal td { padding:2px 6px; vertical-align:top; font-variant-numeric: tabular-nums; }
+      table.bal td.r { text-align:right; white-space:nowrap; }
+      table.bal td.cod { width:52px; color:#000; }
+      table.bal td.cla { width:110px; white-space:nowrap; }
+      table.bal td.desc { }
+      table.bal tr.sint td { font-weight:bold; border-top:1px solid #bbb; }
+      thead { display: table-header-group; }
+      tr { page-break-inside: avoid; }
+    </style></head>
+    <body>
+      <div class="cab"><table>
+        <tr>
+          <td class="lab">Empresa:</td><td>${esc(empresa)}</td><td class="folha">Folha:&nbsp;&nbsp;0001</td>
+        </tr>
+        <tr class="row2">
+          <td class="lab">C.N.P.J.:</td><td>${esc(cnpj)}</td><td class="folha">&nbsp;</td>
+        </tr>
+        <tr class="row2">
+          <td class="lab">Período:</td><td>${esc(periodoIni)} - ${esc(periodoFim)}</td><td class="folha">&nbsp;</td>
+        </tr>
+      </table></div>
+      <h1>BALANCETE</h1>
+      <table class="bal">
+        <thead><tr>
+          <th>Código</th><th>Classificação</th><th>Descrição da conta</th>
+          <th class="r">Saldo Anterior</th><th class="r">Débito</th><th class="r">Crédito</th><th class="r">Saldo Atual</th>
+        </tr></thead>
+        <tbody>${corpo}</tbody>
+      </table>
+      <script>window.onload=function(){setTimeout(function(){window.print()},250)}</script>
+    </body></html>`
+  const w = window.open('', '_blank')
+  if (!w) { alert('Permita pop-ups para gerar o PDF.'); return }
+  w.document.write(html); w.document.close()
+}

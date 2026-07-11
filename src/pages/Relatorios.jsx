@@ -4,8 +4,9 @@ import { useAppData } from '../lib/appData'
 import { apurarDistribuicao } from '../lib/distribuicao'
 import { apurarBancoResultado } from '../lib/bancoResultado'
 import { apurarVariacoes } from '../lib/variacoes'
-import { parsePlano, contasConciliacaoAbertas } from '../lib/balancete'
+import { parsePlano, contasConciliacaoAbertas, montarBalancete } from '../lib/balancete'
 import { gerarExcelTimbrado } from '../lib/excel'
+import { abreBalanceteDominio } from '../lib/pdf'
 import BookComposicoes from '../components/BookComposicoes'
 import { theme, money } from '../lib/theme'
 
@@ -46,11 +47,13 @@ export default function Relatorios() {
   const [br, setBr] = useState(null)                // apuração banco × resultado
   const [comparativo, setComparativo] = useState(null) // matriz conta × mês do ano
   const [concOk, setConcOk] = useState(null)        // conciliação finalizada? (null = checando)
+  const [compId, setCompId] = useState(null)        // id da competência resolvida (p/ montarBalancete)
+  const [gerandoDom, setGerandoDom] = useState(false)
   const [aba, setAba] = useState('balancete')
 
   // Resolve a competência (READ-ONLY) e lê balancete + documentos + auditoria.
   useEffect(() => {
-    setLinhas([]); setDocumentos([]); setConcPend([]); setAuditoria([]); setDist(null); setBr(null); setComparativo(null); setConcOk(null); setTemComp(null)
+    setLinhas([]); setDocumentos([]); setConcPend([]); setAuditoria([]); setDist(null); setBr(null); setComparativo(null); setConcOk(null); setCompId(null); setTemComp(null)
     if (!empresaId) return
     let vivo = true
     ;(async () => {
@@ -62,6 +65,7 @@ export default function Relatorios() {
         if (!vivo) return
         if (!comp) { setTemComp(false); return }
         setTemComp(true)
+        setCompId(comp.id)
         setDocumentos(Array.isArray(comp.documentos) ? comp.documentos : [])
 
         // Tick verde do Book de Composições: acende só quando a conciliação está
@@ -161,6 +165,27 @@ export default function Relatorios() {
       arquivo: `balancete_${compSlug}.xlsx`,
       aba: 'Balancete',
     })
+  }
+
+  // Gera o balancete no padrão Domínio (hierarquia via montarBalancete: sintéticas +
+  // analíticas, com Saldo Anterior por arrasto). Abre o PDF com a cara do Domínio.
+  async function gerarBalanceteDominioPDF() {
+    if (!compId || gerandoDom) return
+    setGerandoDom(true)
+    try {
+      const { linhas: hier } = await montarBalancete(empresaId, compId)
+      const [mes, ano] = competencia.split('/').map(Number)
+      const ult = new Date(ano, mes, 0).getDate()
+      abreBalanceteDominio({
+        empresa: empresaNome,
+        cnpj: cnpj || '',
+        periodoIni: `01/${String(mes).padStart(2, '0')}/${ano}`,
+        periodoFim: `${String(ult).padStart(2, '0')}/${String(mes).padStart(2, '0')}/${ano}`,
+        linhas: hier,
+      })
+    } finally {
+      setGerandoDom(false)
+    }
   }
 
   function exportarDRE() {
@@ -345,6 +370,13 @@ export default function Relatorios() {
       {/* Balancete */}
       {!carregando && temComp && linhas.length > 0 && aba === 'balancete' && (
         <Secao titulo="Balancete" onExportar={exportarBalancete}>
+          <div style={{ marginBottom: 12 }}>
+            <button className="btn" onClick={gerarBalanceteDominioPDF} disabled={!compId || gerandoDom}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 8, opacity: gerandoDom ? .6 : 1 }}>
+              <i className={`ti ${gerandoDom ? 'ti-loader-2' : 'ti-file-type-pdf'}`} /> {gerandoDom ? 'Gerando…' : 'Gerar balancete (padrão Domínio)'}
+            </button>
+            <span style={{ marginLeft: 10, fontSize: 12, color: theme.sub }}>PDF com a mesma cara do relatório do Domínio (hierarquia, D/C, Saldo Anterior por arrasto).</span>
+          </div>
           <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
