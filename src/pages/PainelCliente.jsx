@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
 import { apurarVariacoes } from '../lib/variacoes'
 import { apurarDistribuicao } from '../lib/distribuicao'
+import { montarBalancete } from '../lib/balancete'
 import { extrairEntidade } from '../lib/financeiro'
 import { gerarExcelTimbrado } from '../lib/excel'
 import { theme, money } from '../lib/theme'
@@ -11,6 +12,7 @@ const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'O
 const num = v => Number(v) || 0
 const pct = (a, b) => (b ? (a / b) * 100 : null)
 const fmtPct = p => p == null ? '—' : `${p.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`
+const AZUL_CLARO = '#5AA9FF' // resultado do mês/exercício — não é bom/ruim, só o valor
 
 // Formata CNPJ 00.000.000/0000-00 (aceita já formatado).
 function fmtCnpj(c) {
@@ -48,77 +50,75 @@ export default function PainelCliente() {
         if (!comp) { setTemComp(false); return }
         setTemComp(true)
 
-        const { data: bal } = await supabase.from('balancete')
-          .select('conta, nome, saldo_final').eq('competencia_id', comp.id).order('conta', { ascending: true })
-        const linhas = bal || []
+        // Balancete hierárquico — MESMA fonte da Conciliação/Relatórios: saldo inicial por
+        // arrasto + carga inicial, e saldo_final = a "última coluna da conciliação".
+        const { linhas: hier } = await montarBalancete(empresaId, comp.id)
+        const analit = (hier || []).filter(l => !l.sintetica)
+        const g = l => String(l.classifRaw || '')[0] // grupo pela CLASSIFICAÇÃO (não pelo reduzido)
 
         const comparativo = await apurarVariacoes(empresaId)
         const dist = await apurarDistribuicao(empresaId, comp.id)
 
-        // Mapa código-da-conta → classificação (mascarada) do plano, p/ índices por grupo.
-        const classifDe = {}
-        for (const p of (plano || [])) if (p.cod && !(p.cod in classifDe)) classifDe[p.cod] = String(p.classif || '')
+        // --- Resultado: bate com o Comparativo de Movimento (última linha) ---
+        // resMes(m) = soma do movimento de TODAS as contas de resultado no mês (= RESULTADO
+        // DO MÊS do comparativo). Acumulado = soma até o mês (= RESULTADO DO EXERCÍCIO).
+        const resMes = m => (comparativo.contas || []).reduce((s, c) => s + (comparativo.matriz[c.conta]?.[m] || 0), 0)
+        const serie = (comparativo.meses || []).map(m => ({ mes: m, resultado: resMes(m) }))
+        const resultado = resMes(mes)
+        const acumulado = (comparativo.meses || []).filter(m => m <= mes).reduce((s, m) => s + resMes(m), 0)
 
-        // --- Resultado (mesma régua da tela Relatórios: prefixo do código da conta) ---
-        const somaPref = pref => linhas.filter(l => String(l.conta || '').startsWith(pref))
-          .reduce((s, l) => s + num(l.saldo_final), 0)
-        const receita = somaPref('3')
-        const despesa = somaPref('4')
-        const custo = somaPref('5')
-        const resultado = receita - despesa - custo
+        // Nível 1 resumido do mês: faturamento (grupo 3), custo (4) e despesa (5). Grupo de
+        // cada conta vem da classificação (via balancete hierárquico).
+        const grpDe = {}
+        for (const l of analit) grpDe[String(l.reduzido)] = g(l)
+        const somaGrupoMes = dig => (comparativo.contas || [])
+          .filter(c => grpDe[String(c.conta)] === dig)
+          .reduce((s, c) => s + (comparativo.matriz[c.conta]?.[mes] || 0), 0)
+        const faturamento = Math.abs(somaGrupoMes('3')) // receita é credora — mostra positivo
+        const custo = Math.abs(somaGrupoMes('4'))
+        const despesa = Math.abs(somaGrupoMes('5'))
+        const lucro = resultado // igual ao comparativo (última linha)
 
-        // --- Série mensal do resultado (do comparativo: matriz conta × mês) ---
-        const serie = (comparativo.meses || []).map(m => {
-          let rec = 0, dsp = 0
-          for (const { conta } of (comparativo.contas || [])) {
-            const v = comparativo.matriz[conta]?.[m]
-            if (v == null) continue
-            if (String(conta).startsWith('3')) rec += num(v)
-            else dsp += num(v) // 4 e 5 (despesa/custo)
-          }
-          return { mes: m, receita: rec, resultado: rec - dsp }
-        })
-        const acumulado = serie.reduce((s, x) => s + x.resultado, 0)
-
-        // --- Balanço ---
-        const ativo = linhas.filter(l => String(l.conta || '').startsWith('1'))
-        const passivo = linhas.filter(l => String(l.conta || '').startsWith('2'))
-        const totAtivo = ativo.reduce((s, l) => s + num(l.saldo_final), 0)
-        const totPassivo = passivo.reduce((s, l) => s + num(l.saldo_final), 0)
-
-        // --- Grupos por nome (impostos, receber, pagar, disponibilidades) ---
+        // --- Balanço: saldo_final = última coluna da conciliação ---
+        const ativoLinhas = analit.filter(l => g(l) === '1')
+        const passivoLinhas = analit.filter(l => g(l) === '2')
+        const totAtivo = ativoLinhas.reduce((s, l) => s + num(l.saldo_final), 0)
+        const totPassivo = passivoLinhas.reduce((s, l) => s + num(l.saldo_final), 0)
         const somaFiltro = (arr, re) => arr.filter(l => re.test(l.nome || ''))
           .reduce((s, l) => s + Math.abs(num(l.saldo_final)), 0)
-        const impostos = somaFiltro(passivo, RE_IMPOSTO)
-        const aReceber = somaFiltro(ativo, RE_RECEBER)
-        const aPagar = somaFiltro(passivo, RE_PAGAR)
-        const disponiveis = ativo.filter(l => RE_DISP.test(l.nome || ''))
-          .map(l => ({ nome: l.nome || l.conta, valor: num(l.saldo_final) }))
-          .filter(l => Math.abs(l.valor) > 0.005)
-          .sort((a, b) => b.valor - a.valor)
-        const totDisp = disponiveis.reduce((s, l) => s + l.valor, 0)
+        const clientes = somaFiltro(ativoLinhas, RE_RECEBER)
+        const fornecedores = somaFiltro(passivoLinhas, RE_PAGAR)
+        const impostos = somaFiltro(passivoLinhas, RE_IMPOSTO)
 
-        // --- Índices por classificação (1.1 circulante, 2.1 PC, 2.2 PNC, 2.3 PL) ---
-        const somaClassif = pref => linhas.filter(l => (classifDe[l.conta] || '').startsWith(pref))
+        // --- Disponibilidades e geração de caixa (saldo final − saldo inicial) ---
+        const disponiveis = ativoLinhas.filter(l => RE_DISP.test(l.nome || ''))
+          .map(l => ({ nome: l.nome || l.reduzido, ini: num(l.saldo_inicial), fim: num(l.saldo_final) }))
+          .filter(l => Math.abs(l.ini) > 0.005 || Math.abs(l.fim) > 0.005)
+          .sort((a, b) => b.fim - a.fim)
+        const totDispIni = disponiveis.reduce((s, l) => s + l.ini, 0)
+        const totDispFim = disponiveis.reduce((s, l) => s + l.fim, 0)
+        const geracaoCaixa = totDispFim - totDispIni
+
+        // --- Índices (última coluna da conciliação; classificação mascarada) ---
+        const somaClassif = pref => analit.filter(l => String(l.classif || '').startsWith(pref))
           .reduce((s, l) => s + num(l.saldo_final), 0)
-        const temClassif = Object.keys(classifDe).length > 0
-        const ac = temClassif ? somaClassif('1.1') : null
-        const pc = temClassif ? somaClassif('2.1') : null
-        const pnc = temClassif ? somaClassif('2.2') : null
+        const ac = somaClassif('1.1') // ativo circulante
+        const pc = somaClassif('2.1') // passivo circulante
+        const pnc = somaClassif('2.2') // passivo não circulante
         const indices = {
-          margem: pct(resultado, receita),
-          cargaTrib: pct(impostos, receita),
-          liquidez: (ac != null && pc) ? ac / Math.abs(pc) : null,
-          endividamento: (temClassif && totAtivo) ? pct(Math.abs(pc || 0) + Math.abs(pnc || 0), Math.abs(totAtivo)) : null,
-          prazoReceb: receita ? Math.round((aReceber / receita) * 30) : null,
+          margem: faturamento ? ((faturamento - custo - despesa) / faturamento) * 100 : null,
+          cargaTrib: faturamento ? (impostos / faturamento) * 100 : null,
+          liquidez: pc ? ac / Math.abs(pc) : null,
+          endividamento: totAtivo ? pct(Math.abs(pc) + Math.abs(pnc), Math.abs(totAtivo)) : null,
+          prazoReceb: faturamento ? Math.round((clientes / faturamento) * 30) : null,
         }
 
-        // --- Distribuição de lucros ---
+        // --- Distribuição de lucros (campo de distribuição / ata) ---
         const distTotal = (dist?.socios || []).reduce((s, x) => s + num(x.total), 0)
 
-        // --- Principais clientes (nome extraído do histórico das NFs de receita) ---
-        const receitaCods = [...new Set(linhas.filter(l => String(l.conta || '').startsWith('3')).map(l => l.conta))]
-        let topClientes = [], totReceitaRazao = 0, semNome = 0
+        // --- Principais clientes (NOME extraído do histórico das NFs de receita) ---
+        const receitaCods = [...new Set(analit.filter(l => g(l) === '3').map(l => String(l.reduzido)))]
+        let topClientes = [], totReceitaRazao = 0
         if (receitaCods.length) {
           const { data: rz } = await supabase.from('razao').select('conta, historico, debito, credito')
             .eq('competencia_id', comp.id).in('conta', receitaCods)
@@ -128,7 +128,7 @@ export default function PainelCliente() {
             if (v <= 0) continue
             totReceitaRazao += v
             const ent = extrairEntidade(l.historico)
-            if (!ent) { semNome += v; continue }
+            if (!ent || /^[\d.,\s]+$/.test(ent) || ent.replace(/[^A-Za-zÀ-ú]/g, '').length < 3) continue // descarta "nome" que é só número
             mapa[ent] = (mapa[ent] || 0) + v
           }
           topClientes = Object.entries(mapa).map(([nome, valor]) => ({ nome, valor }))
@@ -137,13 +137,13 @@ export default function PainelCliente() {
 
         if (!vivo) return
         setD({
-          receita, despesa, custo, resultado, acumulado, serie,
-          ativo, passivo, totAtivo, totPassivo,
-          impostos, aReceber, aPagar, disponiveis, totDisp,
+          faturamento, custo, despesa, resultado, lucro, acumulado, serie,
+          totAtivo, totPassivo, clientes, fornecedores,
+          impostos, disponiveis, totDispIni, totDispFim, geracaoCaixa,
           indices, dist, distTotal,
           comparativo,
           variacoesConta: new Set((comparativo.itens || []).map(i => String(i.conta))).size,
-          topClientes, totReceitaRazao, semNome,
+          topClientes, totReceitaRazao,
         })
       } finally {
         if (vivo) setCarregando(false)
@@ -158,11 +158,11 @@ export default function PainelCliente() {
     const secoes = []
 
     secoes.push({
-      titulo: 'Resultado do período',
+      titulo: 'Resultado do período (igual ao Comparativo de Movimento)',
       linhas: [
-        ['Receita da competência', num(d.receita)],
-        ['(-) Despesas', num(d.despesa)],
+        ['Total de faturamento', num(d.faturamento)],
         ['(-) Custos', num(d.custo)],
+        ['(-) Despesas', num(d.despesa)],
         ['Margem líquida', fmtPct(d.indices.margem)],
       ],
       totais: ['Resultado da competência', num(d.resultado)],
@@ -170,24 +170,27 @@ export default function PainelCliente() {
     if (d.serie.length) secoes.push({
       titulo: 'Resultado por mês (comparativo)',
       linhas: d.serie.map(x => [`${MESES[x.mes - 1]}/2026`, num(x.resultado)]),
-      totais: ['Acumulado do ano', num(d.acumulado)],
+      totais: ['Resultado do exercício (acumulado)', num(d.acumulado)],
     })
     secoes.push({
-      titulo: 'Balanço patrimonial',
-      linhas: [['Total do ativo', num(d.totAtivo)], ['Total do passivo + PL', num(d.totPassivo)]],
-    })
-    secoes.push({
-      titulo: 'Financeiro — disponibilidades',
-      linhas: d.disponiveis.length ? d.disponiveis.map(l => [l.nome, num(l.valor)]) : [['Sem contas de disponibilidade no balancete', '']],
-      totais: ['Total disponível', num(d.totDisp)],
-    })
-    secoes.push({
-      titulo: 'Impostos, recebíveis e distribuição',
+      titulo: 'Balanço patrimonial (saldo final da conciliação)',
       linhas: [
-        ['Contas a receber', num(d.aReceber)],
-        ['Contas a pagar', num(d.aPagar)],
-        [`Impostos apurados (${fmtPct(d.indices.cargaTrib)} da receita)`, num(d.impostos)],
-        ['Lucro distribuído aos sócios', num(d.distTotal)],
+        ['Total do ativo', num(d.totAtivo)],
+        ['Total do passivo + PL', num(d.totPassivo)],
+        ['Clientes (a receber)', num(d.clientes)],
+        ['Fornecedores (a pagar)', num(d.fornecedores)],
+        ['Distribuição de lucros', num(d.distTotal)],
+      ],
+    })
+    secoes.push({
+      titulo: 'Financeiro — disponibilidades e geração de caixa',
+      linhas: (d.disponiveis.length ? d.disponiveis.map(l => [l.nome, num(l.fim)]) : [['Sem contas de disponibilidade no balancete', '']]),
+      totais: ['Geração de caixa (final − inicial)', num(d.geracaoCaixa)],
+    })
+    secoes.push({
+      titulo: 'Impostos',
+      linhas: [
+        [`Impostos apurados (${fmtPct(d.indices.cargaTrib)} do faturamento)`, num(d.impostos)],
       ],
     })
     if (d.topClientes.length) secoes.push({
@@ -265,22 +268,24 @@ function BlocoResultado({ d }) {
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1.4fr)', gap: 14 }}>
         <div style={{ ...card, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
           <span style={{ color: theme.sub, fontSize: 11, textTransform: 'uppercase', letterSpacing: .5 }}>Resultado da competência</span>
-          <b style={{ fontSize: 34, fontWeight: 800, color: d.resultado >= 0 ? theme.green : theme.red, letterSpacing: -.5 }}>{money(d.resultado)}</b>
+          <b style={{ fontSize: 34, fontWeight: 800, color: AZUL_CLARO, letterSpacing: -.5 }}>{money(d.resultado)}</b>
           <div style={{ display: 'flex', gap: 18, marginTop: 8, flexWrap: 'wrap' }}>
-            <Mini label="Receita" v={money(d.receita)} />
+            <Mini label="Faturamento" v={money(d.faturamento)} />
             <Mini label="Acumulado do ano" v={money(d.acumulado)} />
             <Mini label="Margem líquida" v={fmtPct(d.indices.margem)} />
           </div>
+          <span style={{ fontSize: 11, color: theme.sub, marginTop: 8 }}>Igual à última linha do Comparativo de Movimento (Resultado do mês / do exercício).</span>
         </div>
         <div style={card}>
           <span style={{ color: theme.sub, fontSize: 11, textTransform: 'uppercase', letterSpacing: .5 }}>Resultado por mês</span>
           {d.serie.length === 0 ? (
             <p style={{ color: theme.sub, fontSize: 13, marginTop: 10 }}>Sem meses no comparativo ainda.</p>
           ) : (
-            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, height: 120, marginTop: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, height: 140, marginTop: 12 }}>
               {d.serie.map(x => (
-                <div key={x.mes} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, justifyContent: 'flex-end', height: '100%' }}>
-                  <div title={money(x.resultado)} style={{ width: '100%', height: `${Math.max(4, (Math.abs(x.resultado) / max) * 100)}%`, background: x.resultado >= 0 ? theme.green : theme.red, borderRadius: '5px 5px 2px 2px', minHeight: 4 }} />
+                <div key={x.mes} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5, justifyContent: 'flex-end', height: '100%' }}>
+                  <small style={{ fontSize: 9.5, color: theme.text, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>{money(x.resultado)}</small>
+                  <div title={money(x.resultado)} style={{ width: '100%', height: `${Math.max(4, (Math.abs(x.resultado) / max) * 100)}%`, background: AZUL_CLARO, borderRadius: '5px 5px 2px 2px', minHeight: 4 }} />
                   <small style={{ fontSize: 10.5, color: theme.sub }}>{MESES[x.mes - 1]}</small>
                 </div>
               ))}
@@ -293,74 +298,75 @@ function BlocoResultado({ d }) {
 }
 
 function BlocoComparativo({ d }) {
-  const { comparativo, variacoesConta } = d
-  const contas = comparativo.contas || []
+  const { variacoesConta } = d
   return (
-    <Secao titulo="Comparativo de movimento"
+    <Secao titulo="Comparativo de movimento — resumo (nível 1)"
       flag={variacoesConta ? `${variacoesConta} conta(s) a verificar` : null}>
-      {contas.length === 0 ? (
-        <Aviso icon="ti-database-off" texto="Importe o razão em ao menos uma competência para comparar." />
-      ) : (
-        <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'auto', maxHeight: 360 }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 620 }}>
-            <thead>
-              <tr style={{ background: theme.input }}>
-                <th style={{ ...th, position: 'sticky', left: 0, background: theme.input }}>Conta</th>
-                {comparativo.meses.map(m => <th key={m} style={thNum}>{MESES[m - 1]}</th>)}
-              </tr>
-            </thead>
-            <tbody>
-              {contas.map(({ conta, nome }) => (
-                <tr key={conta} style={{ borderTop: `1px solid ${theme.border}` }}>
-                  <td style={{ ...td, position: 'sticky', left: 0, background: theme.card }}><span style={{ color: theme.sub, fontSize: 11 }}>{conta}</span> {nome}</td>
-                  {comparativo.meses.map(m => {
-                    const v = comparativo.matriz[conta]?.[m]
-                    return <td key={m} style={tdNum}>{v == null ? '—' : money(v)}</td>
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(210px,1fr))', gap: 12 }}>
+        <Tile label="Total de faturamento" valor={money(d.faturamento)} cor={theme.green} />
+        <Tile label="Total de custo" valor={money(d.custo)} />
+        <Tile label="Despesa" valor={money(d.despesa)} />
+        <Tile label="Lucro / resultado" valor={money(d.lucro)} cor={AZUL_CLARO} sub="igual à última linha do comparativo" />
+      </div>
     </Secao>
   )
 }
 
 function BlocoBalanco({ d }) {
-  const ativoBate = Math.abs(d.totAtivo - d.totPassivo) < 0.05
+  const ativoBate = Math.abs(d.totAtivo - Math.abs(d.totPassivo)) < 0.05
   return (
     <Secao titulo="Balanço patrimonial">
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))', gap: 12 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(210px,1fr))', gap: 12 }}>
         <Tile label="Total do ativo" valor={money(d.totAtivo)} />
         <Tile label="Total do passivo + PL" valor={money(d.totPassivo)} />
-        <Tile label="Conferência" valor={ativoBate ? 'Ativo = Passivo' : money(d.totAtivo - d.totPassivo)}
+        <Tile label="Conferência" valor={ativoBate ? 'Ativo = Passivo' : money(d.totAtivo - Math.abs(d.totPassivo))}
           cor={ativoBate ? theme.green : theme.yellow} sub={ativoBate ? 'balanço fechado' : 'diferença a revisar'} />
+        <Tile label="Clientes (a receber)" valor={money(d.clientes)} cor={theme.green} />
+        <Tile label="Fornecedores (a pagar)" valor={money(d.fornecedores)} cor={theme.red} />
+        <Tile label="Distribuição de lucros" valor={money(d.distTotal)} sub="conforme ata / campo de distribuição" />
       </div>
+      <p style={{ fontSize: 11, color: theme.sub, margin: '8px 2px 0' }}>Saldos da última coluna da conciliação (saldo final da competência).</p>
     </Secao>
   )
 }
 
 function BlocoFinanceiro({ d }) {
   return (
-    <Secao titulo="Financeiro — disponibilidades">
+    <Secao titulo="Financeiro — disponibilidades e geração de caixa">
       {d.disponiveis.length === 0 ? (
         <Aviso icon="ti-building-bank" texto="Nenhuma conta de caixa/banco identificada no balancete desta competência." />
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.6fr) minmax(0,.7fr)', gap: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.6fr) minmax(0,.8fr)', gap: 12 }}>
           <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'hidden' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ background: theme.input }}>
+                  <th style={th}>Conta</th><th style={thNum}>Saldo inicial</th><th style={thNum}>Saldo final</th>
+                </tr>
+              </thead>
               <tbody>
                 {d.disponiveis.map((l, i) => (
-                  <tr key={i} style={{ borderTop: i ? `1px solid ${theme.border}` : 'none' }}>
+                  <tr key={i} style={{ borderTop: `1px solid ${theme.border}` }}>
                     <td style={td}>{l.nome}</td>
-                    <td style={tdNum}>{money(l.valor)}</td>
+                    <td style={tdNum}>{money(l.ini)}</td>
+                    <td style={tdNum}>{money(l.fim)}</td>
                   </tr>
                 ))}
               </tbody>
+              <tfoot>
+                <tr style={{ borderTop: `1px solid ${theme.border}`, background: theme.input }}>
+                  <td style={{ ...td, fontWeight: 700 }}>Total disponível</td>
+                  <td style={{ ...tdNum, fontWeight: 700 }}>{money(d.totDispIni)}</td>
+                  <td style={{ ...tdNum, fontWeight: 700 }}>{money(d.totDispFim)}</td>
+                </tr>
+              </tfoot>
             </table>
           </div>
-          <Tile label="Total disponível" valor={money(d.totDisp)} cor={theme.accent} />
+          <div style={{ display: 'grid', gap: 12, alignContent: 'start' }}>
+            <Tile label="Total disponível (saldo final)" valor={money(d.totDispFim)} cor={theme.accent} />
+            <Tile label="Geração de caixa no mês" valor={money(d.geracaoCaixa)} cor={d.geracaoCaixa >= 0 ? theme.green : theme.red}
+              sub="saldo final − saldo inicial das disponibilidades" />
+          </div>
         </div>
       )}
     </Secao>
@@ -369,12 +375,10 @@ function BlocoFinanceiro({ d }) {
 
 function BlocoImpostos({ d }) {
   return (
-    <Secao titulo="Impostos, recebíveis e distribuição">
+    <Secao titulo="Impostos">
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(210px,1fr))', gap: 12 }}>
-        <Tile label="Contas a receber" valor={money(d.aReceber)} cor={theme.green} />
-        <Tile label="Contas a pagar" valor={money(d.aPagar)} cor={theme.red} />
-        <Tile label="Impostos apurados" valor={money(d.impostos)} sub={`${fmtPct(d.indices.cargaTrib)} da receita`} />
-        <Tile label="Lucro distribuído" valor={money(d.distTotal)} sub="aos sócios na competência" />
+        <Tile label="Impostos apurados" valor={money(d.impostos)} sub={`${fmtPct(d.indices.cargaTrib)} do faturamento`} />
+        <Tile label="Carga tributária" valor={fmtPct(d.indices.cargaTrib)} sub="impostos ÷ faturamento" />
       </div>
     </Secao>
   )
