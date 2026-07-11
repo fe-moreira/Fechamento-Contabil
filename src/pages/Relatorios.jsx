@@ -53,6 +53,7 @@ export default function Relatorios() {
   const [compId, setCompId] = useState(null)        // id da competência resolvida (p/ montarBalancete)
   const [gerandoDom, setGerandoDom] = useState(false)
   const [aba, setAba] = useState('balancete')
+  const [cardsAberto, setCardsAberto] = useState(true) // recolher a lista de cards p/ dar espaço ao relatório
 
   // Resolve a competência (READ-ONLY) e lê balancete + documentos + auditoria.
   useEffect(() => {
@@ -338,7 +339,25 @@ export default function Relatorios() {
         <b style={{ color: theme.text }}>{empresaNome}</b> · competência <b style={{ color: theme.text }}>{competencia}</b>
       </p>
 
+      {/* Barra: seletor compacto (quando recolhido) + botão recolher/expandir */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: cardsAberto ? 12 : 18 }}>
+        {!cardsAberto && (
+          <label style={{ fontSize: 12, color: theme.sub, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <i className="ti ti-report" /> Relatório:
+            <select className="input" style={{ width: 'auto', fontSize: 13, padding: '6px 10px' }} value={aba} onChange={e => setAba(e.target.value)}>
+              {RELATORIOS.map(r => <option key={r.id} value={r.id}>{r.nome}</option>)}
+            </select>
+          </label>
+        )}
+        <button className="btn-ghost" onClick={() => setCardsAberto(v => !v)}
+          title={cardsAberto ? 'Recolher a lista para ver o relatório maior' : 'Mostrar a lista de relatórios'}
+          style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12.5, padding: '6px 12px' }}>
+          <i className={`ti ${cardsAberto ? 'ti-chevrons-up' : 'ti-chevrons-down'}`} /> {cardsAberto ? 'Recolher lista' : 'Expandir lista'}
+        </button>
+      </div>
+
       {/* Cards de relatório (escolha) */}
+      {cardsAberto && (
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(260px,1fr))', gap: 12, marginBottom: 22 }}>
         {RELATORIOS.map(r => (
           <button
@@ -371,6 +390,7 @@ export default function Relatorios() {
           </button>
         ))}
       </div>
+      )}
 
       {carregando && <p style={{ color: theme.sub, fontSize: 13 }}>Carregando…</p>}
 
