@@ -286,6 +286,7 @@ export default function PainelCliente() {
 
 function BlocoResultado({ d }) {
   const max = Math.max(1, ...d.serie.flatMap(x => [x.receita, x.despesa, Math.abs(x.resultado)]))
+  const [hov, setHov] = useState(null)
   const barras = [
     { key: 'receita', label: 'Receita', cor: theme.accent },
     { key: 'despesa', label: 'Despesa', cor: LARANJA },
@@ -325,9 +326,17 @@ function BlocoResultado({ d }) {
                     {barras.map(b => {
                       const v = x[b.key]
                       const cor = b.key === 'resultado' ? corResultado(v) : b.cor
+                      const id = `${x.mes}-${b.key}`
                       return (
-                        <div key={b.key} title={`${b.label}: ${money(v)}`}
-                          style={{ flex: 1, height: `${Math.max(2, (Math.abs(v) / max) * 100)}%`, background: cor, minHeight: 2, borderRadius: '3px 3px 0 0', cursor: 'default' }} />
+                        <div key={b.key} onMouseEnter={() => setHov(id)} onMouseLeave={() => setHov(h => (h === id ? null : h))}
+                          style={{ flex: 1, height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', position: 'relative', cursor: 'default' }}>
+                          {hov === id && (
+                            <div style={{ position: 'absolute', top: 0, left: '50%', transform: 'translate(-50%,-100%)', background: theme.card, border: `1px solid ${theme.cb}`, borderRadius: 7, padding: '5px 10px', fontSize: 11.5, whiteSpace: 'nowrap', zIndex: 6, boxShadow: '0 4px 14px rgba(0,0,0,.35)', pointerEvents: 'none' }}>
+                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}><span style={{ width: 8, height: 8, borderRadius: 2, background: cor }} /> {MESES[x.mes - 1]} · {b.label}</span> <b style={{ color: cor, marginLeft: 4 }}>{money(v)}</b>
+                            </div>
+                          )}
+                          <div style={{ height: `${Math.max(2, (Math.abs(v) / max) * 100)}%`, background: cor, minHeight: 2, borderRadius: '3px 3px 0 0' }} />
+                        </div>
                       )
                     })}
                   </div>
