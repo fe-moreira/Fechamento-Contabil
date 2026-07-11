@@ -58,3 +58,49 @@ export function montarDRE(linhas) {
   sub('LUCRO LÍQUIDO DO EXERCÍCIO', lucroLiquido)
   return rows
 }
+
+// Resumo do balancete (igual ao Domínio): totais por grupo (Ativo/Passivo/PL/Receitas/
+// Custos/Despesas), Contas Devedoras/Credoras e Resultado do mês/exercício. Cada linha traz
+// { ini, deb, cred, fim } (saldos com sinal: devedor +, credor −). Ativo/Passivo/PL vêm com
+// Saldo Anterior por arrasto; nas contas de resultado o Saldo Anterior depende de meses
+// anteriores importados (senão vem só do mês).
+export function montarResumoBalancete(linhas) {
+  const analit = (linhas || []).filter(l => !l.sintetica)
+  const raw = l => String(l.classifRaw || l.classif || '')
+  const grupo = (pref, exclui = []) => {
+    const rs = analit.filter(l => { const c = raw(l); return c.startsWith(pref) && !exclui.some(e => c.startsWith(e)) })
+    return {
+      ini: rs.reduce((s, l) => s + (Number(l.saldo_inicial) || 0), 0),
+      deb: rs.reduce((s, l) => s + (Number(l.debito) || 0), 0),
+      cred: rs.reduce((s, l) => s + (Number(l.credito) || 0), 0),
+      fim: rs.reduce((s, l) => s + (Number(l.saldo_final) || 0), 0),
+    }
+  }
+  const soma = (...gs) => gs.reduce((a, g) => ({ ini: a.ini + g.ini, deb: a.deb + g.deb, cred: a.cred + g.cred, fim: a.fim + g.fim }), { ini: 0, deb: 0, cred: 0, fim: 0 })
+
+  const ativo = grupo('1')
+  const passivo = grupo('2', ['23'])
+  const pl = grupo('23')
+  const receitas = grupo('3')
+  const custos = grupo('4')
+  const despesas = grupo('5')
+  const apuracao = grupo('6')
+  const grupos = [
+    { label: 'ATIVO', ...ativo },
+    { label: 'PASSIVO', ...passivo },
+    { label: 'PATRIMONIO LIQUIDO', ...pl },
+    { label: 'RECEITAS', ...receitas },
+    { label: 'CUSTOS DAS VENDAS', ...custos },
+    { label: 'DESPESAS OPERACIONAIS', ...despesas },
+  ]
+  if (Math.abs(apuracao.fim) > 0.005 || Math.abs(apuracao.deb) > 0.005 || Math.abs(apuracao.cred) > 0.005)
+    grupos.push({ label: 'APURACAO DE RESULTADO - TRANSITORIA', ...apuracao })
+
+  const devedoras = { label: 'CONTAS DEVEDORAS', ...soma(ativo, custos, despesas) }
+  const credoras = { label: 'CONTAS CREDORAS', ...soma(passivo, pl, receitas) }
+  const rExerc = soma(receitas, custos, despesas)
+  const resultadoExerc = { label: 'RESULTADO DO EXERCÍCIO', ini: rExerc.ini, deb: rExerc.deb, cred: rExerc.cred, fim: rExerc.fim }
+  const resultadoMes = { label: 'RESULTADO DO MES', ini: 0, deb: rExerc.deb, cred: rExerc.cred, fim: rExerc.deb - rExerc.cred }
+
+  return { grupos, devedoras, credoras, resultadoMes, resultadoExerc }
+}

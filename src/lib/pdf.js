@@ -87,7 +87,7 @@ export function abreDreDominio({ empresa = '', cnpj = '', periodoIni = '', perio
       table.dre { width:100%; border-collapse:collapse; }
       table.dre thead th { border-top:1px solid #000; border-bottom:1px solid #000; padding:4px 6px; font-size:9.5px; background:#eee; text-align:left; }
       table.dre thead th.r { text-align:right; width:150px; }
-      table.dre td { padding:3px 6px; vertical-align:top; font-variant-numeric: tabular-nums; }
+      table.dre td { padding:5.5px 6px; vertical-align:top; font-variant-numeric: tabular-nums; line-height:1.35; }
       table.dre td.r { text-align:right; white-space:nowrap; }
       table.dre td.desc { }
       table.dre tr.sub td { font-weight:bold; border-top:1px solid #999; border-bottom:1px solid #999; background:#f4f4f4; }
@@ -117,10 +117,26 @@ export function abreDreDominio({ empresa = '', cnpj = '', periodoIni = '', perio
 // Código · Classificação · Descrição da conta · Saldo Anterior · Débito · Crédito
 // · Saldo Atual, com o sufixo D/C nos saldos e a hierarquia (sintéticas + analíticas).
 // linhas: [{ reduzido, classif, nome, saldo_inicial, debito, credito, saldo_final, sintetica }]
-export function abreBalanceteDominio({ empresa = '', cnpj = '', periodoIni = '', periodoFim = '', linhas = [] }) {
+export function abreBalanceteDominio({ empresa = '', cnpj = '', periodoIni = '', periodoFim = '', linhas = [], resumo = null }) {
   const esc = s => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))
   const fmt = v => Math.abs(Number(v) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
   const dc = v => { const n = Number(v) || 0; return Math.abs(n) < 0.005 ? '0,00' : fmt(n) + (n >= 0 ? 'D' : 'C') }
+
+  // Bloco RESUMO DO BALANCETE (grupos + contas devedoras/credoras + resultado).
+  const linhaRes = (r, cls = '') => `<tr class="${cls}"><td class="desc">${esc(r.label)}</td><td class="r">${dc(r.ini)}</td><td class="r">${fmt(r.deb)}</td><td class="r">${fmt(r.cred)}</td><td class="r">${dc(r.fim)}</td></tr>`
+  const blocoResumo = resumo ? `
+    <h1 style="margin-top:22px">RESUMO DO BALANCETE</h1>
+    <table class="bal resumo">
+      <tbody>
+        ${resumo.grupos.map(g => linhaRes(g)).join('')}
+        <tr class="gap"><td colspan="5">&nbsp;</td></tr>
+        ${linhaRes(resumo.devedoras, 'sint')}
+        ${linhaRes(resumo.credoras, 'sint')}
+        <tr class="gap"><td colspan="5">&nbsp;</td></tr>
+        ${linhaRes(resumo.resultadoMes, 'sint')}
+        ${linhaRes(resumo.resultadoExerc, 'sint')}
+      </tbody>
+    </table>` : ''
 
   const corpo = (linhas || []).map(l => {
     const sint = !!l.sintetica
@@ -146,16 +162,19 @@ export function abreBalanceteDominio({ empresa = '', cnpj = '', periodoIni = '',
       .cab .lab { color:#000; font-weight:bold; width:70px; }
       .cab .folha { text-align:right; white-space:nowrap; }
       .cab .row2 td { border-top:1px solid #000; }
-      h1 { text-align:center; font-size:13px; letter-spacing:2px; margin:8px 0 6px; }
+      h1 { text-align:center; font-size:13px; letter-spacing:2px; margin:10px 0 8px; }
       table.bal { width:100%; border-collapse:collapse; }
-      table.bal thead th { border-top:1px solid #000; border-bottom:1px solid #000; padding:4px 6px; font-size:9px; text-align:left; background:#eee; }
+      table.bal thead th { border-top:1px solid #000; border-bottom:1px solid #000; padding:6px; font-size:9px; text-align:left; background:#eee; }
       table.bal thead th.r { text-align:right; }
-      table.bal td { padding:2px 6px; vertical-align:top; font-variant-numeric: tabular-nums; }
+      table.bal td { padding:4.5px 6px; vertical-align:top; font-variant-numeric: tabular-nums; line-height:1.35; }
       table.bal td.r { text-align:right; white-space:nowrap; }
       table.bal td.cod { width:52px; color:#000; }
       table.bal td.cla { width:110px; white-space:nowrap; }
       table.bal td.desc { }
       table.bal tr.sint td { font-weight:bold; border-top:1px solid #bbb; }
+      table.resumo td { padding:6px; }
+      table.resumo tr.gap td { padding:0; height:8px; border:none; }
+      table.resumo tr.sint td { border-top:1px solid #999; }
       thead { display: table-header-group; }
       tr { page-break-inside: avoid; }
     </style></head>
@@ -179,6 +198,7 @@ export function abreBalanceteDominio({ empresa = '', cnpj = '', periodoIni = '',
         </tr></thead>
         <tbody>${corpo}</tbody>
       </table>
+      ${blocoResumo}
       <script>window.onload=function(){setTimeout(function(){window.print()},250)}</script>
     </body></html>`
   const w = window.open('', '_blank')
