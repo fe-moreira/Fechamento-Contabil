@@ -59,10 +59,11 @@ export default function PainelCliente() {
         const comparativo = await apurarVariacoes(empresaId)
         const dist = await apurarDistribuicao(empresaId, comp.id)
 
-        // --- Resultado: bate com o Comparativo de Movimento (última linha) ---
-        // resMes(m) = soma do movimento de TODAS as contas de resultado no mês (= RESULTADO
-        // DO MÊS do comparativo). Acumulado = soma até o mês (= RESULTADO DO EXERCÍCIO).
-        const resMes = m => (comparativo.contas || []).reduce((s, c) => s + (comparativo.matriz[c.conta]?.[m] || 0), 0)
+        // --- Resultado: mesma magnitude da última linha do Comparativo de Movimento, mas
+        // com sinal contábil de gestão: LUCRO positivo, PREJUÍZO negativo. No comparativo o
+        // movimento é (débito − crédito), então lucro fica negativo; aqui invertemos o sinal.
+        const resMesMov = m => (comparativo.contas || []).reduce((s, c) => s + (comparativo.matriz[c.conta]?.[m] || 0), 0)
+        const resMes = m => -resMesMov(m)
         const serie = (comparativo.meses || []).map(m => ({ mes: m, resultado: resMes(m) }))
         const resultado = resMes(mes)
         const acumulado = (comparativo.meses || []).filter(m => m <= mes).reduce((s, m) => s + resMes(m), 0)
@@ -290,7 +291,7 @@ function BlocoResultado({ d }) {
             <Mini label="Acumulado do ano" v={money(d.acumulado)} />
             <Mini label="Margem líquida" v={fmtPct(d.indices.margem)} />
           </div>
-          <span style={{ fontSize: 11, color: theme.sub, marginTop: 8 }}>Igual à última linha do Comparativo de Movimento (Resultado do mês / do exercício).</span>
+          <span style={{ fontSize: 11, color: theme.sub, marginTop: 8 }}>Mesmo valor da última linha do Comparativo de Movimento (lucro positivo, prejuízo negativo).</span>
         </div>
         <div style={card}>
           <span style={{ color: theme.sub, fontSize: 11, textTransform: 'uppercase', letterSpacing: .5 }}>Resultado por mês</span>
@@ -322,7 +323,7 @@ function BlocoComparativo({ d }) {
         <Tile label="Total de faturamento" valor={money(d.faturamento)} cor={theme.green} />
         <Tile label="Total de custo" valor={money(d.custo)} />
         <Tile label="Despesa" valor={money(d.despesa)} />
-        <Tile label="Lucro / resultado" valor={money(d.lucro)} cor={AZUL_CLARO} sub="igual à última linha do comparativo" />
+        <Tile label="Lucro / resultado" valor={money(d.lucro)} cor={AZUL_CLARO} sub="lucro positivo, prejuízo negativo" />
       </div>
     </Secao>
   )
