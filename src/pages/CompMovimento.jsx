@@ -68,6 +68,7 @@ export default function CompMovimento() {
   const [matriz, setMatriz] = useState({})      // { classif: { mes: saldo_final } }
   const [detalhe, setDetalhe] = useState(null)  // { conta, nome, mes, compId }
   const [justificadas, setJustificadas] = useState(() => new Set()) // 'conta|mes' já justificadas/corrigidas localmente
+  const [justTextos, setJustTextos] = useState(() => ({}))          // 'conta|mes' -> texto da justificativa (p/ tooltip)
   const [refresh, setRefresh] = useState(0)     // recarrega após importar meses anteriores
   const [impBusy, setImpBusy] = useState(false)
   const [impMsg, setImpMsg] = useState('')
@@ -208,20 +209,26 @@ export default function CompMovimento() {
         const compIds = compsComDados.map(c => c.id)
         if (compIds.length) {
           const { data: audits } = await supabase
-            .from('auditoria').select('item, competencia_id')
+            .from('auditoria').select('item, competencia_id, tipo, detalhe')
             .in('competencia_id', compIds).eq('modulo', 'Comparativo')
           if (!vivo) return
           if (audits && audits.length) {
-            const set = new Set()
+            const set = new Set(), textos = {}
             for (const a of audits) {
               // item no formato `${conta} · ${MES}/${ano}` — o mês vem do PRÓPRIO item
               // (fonte da verdade, igual ao desfazer e à célula), não da competência anexada.
               const [contaPart, periodo] = String(a.item || '').split(' · ')
               const conta = (contaPart || '').trim()
               const idx = MESES.indexOf((periodo || '').trim().slice(0, 3))
-              if (conta && idx >= 0) set.add(chaveCelula(conta, idx + 1))
+              if (conta && idx >= 0) {
+                const ch = chaveCelula(conta, idx + 1)
+                set.add(ch)
+                if (a.detalhe) textos[ch] = a.detalhe
+                else if (a.tipo) textos[ch] = a.tipo
+              }
             }
             setJustificadas(set)
+            setJustTextos(textos)
           }
         }
       } finally {
@@ -255,12 +262,13 @@ export default function CompMovimento() {
   }
 
   // Marca uma célula como justificada/corrigida localmente (atualiza o contador na hora).
-  function marcarJustificada(conta, mes) {
+  function marcarJustificada(conta, mes, texto) {
     setJustificadas(prev => {
       const next = new Set(prev)
       next.add(chaveCelula(conta, mes))
       return next
     })
+    if (texto) setJustTextos(prev => ({ ...prev, [chaveCelula(conta, mes)]: texto }))
   }
 
   // Desfaz o ajuste: devolve a célula à contagem de pendências (atualiza na hora).
@@ -403,10 +411,12 @@ export default function CompMovimento() {
                                 display: 'inline-flex', alignItems: 'center', gap: 4, justifyContent: 'flex-end',
                                 background: 'none', border: 'none', padding: 0, cursor: 'pointer',
                                 fontSize: 12.5, fontFamily: 'inherit',
-                                color: red ? theme.red : theme.text,
-                                fontWeight: red ? 700 : 400,
+                                color: (red && !ok) ? theme.red : theme.text,
+                                fontWeight: (red && !ok) ? 700 : 400,
                               }}
-                              title={ok ? 'Variação justificada — ver razão da conta neste mês' : (vazio ? 'Mês sem movimento nesta conta — variação a justificar' : 'Ver razão da conta neste mês')}
+                              title={ok
+                                ? `Variação justificada${justTextos[chaveCelula(reduzido, c.mes)] ? ' — ' + justTextos[chaveCelula(reduzido, c.mes)] : ''} · clique para ver o razão`
+                                : (vazio ? 'Mês sem movimento nesta conta — variação a justificar' : 'Ver razão da conta neste mês')}
                             >
                               {ok && <i className="ti ti-circle-check" style={{ color: theme.green, fontSize: 13 }} />}
                               {vazio ? '—' : moneyDC(v)}
@@ -450,7 +460,7 @@ export default function CompMovimento() {
           usuario={user?.email}
           getCompetenciaId={getCompetenciaId}
           jaJustificada={justificadas.has(chaveCelula(detalhe.conta, detalhe.mes))}
-          onJustificada={() => marcarJustificada(detalhe.conta, detalhe.mes)}
+          onJustificada={(texto) => marcarJustificada(detalhe.conta, detalhe.mes, texto)}
           onDesfeita={() => marcarNaoJustificada(detalhe.conta, detalhe.mes)}
           onCorrigido={() => setRefresh(x => x + 1)}
           plano={plano}
@@ -518,7 +528,7 @@ function ModalRazao({ detalhe, compsAnteriores, usuario, jaJustificada, onJustif
       })
       if (error) throw error
       setMsg(`${tipo} registrada na auditoria.`)
-      setRegistro(null); setTratada(true); onJustificada()
+      setRegistro(null); setTratada(true); onJustificada(detalheTxt)
     } catch (e) { setMsg('Erro ao registrar: ' + (e.message || e)) } finally { setSalvando(false) }
   }
 
