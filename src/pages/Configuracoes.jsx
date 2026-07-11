@@ -11,6 +11,8 @@ export default function Configuracoes() {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 14 }}>
         <Cfg to="/clientes" icon="ti-users" titulo="Cadastro de Clientes" sub="Importação em lote, filiais, CNPJ" />
         <Cfg to="/usuarios" icon="ti-user-shield" titulo="Usuários" sub="Convidar e gerenciar acessos (ADM)" />
+        <Cfg to="/grupo-empresarial" icon="ti-building-community" titulo="Grupo Empresarial" sub="Agrupar empresas do mesmo grupo" />
+        <Cfg to="/relatorio-gerencial-modelo" icon="ti-report-analytics" titulo="Mod. Relatório Gerencial" sub="Modelos de relatório gerencial" />
       </div>
     </div>
   )

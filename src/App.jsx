@@ -27,6 +27,7 @@ import RelatoriosMassa from './pages/RelatoriosMassa'
 import Configuracoes from './pages/Configuracoes'
 import Ajuda from './pages/Ajuda'
 import Timesheet from './pages/Timesheet'
+import EmBreve from './pages/EmBreve'
 
 function Protegido({ children }) {
   const { session, loading } = useAuth()
@@ -60,6 +61,8 @@ function Rotas() {
         <Route path="importacoes" element={<ImportacaoMassa />} />
         <Route path="relatorios-massa" element={<RelatoriosMassa />} />
         <Route path="config" element={<Configuracoes />} />
+        <Route path="grupo-empresarial" element={<EmBreve titulo="Grupo Empresarial" sub="Agrupar empresas do mesmo grupo econômico." icon="ti-building-community" descricao="Cadastro de grupos empresariais para consolidar empresas do mesmo grupo — visão agregada de fechamento, relatórios e indicadores. Em construção." />} />
+        <Route path="relatorio-gerencial-modelo" element={<EmBreve titulo="Mod. Relatório Gerencial" sub="Modelos de relatório gerencial para o cliente." icon="ti-report-analytics" descricao="Configuração dos modelos de relatório gerencial (estrutura, blocos e indicadores) que alimentam o Cockpit Financeiro e os relatórios enviados ao cliente. Em construção." />} />
         <Route path="usuarios" element={<Usuarios />} />
         <Route path="timesheet" element={<Timesheet />} />
         <Route path="ajuda" element={<Ajuda />} />
