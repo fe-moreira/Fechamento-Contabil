@@ -69,7 +69,7 @@ export default function CompMovimento() {
   const [detalhe, setDetalhe] = useState(null)  // { conta, nome, mes, compId }
   const [justificadas, setJustificadas] = useState(() => new Set()) // 'conta|mes' já justificadas/corrigidas localmente
   const [justTextos, setJustTextos] = useState(() => ({}))          // 'conta|mes' -> texto da justificativa (p/ tooltip)
-  const [expandido, setExpandido] = useState(true)                  // false = só sintéticas (totais)
+  const [nivel, setNivel] = useState('tudo')                        // 'tudo' = todas; número N = sintéticas até o nível N
   const [refresh, setRefresh] = useState(0)     // recarrega após importar meses anteriores
   const [impBusy, setImpBusy] = useState(false)
   const [impMsg, setImpMsg] = useState('')
@@ -262,6 +262,9 @@ export default function CompMovimento() {
     if (comps.some(c => desviante(classifRaw, c.mes) && !justificadas.has(chaveCelula(reduzido, c.mes)))) pendentes++
   }
 
+  // Níveis de sintéticas disponíveis (grau), para o filtro por nível do comparativo.
+  const niveisSint = [...new Set(contas.filter(c => c.sintetica).map(c => c.grau))].sort((a, b) => a - b)
+
   // Marca uma célula como justificada/corrigida localmente (atualiza o contador na hora).
   function marcarJustificada(conta, mes, texto) {
     setJustificadas(prev => {
@@ -360,11 +363,17 @@ export default function CompMovimento() {
             <p style={{ color: theme.sub, fontSize: 12.5, margin: 0, flex: 1, minWidth: 240 }}>
               Contas de resultado. Valores em <b style={{ color: theme.red }}>vermelho</b> desviam mais de 10% do <b>mês anterior</b> (fev × jan, mar × fev…) — o primeiro mês não é comparado. Mês sem saldo aparece como <b>—</b>; fica vermelho quando o mês anterior tinha movimento. Clique num valor para ver o razão e o provável culpado.
             </p>
-            <button className="btn btn-ghost" onClick={() => setExpandido(v => !v)}
-              title={expandido ? 'Recolher: mostrar só as contas sintéticas (totais)' : 'Expandir: mostrar todas as contas'}
-              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, padding: '6px 12px' }}>
-              <i className={`ti ${expandido ? 'ti-fold' : 'ti-fold-down'}`} /> {expandido ? 'Recolher (só sintéticas)' : 'Expandir (todas)'}
-            </button>
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 12, color: theme.sub, display: 'inline-flex', alignItems: 'center', gap: 5 }}><i className="ti ti-stack-2" /> Nível:</span>
+              {niveisSint.map(n => (
+                <button key={n} onClick={() => setNivel(n)} title={`Mostrar até o nível ${n}`}
+                  className={nivel === n ? 'btn' : 'btn btn-ghost'}
+                  style={{ fontSize: 12, padding: '5px 11px', minWidth: 34 }}>{n}</button>
+              ))}
+              <button onClick={() => setNivel('tudo')} title="Expandir: todas as contas (inclui analíticas)"
+                className={nivel === 'tudo' ? 'btn' : 'btn btn-ghost'}
+                style={{ fontSize: 12, padding: '5px 11px' }}>Tudo</button>
+            </div>
             <label style={{ fontSize: 12, color: theme.sub, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
               <i className="ti ti-filter" /> Mês:
               <select className="input" style={{ width: 'auto', fontSize: 12, padding: '6px 10px' }} value={filtroMes} onChange={e => setFiltroMes(e.target.value)}>
@@ -387,14 +396,21 @@ export default function CompMovimento() {
                 </tr>
               </thead>
               <tbody>
-                {contas.filter(c => expandido || c.sintetica).map(({ reduzido, classif, classifRaw, nome, sintetica }) => {
+                {contas.filter(c => nivel === 'tudo' ? true : (c.sintetica && c.grau <= nivel)).map(({ reduzido, classif, classifRaw, nome, sintetica, grau }) => {
                   const linha = matriz[classifRaw] || {}
                   const tot = totalConta(classifRaw)
+                  // Destaque por nível: sintética de 1º nível mais forte; níveis mais fundos, mais leves.
+                  const bgNivel = !sintetica ? 'transparent' : grau <= 1 ? theme.input : grau === 2 ? 'rgba(74,124,255,0.07)' : 'rgba(74,124,255,0.035)'
+                  const pesoNivel = sintetica ? (grau <= 1 ? 800 : grau === 2 ? 700 : 600) : 400
+                  const recuo = 14 + Math.max(0, (grau || 1) - 1) * 16
                   return (
-                    <tr key={classifRaw} style={{ borderTop: `1px solid ${theme.border}`, background: sintetica ? theme.input : 'transparent', fontWeight: sintetica ? 700 : 400 }}>
+                    <tr key={classifRaw} style={{ borderTop: `1px solid ${theme.border}`, background: bgNivel, fontWeight: pesoNivel }}>
                       <td style={{ ...td, color: theme.sub, fontSize: 11 }}>{reduzido || ''}</td>
                       <td style={{ ...td, color: theme.sub, fontSize: 11 }}>{classif}</td>
-                      <td style={{ ...td, fontWeight: sintetica ? 700 : 400, maxWidth: 320 }}>{nome || '—'}</td>
+                      <td style={{ ...td, fontWeight: pesoNivel, maxWidth: 320, paddingLeft: recuo }}>
+                        {sintetica && <span style={{ fontSize: 9.5, fontWeight: 700, color: theme.accent, background: 'rgba(74,124,255,0.14)', borderRadius: 4, padding: '1px 5px', marginRight: 6 }}>N{grau}</span>}
+                        {nome || '—'}
+                      </td>
                       {mesesVis.map(c => {
                         const v = linha[c.mes]
                         // Saldo nulo OU zero conta como vazio → mostra "—" (igual aos demais meses).
