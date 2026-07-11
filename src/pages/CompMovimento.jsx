@@ -363,17 +363,14 @@ export default function CompMovimento() {
             <p style={{ color: theme.sub, fontSize: 12.5, margin: 0, flex: 1, minWidth: 240 }}>
               Contas de resultado. Valores em <b style={{ color: theme.red }}>vermelho</b> desviam mais de 10% do <b>mês anterior</b> (fev × jan, mar × fev…) — o primeiro mês não é comparado. Mês sem saldo aparece como <b>—</b>; fica vermelho quando o mês anterior tinha movimento. Clique num valor para ver o razão e o provável culpado.
             </p>
-            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 12, color: theme.sub, display: 'inline-flex', alignItems: 'center', gap: 5 }}><i className="ti ti-stack-2" /> Nível:</span>
-              {niveisSint.map(n => (
-                <button key={n} onClick={() => setNivel(n)} title={`Mostrar até o nível ${n}`}
-                  className={nivel === n ? 'btn' : 'btn btn-ghost'}
-                  style={{ fontSize: 12, padding: '5px 11px', minWidth: 34 }}>{n}</button>
-              ))}
-              <button onClick={() => setNivel('tudo')} title="Expandir: todas as contas (inclui analíticas)"
-                className={nivel === 'tudo' ? 'btn' : 'btn btn-ghost'}
-                style={{ fontSize: 12, padding: '5px 11px' }}>Tudo</button>
-            </div>
+            <label style={{ fontSize: 12, color: theme.sub, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <i className="ti ti-stack-2" /> Nível:
+              <select className="input" style={{ width: 'auto', fontSize: 12, padding: '6px 10px' }}
+                value={String(nivel)} onChange={e => setNivel(e.target.value === 'tudo' ? 'tudo' : Number(e.target.value))}>
+                {niveisSint.map(n => <option key={n} value={n}>Até o nível {n}</option>)}
+                <option value="tudo">Tudo (todas as contas)</option>
+              </select>
+            </label>
             <label style={{ fontSize: 12, color: theme.sub, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
               <i className="ti ti-filter" /> Mês:
               <select className="input" style={{ width: 'auto', fontSize: 12, padding: '6px 10px' }} value={filtroMes} onChange={e => setFiltroMes(e.target.value)}>
