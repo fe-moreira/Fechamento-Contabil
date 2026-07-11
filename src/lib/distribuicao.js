@@ -38,7 +38,9 @@ export async function apurarDistribuicao(empresaId, compId, ano = null, mes = nu
   const fimMes = (ano && mes) ? `${ano}-${String(mes).padStart(2, '0')}-${String(new Date(ano, mes, 0).getDate()).padStart(2, '0')}` : null
   const alvoMes = (ano && mes) ? `${ano}-${String(mes).padStart(2, '0')}` : null
   let distribuido = 0, pago = 0, pagoMes = 0
-  for (const s of (cfg.socios || [])) {
+  // A ata fica em cfg.ata.socios[] ({ nome, valor, conta, pagamentos[] }) — diferente de
+  // cfg.socios (que é só a lista de identificadores para o cálculo de IRRF).
+  for (const s of (cfg.ata?.socios || [])) {
     distribuido += Number(s.valor) || 0
     for (const p of (s.pagamentos || [])) {
       const v = Number(p.valor) || 0
