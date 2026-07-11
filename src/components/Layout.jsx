@@ -23,7 +23,7 @@ const FECHAMENTO = [
   { to: '/comparativo', icon: 'ti-arrows-diff', label: 'Comp. Movimento' },
   { to: '/status', icon: 'ti-traffic-lights', label: 'Status' },
   { to: '/relatorios', icon: 'ti-report', label: 'Relatórios' },
-  { to: '/painel-cliente', icon: 'ti-presentation-analytics', label: 'Dashboard do Cliente' },
+  { to: '/painel-cliente', icon: 'ti-presentation-analytics', label: 'Cockpit Financeiro' },
 ]
 
 const SISTEMA = [

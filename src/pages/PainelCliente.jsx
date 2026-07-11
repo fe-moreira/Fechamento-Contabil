@@ -249,7 +249,7 @@ export default function PainelCliente() {
     })
 
     gerarExcelTimbrado({
-      titulo: 'Dashboard do cliente',
+      titulo: 'Cockpit Financeiro',
       sub,
       colunas: [{ nome: 'Indicador', largura: 46, wrap: true }, { nome: 'Valor', alinhar: 'right', moeda: true }],
       secoes,
@@ -674,7 +674,7 @@ const card = { background: theme.card, border: `0.5px solid ${theme.cb}`, border
 function Wrapper({ children }) {
   return (
     <div>
-      <h1 style={{ fontSize: 22, fontWeight: 500, marginBottom: 4 }}>Dashboard do Cliente</h1>
+      <h1 style={{ fontSize: 22, fontWeight: 500, marginBottom: 4 }}>Cockpit Financeiro</h1>
       <p style={{ color: theme.sub, fontSize: 13, marginBottom: 22 }}>Visão para levar ao cliente — resultado, balanço, financeiro, impostos e principais clientes da competência.</p>
       {children}
     </div>
