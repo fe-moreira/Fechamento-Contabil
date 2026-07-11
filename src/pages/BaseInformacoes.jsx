@@ -366,9 +366,7 @@ export default function BaseInformacoes() {
       <p style={{ color: theme.sub, fontSize: 13, fontWeight: 600, textTransform: 'uppercase', letterSpacing: .8, margin: '4px 0 12px' }}>Parâmetros do fechamento</p>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 14 }}>
         <CargaCard {...CARGAS[0]} ultima={cargas.plano?.at(-1)} onClick={() => setModal({ tipo: 'carga', carga: CARGAS[0] })} />
-        <CargaCard {...CARGAS[1]} ultima={cargas.depara?.at(-1)} onClick={() => setModal({ tipo: 'carga', carga: CARGAS[1] })} />
         <CargaCard {...CARGAS[2]} ultima={cargas.apelidos?.at(-1)} onClick={() => setModal({ tipo: 'carga', carga: CARGAS[2] })} />
-        <SimplesCard icon="ti-file-description" title="Modelos de relatório" sub="Balancete, DRE, DFC" onClick={() => setModal({ tipo: 'modelos' })} />
         <SimplesCard icon="ti-calendar-event" title="Período de início" sub={periodo ? `${periodo} · trava o passado` : 'Trava o passado'}
           badge={!periodo
             ? { txt: 'definir', cor: theme.yellow, bg: 'rgba(245,166,35,0.15)' }
@@ -428,9 +426,6 @@ export default function BaseInformacoes() {
       )}
       {modal?.tipo === 'dist' && (
         <ModalDist inicial={dist} empresaId={empresaId} competencia={competencia} empresaNome={empresaNome} planoMap={planoMap} onClose={() => setModal(null)} onSalvar={salvarDist} />
-      )}
-      {modal?.tipo === 'modelos' && (
-        <ModalSimples titulo="Modelos de relatório" texto="Os modelos do escritório (Balancete, DRE, DFC, Balanço) já são gerados na tela de Relatórios a partir do balancete da competência, com exportação para Excel (.xlsx) no papel timbrado da Attentive. A personalização de modelos por cliente entra em breve." onClose={() => setModal(null)} />
       )}
       {modal?.tipo === 'verCargaInicial' && (
         <Modal titulo="Carga inicial — conteúdo importado" sub={String(modal.carga.obs || '').replace(/^Carga inicial · /, '')} onClose={() => setModal(null)} largura={760}>
