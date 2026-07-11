@@ -295,6 +295,17 @@ export default function CompMovimento() {
     return Math.abs(a - p) / Math.abs(p) > 0.1
   }
 
+  // Dados da variação de uma conta num mês (atual × mês anterior) — alimenta a sugestão
+  // automática de justificativa no modal.
+  function infoVariacao(classifRaw, mes) {
+    const idx = comps.findIndex(c => c.mes === mes)
+    const linha = matriz[classifRaw] || {}
+    const atual = Number(linha[amKey(ANO, mes)] || 0) || 0
+    const mesAntObj = idx > 0 ? comps[idx - 1] : null
+    const anterior = mesAntObj ? (Number(linha[amKey(ANO, mesAntObj.mes)] || 0) || 0) : null
+    return { atual, anterior, mesAtual: mes, mesAnterior: mesAntObj ? mesAntObj.mes : null }
+  }
+
   // Conta por CONTA (não por célula/mês): uma conta com qualquer mês desviante ainda
   // não justificado conta 1 — mesmo conceito do Status e do badge do menu.
   // Só nas analíticas — as sintéticas são totais (não se justificam diretamente).
@@ -511,7 +522,7 @@ export default function CompMovimento() {
                         return (
                           <td key={col.key} style={{ ...td, textAlign: 'right' }}>
                             <button
-                              onClick={() => setDetalhe({ conta: reduzido, classif, nome, mes, compId: col.compId })}
+                              onClick={() => setDetalhe({ conta: reduzido, classif, nome, mes, compId: col.compId, varInfo: infoVariacao(classifRaw, mes) })}
                               style={{
                                 display: 'inline-flex', alignItems: 'center', gap: 4, justifyContent: 'flex-end',
                                 background: 'none', border: 'none', padding: 0, cursor: 'pointer',
@@ -850,6 +861,7 @@ function ModalRazao({ detalhe, compsAnteriores, usuario, jaJustificada, onJustif
       {registro && (
         <ModalRegistro
           tipo={registro} salvando={salvando} conta={conta} mes={mes}
+          sugestao={registro === 'Justificativa' ? montarSugestaoJust({ varInfo: detalhe.varInfo, nome, conta, suspeitos }) : ''}
           onClose={() => setRegistro(null)} onConfirmar={txt => registrar(registro, txt)}
         />
       )}
@@ -935,8 +947,30 @@ function ModalCorrecao({ acao, conta, salvando, onClose, onGerar, onDesfazer }) 
   )
 }
 
-function ModalRegistro({ tipo, salvando, conta, mes, onClose, onConfirmar }) {
-  const [txt, setTxt] = useState('')
+// Monta uma sugestão de justificativa a partir dos dados da variação (magnitude,
+// direção e comparação com o mês anterior) e do provável lançamento culpado. O
+// contador confirma ou reescreve — serve só para ganhar tempo.
+function montarSugestaoJust({ varInfo, nome, conta, suspeitos }) {
+  if (!varInfo) return ''
+  const { atual, anterior, mesAtual, mesAnterior } = varInfo
+  const nm = nome ? `A conta ${nome}` : `A conta ${conta}`
+  const culpado = (suspeitos || []).find(s => s.suspeito && s.historico)
+  const origem = culpado ? ` Possível origem: ${culpado.historico}${culpado.motivo ? ` (${culpado.motivo})` : ''}.` : ''
+
+  // Sem mês anterior (primeiro mês) ou conta que surgiu do zero.
+  if (anterior == null || Math.abs(anterior) < 0.005) {
+    return `${nm} passou a apresentar movimento de ${money(Math.abs(atual))} em ${MESES[mesAtual - 1]}/${ANO}.${origem} Variação esperada em razão de ______.`
+  }
+  const delta = Math.abs(atual) - Math.abs(anterior)
+  const subiu = delta > 0
+  const pct = Math.round(Math.abs(delta) / Math.abs(anterior) * 100)
+  return `${nm} ${subiu ? 'aumentou' : 'reduziu'} ${money(Math.abs(delta))} (${subiu ? '+' : '−'}${pct}%) em `
+    + `${MESES[mesAtual - 1]}/${ANO} na comparação com ${MESES[(mesAnterior || 1) - 1]}/${ANO} `
+    + `(de ${money(Math.abs(anterior))} para ${money(Math.abs(atual))}).${origem} Variação esperada em razão de ______.`
+}
+
+function ModalRegistro({ tipo, salvando, conta, mes, sugestao = '', onClose, onConfirmar }) {
+  const [txt, setTxt] = useState(tipo === 'Justificativa' ? sugestao : '')
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 60 }}>
       <div onClick={e => e.stopPropagation()} style={{ width: 'min(480px,96vw)', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
@@ -944,7 +978,18 @@ function ModalRegistro({ tipo, salvando, conta, mes, onClose, onConfirmar }) {
         <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 14 }}>
           Conta <b style={{ color: theme.text }}>{conta}</b> · {MESES[mes - 1]}/{ANO}. Fica registrada na auditoria com seu usuário e a data.
         </p>
-        <textarea className="input" rows={3} value={txt} onChange={e => setTxt(e.target.value)} autoFocus
+        {tipo === 'Justificativa' && sugestao && (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+            <span style={{ fontSize: 11.5, color: theme.accent, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+              <i className="ti ti-sparkles" /> Sugestão automática — confirme ou edite o texto.
+            </span>
+            <div style={{ display: 'flex', gap: 6 }}>
+              {txt !== sugestao && <button type="button" className="btn-ghost" style={{ fontSize: 11, padding: '3px 9px' }} onClick={() => setTxt(sugestao)}>Restaurar sugestão</button>}
+              <button type="button" className="btn-ghost" style={{ fontSize: 11, padding: '3px 9px' }} onClick={() => setTxt('')}>Limpar</button>
+            </div>
+          </div>
+        )}
+        <textarea className="input" rows={4} value={txt} onChange={e => setTxt(e.target.value)} autoFocus
           placeholder={tipo === 'Correção' ? 'O que foi corrigido (ex.: reclassificação, lançamento ajustado)…' : 'Por que esta variação é esperada…'} />
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
           <button className="btn btn-ghost" onClick={onClose} disabled={salvando}>Cancelar</button>
