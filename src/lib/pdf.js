@@ -59,6 +59,59 @@ export function abrePdfTimbrado({ titulo, sub = '', colunas, linhas, totais, sec
 }
 
 // ---------------------------------------------------------------------------
+// DRE no PADRÃO DOMÍNIO: cabeçalho Empresa/CNPJ/Período, título "DEMONSTRAÇÃO DO
+// RESULTADO DO EXERCÍCIO EM ...", colunas Descrição · Saldo · Total. Componentes com
+// valor em Saldo e Total; subtotais (negrito) só na coluna Total. Negativos em parênteses.
+// rows: [{ label, valor, sub }] (de montarDRE).
+export function abreDreDominio({ empresa = '', cnpj = '', periodoIni = '', periodoFim = '', dataFim = '', rows = [] }) {
+  const esc = s => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))
+  const fmtP = v => { const n = Number(v) || 0; const a = Math.abs(n).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); return n < -0.005 ? `(${a})` : a }
+
+  const corpo = (rows || []).map(r => r.sub
+    ? `<tr class="sub"><td class="desc">${esc(r.label)}</td><td class="r"></td><td class="r">${fmtP(r.valor)}</td></tr>`
+    : `<tr><td class="desc">${esc(r.label)}</td><td class="r">${fmtP(r.valor)}</td><td class="r">${fmtP(r.valor)}</td></tr>`
+  ).join('') || `<tr><td colspan="3">Sem dados de resultado.</td></tr>`
+
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>DRE - ${esc(empresa)}</title>
+    <style>
+      @page { margin: 22px 24px 30px; }
+      * { box-sizing: border-box; }
+      body { font-family: Arial, Helvetica, sans-serif; color:#000; margin:0; font-size:10px; }
+      .cab { border:1px solid #000; margin-bottom:6px; }
+      .cab table { width:100%; border-collapse:collapse; }
+      .cab td { padding:3px 8px; font-size:10px; }
+      .cab .lab { font-weight:bold; width:70px; }
+      .cab .folha { text-align:right; white-space:nowrap; }
+      .cab .row2 td { border-top:1px solid #000; }
+      h1 { text-align:center; font-size:12px; margin:8px 0 8px; }
+      table.dre { width:100%; border-collapse:collapse; }
+      table.dre thead th { border-top:1px solid #000; border-bottom:1px solid #000; padding:4px 6px; font-size:9.5px; background:#eee; text-align:left; }
+      table.dre thead th.r { text-align:right; width:150px; }
+      table.dre td { padding:3px 6px; vertical-align:top; font-variant-numeric: tabular-nums; }
+      table.dre td.r { text-align:right; white-space:nowrap; }
+      table.dre td.desc { }
+      table.dre tr.sub td { font-weight:bold; border-top:1px solid #999; border-bottom:1px solid #999; background:#f4f4f4; }
+      thead { display: table-header-group; }
+    </style></head>
+    <body>
+      <div class="cab"><table>
+        <tr><td class="lab">Empresa:</td><td>${esc(empresa)}</td><td class="folha">Folha:&nbsp;&nbsp;0001</td></tr>
+        <tr class="row2"><td class="lab">C.N.P.J.:</td><td>${esc(cnpj)}</td><td class="folha">&nbsp;</td></tr>
+        <tr class="row2"><td class="lab">Período:</td><td>${esc(periodoIni)} - ${esc(periodoFim)}</td><td class="folha">&nbsp;</td></tr>
+      </table></div>
+      <h1>DEMONSTRAÇÃO DO RESULTADO DO EXERCÍCIO EM ${esc(dataFim || periodoFim)}</h1>
+      <table class="dre">
+        <thead><tr><th>Descrição</th><th class="r">Saldo</th><th class="r">Total</th></tr></thead>
+        <tbody>${corpo}</tbody>
+      </table>
+      <script>window.onload=function(){setTimeout(function(){window.print()},250)}</script>
+    </body></html>`
+  const w = window.open('', '_blank')
+  if (!w) { alert('Permita pop-ups para gerar o PDF.'); return }
+  w.document.write(html); w.document.close()
+}
+
+// ---------------------------------------------------------------------------
 // Balancete no PADRÃO DOMÍNIO (mesma cara do relatório que o Domínio emite):
 // cabeçalho Empresa / C.N.P.J. / Período / Folha, título BALANCETE e as colunas
 // Código · Classificação · Descrição da conta · Saldo Anterior · Débito · Crédito

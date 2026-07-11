@@ -6,7 +6,8 @@ import { apurarBancoResultado } from '../lib/bancoResultado'
 import { apurarVariacoes } from '../lib/variacoes'
 import { parsePlano, contasConciliacaoAbertas, montarBalancete } from '../lib/balancete'
 import { gerarExcelTimbrado } from '../lib/excel'
-import { abreBalanceteDominio } from '../lib/pdf'
+import { abreBalanceteDominio, abreDreDominio } from '../lib/pdf'
+import { montarDRE } from '../lib/dre'
 import BookComposicoes from '../components/BookComposicoes'
 import { theme, money, moneyDC } from '../lib/theme'
 
@@ -23,7 +24,7 @@ function dataPtBR(iso) {
 // Catálogo de relatórios (ordem das abas/cards).
 const RELATORIOS = [
   { id: 'balancete', nome: 'Balancete', icon: 'ti-table', desc: 'Saldos por conta (inicial, movimento e final).' },
-  { id: 'dre', nome: 'DRE (resumo)', icon: 'ti-report-money', desc: 'Demonstração de resultado simplificada por prefixo de conta.' },
+  { id: 'dre', nome: 'DRE', icon: 'ti-report-money', desc: 'Demonstração do resultado: Receita Líquida, Lucro Bruto, EBITDA, LAIR e Lucro Líquido.' },
   { id: 'book', nome: 'Book de Composições', icon: 'ti-book', desc: 'Contas patrimoniais: composição, amarração e documento-suporte para auditoria.' },
   { id: 'balanco', nome: 'Balanço Patrimonial', icon: 'ti-scale', desc: 'Ativo e Passivo + Patrimônio Líquido por conta (saldo final).' },
   { id: 'comparativo', nome: 'Comparativo de Movimento', icon: 'ti-arrows-diff', desc: 'Saldo de cada conta ao longo dos meses do ano.' },
@@ -125,14 +126,9 @@ export default function Relatorios() {
   const totDeb = linhas.reduce((s, l) => s + (Number(l.debito) || 0), 0)
   const totCred = linhas.reduce((s, l) => s + (Number(l.credito) || 0), 0)
 
-  // DRE simplificada por prefixo de conta.
-  const receitas = linhas.filter(l => String(l.conta || '').startsWith('3'))
-    .reduce((s, l) => s + (Number(l.saldo_final) || 0), 0)
-  const despesas = linhas.filter(l => String(l.conta || '').startsWith('4'))
-    .reduce((s, l) => s + (Number(l.saldo_final) || 0), 0)
-  const custos = linhas.filter(l => String(l.conta || '').startsWith('5'))
-    .reduce((s, l) => s + (Number(l.saldo_final) || 0), 0)
-  const resultado = receitas - despesas - custos
+  // DRE estruturada (Receita Bruta → Líquida → Lucro Bruto → EBITDA → LAIR → Lucro Líquido),
+  // montada da hierarquia do balancete (mesma estrutura do Domínio).
+  const dreRows = hier.length ? montarDRE(hier) : []
 
   // Balanço: Ativo (prefixo 1) × Passivo + PL (prefixo 2).
   const ativo = linhas.filter(l => String(l.conta || '').startsWith('1'))
@@ -195,18 +191,29 @@ export default function Relatorios() {
   }
 
   function exportarDRE() {
-    xls('DRE (resumo)', [
-      { nome: 'Grupo', largura: 32 },
+    xls('DRE — Demonstração do Resultado', [
+      { nome: 'Descrição', largura: 44 },
       { nome: 'Valor', alinhar: 'right', moeda: true },
     ], {
-      linhas: [
-        ['Receitas', num(receitas)],
-        ['(-) Despesas', num(despesas)],
-        ['(-) Custos/Outras', num(custos)],
-      ],
-      totais: ['Resultado', num(resultado)],
+      linhas: dreRows.map(r => [(r.sub ? '' : '   ') + r.label, num(r.valor)]),
       arquivo: `dre_${compSlug}.xlsx`,
       aba: 'DRE',
+    })
+  }
+
+  // Gera a DRE no padrão Domínio (estrutura Receita Líquida/Lucro Bruto/EBITDA/LAIR/Lucro Líquido).
+  function gerarDreDominioPDF() {
+    if (!dreRows.length) return
+    const [mes, ano] = competencia.split('/').map(Number)
+    const ult = new Date(ano, mes, 0).getDate()
+    const dd = `${String(ult).padStart(2, '0')}/${String(mes).padStart(2, '0')}/${ano}`
+    abreDreDominio({
+      empresa: empresaNome,
+      cnpj: cnpj || '',
+      periodoIni: `01/${String(mes).padStart(2, '0')}/${ano}`,
+      periodoFim: dd,
+      dataFim: dd,
+      rows: dreRows,
     })
   }
 
@@ -426,19 +433,35 @@ export default function Relatorios() {
         </Secao>
       )}
 
-      {/* DRE */}
+      {/* DRE estruturada (modelo do sistema / Domínio) */}
       {!carregando && temComp && linhas.length > 0 && aba === 'dre' && (
-        <Secao titulo="DRE (resumo)" onExportar={exportarDRE}>
-          <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: 22, maxWidth: 520 }}>
-            <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 18 }}>DRE simplificada por prefixo de conta</p>
-            <LinhaDRE label="Receitas" valor={money(receitas)} />
-            <LinhaDRE label="(-) Despesas" valor={money(despesas)} />
-            <LinhaDRE label="(-) Custos/Outras" valor={money(custos)} />
-            <div style={{ borderTop: `1px solid ${theme.border}`, marginTop: 10, paddingTop: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontSize: 14, fontWeight: 700 }}>Resultado</span>
-              <span style={{ fontSize: 18, fontWeight: 700, color: resultado >= 0 ? theme.green : theme.red }}>{money(resultado)}</span>
-            </div>
+        <Secao titulo="DRE — Demonstração do Resultado" onExportar={dreRows.length ? exportarDRE : null}>
+          <div style={{ marginBottom: 12 }}>
+            <button className="btn" onClick={gerarDreDominioPDF} disabled={!dreRows.length}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+              <i className="ti ti-file-type-pdf" /> Gerar DRE (padrão Domínio)
+            </button>
+            <span style={{ marginLeft: 10, fontSize: 12, color: theme.sub }}>PDF no modelo do Domínio (Receita Líquida, Lucro Bruto, EBITDA, LAIR, Lucro Líquido).</span>
           </div>
+          {hier.length === 0 ? (
+            <p style={{ color: theme.sub, fontSize: 13 }}>Montando a DRE…</p>
+          ) : (
+            <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: '8px 0', maxWidth: 640 }}>
+              {dreRows.map((r, i) => (
+                <div key={i} style={{
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16,
+                  padding: r.sub ? '11px 22px' : '7px 22px',
+                  borderTop: r.sub ? `1px solid ${theme.border}` : 'none',
+                  background: r.sub ? theme.input : 'transparent',
+                }}>
+                  <span style={{ fontSize: r.sub ? 13.5 : 13, fontWeight: r.sub ? 700 : 400, color: r.sub ? theme.text : theme.sub, paddingLeft: r.sub ? 0 : 12 }}>{r.label}</span>
+                  <span style={{ fontSize: r.sub ? 14.5 : 13, fontWeight: r.sub ? 800 : 500, fontVariantNumeric: 'tabular-nums', color: r.valor < 0 ? theme.red : (r.sub ? theme.text : theme.text) }}>
+                    {r.valor < 0 ? `(${money(Math.abs(r.valor)).replace('R$', 'R$ ').trim()})` : money(r.valor)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </Secao>
       )}
 
