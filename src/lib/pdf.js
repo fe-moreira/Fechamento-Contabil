@@ -112,6 +112,62 @@ export function abreDreDominio({ empresa = '', cnpj = '', periodoIni = '', perio
 }
 
 // ---------------------------------------------------------------------------
+// Comparativo de Movimento no PADRÃO DOMÍNIO (paisagem): Código · Classificação ·
+// Descrição + uma coluna por mês (saldo com D/C). Hierarquia completa (sint. + analít.).
+// rows: [{ cod, classif, nome, sintetica, vals: [número|null] }]; meses: rótulos.
+export function abreComparativoDominio({ empresa = '', cnpj = '', periodoIni = '', periodoFim = '', meses = [], rows = [] }) {
+  const esc = s => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))
+  const dc = v => { if (v == null) return ''; const n = Number(v) || 0; return Math.abs(n) < 0.005 ? '0,00' : Math.abs(n).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + (n >= 0 ? 'D' : 'C') }
+  const thMeses = meses.map(m => `<th class="r">${esc(m)}</th>`).join('')
+  const corpo = (rows || []).map(r => `<tr class="${r.sintetica ? 'sint' : ''}">
+      <td class="cod">${esc(r.cod || '')}</td>
+      <td class="cla">${esc(r.classif || '')}</td>
+      <td class="desc">${esc(r.nome || '')}</td>
+      ${r.vals.map(v => `<td class="r">${dc(v)}</td>`).join('')}
+    </tr>`).join('') || `<tr><td colspan="${3 + meses.length}">Sem dados no comparativo.</td></tr>`
+
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Comparativo de Movimento - ${esc(empresa)}</title>
+    <style>
+      @page { size: landscape; margin: 18px 20px 26px; }
+      * { box-sizing: border-box; }
+      body { font-family: Arial, Helvetica, sans-serif; color:#000; margin:0; font-size:8.4px; }
+      .cab { border:1px solid #000; margin-bottom:6px; }
+      .cab table { width:100%; border-collapse:collapse; }
+      .cab td { padding:3px 8px; font-size:10px; }
+      .cab .lab { font-weight:bold; width:70px; }
+      .cab .folha { text-align:right; white-space:nowrap; }
+      .cab .row2 td { border-top:1px solid #000; }
+      h1 { text-align:center; font-size:12px; letter-spacing:1.5px; margin:8px 0 6px; }
+      table.cmp { width:100%; border-collapse:collapse; }
+      table.cmp thead th { border-top:1px solid #000; border-bottom:1px solid #000; padding:4px 5px; font-size:8px; background:#eee; text-align:left; }
+      table.cmp thead th.r { text-align:right; }
+      table.cmp td { padding:3.5px 5px; vertical-align:top; font-variant-numeric: tabular-nums; line-height:1.3; }
+      table.cmp td.r { text-align:right; white-space:nowrap; }
+      table.cmp td.cod { width:44px; }
+      table.cmp td.cla { width:96px; white-space:nowrap; }
+      table.cmp tr.sint td { font-weight:bold; border-top:1px solid #bbb; }
+      thead { display: table-header-group; }
+      tr { page-break-inside: avoid; }
+    </style></head>
+    <body>
+      <div class="cab"><table>
+        <tr><td class="lab">Empresa:</td><td>${esc(empresa)}</td><td class="folha">Folha:&nbsp;&nbsp;0001</td></tr>
+        <tr class="row2"><td class="lab">C.N.P.J.:</td><td>${esc(cnpj)}</td><td class="folha">&nbsp;</td></tr>
+        <tr class="row2"><td class="lab">Período:</td><td>${esc(periodoIni)} - ${esc(periodoFim)}</td><td class="folha">&nbsp;</td></tr>
+      </table></div>
+      <h1>COMPARATIVO DE MOVIMENTO</h1>
+      <table class="cmp">
+        <thead><tr><th>Código</th><th>Classificação</th><th>Descrição da conta</th>${thMeses}</tr></thead>
+        <tbody>${corpo}</tbody>
+      </table>
+      <script>window.onload=function(){setTimeout(function(){window.print()},250)}</script>
+    </body></html>`
+  const w = window.open('', '_blank')
+  if (!w) { alert('Permita pop-ups para gerar o PDF.'); return }
+  w.document.write(html); w.document.close()
+}
+
+// ---------------------------------------------------------------------------
 // Balancete no PADRÃO DOMÍNIO (mesma cara do relatório que o Domínio emite):
 // cabeçalho Empresa / C.N.P.J. / Período / Folha, título BALANCETE e as colunas
 // Código · Classificação · Descrição da conta · Saldo Anterior · Débito · Crédito
