@@ -32,20 +32,21 @@ const th = { textAlign: 'left', padding: '9px 12px', fontSize: 11, color: theme.
 const td = { padding: '10px 12px', fontSize: 13, color: theme.text, borderBottom: `1px solid ${theme.border}`, verticalAlign: 'top' }
 function Card({ children, style }) { return <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: 12, padding: 18, ...style }}>{children}</div> }
 function SecTitle({ children }) { return <p style={{ fontSize: 15, fontWeight: 700, margin: '0 0 2px', display: 'flex', alignItems: 'center', gap: 8 }}>{children}</p> }
-// Card de cadastro colapsável: cabeçalho com título + botão Recolher/Expandir; o corpo
-// (formulário) some ao recolher, dando mais espaço à lista abaixo.
+// Card de cadastro colapsável: começa RECOLHIDO para a tela ficar limpa (só os cards
+// de cima e a lista de registros aparecem). O cabeçalho inteiro é clicável; ao expandir,
+// o formulário aparece. Assim evita-se poluir a tela quando o objetivo é só consultar.
 function FormCard({ titulo, children }) {
-  const [aberto, setAberto] = useState(true)
+  const [aberto, setAberto] = useState(false)
   return (
     <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: 12, padding: 18 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+      <div onClick={() => setAberto(a => !a)} title={aberto ? 'Recolher o cadastro' : 'Expandir para cadastrar'}
+        style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, cursor: 'pointer', userSelect: 'none' }}>
         <SecTitle>{titulo}</SecTitle>
-        <button type="button" className="btn-ghost" onClick={() => setAberto(a => !a)} title={aberto ? 'Recolher o cadastro' : 'Expandir o cadastro'}
-          style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, padding: '5px 11px' }}>
+        <span className="btn-ghost" style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, padding: '5px 11px' }}>
           <i className={`ti ${aberto ? 'ti-chevrons-up' : 'ti-chevrons-down'}`} /> {aberto ? 'Recolher' : 'Expandir'}
-        </button>
+        </span>
       </div>
-      {aberto && children}
+      {aberto && <div style={{ marginTop: 14 }}>{children}</div>}
     </div>
   )
 }
