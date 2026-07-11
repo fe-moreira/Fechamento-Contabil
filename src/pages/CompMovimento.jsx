@@ -90,6 +90,9 @@ function analisarMovers(linhasAtual, linhasAnterior) {
   }
   somar(linhasAtual, 'movAtual')
   somar(linhasAnterior, 'movAnterior')
+  // Grupo único = a conta não tem quebra por cliente no histórico (ex.: linha
+  // acumuladora). Nesse caso não há entidade a nomear — devolve vazio.
+  if (acc.size <= 1) return []
   const lista = [...acc.entries()]
     .map(([key, g]) => ({ key, rep: g.rep, movAtual: g.movAtual, movAnterior: g.movAnterior, delta: g.movAtual - g.movAnterior }))
     .filter(g => Math.abs(g.delta) > 0.005)
@@ -1034,40 +1037,44 @@ function ModalCorrecao({ acao, conta, salvando, onClose, onGerar, onDesfazer }) 
 // Monta uma sugestão de justificativa a partir dos dados da variação (magnitude,
 // direção e comparação com o mês anterior) e do provável lançamento culpado. O
 // contador confirma ou reescreve — serve só para ganhar tempo.
-// Frase de uma entidade que puxou a variação (cliente/fornecedor), com os valores dos
-// dois meses — o "ponto identificado" que o contador confirma.
-function fraseMover(m) {
+// Frase do MOTIVO por entidade (cliente/fornecedor): já escreve a causa provável, com
+// o valor do impacto — é o que preenche o "em razão de" para o contador só confirmar.
+function fraseRazao(m) {
   const a = Math.abs(m.movAtual), p = Math.abs(m.movAnterior)
   const rep = String(m.rep || '').trim().replace(/\s+/g, ' ').slice(0, 48)
-  let base
-  if (p < 0.005) base = `${rep} passou a movimentar ${money(a)}`
-  else if (a < 0.005) base = `${rep} deixou de movimentar (antes ${money(p)})`
-  else base = `${rep} ${a > p ? 'subiu' : 'caiu'} de ${money(p)} para ${money(a)}`
-  if (m.reclass) base += ` — o valor aparece na conta ${m.reclass.conta}${m.reclass.nome ? ` · ${m.reclass.nome}` : ''} no mês (possível reclassificação)`
-  return base
+  let s
+  if (p < 0.005) s = `entrada de ${rep} (${money(a)})`
+  else if (a < 0.005) s = `saída de ${rep} (antes ${money(p)})`
+  else s = `${a < p ? 'redução' : 'aumento'} de ${rep} (${a < p ? '−' : '+'}${money(Math.abs(a - p))})`
+  if (m.reclass) s += ` — reclassificado para a conta ${m.reclass.conta}${m.reclass.nome ? ` · ${m.reclass.nome}` : ''}`
+  return s
 }
 
 function montarSugestaoJust({ varInfo, nome, conta, suspeitos, movers }) {
   if (!varInfo) return ''
   const { atual, anterior, mesAtual, mesAnterior } = varInfo
   const nm = nome ? `A conta ${nome}` : `A conta ${conta}`
-  // Preferimos apontar a entidade (cliente/fornecedor) que mais mudou; se não der,
-  // caímos no lançamento provável culpado.
-  const culpado = (suspeitos || []).find(s => s.suspeito && s.historico)
-  const detalhe = (movers && movers.length)
-    ? ` Destaque: ${movers.map(fraseMover).join('; ')}.`
-    : (culpado ? ` Possível origem: ${culpado.historico}${culpado.motivo ? ` (${culpado.motivo})` : ''}.` : '')
+  // Se há quebra por cliente, já escreve o motivo com os nomes; senão, aponta o provável
+  // lançamento culpado e deixa o "em razão de" em branco para preenchimento manual.
+  let razao
+  if (movers && movers.length) {
+    razao = ` Variação em razão de: ${movers.map(fraseRazao).join('; ')}.`
+  } else {
+    const culpado = (suspeitos || []).find(s => s.suspeito && s.historico)
+    razao = (culpado ? ` Possível origem: ${culpado.historico}${culpado.motivo ? ` (${culpado.motivo})` : ''}.` : '')
+      + ` Variação esperada em razão de ______.`
+  }
 
   // Sem mês anterior (primeiro mês) ou conta que surgiu do zero.
   if (anterior == null || Math.abs(anterior) < 0.005) {
-    return `${nm} passou a apresentar movimento de ${money(Math.abs(atual))} em ${MESES[mesAtual - 1]}/${ANO}.${detalhe} Variação esperada em razão de ______.`
+    return `${nm} passou a apresentar movimento de ${money(Math.abs(atual))} em ${MESES[mesAtual - 1]}/${ANO}.${razao}`
   }
   const delta = Math.abs(atual) - Math.abs(anterior)
   const subiu = delta > 0
   const pct = Math.round(Math.abs(delta) / Math.abs(anterior) * 100)
   return `${nm} ${subiu ? 'aumentou' : 'reduziu'} ${money(Math.abs(delta))} (${subiu ? '+' : '−'}${pct}%) em `
     + `${MESES[mesAtual - 1]}/${ANO} na comparação com ${MESES[(mesAnterior || 1) - 1]}/${ANO} `
-    + `(de ${money(Math.abs(anterior))} para ${money(Math.abs(atual))}).${detalhe} Variação esperada em razão de ______.`
+    + `(de ${money(Math.abs(anterior))} para ${money(Math.abs(atual))}).${razao}`
 }
 
 function ModalRegistro({ tipo, salvando, conta, mes, sugestao = '', onClose, onConfirmar }) {
