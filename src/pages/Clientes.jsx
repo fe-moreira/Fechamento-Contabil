@@ -71,6 +71,7 @@ export default function Clientes() {
   const [editId, setEditId] = useState(null)
   const [aberto, setAberto] = useState(false)
   const [importMsg, setImportMsg] = useState('')
+  const [busca, setBusca] = useState('')
   const [preview, setPreview] = useState(null)   // resumo da importação p/ confirmação
   const [aplicando, setAplicando] = useState(false)
   const fileRef = useRef(null)
@@ -272,14 +273,26 @@ export default function Clientes() {
   const set = (k) => (e) => setForm(f => ({ ...f, [k]: e.target.value }))
   const toggleConflito = (i) => setPreview(p => ({ ...p, conflitos: p.conflitos.map((c, j) => j === i ? { ...c, aplicar: !c.aplicar } : c) }))
 
+  // Filtro por nome (razão social / fantasia) ou código.
+  const norm = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+  const termo = norm(busca.trim())
+  const listaFiltrada = termo
+    ? lista.filter(c => norm(c.razao_social).includes(termo) || norm(c.nome_fantasia).includes(termo) || String(c.codigo_dominio || '').includes(busca.trim()))
+    : lista
+
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
         <div>
           <h1 style={{ fontSize: 22 }}>Clientes</h1>
-          <p style={{ color: theme.sub, fontSize: 13, marginTop: 2 }}>{lista.length} cadastrado(s)</p>
+          <p style={{ color: theme.sub, fontSize: 13, marginTop: 2 }}>{termo ? `${listaFiltrada.length} de ${lista.length}` : `${lista.length} cadastrado(s)`}</p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <div style={{ position: 'relative' }}>
+            <i className="ti ti-search" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: theme.sub, fontSize: 15 }} />
+            <input className="input" value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar por nome ou código…"
+              style={{ paddingLeft: 30, width: 240, fontSize: 13 }} />
+          </div>
           <a className="btn btn-ghost" href="/modelo-importacao-clientes.xlsx" download
             style={{ fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
             <i className="ti ti-file-spreadsheet" /> Baixar modelo
@@ -310,7 +323,9 @@ export default function Clientes() {
               <tr><td colSpan={6} style={{ padding: 20, color: theme.sub }}>Carregando…</td></tr>
             ) : lista.length === 0 ? (
               <tr><td colSpan={6} style={{ padding: 20, color: theme.sub }}>Nenhum cliente. Clique em “+ Novo cliente”.</td></tr>
-            ) : lista.map(c => (
+            ) : listaFiltrada.length === 0 ? (
+              <tr><td colSpan={6} style={{ padding: 20, color: theme.sub }}>Nenhum cliente encontrado para “{busca}”.</td></tr>
+            ) : listaFiltrada.map(c => (
               <tr key={c.id} style={{ borderTop: `1px solid ${theme.border}` }}>
                 <td style={{ padding: '11px 14px', fontSize: 13, color: theme.sub }}>{c.codigo_dominio}{c.tipo === 'Filial' ? ' (filial)' : ''}</td>
                 <td style={{ padding: '11px 14px', fontSize: 13 }}>{c.razao_social}</td>
