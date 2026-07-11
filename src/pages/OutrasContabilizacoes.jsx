@@ -268,6 +268,7 @@ export default function OutrasContabilizacoes() {
   const planoMap = Object.fromEntries((plano || []).map(p => [String(p.cod), p]))
   const { user } = useAuth()
   const [tab, setTab] = useState('seguro')
+  const [cardsAberto, setCardsAberto] = useState(true) // recolher os cards do topo p/ dar espaço
   const [gerar, setGerar] = useState(null) // {campos, titulo}
   const [versao, setVersao] = useState(0)  // incrementa após gerar lançamento → recarrega status "Apropriado"
   const [msg, setMsg] = useState('')
@@ -321,6 +322,15 @@ export default function OutrasContabilizacoes() {
 
       <ObservacoesConciliacao clienteId={empresaId} competencia={competencia} user={user} irPara={setTab} />
 
+      <div style={{ display: 'flex', alignItems: 'center', marginBottom: cardsAberto ? 12 : 14 }}>
+        <button className="btn-ghost" onClick={() => setCardsAberto(v => !v)}
+          title={cardsAberto ? 'Recolher os cards para ganhar espaço' : 'Mostrar os cards'}
+          style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12.5, padding: '6px 12px' }}>
+          <i className={`ti ${cardsAberto ? 'ti-chevrons-up' : 'ti-chevrons-down'}`} /> {cardsAberto ? 'Recolher' : 'Expandir'}
+        </button>
+      </div>
+
+      {cardsAberto && (
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(168px,1fr))', gap: 12, marginBottom: 18 }}>
         {BLOCOS.map(b => {
           const on = tab === b.key
@@ -335,6 +345,7 @@ export default function OutrasContabilizacoes() {
           )
         })}
       </div>
+      )}
 
       <div style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${theme.border}`, marginBottom: 20, flexWrap: 'wrap' }}>
         {BLOCOS.map(b => (
