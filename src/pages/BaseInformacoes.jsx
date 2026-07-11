@@ -117,6 +117,7 @@ const CARGAS = [
   { tipo: 'apelidos', icon: 'ti-book', title: 'Apelidos', sub: 'Leitura de histórico' },
   { tipo: 'financeiro', icon: 'ti-history', title: 'Histórico de lançamentos financeiros', sub: 'Carga inicial · atualiza a cada mês' },
   { tipo: 'bancoresult', icon: 'ti-cash', title: 'Amarração banco × resultado', sub: 'Contas banco e resultados liberados' },
+  { tipo: 'centro_custo', icon: 'ti-sitemap', title: 'Centro de custo', sub: 'Importar os centros de custo do cliente' },
 ]
 
 // Modelo de planilha de cada carga (colunas + exemplos). Serve para baixar o template
@@ -146,6 +147,11 @@ const MODELOS = {
     cols: ['Tipo', 'Código', 'Nome'],
     ex: [['Banco', '1.1.1.01', 'Banco Itaú c/c'], ['Banco', '1.1.1.02', 'Banco Bradesco c/c'], ['Resultado liberado', '4.1.1.01', 'Despesas bancárias / tarifas'], ['Resultado liberado', '3.2.1.01', 'Receita financeira (rendimento)']],
     dica: 'Tipo = "Banco" (conta de banco) ou "Resultado liberado" (resultado que pode receber lançamento direto do banco).',
+  },
+  centro_custo: {
+    cols: ['Código', 'Nome', 'Responsável'],
+    ex: [['1', 'ADMINISTRATIVO', 'Financeiro'], ['2', 'COMERCIAL', 'Vendas'], ['3', 'PRODUÇÃO', 'Operações']],
+    dica: 'Centros de custo do cliente: código, nome e (opcional) responsável. Um por linha.',
   },
 }
 
@@ -219,7 +225,8 @@ function extrairConta(obj) {
 }
 
 export default function BaseInformacoes() {
-  const { empresaId, empresaNome, competencia, plano, recalcularPendencias, recarregarPlano } = useAppData()
+  const { empresaId, empresaNome, competencia, plano, empresas, recalcularPendencias, recarregarPlano } = useAppData()
+  const usaCentroCusto = !!(empresas || []).find(e => e.id === empresaId)?.usa_centro_custo
   const planoMap = Object.fromEntries((plano || []).map(p => [String(p.cod), p]))
   const { user } = useAuth()
 
@@ -378,6 +385,9 @@ export default function BaseInformacoes() {
         <SimplesCard icon="ti-users" title="Distribuição de lucros" sub="Limite, alíquota e sócios (IRRF 2026)"
           badge={dist ? { txt: 'configurado', cor: theme.green, bg: 'rgba(48,164,108,0.15)' } : null}
           onClick={() => setModal({ tipo: 'dist' })} />
+        <CargaCard {...CARGAS[5]} ultima={cargas.centro_custo?.at(-1)}
+          disabled={!usaCentroCusto} dicaDisabled="Ative “Usa centro de custo” no cadastro do cliente para habilitar."
+          onClick={() => setModal({ tipo: 'carga', carga: CARGAS[5] })} />
       </div>
 
       {/* Carga inicial de saldos — arquivos importados (ver / excluir) */}
@@ -463,17 +473,20 @@ function TabelaDados({ titulo, linhas }) {
 }
 
 /* ---------- Cards ---------- */
-function CargaCard({ icon, title, sub, ultima, onClick }) {
+function CargaCard({ icon, title, sub, ultima, onClick, disabled, dicaDisabled }) {
   return (
-    <div onClick={onClick} style={cardBase}>
+    <div onClick={disabled ? undefined : onClick} title={disabled ? dicaDisabled : undefined}
+      style={{ ...cardBase, cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? .5 : 1 }}>
       <IconeBadge icon={icon} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <p style={{ color: theme.text, fontSize: 14, fontWeight: 500, margin: 0 }}>{title}</p>
-        <p style={{ color: theme.sub, fontSize: 12, margin: '2px 0 0' }}>{sub}</p>
+        <p style={{ color: theme.sub, fontSize: 12, margin: '2px 0 0' }}>{disabled ? dicaDisabled : sub}</p>
       </div>
-      {ultima
-        ? <span style={badge('rgba(48,164,108,0.15)', theme.green)}>vigência {ultima.vigencia}</span>
-        : <span style={badge('rgba(245,166,35,0.15)', theme.yellow)}>carga pendente</span>}
+      {disabled
+        ? <span style={badge('rgba(255,255,255,0.06)', theme.sub)}>desabilitado</span>
+        : ultima
+          ? <span style={badge('rgba(48,164,108,0.15)', theme.green)}>vigência {ultima.vigencia}</span>
+          : <span style={badge('rgba(245,166,35,0.15)', theme.yellow)}>carga pendente</span>}
     </div>
   )
 }
