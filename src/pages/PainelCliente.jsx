@@ -12,13 +12,9 @@ const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'O
 const num = v => Number(v) || 0
 const pct = (a, b) => (b ? (a / b) * 100 : null)
 const fmtPct = p => p == null ? '—' : `${p.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`
-const AZUL_CLARO = '#5AA9FF' // resultado do mês/exercício — não é bom/ruim, só o valor
-// Rótulo compacto para as barras (ex.: "R$ 45,5k") — cabe acima de colunas estreitas.
-const fmtK = v => {
-  const a = Math.abs(Number(v) || 0)
-  if (a >= 1000) return `${v < 0 ? '-' : ''}R$ ${(a / 1000).toLocaleString('pt-BR', { maximumFractionDigits: 1 })}k`
-  return money(v)
-}
+const LARANJA = '#E5894D'
+// Lucro verde, prejuízo vermelho.
+const corResultado = v => (Number(v) || 0) >= 0 ? theme.green : theme.red
 
 // Formata CNPJ 00.000.000/0000-00 (aceita já formatado).
 function fmtCnpj(c) {
@@ -291,16 +287,16 @@ export default function PainelCliente() {
 function BlocoResultado({ d }) {
   const max = Math.max(1, ...d.serie.flatMap(x => [x.receita, x.despesa, Math.abs(x.resultado)]))
   const barras = [
-    { key: 'receita', label: 'Receita', cor: theme.green },
-    { key: 'despesa', label: 'Despesa', cor: theme.red },
-    { key: 'resultado', label: 'Lucro', cor: AZUL_CLARO },
+    { key: 'receita', label: 'Receita', cor: theme.accent },
+    { key: 'despesa', label: 'Despesa', cor: LARANJA },
+    { key: 'resultado', label: 'Lucro', cor: theme.green },
   ]
   return (
     <Secao titulo="Resultado do período">
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1.6fr)', gap: 14 }}>
         <div style={{ ...card, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
           <span style={{ color: theme.sub, fontSize: 11, textTransform: 'uppercase', letterSpacing: .5 }}>Resultado da competência</span>
-          <b style={{ fontSize: 34, fontWeight: 800, color: AZUL_CLARO, letterSpacing: -.5 }}>{money(d.resultado)}</b>
+          <b style={{ fontSize: 34, fontWeight: 800, color: corResultado(d.resultado), letterSpacing: -.5 }}>{money(d.resultado)}</b>
           <div style={{ display: 'flex', gap: 18, marginTop: 8, flexWrap: 'wrap' }}>
             <Mini label="Faturamento" v={money(d.faturamento)} />
             <Mini label="Acumulado do ano" v={money(d.acumulado)} />
@@ -322,21 +318,20 @@ function BlocoResultado({ d }) {
           {d.serie.length === 0 ? (
             <p style={{ color: theme.sub, fontSize: 13, marginTop: 10 }}>Sem meses no comparativo ainda.</p>
           ) : (
-            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, height: 170, marginTop: 14 }}>
+            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 22, height: 180, marginTop: 14 }}>
               {d.serie.map(x => (
-                <div key={x.mes} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5, justifyContent: 'flex-end', height: '100%' }}>
-                  <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'center', gap: 3, width: '100%', height: '100%' }}>
+                <div key={x.mes} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, justifyContent: 'flex-end', height: '100%' }}>
+                  <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'center', gap: 0, width: '100%', height: '100%' }}>
                     {barras.map(b => {
                       const v = x[b.key]
+                      const cor = b.key === 'resultado' ? corResultado(v) : b.cor
                       return (
-                        <div key={b.key} title={`${b.label}: ${money(v)}`} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-end', height: '100%' }}>
-                          <span style={{ fontSize: 8, color: theme.sub, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', writingMode: 'vertical-rl', transform: 'rotate(180deg)', marginBottom: 2 }}>{fmtK(v)}</span>
-                          <div style={{ width: '100%', maxWidth: 26, height: `${Math.max(2, (Math.abs(v) / max) * 100)}%`, background: b.cor, borderRadius: '4px 4px 2px 2px', minHeight: 2 }} />
-                        </div>
+                        <div key={b.key} title={`${b.label}: ${money(v)}`}
+                          style={{ flex: 1, height: `${Math.max(2, (Math.abs(v) / max) * 100)}%`, background: cor, minHeight: 2, borderRadius: '3px 3px 0 0', cursor: 'default' }} />
                       )
                     })}
                   </div>
-                  <small style={{ fontSize: 10.5, color: theme.sub }}>{MESES[x.mes - 1]}</small>
+                  <small style={{ fontSize: 11, color: theme.sub }}>{MESES[x.mes - 1]}</small>
                 </div>
               ))}
             </div>
@@ -347,16 +342,54 @@ function BlocoResultado({ d }) {
   )
 }
 
+function Donut({ size = 150, segs, centro, sub, corCentro }) {
+  const total = segs.reduce((a, s) => a + Math.max(0, s.v), 0) || 1
+  let acc = 0
+  return (
+    <div style={{ position: 'relative', width: size, height: size }}>
+      <svg width={size} height={size} viewBox="0 0 42 42">
+        <circle cx="21" cy="21" r="15.9155" fill="none" stroke={theme.input} strokeWidth="5.5" />
+        {segs.filter(s => s.v > 0).map((s, i) => {
+          const p = (Math.max(0, s.v) / total) * 100, off = 25 - acc; acc += p
+          return <circle key={i} cx="21" cy="21" r="15.9155" fill="none" stroke={s.c} strokeWidth="5.5" strokeDasharray={`${p} ${100 - p}`} strokeDashoffset={off} strokeLinecap="butt" />
+        })}
+      </svg>
+      <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+        <b style={{ fontSize: 15, fontWeight: 800, color: corCentro || theme.text }}>{centro}</b>
+        {sub && <small style={{ color: theme.sub, fontSize: 10 }}>{sub}</small>}
+      </div>
+    </div>
+  )
+}
+
 function BlocoComparativo({ d }) {
   const { variacoesConta } = d
+  const segs = [
+    { label: 'Custo', v: d.custo, c: LARANJA },
+    { label: 'Despesa', v: d.despesa, c: theme.yellow },
+    { label: 'Lucro', v: Math.max(0, d.lucro), c: theme.green },
+  ]
   return (
     <Secao titulo="Comparativo de movimento — resumo (nível 1)"
       flag={variacoesConta ? `${variacoesConta} conta(s) a verificar` : null}>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(210px,1fr))', gap: 12 }}>
-        <Tile label="Total de faturamento" valor={money(d.faturamento)} cor={theme.green} />
-        <Tile label="Total de custo" valor={money(d.custo)} />
-        <Tile label="Despesa" valor={money(d.despesa)} />
-        <Tile label="Lucro / resultado" valor={money(d.lucro)} cor={AZUL_CLARO} sub="lucro positivo, prejuízo negativo" />
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.5fr) minmax(0,.8fr)', gap: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 12 }}>
+          <Tile label="Total de faturamento" valor={money(d.faturamento)} cor={theme.accent} />
+          <Tile label="Total de custo" valor={money(d.custo)} cor={LARANJA} />
+          <Tile label="Despesa" valor={money(d.despesa)} cor={theme.yellow} />
+          <Tile label="Lucro / resultado" valor={money(d.lucro)} cor={corResultado(d.lucro)} sub="lucro positivo, prejuízo negativo" />
+        </div>
+        <div style={{ ...card, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12 }}>
+          <span style={{ color: theme.sub, fontSize: 11, textTransform: 'uppercase', letterSpacing: .5 }}>Composição do faturamento</span>
+          <Donut segs={segs} centro={fmtPct(d.indices.margem)} sub="margem" corCentro={corResultado(d.lucro)} />
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, justifyContent: 'center' }}>
+            {segs.map(s => (
+              <span key={s.label} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: theme.sub }}>
+                <span style={{ width: 10, height: 10, borderRadius: 3, background: s.c }} /> {s.label}
+              </span>
+            ))}
+          </div>
+        </div>
       </div>
     </Secao>
   )
@@ -481,12 +514,12 @@ function BlocoClientesIndices({ d }) {
         <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'hidden' }}>
           <p style={{ fontSize: 13.5, fontWeight: 600, padding: '13px 15px', margin: 0, borderBottom: `1px solid ${theme.border}` }}>Índices financeiros</p>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)' }}>
-            <Kpi label="Liquidez corrente" v={ix.liquidez == null ? '—' : ix.liquidez.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} hint="Ativo circ. ÷ Passivo circ." />
-            <Kpi label="Margem líquida" v={fmtPct(ix.margem)} hint="Resultado ÷ receita" />
-            <Kpi label="Endividamento" v={fmtPct(ix.endividamento)} hint="Passivo exig. ÷ ativo" />
-            <Kpi label="Carga tributária" v={fmtPct(ix.cargaTrib)} hint="Impostos ÷ receita" />
+            <Kpi label="Liquidez corrente" v={ix.liquidez == null ? '—' : ix.liquidez.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} hint="Ativo circ. ÷ Passivo circ." cor={corFaixa(ix.liquidez, 1, 0.7, true)} />
+            <Kpi label="Margem líquida" v={fmtPct(ix.margem)} hint="Resultado ÷ receita" cor={corResultado(ix.margem)} />
+            <Kpi label="Endividamento" v={fmtPct(ix.endividamento)} hint="Passivo exig. ÷ ativo" cor={corFaixa(ix.endividamento, 50, 70, false)} />
+            <Kpi label="Carga tributária" v={fmtPct(ix.cargaTrib)} hint="Impostos ÷ receita" cor={corFaixa(ix.cargaTrib, 15, 25, false)} />
             <Kpi label="Prazo médio receb." v={ix.prazoReceb == null ? '—' : `${ix.prazoReceb} dias`} hint="A receber ÷ receita" />
-            <Kpi label="Resultado / receita" v={fmtPct(ix.margem)} hint="Rentabilidade do mês" />
+            <Kpi label="Resultado / receita" v={fmtPct(ix.margem)} hint="Rentabilidade do mês" cor={corResultado(ix.margem)} />
           </div>
         </div>
       </div>
@@ -524,14 +557,20 @@ function Mini({ label, v }) {
     </div>
   )
 }
-function Kpi({ label, v, hint }) {
+function Kpi({ label, v, hint, cor }) {
   return (
     <div style={{ padding: '13px 15px', borderTop: `1px solid ${theme.border}`, borderRight: `1px solid ${theme.border}` }}>
       <span style={{ color: theme.sub, fontSize: 10.5, textTransform: 'uppercase', letterSpacing: .4, fontWeight: 700 }}>{label}</span>
-      <b style={{ display: 'block', fontSize: 18, fontWeight: 800, margin: '3px 0 0', fontVariantNumeric: 'tabular-nums' }}>{v}</b>
+      <b style={{ display: 'block', fontSize: 18, fontWeight: 800, margin: '3px 0 0', fontVariantNumeric: 'tabular-nums', color: cor || theme.text }}>{v}</b>
       <span style={{ fontSize: 11, color: theme.sub }}>{hint}</span>
     </div>
   )
+}
+// Cor por faixa: bom (verde), atenção (amarelo), ruim (vermelho). alto=true → maior é melhor.
+function corFaixa(v, bom, atencao, alto = true) {
+  if (v == null) return theme.sub
+  if (alto) return v >= bom ? theme.green : v >= atencao ? theme.yellow : theme.red
+  return v <= bom ? theme.green : v <= atencao ? theme.yellow : theme.red
 }
 
 const th = { textAlign: 'left', padding: '10px 14px', fontSize: 11, color: theme.sub, textTransform: 'uppercase', letterSpacing: .3 }
