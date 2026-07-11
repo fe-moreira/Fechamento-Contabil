@@ -13,6 +13,12 @@ const num = v => Number(v) || 0
 const pct = (a, b) => (b ? (a / b) * 100 : null)
 const fmtPct = p => p == null ? '—' : `${p.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`
 const AZUL_CLARO = '#5AA9FF' // resultado do mês/exercício — não é bom/ruim, só o valor
+// Rótulo compacto para as barras (ex.: "R$ 45,5k") — cabe acima de colunas estreitas.
+const fmtK = v => {
+  const a = Math.abs(Number(v) || 0)
+  if (a >= 1000) return `${v < 0 ? '-' : ''}R$ ${(a / 1000).toLocaleString('pt-BR', { maximumFractionDigits: 1 })}k`
+  return money(v)
+}
 
 // Formata CNPJ 00.000.000/0000-00 (aceita já formatado).
 function fmtCnpj(c) {
@@ -59,26 +65,27 @@ export default function PainelCliente() {
         const comparativo = await apurarVariacoes(empresaId)
         const dist = await apurarDistribuicao(empresaId, comp.id, ano, mes)
 
-        // --- Resultado: mesma magnitude da última linha do Comparativo de Movimento, mas
-        // com sinal contábil de gestão: LUCRO positivo, PREJUÍZO negativo. No comparativo o
-        // movimento é (débito − crédito), então lucro fica negativo; aqui invertemos o sinal.
-        const resMesMov = m => (comparativo.contas || []).reduce((s, c) => s + (comparativo.matriz[c.conta]?.[m] || 0), 0)
-        const resMes = m => -resMesMov(m)
-        const serie = (comparativo.meses || []).map(m => ({ mes: m, resultado: resMes(m) }))
+        // --- Resultado por mês (receita, despesa e lucro) ---
+        // Grupo de cada conta vem da classificação (via balancete hierárquico).
+        const grpDe = {}
+        for (const l of analit) grpDe[String(l.reduzido)] = g(l)
+        const somaGrupoMesM = (dig, m) => (comparativo.contas || [])
+          .filter(c => grpDe[String(c.conta)] === dig)
+          .reduce((s, c) => s + (comparativo.matriz[c.conta]?.[m] || 0), 0)
+        const receitaMes = m => Math.abs(somaGrupoMesM('3', m))              // receita (credora) positiva
+        const despesaMes = m => Math.abs(somaGrupoMesM('4', m)) + Math.abs(somaGrupoMesM('5', m)) // custo + despesa
+        // Lucro = mesma magnitude da última linha do Comparativo, com sinal de gestão
+        // (lucro positivo, prejuízo negativo).
+        const resMes = m => receitaMes(m) - despesaMes(m)
+        const serie = (comparativo.meses || []).map(m => ({ mes: m, receita: receitaMes(m), despesa: despesaMes(m), resultado: resMes(m) }))
         const resultado = resMes(mes)
         const acumulado = (comparativo.meses || []).filter(m => m <= mes).reduce((s, m) => s + resMes(m), 0)
 
-        // Nível 1 resumido do mês: faturamento (grupo 3), custo (4) e despesa (5). Grupo de
-        // cada conta vem da classificação (via balancete hierárquico).
-        const grpDe = {}
-        for (const l of analit) grpDe[String(l.reduzido)] = g(l)
-        const somaGrupoMes = dig => (comparativo.contas || [])
-          .filter(c => grpDe[String(c.conta)] === dig)
-          .reduce((s, c) => s + (comparativo.matriz[c.conta]?.[mes] || 0), 0)
-        const faturamento = Math.abs(somaGrupoMes('3')) // receita é credora — mostra positivo
-        const custo = Math.abs(somaGrupoMes('4'))
-        const despesa = Math.abs(somaGrupoMes('5'))
-        const lucro = resultado // igual ao comparativo (última linha)
+        // Nível 1 resumido do mês da competência.
+        const faturamento = receitaMes(mes)
+        const custo = Math.abs(somaGrupoMesM('4', mes))
+        const despesa = Math.abs(somaGrupoMesM('5', mes))
+        const lucro = resultado
 
         // --- Balanço: saldo_final = última coluna da conciliação ---
         const ativoLinhas = analit.filter(l => g(l) === '1')
@@ -282,10 +289,15 @@ export default function PainelCliente() {
 /* ---------------- Blocos ---------------- */
 
 function BlocoResultado({ d }) {
-  const max = Math.max(1, ...d.serie.map(x => Math.abs(x.resultado)))
+  const max = Math.max(1, ...d.serie.flatMap(x => [x.receita, x.despesa, Math.abs(x.resultado)]))
+  const barras = [
+    { key: 'receita', label: 'Receita', cor: theme.green },
+    { key: 'despesa', label: 'Despesa', cor: theme.red },
+    { key: 'resultado', label: 'Lucro', cor: AZUL_CLARO },
+  ]
   return (
     <Secao titulo="Resultado do período">
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1.4fr)', gap: 14 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1.6fr)', gap: 14 }}>
         <div style={{ ...card, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
           <span style={{ color: theme.sub, fontSize: 11, textTransform: 'uppercase', letterSpacing: .5 }}>Resultado da competência</span>
           <b style={{ fontSize: 34, fontWeight: 800, color: AZUL_CLARO, letterSpacing: -.5 }}>{money(d.resultado)}</b>
@@ -297,15 +309,33 @@ function BlocoResultado({ d }) {
           <span style={{ fontSize: 11, color: theme.sub, marginTop: 8 }}>Mesmo valor da última linha do Comparativo de Movimento (lucro positivo, prejuízo negativo).</span>
         </div>
         <div style={card}>
-          <span style={{ color: theme.sub, fontSize: 11, textTransform: 'uppercase', letterSpacing: .5 }}>Resultado por mês</span>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+            <span style={{ color: theme.sub, fontSize: 11, textTransform: 'uppercase', letterSpacing: .5 }}>Resultado por mês</span>
+            <div style={{ display: 'flex', gap: 12 }}>
+              {barras.map(b => (
+                <span key={b.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: theme.sub }}>
+                  <span style={{ width: 10, height: 10, borderRadius: 3, background: b.cor }} /> {b.label}
+                </span>
+              ))}
+            </div>
+          </div>
           {d.serie.length === 0 ? (
             <p style={{ color: theme.sub, fontSize: 13, marginTop: 10 }}>Sem meses no comparativo ainda.</p>
           ) : (
-            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, height: 140, marginTop: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, height: 170, marginTop: 14 }}>
               {d.serie.map(x => (
                 <div key={x.mes} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5, justifyContent: 'flex-end', height: '100%' }}>
-                  <small style={{ fontSize: 9.5, color: theme.text, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>{money(x.resultado)}</small>
-                  <div title={money(x.resultado)} style={{ width: '100%', height: `${Math.max(4, (Math.abs(x.resultado) / max) * 100)}%`, background: AZUL_CLARO, borderRadius: '5px 5px 2px 2px', minHeight: 4 }} />
+                  <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'center', gap: 3, width: '100%', height: '100%' }}>
+                    {barras.map(b => {
+                      const v = x[b.key]
+                      return (
+                        <div key={b.key} title={`${b.label}: ${money(v)}`} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-end', height: '100%' }}>
+                          <span style={{ fontSize: 8, color: theme.sub, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', writingMode: 'vertical-rl', transform: 'rotate(180deg)', marginBottom: 2 }}>{fmtK(v)}</span>
+                          <div style={{ width: '100%', maxWidth: 26, height: `${Math.max(2, (Math.abs(v) / max) * 100)}%`, background: b.cor, borderRadius: '4px 4px 2px 2px', minHeight: 2 }} />
+                        </div>
+                      )
+                    })}
+                  </div>
                   <small style={{ fontSize: 10.5, color: theme.sub }}>{MESES[x.mes - 1]}</small>
                 </div>
               ))}
