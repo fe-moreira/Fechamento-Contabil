@@ -405,14 +405,13 @@ function BlocoComparativo({ d }) {
 }
 
 function BlocoBalanco({ d }) {
-  const ativoBate = Math.abs(d.totAtivo - Math.abs(d.totPassivo)) < 0.05
   return (
     <Secao titulo="Balanço patrimonial">
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(210px,1fr))', gap: 12 }}>
         <Tile label="Total do ativo" valor={money(d.totAtivo)} />
         <Tile label="Total do passivo + PL" valor={money(d.totPassivo)} />
-        <Tile label="Conferência" valor={ativoBate ? 'Ativo = Passivo' : money(d.totAtivo - Math.abs(d.totPassivo))}
-          cor={ativoBate ? theme.green : theme.yellow} sub={ativoBate ? 'balanço fechado' : 'diferença a revisar'} />
+        <Tile label="Resultado acumulado" valor={money(d.totAtivo - Math.abs(d.totPassivo))}
+          cor={corResultado(d.totAtivo - Math.abs(d.totPassivo))} sub="ativo − (passivo + PL)" />
         <Tile label="Clientes (a receber)" valor={money(d.clientes)} cor={theme.green} />
         <Tile label="Fornecedores (a pagar)" valor={money(d.fornecedores)} cor={theme.red} />
         <Tile label="Distribuição de lucros (mês)" valor={money(d.ata.pagoMes || d.distTotal)} sub="pago aos sócios no mês" />
