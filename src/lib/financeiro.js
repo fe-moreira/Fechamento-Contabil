@@ -30,9 +30,13 @@ export function tokensHist(s) {
 // 1) termo com TODOS os tokens no histórico vence (o mais específico);
 // 2) fallback por SEMELHANÇA: o termo com mais palavras em comum (≥2 e ≥60% do termo)
 //    — traz a conta quando "o nome tem muitas coisas iguais" (ex.: Attentive).
-export function casarHistorico(historico, memoria, excluir) {
+// Igual ao casarHistorico, mas devolve { conta, nivel, score } com o NÍVEL DE CONFIANÇA:
+//  'alta'  = regra forte (todos os tokens do termo batem) OU ≥80% das palavras do termo;
+//  'media' = 60% a 80% das palavras do termo (≥2 em comum) — "confira";
+//  ''      = nada casou.
+export function casarHistoricoNivel(historico, memoria, excluir) {
   const htoks = new Set(tokensHist(historico))
-  if (!htoks.size) return ''
+  if (!htoks.size) return { conta: '', nivel: '', score: 0 }
   const banida = c => excluir && excluir.has && excluir.has(String(c))
   let best = null, bestScore = 0
   for (const m of (memoria || [])) {
@@ -42,7 +46,7 @@ export function casarHistorico(historico, memoria, excluir) {
     if (!tt.every(t => htoks.has(t))) continue
     if (tt.length > bestScore) { bestScore = tt.length; best = m }
   }
-  if (best) return String(best.conta || '')
+  if (best) return { conta: String(best.conta || ''), nivel: 'alta', score: 1 }
   let alt = null, altShared = 0, altFrac = 0
   for (const m of (memoria || [])) {
     if (banida(m.conta)) continue
@@ -50,9 +54,14 @@ export function casarHistorico(historico, memoria, excluir) {
     if (tt.length < 2) continue
     const shared = tt.filter(t => htoks.has(t)).length
     const frac = shared / tt.length
-    if (shared >= 2 && frac >= 0.6 && (shared > altShared || (shared === altShared && frac > altFrac))) { altShared = shared; altFrac = frac; alt = m }
+    if (shared >= 2 && frac >= 0.6 && (frac > altFrac || (frac === altFrac && shared > altShared))) { altShared = shared; altFrac = frac; alt = m }
   }
-  return alt ? String(alt.conta || '') : ''
+  if (alt) return { conta: String(alt.conta || ''), nivel: altFrac >= 0.8 ? 'alta' : 'media', score: altFrac }
+  return { conta: '', nivel: '', score: 0 }
+}
+
+export function casarHistorico(historico, memoria, excluir) {
+  return casarHistoricoNivel(historico, memoria, excluir).conta
 }
 
 // Valor em formato BR ("1.234,56") ou US ("1234.56"); negativo por sinal ou (parênteses).
@@ -232,11 +241,13 @@ export function aplicarPerfil(arr, perfil, memoria, catByRow, adiantContas, banc
     // Sempre casa pelo HISTÓRICO (que já traz a descrição/entidade via colHist). Antes
     // usava `credor || historico`, e um credor mal mapeado (ex.: a coluna C/D = "D")
     // fazia casar por "D" e não achar nada.
-    let contra = casarHistorico(historico, memoria, bancos)
+    const casada = casarHistoricoNivel(historico, memoria, bancos)
+    let contra = casada.conta
+    let contra_nivel = casada.nivel
     // Regra: se a linha tem nota/documento, não é adiantamento (adiantamento é
     // quando ainda não há nota). Evita "adiantamento a fornecedor/cliente" errado.
-    if (doc && contra && temAdiant && adiantContas.has(String(contra))) contra = ''
-    out.push({ historico, credor, valor, entrada, data, contra })
+    if (doc && contra && temAdiant && adiantContas.has(String(contra))) { contra = ''; contra_nivel = '' }
+    out.push({ historico, credor, valor, entrada, data, contra, contra_nivel })
   }
   return out
 }

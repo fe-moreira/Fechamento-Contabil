@@ -5,7 +5,7 @@ import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { theme, money, moneyDC } from '../lib/theme'
 import CampoConta from '../components/CampoConta'
-import { normHist, casarHistorico, aprender, parseValor, dataISO, aplicarPerfil, extrairEntidade, ehEmpresa, catByRowDeMerges } from '../lib/financeiro'
+import { normHist, casarHistorico, casarHistoricoNivel, aprender, parseValor, dataISO, aplicarPerfil, extrairEntidade, ehEmpresa, catByRowDeMerges } from '../lib/financeiro'
 import { gerarExcelTimbrado } from '../lib/excel'
 import { gerarDominioCSV } from '../lib/dominio'
 import { contasConciliacaoAbertas, montarBalancete } from '../lib/balancete'
@@ -974,6 +974,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   const [fData, setFData] = useState('')         // filtro por data (dd/mm)
   const [fES, setFES] = useState('')             // filtro entrada/saída ('' | 'entrada' | 'saida')
   const [fConta, setFConta] = useState('')       // filtro por conta de contrapartida
+  const [fNivel, setFNivel] = useState('')       // filtro por nível de confiança ('' | alta | media | manual | sem)
   const [lote, setLote] = useState('')           // conta para preencher em lote nas selecionadas
   const [sel, setSel] = useState(() => new Set())// linhas selecionadas (índice original)
   const [quebra, setQuebra] = useState(null)      // { i, linha } divisão de um lançamento
@@ -1094,7 +1095,8 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
       const historico = mapX.hist >= 0 ? String(cells[mapX.hist] ?? '').trim() : ''
       const valor = mapX.valor >= 0 ? parseValor(cells[mapX.valor]) : 0
       const data = mapX.data >= 0 ? dataISO(cells[mapX.data]) : ''
-      return { banco, historico, valor: Math.abs(valor), entrada: valor >= 0, contra: casarHistorico(historico, memX, banco ? new Set([String(banco)]) : null), data }
+      const cas = casarHistoricoNivel(historico, memX, banco ? new Set([String(banco)]) : null)
+      return { banco, historico, valor: Math.abs(valor), entrada: valor >= 0, contra: cas.conta, contra_nivel: cas.nivel, data }
     // "SALDO ANTERIOR/INICIAL" não é lançamento (só valida o saldo) — fora da lista.
     }).filter(l => !/saldo\s+(anterior|inicial)/i.test(String(l.historico).normalize('NFD').replace(/[̀-ͯ]/g, '')))
   }
@@ -1152,7 +1154,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     const prev = prevBanco?.draft
     let mantidas = 0
     if (Array.isArray(prev) && prev.length === norm.length) {
-      norm.forEach((l, i) => { if (prev[i]?.contra) { l.contra = prev[i].contra; mantidas++ } })
+      norm.forEach((l, i) => { if (prev[i]?.contra) { l.contra = prev[i].contra; l.contra_nivel = prev[i].contra_nivel || 'manual'; mantidas++ } })
     }
     if (prevBanco?.saldoExtrato) setSaldoExtrato(prevBanco.saldoExtrato)
     setCruza(prevBanco?.cruza || null); setCruzaOpen(false)
@@ -1285,7 +1287,8 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
       setMsg(`${cl.length} linha(s) · competência ${competencia} conferida.`)
     }
   }
-  const setLinha = (i, patch) => { if (concluido) return; setLinhas(ls => ls.map((l, j) => j === i ? { ...l, ...patch } : l)) }
+  // Ao definir a contrapartida na mão, o nível vira 'manual' (100% do usuário).
+  const setLinha = (i, patch) => { if (concluido) return; setLinhas(ls => ls.map((l, j) => j === i ? { ...l, ...patch, ...('contra' in patch ? { contra_nivel: patch.contra ? 'manual' : '' } : {}) } : l)) }
 
   // Salva as linhas no rascunho do banco (mantém estado/doc atuais).
   function persistirLinhas(novas) {
@@ -1317,8 +1320,13 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   // Filtros da tabela de classificação + preenchimento em lote.
   const dataBR = iso => iso ? iso.split('-').reverse().join('/') : ''
   const normTxt = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+  // Nível de confiança da classificação (cor + rótulo).
+  const nivelCor = n => n === 'alta' ? theme.green : n === 'media' ? theme.yellow : n === 'manual' ? theme.accent : theme.sub
+  const nivelLabel = n => n === 'alta' ? 'Confiança alta (memória)' : n === 'media' ? 'Confiança média — confira' : n === 'manual' ? 'Definido manualmente' : 'Sem classificação'
   function linhaVisivel(l) {
     if (fSem && l.contra) return false
+    if (fNivel === 'sem') { if (l.contra) return false }
+    else if (fNivel) { if (!l.contra || (l.contra_nivel || 'manual') !== fNivel) return false }
     if (fHist) {
       const h = normTxt(l.historico), q = normTxt(fHist)
       if (fMode === 'exato' ? h !== q : !h.includes(q)) return false
@@ -1395,7 +1403,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   function confirmarQuebra(i, partes) {
     if (concluido) return
     const base = linhas[i]
-    const novas = partes.map(p => ({ ...base, valor: Math.abs(Number(p.valor) || 0), contra: String(p.contra || '').trim() }))
+    const novas = partes.map(p => ({ ...base, valor: Math.abs(Number(p.valor) || 0), contra: String(p.contra || '').trim(), contra_nivel: String(p.contra || '').trim() ? 'manual' : '' }))
     setLinhas(ls => [...ls.slice(0, i), ...novas, ...ls.slice(i + 1)])
     setSel(new Set()); setQuebra(null)
     setMsg(`Lançamento dividido em ${novas.length}.`)
@@ -1406,7 +1414,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     if (!cod) { setMsg('Informe a conta para aplicar em lote.'); return }
     if (!sel.size) { setMsg('Selecione as linhas (caixas à esquerda) para aplicar a conta.'); return }
     const n = sel.size
-    setLinhas(ls => ls.map((l, j) => sel.has(j) ? { ...l, contra: cod } : l))
+    setLinhas(ls => ls.map((l, j) => sel.has(j) ? { ...l, contra: cod, contra_nivel: 'manual' } : l))
     // Volta ao estado original para a próxima aplicação: limpa filtro, seleção e conta.
     setSel(new Set()); setLote(''); setFSem(false); setFHist(''); setFData(''); setFES(''); setFConta('')
     setMsg(`Conta ${cod} aplicada em ${n} linha(s). Pronto para a próxima seleção.`)
@@ -1440,7 +1448,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   function aplicarSugestoes(itensConfirmados) {
     if (concluido || !itensConfirmados?.length) { setSugAprend(null); return }
     const mapa = {}; for (const it of itensConfirmados) mapa[it.i] = it.contra
-    const novas = linhas.map((l, j) => mapa[j] != null ? { ...l, contra: mapa[j] } : l)
+    const novas = linhas.map((l, j) => mapa[j] != null ? { ...l, contra: mapa[j], contra_nivel: 'manual' } : l)
     setLinhas(novas); persistirLinhas(novas); setSugAprend(null)
     setMsg(`${Object.keys(mapa).length} lançamento(s) classificado(s) pelo aprendizado.`)
   }
@@ -1590,6 +1598,8 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
 
   const prontas = linhas.filter(l => l.banco && l.contra && l.valor > 0).length
   const semContra = linhas.filter(l => !l.contra).length
+  const nAlta = linhas.filter(l => l.contra && (l.contra_nivel || 'manual') === 'alta').length
+  const nMedia = linhas.filter(l => l.contra && l.contra_nivel === 'media').length
   const totEnt = linhas.filter(l => l.entrada).reduce((s, l) => s + (l.valor || 0), 0)
   const totSai = linhas.filter(l => !l.entrada).reduce((s, l) => s + (l.valor || 0), 0)
   const saldoFinal = (saldoAnterior || 0) + totEnt - totSai
@@ -1597,7 +1607,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   const difSaldo = Math.round((saldoFinal - parseValor(saldoExtrato)) * 100) / 100
   const visiveis = linhas.map((l, i) => ({ l, i })).filter(({ l }) => linhaVisivel(l))
   // Totalizador do que está filtrado (útil ao filtrar por dia): quanto de + e de −.
-  const filtroAtivo = fSem || !!fHist || !!fData || !!fES || !!fConta
+  const filtroAtivo = fSem || !!fHist || !!fData || !!fES || !!fConta || !!fNivel
   const totVisEnt = visiveis.filter(({ l }) => l.entrada).reduce((s, { l }) => s + (l.valor || 0), 0)
   const totVisSai = visiveis.filter(({ l }) => !l.entrada).reduce((s, { l }) => s + (l.valor || 0), 0)
   const visIdx = visiveis.map(v => v.i)
@@ -1767,8 +1777,15 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
             <select className="input" style={{ maxWidth: 120, fontSize: 12, padding: '6px 8px' }} value={fES} onChange={e => setFES(e.target.value)}>
               <option value="">Entrada/Saída</option><option value="entrada">Só entradas</option><option value="saida">Só saídas</option>
             </select>
+            <select className="input" style={{ maxWidth: 150, fontSize: 12, padding: '6px 8px' }} value={fNivel} onChange={e => setFNivel(e.target.value)} title="Filtrar por nível de confiança da classificação">
+              <option value="">Confiança</option>
+              <option value="alta">● Alta</option>
+              <option value="media">● Média (confira)</option>
+              <option value="manual">● Manual</option>
+              <option value="sem">Sem contrapartida</option>
+            </select>
             <CampoConta value={fConta} onChange={setFConta} placeholder="Filtrar conta (F4)" style={{ width: 170 }} />
-            {(fSem || fHist || fData || fES || fConta) && <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', color: theme.sub }} onClick={() => { setFSem(false); setFHist(''); setFData(''); setFES(''); setFConta('') }}>limpar filtros</button>}
+            {filtroAtivo && <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', color: theme.sub }} onClick={() => { setFSem(false); setFHist(''); setFData(''); setFES(''); setFConta(''); setFNivel('') }}>limpar filtros</button>}
             <span style={{ flex: 1 }} />
             <span style={{ fontSize: 12, color: theme.sub }}>Aplicar às selecionadas:</span>
             <CampoConta value={lote} onChange={setLote} onEnter={aplicarLote} placeholder="Conta (F4)" style={{ width: 190 }} />
@@ -1778,6 +1795,8 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
 
           <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 12.5, margin: '0 0 6px' }}>
             <span style={{ color: theme.green }}><b>{prontas}</b> pronta(s) p/ contabilizar</span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, color: theme.sub }} title="Classificadas pela memória com confiança alta"><span style={{ width: 8, height: 8, borderRadius: '50%', background: theme.green }} /><b style={{ color: theme.text }}>{nAlta}</b> alta</span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, color: theme.sub }} title="Confiança média — vale conferir"><span style={{ width: 8, height: 8, borderRadius: '50%', background: theme.yellow }} /><b style={{ color: theme.text }}>{nMedia}</b> confira</span>
             <span style={{ color: theme.yellow }}><b>{semContra}</b> sem contrapartida</span>
             <span style={{ color: theme.sub }}>mostrando <b>{visiveis.length}</b> de {linhas.length}{sel.size ? ` · ${sel.size} selecionada(s)` : ''}</span>
             {filtroAtivo && <span style={{ color: theme.sub }}>{fData ? `dia ${fData}: ` : 'filtro: '}<b style={{ color: theme.green }}>+{money(totVisEnt)}</b> · <b style={{ color: theme.red }}>−{money(totVisSai)}</b> · líquido <b style={{ color: theme.text }}>{money(totVisEnt - totVisSai)}</b></span>}
@@ -1839,6 +1858,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
                     </td>
                     <td style={{ ...ftd, minWidth: 180 }}>
                       <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                        {l.contra && <span title={nivelLabel(l.contra_nivel)} style={{ width: 9, height: 9, borderRadius: '50%', background: nivelCor(l.contra_nivel), flexShrink: 0 }} />}
                         <div style={{ flex: 1 }}><ContraCell value={l.contra} disabled={concluido} onCommit={v => setLinha(i, { contra: v })}
                           inputRef={el => { refsContra.current[pos] = el }} onEnter={() => refsContra.current[pos + 1]?.focus()} /></div>
                         {!concluido && <i className="ti ti-pencil" title="Editar o lançamento (data, histórico, valor…)" onClick={() => setEditLanc({ i, linha: l })} style={{ color: theme.accent, cursor: 'pointer', fontSize: 15, flexShrink: 0 }} />}

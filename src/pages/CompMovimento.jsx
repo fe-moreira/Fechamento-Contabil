@@ -4,6 +4,7 @@ import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { theme, money, moneyDC } from '../lib/theme'
 import { montarBalancete, normalizaCompetencia, applyMask, erroContaSintetica } from '../lib/balancete'
+import { extrairEntidade, aprender, tokensHist } from '../lib/financeiro'
 import CampoConta from '../components/CampoConta'
 
 // Data (Date do Excel ou "dd/mm/aaaa") → ISO "aaaa-mm-dd".
@@ -642,6 +643,7 @@ export default function CompMovimento() {
       {detalhe && (
         <ModalRazao
           detalhe={detalhe}
+          empresaId={empresaId}
           compsAnteriores={comps.filter(c => c.mes < detalhe.mes).map(c => c.id)}
           compIdAnterior={comps.find(c => c.mes === detalhe.varInfo?.mesAnterior)?.id || null}
           usuario={user?.email}
@@ -659,7 +661,7 @@ export default function CompMovimento() {
   )
 }
 
-function ModalRazao({ detalhe, compsAnteriores, compIdAnterior, usuario, jaJustificada, justTextoAtual, onJustificada, onDesfeita, onCorrigido, plano, onClose }) {
+function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuario, jaJustificada, justTextoAtual, onJustificada, onDesfeita, onCorrigido, plano, onClose }) {
   const { conta, nome, mes, compId, todos, compIds, mesPorComp } = detalhe
   const [carregando, setCarregando] = useState(true)
   const [linhas, setLinhas] = useState([])
@@ -677,7 +679,7 @@ function ModalRazao({ detalhe, compsAnteriores, compIdAnterior, usuario, jaJusti
     setCarregando(true)
     const ids = todos ? compIds : [compId]
     const { data } = await supabase
-      .from('razao').select('id, competencia_id, data, conta, historico, debito, credito')
+      .from('razao').select('id, competencia_id, data, conta, contrapartida, historico, debito, credito')
       .in('competencia_id', ids).eq('conta', conta)
       .order('data', { ascending: true })
     const rows = data || []
@@ -804,11 +806,39 @@ function ModalRazao({ detalhe, compsAnteriores, compIdAnterior, usuario, jaJusti
         detalhe: `Reclassificação ${conta} → ${contaCerta} · ${money(v)}${historico ? ' · ' + historico : ''}`,
         razao_id: l.id, usuario,
       })
-      setMsg('Correção gerada — lançamento no painel Contabilizar e saldos atualizados.')
+      // Aprendizado: se a correção foi CONTRA UMA CONTA DE BANCO (contrapartida = banco),
+      // a memória da integração financeira aprende histórico → conta corrigida.
+      const aprendido = await aprenderBanco(l, contaCerta)
+      setMsg('Correção gerada — lançamento no painel Contabilizar e saldos atualizados.' + (aprendido ? ` · Aprendido: ${aprendido}` : ''))
       setAcaoLanc(null)
       await carregarLinhas()
       onCorrigido && onCorrigido()
     } catch (e) { setMsg('Erro ao gerar correção: ' + (e.message || e)) } finally { setSalvando(false) }
+  }
+
+  // Se o outro lado do lançamento corrigido é uma CONTA DE BANCO (cadastrada na integração
+  // financeira), ensina a memória: histórico (entidade) → conta corrigida. Devolve o texto
+  // "entidade → conta" quando aprendeu, ou null. Nunca bloqueia a correção.
+  async function aprenderBanco(l, contaCerta) {
+    try {
+      if (!empresaId) return null
+      const dig = v => String(v ?? '').replace(/\D/g, '')
+      const contra = dig(l.contrapartida)
+      if (!contra) return null
+      const { data: cb } = await supabase.from('cargas_cadastro').select('dados')
+        .eq('cliente_id', empresaId).eq('tipo', 'contas_bancarias').order('created_at', { ascending: false }).limit(1).maybeSingle()
+      const bancos = new Set((Array.isArray(cb?.dados) ? cb.dados : []).map(b => dig(b.conta_contabil)).filter(Boolean))
+      if (!bancos.has(contra)) return null // a contrapartida não é banco → não aprende
+      const termo = extrairEntidade(l.historico)
+      if (!termo || !tokensHist(termo).length) return null // sem nome útil, não vira regra
+      const { data: mem } = await supabase.from('cargas_cadastro').select('dados, obs')
+        .eq('cliente_id', empresaId).eq('tipo', 'memoria_financeira').order('created_at', { ascending: false }).limit(1).maybeSingle()
+      const atual = Array.isArray(mem?.dados) ? mem.dados : []
+      const nova = aprender(atual, [{ termo, conta: contaCerta }])
+      await supabase.from('cargas_cadastro').delete().eq('cliente_id', empresaId).eq('tipo', 'memoria_financeira')
+      await supabase.from('cargas_cadastro').insert({ cliente_id: empresaId, tipo: 'memoria_financeira', dados: nova, usuario, obs: mem?.obs || 'aprendizado por correção' })
+      return `${termo} → ${contaCerta}`
+    } catch { return null }
   }
 
   // Desfaz a correção: remove o lançamento, reverte o balancete e apaga a auditoria.
