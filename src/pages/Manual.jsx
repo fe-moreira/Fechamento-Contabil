@@ -4,26 +4,29 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 const CSS = `
+/* Espelha a estrutura de tema do app: ESCURO é a base (:root), CLARO é o override
+   ([data-theme="light"]). O manual pinta o próprio fundo (--m-bg) com a mesma paleta
+   do texto (--m-ink), então o contraste nunca quebra, seja qual for o tema do app. */
 #manual-root{
-  --m-bg:#F6F8FB; --m-surface:#FFFFFF; --m-surface2:#FBFCFE;
-  --m-ink:#111726; --m-muted:#5A6474; --m-faint:#8A94A6;
-  --m-line:#E5E9F0; --m-line2:#EEF1F6;
-  --m-accent:#3B6EF5; --m-accent-weak:#3b6ef518; --m-accent-line:#3b6ef540;
-  --m-green:#1E9E63; --m-amber:#B9820A; --m-red:#D6392F;
-  --m-green-weak:#1e9e6318; --m-amber-weak:#b9820a1c; --m-red-weak:#d6392f18;
-  --m-navy:#131A2B;
+  --m-bg:#161B29; --m-surface:#1F2634; --m-surface2:#1A2231;
+  --m-ink:#E8EAF0; --m-muted:#9DA8BD; --m-faint:#6E7A90;
+  --m-line:#2B3446; --m-line2:#232C3D;
+  --m-accent:#6E97FF; --m-accent-weak:#6e97ff22; --m-accent-line:#6e97ff55;
+  --m-green:#41B883; --m-amber:#E0A93B; --m-red:#F0645A;
+  --m-green-weak:#41b88326; --m-amber-weak:#e0a93b26; --m-red-weak:#f0645a26;
+  --m-navy:#0A0F1A;
   --m-mono:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;
-  color:var(--m-ink); max-width:900px;
+  background:var(--m-bg); color:var(--m-ink); max-width:900px;
   font-feature-settings:"kern","liga";
 }
-:root[data-theme="dark"] #manual-root{
-  --m-bg:#0E1420; --m-surface:#161E2D; --m-surface2:#131A28;
-  --m-ink:#E9EEF7; --m-muted:#98A3B7; --m-faint:#6C788E;
-  --m-line:#25304480; --m-line2:#20293a80;
-  --m-accent:#6E97FF; --m-accent-weak:#6e97ff1f; --m-accent-line:#6e97ff4d;
-  --m-green:#41B883; --m-amber:#E0A93B; --m-red:#F0645A;
-  --m-green-weak:#41b88322; --m-amber-weak:#e0a93b22; --m-red-weak:#f0645a22;
-  --m-navy:#0A0F1A;
+:root[data-theme="light"] #manual-root{
+  --m-bg:#FFFFFF; --m-surface:#F4F6FA; --m-surface2:#FAFBFE;
+  --m-ink:#1A2236; --m-muted:#5A6474; --m-faint:#8A94A6;
+  --m-line:#E4E8F0; --m-line2:#EEF1F6;
+  --m-accent:#3B6EF5; --m-accent-weak:#3b6ef514; --m-accent-line:#3b6ef540;
+  --m-green:#1E9E63; --m-amber:#B9820A; --m-red:#D6392F;
+  --m-green-weak:#1e9e6316; --m-amber-weak:#b9820a1a; --m-red-weak:#d6392f16;
+  --m-navy:#131A2B;
 }
 #manual-root h1,#manual-root h2,#manual-root h3,#manual-root h4{margin:0;line-height:1.2;text-wrap:balance}
 #manual-root p{margin:10px 0;line-height:1.62}
