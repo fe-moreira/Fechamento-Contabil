@@ -880,7 +880,8 @@ function PanePerdcomp({ clienteId, user, competencia, abrirGerar }) {
 // ================= JUROS SOBRE CAPITAL PRÓPRIO (JSCP) =================
 function PaneJcp({ clienteId, user, competencia, abrirGerar }) {
   const { rows, recarregar, excluir } = useLista('jcp', clienteId)
-  const [f, on, reset, setF] = useForm({ descricao: '', data_base: '', pl_ajustado: '', taxa_tjlp: '', valor_juros: '', limite_dedutibilidade: '', juros_provisionados: '', juros_a_pagar: '', irrf_pct: '', irrf_valor: '', liquido: '', conta_despesa: '', conta_irrf: '', conta_pagar: '' })
+  // IRRF do JSCP subiu para 17,5% em 2026 (era 15%). Vem preenchido, mas é editável.
+  const [f, on, reset, setF] = useForm({ descricao: '', data_base: '', pl_ajustado: '', taxa_tjlp: '', valor_juros: '', limite_dedutibilidade: '', juros_provisionados: '', juros_a_pagar: '', irrf_pct: '17.5', irrf_valor: '', liquido: '', conta_despesa: '', conta_irrf: '', conta_pagar: '' })
   // Cálculos automáticos (sugestões, editáveis): juros = PL ajustado × taxa; IRRF = juros a pagar × %;
   // líquido = juros a pagar − IRRF. Não sobrescreve o que o usuário digitou manualmente.
   const jurosCalc = Math.round(num(f.pl_ajustado) * num(f.taxa_tjlp)) / 100
@@ -914,7 +915,7 @@ function PaneJcp({ clienteId, user, competencia, abrirGerar }) {
           <Field label="Limite dedutibilidade"><input className="input" value={f.limite_dedutibilidade} onChange={on('limite_dedutibilidade')} placeholder="0,00" /></Field>
           <Field label="Juros já provisionados"><input className="input" value={f.juros_provisionados} onChange={on('juros_provisionados')} placeholder="0,00" /></Field>
           <Field label="Juros a pagar (data base)"><input className="input" value={f.juros_a_pagar} onChange={on('juros_a_pagar')} placeholder="0,00" required /></Field>
-          <Field label="IRRF %"><input className="input" value={f.irrf_pct} onChange={on('irrf_pct')} placeholder="15" /></Field>
+          <Field label="IRRF % (17,5% em 2026)"><input className="input" value={f.irrf_pct} onChange={on('irrf_pct')} placeholder="17,5" /></Field>
           <Field label="IRRF valor"><input className="input" value={f.irrf_valor} onChange={on('irrf_valor')} placeholder={irrfCalc ? fmtNum(irrfCalc) : '0,00'} /></Field>
           <Field label="Líquido a pagar"><input className="input" value={f.liquido} onChange={on('liquido')} placeholder={liqCalc ? fmtNum(liqCalc) : '0,00'} /></Field>
           <Field label="Conta despesa JSCP"><CampoContaForm valor={f.conta_despesa} set={v => setF(x => ({ ...x, conta_despesa: v }))} /></Field>
