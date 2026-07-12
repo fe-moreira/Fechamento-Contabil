@@ -21,6 +21,84 @@ export function parseNomeArquivo(name) {
 }
 
 const sanit = s => String(s).replace(/[^a-zA-Z0-9/_-]/g, '_')
+const soDigitos = s => String(s ?? '').replace(/\D/g, '')
+
+// Impressão digital de uma conta bancária (agência|conta, só dígitos). É a CHAVE da memória:
+// o mesmo banco/conta gera a mesma chave todo mês, então o roteamento vira automático.
+export function chaveContaBanco(agencia, conta) {
+  const c = soDigitos(conta)
+  return c ? `${soDigitos(agencia)}|${c}` : ''
+}
+
+// Acha os identificadores no TEXTO do documento: todos os CNPJs (14 díg.) e a agência/conta
+// bancária (best-effort por palavras-chave). Serve para casar o CLIENTE (CNPJ) e lembrar a
+// CONTA (impressão digital). Não decide nada sozinho — a grade de conferência confirma.
+export function extrairIdentificadores(texto) {
+  const t = String(texto || '')
+  const cnpjs = []
+  const re = /\d{2}[.\-/\s]?\d{3}[.\-/\s]?\d{3}[.\-/\s]?\d{4}[.\-/\s]?\d{2}/g
+  let m
+  while ((m = re.exec(t))) { const d = soDigitos(m[0]); if (d.length === 14 && !cnpjs.includes(d)) cnpjs.push(d) }
+  const ag = t.match(/ag[eê]ncia\D{0,8}(\d{3,6})/i) || t.match(/\bag\.?\s*[:\s]\s*(\d{3,6})\b/i)
+  const cc = t.match(/conta\s*(?:corrente|c\/c)?\D{0,8}(\d{3,12}[-\s]?\d?)/i) || t.match(/\bc\/c\D{0,4}(\d{3,12}[-\s]?\d?)/i)
+  return { cnpjs, agencia: ag ? soDigitos(ag[1]) : '', conta: cc ? soDigitos(cc[1]) : '' }
+}
+
+// Lê o CONTEÚDO do arquivo (PDF: texto; Excel/CSV: primeiras linhas) e extrai os
+// identificadores. Best-effort e tolerante a falha (devolve vazio se não conseguir ler).
+export async function lerIdentificacao(file) {
+  const ext = (file.name.match(/\.([a-z0-9]+)$/i)?.[1] || '').toLowerCase()
+  let texto = ''
+  try {
+    if (ext === 'pdf') {
+      const { extrairTextoPdf } = await import('./pdfText')
+      texto = await extrairTextoPdf(file)
+    } else if (['xlsx', 'xls', 'csv'].includes(ext)) {
+      const XLSX = await import('xlsx')
+      const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' })
+      const partes = []
+      for (const nome of wb.SheetNames.slice(0, 2)) {
+        const arr = XLSX.utils.sheet_to_json(wb.Sheets[nome], { header: 1, defval: '' })
+        for (const r of arr.slice(0, 60)) partes.push(r.join(' '))
+      }
+      texto = partes.join('\n')
+    }
+  } catch { texto = '' }
+  return { ...extrairIdentificadores(texto), ext }
+}
+
+// Memória de contas bancárias do cliente: chave (agência|conta) → conta CONTÁBIL. Vem do
+// cadastro `contas_bancarias` (campos agencia/conta preenchidos pelo aprendizado abaixo).
+export async function lerMemoriaContas(empresaId) {
+  const { data } = await supabase.from('cargas_cadastro').select('dados')
+    .eq('cliente_id', empresaId).eq('tipo', 'contas_bancarias')
+    .order('created_at', { ascending: false }).limit(1).maybeSingle()
+  const rows = Array.isArray(data?.dados) ? data.dados : []
+  const map = {}
+  for (const r of rows) {
+    const fp = chaveContaBanco(r.agencia, r.conta)
+    if (fp && r.conta_contabil) map[fp] = String(r.conta_contabil)
+  }
+  return map
+}
+
+// Aprende: grava no cadastro `contas_bancarias` o número da conta/agência que o usuário
+// confirmou para uma conta contábil. Assim o próximo mês reconhece sozinho. Completa a
+// linha existente da conta contábil (ou cria uma), preservando o resto do cadastro.
+export async function lembrarContaBancaria(empresaId, { conta_contabil, agencia, conta }) {
+  const cc = soDigitos(conta)
+  if (!cc || !conta_contabil) return
+  const { data } = await supabase.from('cargas_cadastro').select('id, dados, obs')
+    .eq('cliente_id', empresaId).eq('tipo', 'contas_bancarias')
+    .order('created_at', { ascending: false }).limit(1).maybeSingle()
+  const rows = Array.isArray(data?.dados) ? data.dados.map(r => ({ ...r })) : []
+  const ag = soDigitos(agencia)
+  const hit = rows.find(r => String(r.conta_contabil) === String(conta_contabil))
+  if (hit) { hit.conta = cc; if (ag) hit.agencia = ag }
+  else rows.push({ conta: cc, agencia: ag, conta_contabil: String(conta_contabil) })
+  if (data?.id) await supabase.from('cargas_cadastro').update({ dados: rows }).eq('id', data.id)
+  else await supabase.from('cargas_cadastro').insert({ cliente_id: empresaId, tipo: 'contas_bancarias', dados: rows })
+}
 
 // Lê o saldo de um extrato PDF (destaque amarelo → texto → OCR), como na Conciliação.
 async function lerSaldoPdf(file) {

@@ -1,9 +1,11 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
 import { fechaSozinho } from '../lib/clientes'
+import { parsePlano } from '../lib/balancete'
 import { theme, money } from '../lib/theme'
-import { parseNomeArquivo, anexarExtratoPdf, anexarExtratoExcel, alimentarIntegracaoFinanceira } from '../lib/importacaoMassa'
+import CampoConta from '../components/CampoConta'
+import { parseNomeArquivo, anexarExtratoPdf, anexarExtratoExcel, alimentarIntegracaoFinanceira, lerIdentificacao, lerMemoriaContas, lembrarContaBancaria, chaveContaBanco } from '../lib/importacaoMassa'
 
 const PADRAO = ['Extratos bancários', 'Notas fiscais de entrada', 'Notas fiscais de saída', 'Folha de pagamento', 'Guias de impostos (DARF/GPS/DAS)', 'Razão do Domínio']
 const cnpj14 = (v) => { const d = String(v ?? '').replace(/\D/g, ''); return d.length >= 11 && d.length <= 14 ? d.padStart(14, '0') : d }
@@ -186,67 +188,137 @@ function Tag({ c, n, t }) {
   return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: theme.text }}><b style={{ color: c, fontSize: 15 }}>{n}</b> {t}</span>
 }
 
-// ---- Card: Recebimento de arquivos (extratos PDF/Excel, cross-client pelo nome) ----
-// Nome do arquivo: <codigoCliente>-<contaContabil>-…​.<ext>. A extensão decide o destino:
-// PDF → Conciliação (anexa + lê o saldo); Excel → Integração (classifica e sugere).
+// ---- Card: Recebimento de arquivos (extratos PDF/Excel, cross-client, sem renomear) ----
+// O sistema RECONHECE cada arquivo em duas vias (nesta ordem):
+//   1) Nome código-conta-… (atalho antigo, mantido).
+//   2) Conteúdo: CNPJ → cliente; agência/conta → conta contábil pela MEMÓRIA aprendida.
+// Depois mostra uma GRADE de conferência (verde/amarelo/vermelho) e, ao receber, aprende
+// o número da conta confirmado (F4) para o próximo mês ser automático.
+const nivelDe = row => {
+  if (!row.destino) return 'vermelho'
+  if (!row.cliente) return 'vermelho'
+  if (!row.comp) return 'vermelho'
+  if (row.comp.status === 'fechado') return 'vermelho'
+  if (!String(row.conta || '').trim()) return 'amarelo'
+  return 'verde'
+}
+const msgErro = row => {
+  if (!row.destino) return `Formato .${row.ext} não suportado`
+  if (!row.cliente) return 'Cliente não identificado — escolha ou renomeie código-conta'
+  if (!row.comp) return `Sem fechamento ${row.alvo}`
+  if (row.comp.status === 'fechado') return 'Fechamento fechado'
+  return ''
+}
+
 function RecebeArquivos({ competencias, competencia, recalcularPendencias }) {
   const [alvo, setAlvo] = useState(competencia)
   const [open, setOpen] = useState(false)
   const [files, setFiles] = useState([])
-  const [rel, setRel] = useState(null)
+  const [rows, setRows] = useState(null)   // grade de conferência (após analisar)
+  const [rel, setRel] = useState(null)     // resultado final
   const [busy, setBusy] = useState(false)
   const [drag, setDrag] = useState(false)
+  const clientesRef = useRef([])
+  const planoCache = useRef(new Map())
+  const compCache = useRef(new Map())
 
-  const addFiles = list => { const arr = Array.from(list || []); if (arr.length) { setFiles(f => [...f, ...arr]); setRel(null) } }
+  const addFiles = list => { const arr = Array.from(list || []).filter(f => /\.(pdf|xlsx|xls|csv)$/i.test(f.name)); if (arr.length) { setFiles(f => [...f, ...arr]); setRows(null); setRel(null) } }
   const onDrop = e => { e.preventDefault(); setDrag(false); addFiles(e.dataTransfer?.files) }
-  const fechar = () => { setOpen(false); setFiles([]); setRel(null) }
+  const fechar = () => { setOpen(false); setFiles([]); setRows(null); setRel(null) }
 
-  async function processar() {
+  const [mes, ano] = alvo.split('/').map(Number)
+  async function planoDe(id) {
+    if (planoCache.current.has(id)) return planoCache.current.get(id)
+    const { data } = await supabase.from('cargas_cadastro').select('dados').eq('cliente_id', id).eq('tipo', 'plano').order('created_at', { ascending: false }).limit(1).maybeSingle()
+    const p = parsePlano(data?.dados); planoCache.current.set(id, p); return p
+  }
+  async function compDe(id) {
+    const k = id + '|' + alvo
+    if (compCache.current.has(k)) return compCache.current.get(k)
+    const { data } = await supabase.from('competencias').select('id, status').eq('cliente_id', id).eq('ano', ano).eq('mes', mes).maybeSingle()
+    compCache.current.set(k, data || null); return data || null
+  }
+
+  // Fase 1 — reconhece cada arquivo (nome → conteúdo) e monta a grade.
+  async function analisar() {
     if (!files.length || busy) return
     setBusy(true)
-    const [mes, ano] = alvo.split('/').map(Number)
-    const { data: clientes } = await supabase.from('clientes').select('id, codigo_dominio, razao_social')
-    const porCod = new Map((clientes || []).map(c => [String(c.codigo_dominio).trim(), c]))
-    const compCache = new Map()
-    const compDe = async cli => {
-      if (compCache.has(cli.id)) return compCache.get(cli.id)
-      const { data } = await supabase.from('competencias').select('id, status').eq('cliente_id', cli.id).eq('ano', ano).eq('mes', mes).maybeSingle()
-      compCache.set(cli.id, data || null); return data || null
-    }
-    const resultado = [], vistos = new Set(), marc = new Map() // compId → [{conta, path, arquivo}]
+    const { data: clientes } = await supabase.from('clientes').select('id, codigo_dominio, razao_social, cnpj')
+    clientesRef.current = clientes || []
+    const porCod = new Map((clientes || []).map(c => [String(c.codigo_dominio || '').trim(), c]))
+    const porCnpj = new Map((clientes || []).map(c => [cnpj14(c.cnpj), c]))
+    const memCache = new Map()
+    const memDe = async id => { if (memCache.has(id)) return memCache.get(id); const m = await lerMemoriaContas(id); memCache.set(id, m); return m }
+
+    const out = []
     for (const file of files) {
-      const p = parseNomeArquivo(file.name)
-      const linha = { nome: file.name }
-      if (!p.cli || !p.conta) { resultado.push({ ...linha, nivel: 'erro', msg: 'Nome fora do padrão código-conta' }); continue }
-      const cli = porCod.get(String(p.cli).trim())
-      if (!cli) { resultado.push({ ...linha, nivel: 'erro', msg: `Código ${p.cli} não encontrado` }); continue }
-      linha.cliente = cli.razao_social
-      const destino = p.ext === 'pdf' ? 'conciliacao' : (['xlsx', 'xls', 'csv'].includes(p.ext) ? 'integracao' : null)
-      if (!destino) { resultado.push({ ...linha, nivel: 'erro', msg: `Formato .${p.ext} não suportado` }); continue }
-      const comp = await compDe(cli)
-      if (!comp) { resultado.push({ ...linha, nivel: 'erro', msg: `Sem fechamento ${alvo}` }); continue }
-      if (comp.status === 'fechado') { resultado.push({ ...linha, nivel: 'erro', msg: 'Fechamento fechado' }); continue }
-      const chave = cli.id + '|' + p.conta + '|' + destino
-      if (vistos.has(chave)) { resultado.push({ ...linha, nivel: 'erro', msg: 'Duplicado no lote' }); continue }
+      const ext = (file.name.match(/\.([a-z0-9]+)$/i)?.[1] || '').toLowerCase()
+      const destino = ext === 'pdf' ? 'conciliacao' : (['xlsx', 'xls', 'csv'].includes(ext) ? 'integracao' : null)
+      const row = { file, nome: file.name, ext, destino, alvo, cliente: null, clienteVia: null, conta: '', contaVia: null, agencia: '', contaBanco: '', comp: null }
+      if (destino) {
+        // 1) Nome código-conta (atalho antigo).
+        const pn = parseNomeArquivo(file.name)
+        const cliNome = pn.cli && porCod.get(String(pn.cli).trim())
+        if (cliNome) { row.cliente = cliNome; row.clienteVia = 'nome'; if (pn.conta) { row.conta = String(pn.conta).trim(); row.contaVia = 'nome' } }
+        // 2) Conteúdo (CNPJ + impressão digital da conta), quando faltou algo.
+        if (!row.cliente || !row.conta) {
+          const id = await lerIdentificacao(file)
+          row.agencia = id.agencia; row.contaBanco = id.conta
+          if (!row.cliente) for (const c of (id.cnpjs || [])) { const cli = porCnpj.get(cnpj14(c)); if (cli) { row.cliente = cli; row.clienteVia = 'cnpj'; break } }
+          if (row.cliente && !row.conta) {
+            const fp = chaveContaBanco(id.agencia, id.conta)
+            const mem = await memDe(row.cliente.id)
+            if (fp && mem[fp]) { row.conta = mem[fp]; row.contaVia = 'memoria' }
+          }
+        }
+        if (row.cliente) { row.plano = await planoDe(row.cliente.id); row.comp = await compDe(row.cliente.id) }
+      }
+      out.push(row)
+    }
+    setRows(out); setBusy(false)
+  }
+
+  // Troca manual de cliente numa linha (para os vermelhos "não identificado").
+  async function escolherCliente(i, cliId) {
+    const cli = clientesRef.current.find(c => c.id === cliId) || null
+    const plano = cli ? await planoDe(cli.id) : []
+    const comp = cli ? await compDe(cli.id) : null
+    setRows(rs => rs.map((r, j) => j === i ? { ...r, cliente: cli, clienteVia: cli ? 'manual' : null, plano, comp } : r))
+  }
+  const setConta = (i, v) => setRows(rs => rs.map((r, j) => j === i ? { ...r, conta: v, contaVia: 'manual' } : r))
+
+  // Fase 2 — recebe o que está verde (aprende a conta confirmada).
+  async function receber() {
+    if (busy || !rows) return
+    setBusy(true)
+    const resultado = [], vistos = new Set(), marc = new Map()
+    for (const row of rows) {
+      const nivel = nivelDe(row)
+      const base = { nome: row.nome, cliente: row.cliente?.razao_social }
+      if (nivel !== 'verde') { resultado.push({ ...base, nivel: 'erro', msg: nivel === 'amarelo' ? 'Sem conta — não recebido' : msgErro(row) }); continue }
+      const cli = row.cliente, conta = String(row.conta).trim(), comp = row.comp
+      const chave = cli.id + '|' + conta + '|' + row.destino
+      if (vistos.has(chave)) { resultado.push({ ...base, nivel: 'erro', msg: 'Duplicado no lote' }); continue }
       vistos.add(chave)
       try {
         let path
-        if (destino === 'conciliacao') {
-          const r = await anexarExtratoPdf({ compId: comp.id, conta: p.conta, file }); path = r.path
+        if (row.destino === 'conciliacao') {
+          const r = await anexarExtratoPdf({ compId: comp.id, conta, file: row.file }); path = r.path
           resultado.push(r.saldoLido != null
-            ? { ...linha, nivel: 'ok', msg: `Conciliação · conta ${p.conta} · saldo ${money(r.saldoLido)}` }
-            : { ...linha, nivel: 'duvida', msg: `Conciliação · conta ${p.conta} · informe o saldo lá` })
+            ? { ...base, nivel: 'ok', msg: `Conciliação · conta ${conta} · saldo ${money(r.saldoLido)}` }
+            : { ...base, nivel: 'duvida', msg: `Conciliação · conta ${conta} · informe o saldo lá` })
         } else {
-          const e1 = await anexarExtratoExcel({ compId: comp.id, conta: p.conta, file }); path = e1.path
+          const e1 = await anexarExtratoExcel({ compId: comp.id, conta, file: row.file }); path = e1.path
           let r
-          try { r = await alimentarIntegracaoFinanceira({ compId: comp.id, empresaId: cli.id, conta: p.conta, file }) } catch (e) { r = { classificado: false, motivo: e.message } }
+          try { r = await alimentarIntegracaoFinanceira({ compId: comp.id, empresaId: cli.id, conta, file: row.file }) } catch (e) { r = { classificado: false, motivo: e.message } }
           resultado.push(r?.classificado
-            ? { ...linha, nivel: 'ok', msg: `Integração · conta ${p.conta} · ${r.classificadas}/${r.total} sugeridos` }
-            : { ...linha, nivel: 'duvida', msg: `Integração · conta ${p.conta} · classifique lá (${r?.motivo || '—'})` })
+            ? { ...base, nivel: 'ok', msg: `Integração · conta ${conta} · ${r.classificadas}/${r.total} sugeridos` }
+            : { ...base, nivel: 'duvida', msg: `Integração · conta ${conta} · classifique lá (${r?.motivo || '—'})` })
         }
-        // Registra para marcar o documento no checklist do cliente (por conta).
-        const arr = marc.get(comp.id) || []; arr.push({ conta: String(p.conta).trim(), path, arquivo: file.name }); marc.set(comp.id, arr)
-      } catch (e) { resultado.push({ ...linha, nivel: 'erro', msg: 'Falha: ' + e.message }) }
+        const arr = marc.get(comp.id) || []; arr.push({ conta, path, arquivo: row.nome }); marc.set(comp.id, arr)
+        // Aprende: número da conta do extrato → conta contábil confirmada (para o próximo mês).
+        if (row.contaBanco) { try { await lembrarContaBancaria(cli.id, { conta_contabil: conta, agencia: row.agencia, conta: row.contaBanco }) } catch { /* aprendizado é best-effort */ } }
+      } catch (e) { resultado.push({ ...base, nivel: 'erro', msg: 'Falha: ' + e.message }) }
     }
     // Marca "recebido" + guarda o arquivo nos documentos que têm a conta recebida.
     const hoje = new Date().toLocaleDateString('pt-BR').slice(0, 5)
@@ -270,11 +342,14 @@ function RecebeArquivos({ competencias, competencia, recalcularPendencias }) {
 
   const COR = { ok: theme.green, duvida: theme.yellow, erro: theme.red }
   const ICO = { ok: 'ti-circle-check', duvida: 'ti-alert-triangle', erro: 'ti-circle-x' }
+  const CORN = { verde: theme.green, amarelo: theme.yellow, vermelho: theme.red }
+  const VIA = { nome: 'nome', cnpj: 'CNPJ', memoria: 'memória', manual: 'manual' }
   const resumo = rel ? { ok: rel.filter(r => r.nivel === 'ok').length, duvida: rel.filter(r => r.nivel === 'duvida').length, erro: rel.filter(r => r.nivel === 'erro').length } : null
+  const cont = rows ? { verde: rows.filter(r => nivelDe(r) === 'verde').length, amarelo: rows.filter(r => nivelDe(r) === 'amarelo').length, vermelho: rows.filter(r => nivelDe(r) === 'vermelho').length } : null
 
   return (
     <>
-      <Bloco icon="ti-cloud-upload" titulo="Recebimento de arquivos" desc="Solte os extratos de vários clientes de uma vez. O nome (código-conta-…) roteia cada arquivo: PDF vai para a Conciliação (lê o saldo) e Excel para a Integração (classifica e sugere).">
+      <Bloco icon="ti-cloud-upload" titulo="Recebimento de arquivos" desc="Solte os extratos de vários clientes de uma vez — sem renomear. O sistema lê o CNPJ (cliente) e a conta bancária (conta contábil), mostra a conferência e aprende para o próximo mês. PDF → Conciliação; Excel → Integração.">
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
           <span style={{ fontSize: 12.5, color: theme.sub }}>Competência:</span>
           <select className="input" style={{ width: 'auto', padding: '6px 10px', fontSize: 13 }} value={alvo} onChange={e => setAlvo(e.target.value)}>
@@ -286,27 +361,29 @@ function RecebeArquivos({ competencias, competencia, recalcularPendencias }) {
 
       {open && (
         <div onClick={e => { if (e.target === e.currentTarget && !busy) fechar() }} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 55 }}>
-          <div onClick={e => e.stopPropagation()} style={{ width: 'min(680px,96vw)', maxHeight: '90vh', overflow: 'auto', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
+          <div onClick={e => e.stopPropagation()} style={{ width: 'min(760px,96vw)', maxHeight: '90vh', overflow: 'auto', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
             <h2 style={{ fontSize: 17, margin: '0 0 4px' }}>Recebimento de arquivos · {alvo}</h2>
-            <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 16px' }}>Nomeie cada arquivo com <b style={{ color: theme.text }}>código-conta-…</b>. Só sobe o que casar com um cliente e um fechamento aberto na competência.</p>
+            <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 16px' }}>Arraste os extratos — <b style={{ color: theme.text }}>não precisa renomear</b>. O sistema identifica o cliente pelo CNPJ e a conta pela memória; confira e receba. Nomear <b style={{ color: theme.text }}>código-conta-…</b> continua funcionando como atalho.</p>
 
-            <label onDragOver={e => { e.preventDefault(); setDrag(true) }} onDragLeave={() => setDrag(false)} onDrop={onDrop}
-              style={{ display: 'block', border: `1.5px dashed ${drag ? theme.accent : theme.border}`, borderRadius: 12, padding: '24px 16px', textAlign: 'center', cursor: 'pointer', background: drag ? 'rgba(74,124,255,0.06)' : theme.input }}>
-              <i className="ti ti-cloud-upload" style={{ fontSize: 26, color: theme.accent }} />
-              <p style={{ margin: '8px 0 0', fontSize: 13, color: theme.text }}>Arraste os arquivos aqui, ou clique para escolher</p>
-              <p style={{ margin: '2px 0 0', fontSize: 11.5, color: theme.sub }}>PDF, XLSX, XLS ou CSV</p>
-              <input type="file" multiple accept=".pdf,.xlsx,.xls,.csv" style={{ display: 'none' }} onChange={e => { addFiles(e.target.files); e.target.value = '' }} />
-            </label>
+            {!rel && (
+              <label onDragOver={e => { e.preventDefault(); setDrag(true) }} onDragLeave={() => setDrag(false)} onDrop={onDrop}
+                style={{ display: 'block', border: `1.5px dashed ${drag ? theme.accent : theme.border}`, borderRadius: 12, padding: '24px 16px', textAlign: 'center', cursor: 'pointer', background: drag ? 'rgba(74,124,255,0.06)' : theme.input }}>
+                <i className="ti ti-cloud-upload" style={{ fontSize: 26, color: theme.accent }} />
+                <p style={{ margin: '8px 0 0', fontSize: 13, color: theme.text }}>Arraste os arquivos aqui, ou clique para escolher</p>
+                <p style={{ margin: '2px 0 0', fontSize: 11.5, color: theme.sub }}>PDF, XLSX, XLS ou CSV</p>
+                <input type="file" multiple accept=".pdf,.xlsx,.xls,.csv" style={{ display: 'none' }} onChange={e => { addFiles(e.target.files); e.target.value = '' }} />
+              </label>
+            )}
 
-            {files.length > 0 && !rel && (
+            {/* Lista simples antes de analisar */}
+            {files.length > 0 && !rows && !rel && (
               <div style={{ marginTop: 12, display: 'grid', gap: 6 }}>
                 {files.map((f, i) => {
-                  const p = parseNomeArquivo(f.name)
+                  const ext = (f.name.match(/\.([a-z0-9]+)$/i)?.[1] || '?').toLowerCase()
                   return (
                     <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12.5, padding: '7px 10px', background: theme.input, borderRadius: 8 }}>
-                      <span style={{ fontFamily: 'monospace', fontSize: 10.5, fontWeight: 800, color: '#fff', background: p.ext === 'pdf' ? theme.accent : theme.green, borderRadius: 5, padding: '2px 5px' }}>{(p.ext || '?').toUpperCase()}</span>
+                      <span style={{ fontFamily: 'monospace', fontSize: 10.5, fontWeight: 800, color: '#fff', background: ext === 'pdf' ? theme.accent : theme.green, borderRadius: 5, padding: '2px 5px' }}>{ext.toUpperCase()}</span>
                       <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
-                      <span style={{ color: theme.sub, fontSize: 11 }}>{p.cli ? p.cli + '·' + p.conta : 'sem código'}</span>
                       <i className="ti ti-x" style={{ cursor: 'pointer', color: theme.sub }} onClick={() => setFiles(files.filter((_, j) => j !== i))} />
                     </div>
                   )
@@ -314,8 +391,59 @@ function RecebeArquivos({ competencias, competencia, recalcularPendencias }) {
               </div>
             )}
 
-            {rel && (
+            {/* Grade de conferência */}
+            {rows && !rel && (
               <div style={{ marginTop: 14 }}>
+                <div style={{ display: 'flex', gap: 16, fontSize: 12.5, marginBottom: 10 }}>
+                  <span style={{ color: theme.green }}><b>{cont.verde}</b> pronto</span>
+                  <span style={{ color: theme.yellow }}><b>{cont.amarelo}</b> falta conta</span>
+                  <span style={{ color: theme.red }}><b>{cont.vermelho}</b> sem cliente</span>
+                </div>
+                <div style={{ display: 'grid', gap: 8 }}>
+                  {rows.map((row, i) => {
+                    const nivel = nivelDe(row)
+                    const ext = (row.ext || '?').toUpperCase()
+                    return (
+                      <div key={i} style={{ padding: '10px 12px', background: theme.input, borderRadius: 10, borderLeft: `3px solid ${CORN[nivel]}`, display: 'grid', gap: 8 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5 }}>
+                          <span style={{ fontFamily: 'monospace', fontSize: 10, fontWeight: 800, color: '#fff', background: row.ext === 'pdf' ? theme.accent : theme.green, borderRadius: 5, padding: '2px 5px' }}>{ext}</span>
+                          <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.nome}</span>
+                          {nivel === 'vermelho' && <span style={{ color: theme.red, fontSize: 11 }}>{msgErro(row)}</span>}
+                        </div>
+                        {row.destino && (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                            {/* Cliente */}
+                            {row.cliente
+                              ? <span style={{ fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                                  <i className="ti ti-building" style={{ color: theme.sub }} /> <b>{row.cliente.razao_social}</b>
+                                  <span style={{ fontSize: 9.5, color: theme.sub, border: `0.5px solid ${theme.cb}`, borderRadius: 5, padding: '1px 5px' }}>{VIA[row.clienteVia] || '—'}</span>
+                                </span>
+                              : <select className="input" style={{ width: 'auto', maxWidth: 260, padding: '5px 8px', fontSize: 12 }} value="" onChange={e => escolherCliente(i, e.target.value)}>
+                                  <option value="">Escolher cliente…</option>
+                                  {clientesRef.current.map(c => <option key={c.id} value={c.id}>{c.razao_social}</option>)}
+                                </select>}
+                            {/* Conta contábil (F4 com o plano do cliente da linha) */}
+                            {row.cliente && row.comp && row.comp.status !== 'fechado' && (
+                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginLeft: 'auto' }}>
+                                <span style={{ fontSize: 11, color: theme.sub }}>Conta:</span>
+                                <div style={{ width: 150 }}>
+                                  <CampoConta value={row.conta} plano={row.plano || []} placeholder="F4 = plano" onChange={v => setConta(i, v)} onPick={p => setConta(i, p.cod)} />
+                                </div>
+                                {row.contaVia === 'memoria' && <span title="Reconhecida pela memória" style={{ fontSize: 9.5, color: theme.green, border: `0.5px solid ${theme.green}`, borderRadius: 5, padding: '1px 5px' }}>memória</span>}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Resultado final */}
+            {rel && (
+              <div style={{ marginTop: 4 }}>
                 <div style={{ display: 'flex', gap: 16, fontSize: 12.5, marginBottom: 10 }}>
                   <span style={{ color: theme.green }}><b>{resumo.ok}</b> ok</span>
                   <span style={{ color: theme.yellow }}><b>{resumo.duvida}</b> dúvida</span>
@@ -338,8 +466,9 @@ function RecebeArquivos({ competencias, competencia, recalcularPendencias }) {
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 18 }}>
               <button className="btn btn-ghost" onClick={fechar} disabled={busy}>{rel ? 'Fechar' : 'Cancelar'}</button>
-              {!rel && <button className="btn" disabled={!files.length || busy} onClick={processar}>{busy ? 'Processando…' : `Receber ${files.length || ''}`.trim()}</button>}
-              {rel && <button className="btn" onClick={() => { setFiles([]); setRel(null) }}>Receber mais</button>}
+              {!rows && !rel && <button className="btn" disabled={!files.length || busy} onClick={analisar}>{busy ? 'Lendo arquivos…' : `Analisar ${files.length || ''}`.trim()}</button>}
+              {rows && !rel && <button className="btn" disabled={busy || !cont.verde} onClick={receber}>{busy ? 'Recebendo…' : `Receber ${cont.verde || ''}`.trim()}</button>}
+              {rel && <button className="btn" onClick={() => { setFiles([]); setRows(null); setRel(null) }}>Receber mais</button>}
             </div>
           </div>
         </div>
