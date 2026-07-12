@@ -4,9 +4,11 @@ import { theme, money } from '../lib/theme'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { gerarLancamento } from '../lib/outras'
+import { decodePartida } from '../lib/sugestoesRazao'
 
 function hexA(hex, a) { const n = parseInt(hex.slice(1), 16); return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})` }
-const num = v => Number(String(v).replace(/\./g, '').replace(',', '.')) || 0
+// Aceita "1.234,56" (BR) e "1234.56" (ponto decimal, vindo do input number/partida).
+const num = v => { const s = String(v ?? '').trim(); return (s.includes(',') ? Number(s.replace(/\./g, '').replace(',', '.')) : Number(s)) || 0 }
 
 export default function SugestoesContabilizacao() {
   const { empresaId, empresaNome, competencia } = useAppData()
@@ -47,7 +49,7 @@ export default function SugestoesContabilizacao() {
     <div>
       <h1 style={{ fontSize: 22, fontWeight: 500, marginBottom: 4 }}>Sugestões de Contabilização</h1>
       <p style={{ color: theme.sub, fontSize: 13, marginBottom: 18, maxWidth: 820 }}>
-        A plataforma sugere contabilizações a partir da análise do razão (fiscal, contábil e folha). O que você confirmar vira lançamento e alimenta o Status → Domínio. Correções que você já fez na Conciliação ou no Status não aparecem aqui — elas já estão lançadas.
+Ao importar o razão, a plataforma já sugere: <b style={{ color: theme.text }}>apropriações do mês</b> (seguro e despesas) e <b style={{ color: theme.text }}>correções recorrentes</b> (quando uma conta que você já corrigiu antes reaparece com a mesma entidade), além da análise fiscal/contábil/folha. O que você confirmar vira lançamento e alimenta o Status → Domínio.
         {empresaNome && <> · <b style={{ color: theme.text }}>{empresaNome}</b> · {competencia}</>}
       </p>
 
@@ -62,19 +64,22 @@ export default function SugestoesContabilizacao() {
         </div>
       ) : (
         <div style={{ display: 'grid', gap: 12 }}>
-          {ativos.map(s => (
+          {ativos.map(s => {
+            const dec = decodePartida(s.detalhe)
+            return (
             <div key={s.id} style={{ background: theme.card, border: `1px solid ${theme.border}`, borderLeft: `3px solid ${theme.accent}`, borderRadius: 12, padding: '14px 16px', display: 'flex', justifyContent: 'space-between', gap: 14, flexWrap: 'wrap' }}>
               <div style={{ minWidth: 0, flex: 1 }}>
                 <b style={{ fontSize: 14 }}>{s.item || s.modulo}</b>
                 <span style={{ marginLeft: 8, background: hexA('#4A7CFF', 0.14), color: '#8FB0FF', fontSize: 11, padding: '3px 9px', borderRadius: 20 }}>{s.modulo}</span>
-                <p style={{ color: theme.sub, fontSize: 12.5, margin: '6px 0 0' }}>{s.detalhe || '(sem detalhe)'}</p>
+                <p style={{ color: theme.sub, fontSize: 12.5, margin: '6px 0 0' }}>{dec.humano || '(sem detalhe)'}</p>
+                {dec.partida && <p style={{ color: theme.sub, fontSize: 11.5, margin: '4px 0 0' }}>D <b style={{ color: theme.text }}>{dec.partida.conta_debito}</b> · C <b style={{ color: theme.text }}>{dec.partida.conta_credito}</b> · <b style={{ color: theme.text }}>{money(dec.partida.valor)}</b></p>}
               </div>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                <button className="btn" style={{ fontSize: 13 }} onClick={() => setModal({ id: s.id, competencia_id: s.competencia_id, historico: s.detalhe || `${s.modulo} · ${s.item || ''}` })}><i className="ti ti-check" /> Confirmar</button>
+                <button className="btn" style={{ fontSize: 13 }} onClick={() => setModal({ id: s.id, competencia_id: s.competencia_id, historico: dec.humano || `${s.modulo} · ${s.item || ''}`, partida: dec.partida })}><i className="ti ti-check" /> Confirmar</button>
                 <button className="btn btn-ghost" style={{ fontSize: 13 }} onClick={() => setTratadas(x => new Set(x).add(s.id))}><i className="ti ti-x" /> Descartar</button>
               </div>
             </div>
-          ))}
+          )})}
         </div>
       )}
 
@@ -86,7 +91,8 @@ export default function SugestoesContabilizacao() {
 function PartidaModal({ cfg, onClose, onConfirm, competencia }) {
   const [m, a] = (competencia || '').split('/').map(Number)
   const dataDefault = m && a ? `${a}-${String(m).padStart(2, '0')}-${String(new Date(a, m, 0).getDate()).padStart(2, '0')}` : ''
-  const [f, setF] = useState({ data: dataDefault, conta_debito: '', conta_credito: '', valor: '', historico: cfg.historico || '' })
+  const p = cfg.partida
+  const [f, setF] = useState({ data: p?.data || dataDefault, conta_debito: p?.conta_debito || '', conta_credito: p?.conta_credito || '', valor: p?.valor ? String(p.valor) : '', historico: cfg.historico || '' })
   const on = k => e => setF(x => ({ ...x, [k]: e.target.value }))
   return (
     <div onClick={e => { if (e.target === e.currentTarget) onClose() }} style={{ position: 'fixed', inset: 0, background: 'rgba(8,11,18,0.64)', zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>

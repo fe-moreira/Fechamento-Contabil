@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
+import { useAuth } from '../components/AuthProvider'
+import { gerarSugestoesDoRazao } from '../lib/sugestoesRazao'
 import DropZone from '../components/DropZone'
 import { theme } from '../lib/theme'
 import { money } from '../lib/theme'
@@ -86,6 +88,7 @@ function autoMapear(headers) {
 
 export default function ImportarRazao() {
   const { empresaId, empresaNome, competencia, getCompetenciaId, recalcularPendencias } = useAppData()
+  const { user } = useAuth()
   const [headers, setHeaders] = useState([])
   const [linhas, setLinhas] = useState([])   // linhas de dados (arrays)
   const [map, setMap] = useState({})
@@ -213,6 +216,9 @@ export default function ImportarRazao() {
 
       // Razão importado → a competência passa a contar como "em andamento".
       await supabase.from('competencias').update({ razao_importado: true }).eq('id', competencia_id)
+
+      // Gera as sugestões do mês (apropriações + correções recorrentes) no Painel de Sugestões.
+      try { await gerarSugestoesDoRazao(empresaId, competencia_id, competencia, user?.email) } catch (e) { console.error('sugestões:', e) }
 
       const totDeb = registros.reduce((s, r) => s + r.debito, 0)
       const totCred = registros.reduce((s, r) => s + r.credito, 0)
