@@ -20,15 +20,18 @@ const SIT = {
   nao_enviou: { label: 'Não enviou', cor: theme.red, icon: 'ti-mail-exclamation' },
 }
 const situOf = d => { const s = d?.situacao ?? (d?.rec ? 'recebido' : ''); return SIT[s] ? s : '' }
-const novoDoc = name => ({ name, situacao: '', rec: false, date: '' })
+const novoDoc = (name, tipo = '', conta = '') => ({ name, tipo, conta, situacao: '', rec: false, date: '' })
 // Mantém a lista sempre em ordem alfabética (inclusive itens novos).
 const ordenar = arr => [...(arr || [])].sort((a, b) => String(a.name).localeCompare(String(b.name), 'pt-BR', { sensitivity: 'base' }))
-// Converte formato antigo (rec bool) e novo (situacao) para o mesmo shape.
+// tipo do documento (de-para): 'conta' = roteia para uma conta contábil (extrato, guia);
+// 'suporte' = apoio do mês, sem conta única (acumulador fiscal, folha); '' = ainda a definir.
 const normaliza = (arr) => (arr || []).map(x => {
   const name = String(x.name || '').trim()
   const situacao = situOf(x)
-  return { name, situacao, rec: situacao === 'recebido', date: x.date || '' }
+  return { name, tipo: x.tipo || '', conta: x.conta || '', situacao, rec: situacao === 'recebido', date: x.date || '' }
 }).filter(x => x.name)
+// Documento ainda sem cadastro completo? 'conta' exige a conta; 'suporte' dispensa; '' falta o tipo.
+const faltaDepara = d => !d.tipo || (d.tipo === 'conta' && !String(d.conta || '').trim())
 
 export default function DocumentosRecebidos() {
   const { empresaId, empresaNome, competencia, getCompetenciaId, recalcularPendencias } = useAppData()
@@ -36,8 +39,12 @@ export default function DocumentosRecebidos() {
   const [status, setStatus] = useState(null)
   const [carregando, setCarregando] = useState(true)
   const [nome, setNome] = useState('')
+  const [tipoNovo, setTipoNovo] = useState('conta')
+  const [contaNovo, setContaNovo] = useState('')
   const [editIdx, setEditIdx] = useState(null)
   const [editNome, setEditNome] = useState('')
+  const [editTipo, setEditTipo] = useState('')
+  const [editConta, setEditConta] = useState('')
   const [msg, setMsg] = useState('')
 
   const ro = status === 'fechado' // fechado = somente leitura
@@ -58,7 +65,7 @@ export default function DocumentosRecebidos() {
         // Herda a lista do fechamento anterior mais recente; senão, fica vazio
         // (sem lista-padrão automática — a base é importada por cliente).
         const herdado = await herdarLista(empresaId, ano, mes)
-        setDocs(ordenar(herdado.map(novoDoc)))
+        setDocs(ordenar(herdado.map(x => novoDoc(x.name, x.tipo, x.conta))))
       }
       setCarregando(false)
     })()
@@ -77,12 +84,15 @@ export default function DocumentosRecebidos() {
 
   async function propagarFrente(novo) {
     const [mes, ano] = competencia.split('/').map(Number)
-    const nomes = novo.map(d => d.name)
     const { data } = await supabase.from('competencias').select('id, ano, mes, status, documentos').eq('cliente_id', empresaId)
     const futuras = (data || []).filter(c => (c.ano > ano || (c.ano === ano && c.mes > mes)) && c.status !== 'fechado')
     for (const c of futuras) {
       const recPorNome = Object.fromEntries(normaliza(c.documentos).map(x => [x.name, x]))
-      const merged = nomes.map(name => recPorNome[name] || novoDoc(name))
+      // O de-para (tipo/conta) é definição do documento → propaga; a situação do mês é preservada.
+      const merged = novo.map(d => {
+        const prev = recPorNome[d.name]
+        return prev ? { ...prev, tipo: d.tipo, conta: d.conta } : novoDoc(d.name, d.tipo, d.conta)
+      })
       await supabase.from('competencias').update({ documentos: merged }).eq('id', c.id)
     }
   }
@@ -97,21 +107,45 @@ export default function DocumentosRecebidos() {
     }))
   }
   const remover = (i) => { if (ro) return; if (confirm(`Excluir “${docs[i].name}” da lista?`)) persistir(docs.filter((_, j) => j !== i), true) }
-  const incluir = () => { if (ro || !nome.trim()) return; persistir([...docs, novoDoc(nome.trim())], true); setNome('') }
-  const abrirEdicao = (i) => { setEditIdx(i); setEditNome(docs[i].name) }
+  // Novos documentos EXIGEM tipo (e conta, quando for do tipo 'conta'). Os já existentes
+  // sem cadastro não travam — só recebem o alerta na lista, corrigidos aos poucos.
+  const incluir = () => {
+    if (ro || !nome.trim()) return
+    if (!tipoNovo) { flash('Escolha o tipo do documento (de conta ou suporte).'); return }
+    if (tipoNovo === 'conta' && !contaNovo.trim()) { flash('Documento do tipo “de conta” exige a conta contábil.'); return }
+    persistir([...docs, novoDoc(nome.trim(), tipoNovo, tipoNovo === 'conta' ? contaNovo.trim() : '')], true)
+    setNome(''); setContaNovo(''); setTipoNovo('conta')
+  }
+  const abrirEdicao = (i) => { setEditIdx(i); setEditNome(docs[i].name); setEditTipo(docs[i].tipo || 'conta'); setEditConta(docs[i].conta || '') }
   const salvarEdicao = () => {
     const n = editNome.trim()
-    if (n && editIdx !== null) persistir(docs.map((d, j) => j === editIdx ? { ...d, name: n } : d), true)
-    setEditIdx(null); setEditNome('')
+    if (n && editIdx !== null) {
+      const conta = editTipo === 'conta' ? editConta.trim() : ''
+      persistir(docs.map((d, j) => j === editIdx ? { ...d, name: n, tipo: editTipo, conta } : d), true)
+    }
+    setEditIdx(null); setEditNome(''); setEditTipo(''); setEditConta('')
   }
+  function flash(t) { setMsg(t); setTimeout(() => setMsg(''), 4000) }
 
   async function baixarModelo() {
     const XLSX = await import('xlsx')
-    const ws = XLSX.utils.aoa_to_sheet([['Documento'], ...PADRAO.map(n => [n])])
-    ws['!cols'] = [{ wch: 46 }]
+    const ws = XLSX.utils.aoa_to_sheet([
+      ['Documento', 'Tipo (conta/suporte)', 'Conta contábil'],
+      ...PADRAO.map(n => [n, /extrato|banc/i.test(n) ? 'conta' : 'suporte', '']),
+    ])
+    ws['!cols'] = [{ wch: 46 }, { wch: 20 }, { wch: 18 }]
     const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, ws, 'Documentos')
     XLSX.writeFile(wb, 'modelo-documentos.xlsx')
+  }
+
+  // Normaliza o tipo vindo da planilha: "suporte/apoio" → suporte; qualquer coisa com
+  // "conta" (ou uma conta preenchida) → conta; vazio → a definir.
+  function tipoPlanilha(raw, conta) {
+    const t = String(raw ?? '').trim().toLowerCase()
+    if (/suport|apoio|global/.test(t)) return 'suporte'
+    if (/conta/.test(t) || String(conta || '').trim()) return 'conta'
+    return ''
   }
 
   async function importar(e) {
@@ -121,14 +155,21 @@ export default function DocumentosRecebidos() {
       const XLSX = await import('xlsx')
       const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' })
       const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' })
-      let nomes = rows.map(r => String(r[0] ?? '').trim()).filter(Boolean)
-      if (nomes[0] && /^documento/i.test(nomes[0])) nomes = nomes.slice(1) // ignora cabeçalho
-      const unicos = [...new Set(nomes)]
-      if (!unicos.length) { setMsg('Nenhum documento encontrado na planilha (coluna A).'); return }
-      if (!confirm(`Importar ${unicos.length} documento(s)? Isso substitui a lista desta competência (em diante).`)) return
-      await persistir(unicos.map(novoDoc), true)
-      setMsg(`${unicos.length} documento(s) importado(s).`)
-    } catch (err) { setMsg('Erro ao importar: ' + err.message) }
+      let body = rows
+      if (body[0] && /^documento/i.test(String(body[0][0] ?? ''))) body = body.slice(1) // ignora cabeçalho
+      const seen = new Set(), items = []
+      for (const r of body) {
+        const name = String(r[0] ?? '').trim(); if (!name || seen.has(name)) continue
+        seen.add(name)
+        const conta = String(r[2] ?? '').trim()
+        items.push(novoDoc(name, tipoPlanilha(r[1], conta), conta))
+      }
+      if (!items.length) { flash('Nenhum documento encontrado na planilha (coluna A).'); return }
+      const incompletos = items.filter(faltaDepara).length
+      if (!confirm(`Importar ${items.length} documento(s) — com conta/tipo? Isso substitui a lista desta competência (em diante).`)) return
+      await persistir(items, true)
+      flash(`${items.length} documento(s) importado(s)${incompletos ? ` · ${incompletos} ainda sem conta/tipo (veja o alerta na lista)` : ''}.`)
+    } catch (err) { flash('Erro ao importar: ' + err.message) }
   }
 
   if (!empresaId) {
@@ -140,6 +181,7 @@ export default function DocumentosRecebidos() {
   for (const d of docs) cont[situOf(d)]++
   const rec = cont.recebido
   const pct = total ? Math.round(rec / total * 100) : 0
+  const semDepara = docs.filter(faltaDepara).length
 
   return (
     <Wrapper>
@@ -164,22 +206,35 @@ export default function DocumentosRecebidos() {
           <span style={{ color: theme.green }}><b>{cont.recebido}</b> recebido(s)</span>
           <span style={{ color: theme.sub }}><b>{cont.nao_tem}</b> não tem</span>
           <span style={{ color: theme.red }}><b>{cont.nao_enviou}</b> não enviou (vai p/ o relatório de pendências)</span>
+          {semDepara > 0 && <span style={{ color: theme.yellow }}><i className="ti ti-alert-triangle" /> <b>{semDepara}</b> sem conta/tipo cadastrado</span>}
         </div>
       </div>
 
-      {/* Ações: incluir / importar / modelo */}
+      {/* Ações: incluir (com de-para) / importar / modelo */}
       {!ro && (
-        <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: 14, marginBottom: 14, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-          <input className="input" style={{ flex: 1, minWidth: 180 }} placeholder="Nome do documento" value={nome}
-            onChange={e => setNome(e.target.value)} onKeyDown={e => e.key === 'Enter' && incluir()} />
-          <button className="btn" onClick={incluir}><i className="ti ti-plus" /> Incluir</button>
-          <span style={{ width: 1, height: 24, background: theme.border, margin: '0 2px' }} />
-          <label className="btn btn-ghost" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
-            <i className="ti ti-file-import" /> Importar Excel
-            <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={importar} />
-          </label>
-          <button className="btn btn-ghost" onClick={baixarModelo}><i className="ti ti-file-spreadsheet" /> Baixar modelo</button>
-          <span style={{ fontSize: 12, color: theme.sub, marginLeft: 'auto' }}>Vários clientes de uma vez? Use <b style={{ color: theme.text }}>Importação em massa</b> (Nível cliente).</span>
+        <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: 14, marginBottom: 14 }}>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            <input className="input" style={{ flex: 1, minWidth: 180 }} placeholder="Nome do documento" value={nome}
+              onChange={e => setNome(e.target.value)} onKeyDown={e => e.key === 'Enter' && incluir()} />
+            <select className="input" style={{ width: 130 }} value={tipoNovo} onChange={e => setTipoNovo(e.target.value)} title="Tipo do documento">
+              <option value="conta">De conta</option>
+              <option value="suporte">Suporte</option>
+            </select>
+            {tipoNovo === 'conta' && (
+              <input className="input" style={{ width: 150 }} placeholder="Conta contábil" value={contaNovo}
+                onChange={e => setContaNovo(e.target.value)} onKeyDown={e => e.key === 'Enter' && incluir()} />
+            )}
+            <button className="btn" onClick={incluir}><i className="ti ti-plus" /> Incluir</button>
+            <span style={{ width: 1, height: 24, background: theme.border, margin: '0 2px' }} />
+            <label className="btn btn-ghost" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+              <i className="ti ti-file-import" /> Importar Excel
+              <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={importar} />
+            </label>
+            <button className="btn btn-ghost" onClick={baixarModelo}><i className="ti ti-file-spreadsheet" /> Baixar modelo</button>
+          </div>
+          <p style={{ fontSize: 11.5, color: theme.sub, margin: '9px 2px 0' }}>
+            <b style={{ color: theme.text }}>De conta</b> (extrato, guia) → liga numa conta contábil e conecta com a conciliação. <b style={{ color: theme.text }}>Suporte</b> (acumulador, folha) → só arquiva. Documentos novos exigem o tipo e a conta; o modelo do Excel já traz as colunas <b style={{ color: theme.text }}>Tipo</b> e <b style={{ color: theme.text }}>Conta</b>.
+          </p>
         </div>
       )}
 
@@ -195,12 +250,33 @@ export default function DocumentosRecebidos() {
           <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderTop: i ? `1px solid ${theme.border}` : 'none', fontSize: 13.5, flexWrap: 'wrap' }}>
             <i className={`ti ${SIT[s].icon}`} style={{ color: SIT[s].cor, fontSize: 20 }} />
             {editIdx === i ? (
-              <input className="input" autoFocus value={editNome}
-                onChange={e => setEditNome(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter') salvarEdicao(); if (e.key === 'Escape') { setEditIdx(null); setEditNome('') } }}
-                onBlur={salvarEdicao} style={{ flex: 1, minWidth: 160 }} />
+              <div style={{ flex: 1, minWidth: 260, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                <input className="input" autoFocus value={editNome} placeholder="Nome do documento"
+                  onChange={e => setEditNome(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') salvarEdicao(); if (e.key === 'Escape') { setEditIdx(null); setEditNome('') } }}
+                  style={{ flex: 1, minWidth: 140 }} />
+                <select className="input" style={{ width: 118 }} value={editTipo} onChange={e => setEditTipo(e.target.value)}>
+                  <option value="conta">De conta</option><option value="suporte">Suporte</option>
+                </select>
+                {editTipo === 'conta' && (
+                  <input className="input" style={{ width: 130 }} placeholder="Conta contábil" value={editConta}
+                    onChange={e => setEditConta(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') salvarEdicao(); if (e.key === 'Escape') { setEditIdx(null) } }} />
+                )}
+                <button className="btn" style={{ fontSize: 12, padding: '6px 10px' }} onClick={salvarEdicao}>Salvar</button>
+              </div>
             ) : (
-              <span style={{ flex: 1, minWidth: 140, color: s === 'recebido' ? theme.text : theme.sub }}>{d.name}</span>
+              <span style={{ flex: 1, minWidth: 140, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <span style={{ color: s === 'recebido' ? theme.text : theme.sub }}>{d.name}</span>
+                {faltaDepara(d)
+                  ? <button className="btn btn-ghost" onClick={() => abrirEdicao(i)} disabled={ro}
+                      style={{ fontSize: 11, padding: '3px 8px', color: theme.yellow, borderColor: theme.yellow }}
+                      title="Falta cadastrar a conta e/ou o tipo deste documento">
+                      <i className="ti ti-alert-triangle" /> falta conta/tipo</button>
+                  : d.tipo === 'suporte'
+                    ? <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 20, background: theme.input, color: theme.sub }}>suporte</span>
+                    : <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 20, background: 'rgba(74,124,255,0.12)', color: theme.accent, fontFamily: 'monospace' }} title="Conta contábil ligada — conecta com a conciliação">conta {d.conta}</span>}
+              </span>
             )}
             {editIdx !== i && <span style={{ color: SIT[s].cor, fontSize: 12, fontWeight: 500, minWidth: 76 }}>{SIT[s].label}{s === 'recebido' && d.date ? ` ${d.date}` : ''}</span>}
             {!ro && editIdx !== i && (
@@ -214,7 +290,7 @@ export default function DocumentosRecebidos() {
                     </button>
                   ))}
                 </div>
-                <i className="ti ti-pencil" title="Editar nome" onClick={() => abrirEdicao(i)} style={{ color: theme.sub, fontSize: 16, marginLeft: 2, cursor: 'pointer' }} />
+                <i className="ti ti-pencil" title="Editar nome / conta / tipo" onClick={() => abrirEdicao(i)} style={{ color: theme.sub, fontSize: 16, marginLeft: 2, cursor: 'pointer' }} />
                 <i className="ti ti-trash" title="Excluir" onClick={() => remover(i)} style={{ color: theme.sub, fontSize: 16, cursor: 'pointer' }} />
               </>
             )}
@@ -225,13 +301,13 @@ export default function DocumentosRecebidos() {
   )
 }
 
-// Lista de documentos do fechamento anterior mais recente (só os nomes).
+// Documentos do fechamento anterior mais recente (nome + de-para tipo/conta, sem a situação).
 async function herdarLista(empresaId, ano, mes) {
   const { data } = await supabase.from('competencias').select('ano, mes, documentos').eq('cliente_id', empresaId)
   const anteriores = (data || [])
     .filter(c => (c.ano < ano || (c.ano === ano && c.mes < mes)) && Array.isArray(c.documentos) && c.documentos.length)
     .sort((a, b) => (b.ano - a.ano) || (b.mes - a.mes))
-  return anteriores[0] ? normaliza(anteriores[0].documentos).map(x => x.name) : []
+  return anteriores[0] ? normaliza(anteriores[0].documentos).map(x => ({ name: x.name, tipo: x.tipo, conta: x.conta })) : []
 }
 
 function Wrapper({ children }) {
