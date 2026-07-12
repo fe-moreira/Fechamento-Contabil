@@ -55,11 +55,11 @@ export default function PainelCliente() {
 
         // Balancete hierárquico — MESMA fonte da Conciliação/Relatórios: saldo inicial por
         // arrasto + carga inicial, e saldo_final = a "última coluna da conciliação".
-        const { linhas: hier } = await montarBalancete(empresaId, comp.id)
+        const { linhas: hier } = await montarBalancete(empresaId, comp.id, 0, { comLancamentos: true })
         const analit = (hier || []).filter(l => !l.sintetica)
         const g = l => String(l.classifRaw || '')[0] // grupo pela CLASSIFICAÇÃO (não pelo reduzido)
 
-        const comparativo = await apurarVariacoes(empresaId)
+        const comparativo = await apurarVariacoes(empresaId, { comLancamentos: true })
         const dist = await apurarDistribuicao(empresaId, comp.id, ano, mes)
 
         // --- Resultado por mês (receita, despesa e lucro) ---

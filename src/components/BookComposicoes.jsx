@@ -42,20 +42,15 @@ export default function BookComposicoes({ empresaId, empresaNome, competencia, c
         if (!vivo) return
         if (!comp) { setSemComp(true); return }
 
-        const [{ linhas }, { data: conc }, { data: lancs }, coments] = await Promise.all([
-          montarBalancete(empresaId, comp.id),
+        // montarBalancete com comLancamentos já entrega o razão VIVO (lançamentos
+        // confirmados embutidos no saldo) — não precisamos sobrepor os lançamentos de novo.
+        const [{ linhas }, { data: conc }, coments] = await Promise.all([
+          montarBalancete(empresaId, comp.id, 0, { comLancamentos: true }),
           supabase.from('conciliacao_conta').select('conta, saldo_documento, documento, documento_path, conciliada, justificativa').eq('competencia_id', comp.id),
-          supabase.from('lancamentos').select('conta_debito, conta_credito, valor').eq('competencia_id', comp.id),
           comentariosPorConta(empresaId),
         ])
         if (!vivo) return
         const conf = {}; for (const r of (conc || [])) conf[String(r.conta)] = r
-        const aj = {}
-        for (const l of (lancs || [])) {
-          const v = num(l.valor)
-          if (l.conta_debito) aj[String(l.conta_debito)] = (aj[String(l.conta_debito)] || 0) + v
-          if (l.conta_credito) aj[String(l.conta_credito)] = (aj[String(l.conta_credito)] || 0) - v
-        }
 
         // Só contas patrimoniais analíticas (Ativo 1 / Passivo+PL 2) com saldo.
         const patr = linhas.filter(l => !l.sintetica
@@ -66,7 +61,7 @@ export default function BookComposicoes({ empresaId, empresaNome, competencia, c
         for (const l of patr) {
           const cod = String(l.reduzido || '')
           const reg = conf[cod] || null
-          const saldoEf = num(l.saldo_final) + (aj[cod] || 0)
+          const saldoEf = num(l.saldo_final) // já vivo (lançamentos embutidos)
           const dif = reg && reg.saldo_documento != null ? difConciliacao(saldoEf, reg.saldo_documento) : null
           let composicao = []
           if (ehEntidade(l.nome)) {

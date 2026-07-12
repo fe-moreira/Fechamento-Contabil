@@ -73,7 +73,7 @@ export default function Relatorios() {
         setDocumentos(Array.isArray(comp.documentos) ? comp.documentos : [])
 
         // Balancete hierárquico (sintéticas + analíticas, com Saldo Anterior por arrasto).
-        montarBalancete(empresaId, comp.id).then(r => { if (vivo) setHier(r.linhas || []) }).catch(() => { if (vivo) setHier([]) })
+        montarBalancete(empresaId, comp.id, 0, { comLancamentos: true }).then(r => { if (vivo) setHier(r.linhas || []) }).catch(() => { if (vivo) setHier([]) })
 
         // Tick verde do Book de Composições: acende só quando a conciliação está
         // finalizada (nenhuma conta de Ativo/Passivo em aberto — mesma régua do Status).
@@ -105,7 +105,7 @@ export default function Relatorios() {
         if (vivo) setDist(d)
         const b = await apurarBancoResultado(empresaId, comp.id)
         if (vivo) setBr(b)
-        const cmp = await apurarVariacoes(empresaId)
+        const cmp = await apurarVariacoes(empresaId, { comLancamentos: true })
         if (vivo) setComparativo(cmp)
       } finally {
         if (vivo) setCarregando(false)
@@ -178,7 +178,7 @@ export default function Relatorios() {
     if (!compId || gerandoDom) return
     setGerandoDom(true)
     try {
-      const linhasHier = hier.length ? hier : (await montarBalancete(empresaId, compId)).linhas
+      const linhasHier = hier.length ? hier : (await montarBalancete(empresaId, compId, 0, { comLancamentos: true })).linhas
       const [mes, ano] = competencia.split('/').map(Number)
       const ult = new Date(ano, mes, 0).getDate()
       abreBalanceteDominio({

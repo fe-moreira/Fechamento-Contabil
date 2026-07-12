@@ -68,7 +68,7 @@ export default function ComparativoCompleto({ empresaId, empresaNome, competenci
         if (!comps || !comps.length) { setDados({ meses: [], contas: [], mov: {}, sf: {} }); return }
         const meta = {}, mov = {}, sf = {}, si = {}, meses = []
         for (const c of comps) {
-          const { linhas } = await montarBalancete(empresaId, c.id)
+          const { linhas } = await montarBalancete(empresaId, c.id, 0, { comLancamentos: true })
           if (!vivo) return
           if (!linhas.length) continue
           meses.push(c.mes)

@@ -38,8 +38,18 @@ export default function SugestoesContabilizacao() {
   async function confirmar(f) {
     try {
       await gerarLancamento({ competencia_id: modal.competencia_id, data: f.data || null, conta_debito: f.conta_debito, conta_credito: f.conta_credito, valor: num(f.valor), historico: f.historico, origem: 'sugestao', usuario: user?.email })
-      setTratadas(s => new Set(s).add(modal.id)); setModal(null); setMsg('Lançamento gerado a partir da sugestão.'); setTimeout(() => setMsg(''), 4000)
+      // Marca a sugestão como confirmada (persistente): não reaparece ao recarregar nem é
+      // regenerada no próximo import do razão (evita lançamento em dobro).
+      await supabase.from('auditoria').update({ tipo: 'Sugestão Confirmada' }).eq('id', modal.id)
+      setTratadas(s => new Set(s).add(modal.id)); setModal(null); setMsg('Lançamento gerado a partir da sugestão. Relatórios, balancete, DRE, conciliação e cockpit já refletem esta contabilização.'); setTimeout(() => setMsg(''), 5000)
     } catch (e) { setMsg('Erro: ' + e.message) }
+  }
+
+  // Ignorar a sugestão PERMANENTEMENTE: a sugestão não muda nada até ser confirmada, e
+  // descartar não gera lançamento — só marca para não voltar nem ser regerada.
+  async function descartar(id) {
+    setTratadas(x => new Set(x).add(id))
+    try { await supabase.from('auditoria').update({ tipo: 'Sugestão Descartada' }).eq('id', id) } catch (e) { console.error('descartar:', e) }
   }
 
   if (!empresaId) return <Aviso texto="Selecione uma empresa no menu lateral." />
@@ -76,7 +86,7 @@ Ao importar o razão, a plataforma já sugere: <b style={{ color: theme.text }}>
               </div>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 <button className="btn" style={{ fontSize: 13 }} onClick={() => setModal({ id: s.id, competencia_id: s.competencia_id, historico: dec.humano || `${s.modulo} · ${s.item || ''}`, partida: dec.partida })}><i className="ti ti-check" /> Confirmar</button>
-                <button className="btn btn-ghost" style={{ fontSize: 13 }} onClick={() => setTratadas(x => new Set(x).add(s.id))}><i className="ti ti-x" /> Descartar</button>
+                <button className="btn btn-ghost" style={{ fontSize: 13 }} onClick={() => descartar(s.id)}><i className="ti ti-x" /> Descartar</button>
               </div>
             </div>
           )})}
