@@ -715,9 +715,28 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
         mv = anotarReclass(mv, mesTodo || [], conta, plano)
       }
     }
+    // Razão VIVO: além do razão importado, traz os LANÇAMENTOS confirmados que tocam esta
+    // conta (correções/estornos da Conciliação, apropriações, contabilizações) como linhas
+    // próprias — o estorno aparece no lado que zera a duplicidade e o Total fecha no valor
+    // certo. É o que faz este drill-down bater com a célula do comparativo (razão vivo).
+    const { data: lancs } = await supabase.from('lancamentos')
+      .select('id, competencia_id, data, conta_debito, conta_credito, valor, historico, origem')
+      .in('competencia_id', ids)
+      .or(`conta_debito.eq.${conta},conta_credito.eq.${conta}`)
+    const lancRows = (lancs || []).map(l => {
+      const ehDeb = String(l.conta_debito || '').trim() === String(conta)
+      const v = Number(l.valor) || 0
+      return {
+        id: `lanc-${l.id}`, competencia_id: l.competencia_id, data: l.data || '',
+        conta, contrapartida: ehDeb ? (l.conta_credito || '') : (l.conta_debito || ''),
+        historico: l.historico || 'Lançamento de ajuste',
+        debito: ehDeb ? v : 0, credito: ehDeb ? 0 : v,
+        suspeito: false, ehLancamento: true, origem: l.origem || 'lancamento',
+      }
+    })
     setCorrecoes(corrMap)
     setMovers(mv)
-    setLinhas(analisarCulpados(rows, anteriores))
+    setLinhas([...analisarCulpados(rows, anteriores), ...lancRows])
     setCarregando(false)
   }
 
@@ -877,15 +896,17 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
                 {linhas.map((l, i) => {
                   saldo += (Number(l.debito) || 0) - (Number(l.credito) || 0)
                   const corr = correcoes[l.id]
+                  const ehLanc = l.ehLancamento
                   return (
                     <tr key={l.id || i}
-                      onClick={() => { setMsg(''); setAcaoLanc(corr ? { modo: 'ver', linha: l, corr } : { modo: 'novo', linha: l }) }}
-                      style={{ borderTop: `1px solid ${theme.border}`, cursor: 'pointer', background: corr ? 'rgba(48,164,108,0.08)' : l.suspeito ? 'rgba(245,166,35,0.07)' : undefined }}
-                      title={corr ? 'Corrigido — clique para ver/desfazer' : 'Clique para corrigir (reclassificar)'}
+                      onClick={ehLanc ? undefined : () => { setMsg(''); setAcaoLanc(corr ? { modo: 'ver', linha: l, corr } : { modo: 'novo', linha: l }) }}
+                      style={{ borderTop: `1px solid ${theme.border}`, cursor: ehLanc ? 'default' : 'pointer', background: ehLanc ? 'rgba(74,124,255,0.08)' : corr ? 'rgba(48,164,108,0.08)' : l.suspeito ? 'rgba(245,166,35,0.07)' : undefined }}
+                      title={ehLanc ? 'Lançamento de ajuste (correção/estorno) — reflete no razão vivo' : corr ? 'Corrigido — clique para ver/desfazer' : 'Clique para corrigir (reclassificar)'}
                     >
                       {todos && <td style={{ ...td, whiteSpace: 'nowrap', color: theme.sub }}>{MESES[(mesDoLanc(l) || 1) - 1]}</td>}
                       <td style={{ ...td, whiteSpace: 'nowrap' }}>{l.data || ''}</td>
                       <td style={{ ...td, maxWidth: 360, whiteSpace: 'normal' }}>
+                        {ehLanc && <span style={{ fontSize: 9.5, fontWeight: 700, color: theme.accent, background: 'rgba(74,124,255,0.14)', borderRadius: 4, padding: '1px 5px', marginRight: 6 }}>AJUSTE</span>}
                         {corr && <i className="ti ti-circle-check" style={{ color: theme.green, marginRight: 6 }} title="Corrigido" />}
                         {l.suspeito && !corr && <i className="ti ti-alert-triangle" style={{ color: theme.yellow, marginRight: 6 }} title="Provável culpado" />}
                         {l.historico || ''}
