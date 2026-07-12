@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
 import { theme, money } from '../lib/theme'
-import { parseNomeArquivo, anexarExtratoPdf, anexarExtratoExcel } from '../lib/importacaoMassa'
+import { parseNomeArquivo, anexarExtratoPdf, anexarExtratoExcel, alimentarIntegracaoFinanceira } from '../lib/importacaoMassa'
 import CampoConta from '../components/CampoConta'
 
 // Lista padrão (só nomes — sem separação por departamento).
@@ -358,7 +358,13 @@ function ImportacaoMassa({ empresaId, codDominio, docs, getCompetenciaId, onClos
         } else if (['xlsx', 'xls', 'csv'].includes(p.ext)) {
           await anexarExtratoExcel({ compId, conta: p.conta, file })
           recebidos.add(doc.name)
-          resultado.push({ ...linha, nivel: 'ok', msg: 'Integração · Excel recebido, pronto para importar' })
+          // Já alimenta a Integração Financeira: classifica com o perfil+memória e deixa os
+          // lançamentos sugeridos como rascunho (o usuário só confere e conclui na tela).
+          let r
+          try { r = await alimentarIntegracaoFinanceira({ compId, empresaId, conta: p.conta, file, usuario: null }) } catch (e) { r = { classificado: false, motivo: e.message } }
+          resultado.push(r?.classificado
+            ? { ...linha, nivel: 'ok', msg: `Integração · ${r.classificadas}/${r.total} lançamentos sugeridos` }
+            : { ...linha, nivel: 'duvida', msg: `Integração · Excel recebido; classifique lá (${r?.motivo || 'não classificado'})` })
         } else {
           resultado.push({ ...linha, nivel: 'erro', msg: `Formato .${p.ext} não suportado (use PDF ou Excel)` })
         }

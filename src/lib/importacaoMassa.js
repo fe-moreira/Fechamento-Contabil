@@ -1,4 +1,6 @@
 import { supabase } from './supabase'
+import { parsePlano } from './balancete'
+import { aplicarPerfil, catByRowDeMerges } from './financeiro'
 
 // ============================================================================
 // Importação em massa de documentos. O NOME do arquivo carrega o roteamento:
@@ -52,11 +54,51 @@ export async function anexarExtratoPdf({ compId, conta, file }) {
   return { saldoLido: saldo }
 }
 
-// Guarda o extrato Excel amarrado à conta/competência, pronto para a Integração Financeira.
+// Guarda o extrato Excel amarrado à conta/competência (referência/consulta).
 export async function anexarExtratoExcel({ compId, conta, file }) {
   const ext = (file.name.match(/\.[a-z0-9]+$/i) || ['.xlsx'])[0].toLowerCase()
   const path = `${sanit(compId + '/' + conta)}/integracao${ext}`
   const { error } = await supabase.storage.from('extratos').upload(path, file, { upsert: true, contentType: file.type || undefined })
   if (error) throw new Error(error.message)
   return { path }
+}
+
+// Alimenta a INTEGRAÇÃO FINANCEIRA de forma headless: usa o perfil de leitura e a memória
+// do cliente para classificar o extrato Excel e grava o RASCUNHO em
+// competencias.integracoes.financeira.bancos[conta] — o mesmo que a tela mostra ao abrir.
+// Não conclui o banco (fica como rascunho, com os lançamentos já sugeridos).
+export async function alimentarIntegracaoFinanceira({ compId, empresaId, conta, file, usuario = null }) {
+  const [{ data: cb }, { data: mem }, { data: planoCarga }] = await Promise.all([
+    supabase.from('cargas_cadastro').select('dados, obs').eq('cliente_id', empresaId).eq('tipo', 'contas_bancarias').order('created_at', { ascending: false }).limit(1).maybeSingle(),
+    supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'memoria_financeira').order('created_at', { ascending: false }).limit(1).maybeSingle(),
+    supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'plano').order('created_at', { ascending: false }).limit(1).maybeSingle(),
+  ])
+  let perfil = null
+  try { const o = JSON.parse(cb?.obs || ''); if (o && typeof o === 'object' && o.perfil) perfil = o.perfil } catch { /* obs antigo */ }
+  if (!perfil) return { classificado: false, motivo: 'perfil de leitura não configurado' }
+  const memoria = Array.isArray(mem?.dados) ? mem.dados : []
+  const adiantContas = new Set(parsePlano(planoCarga?.dados).filter(p => /adiant/i.test(p.nome || '')).map(p => String(p.reduzido)))
+
+  const XLSX = await import('xlsx')
+  const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true })
+  const ws = wb.Sheets[wb.SheetNames[0]]
+  const arr = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
+  const catByRow = catByRowDeMerges(ws['!merges'], arr)
+
+  // Classifica por banco (a conta é um lado da partida; a contrapartida nunca é o próprio banco).
+  const excl = new Set([String(conta)])
+  const norm = aplicarPerfil(arr, perfil, memoria, catByRow, adiantContas, excl)
+    .map(l => ({ ...l, banco: String(conta), contra: String(l.contra || '') === String(conta) ? '' : l.contra }))
+  if (!norm.length) return { classificado: false, motivo: 'o perfil não encontrou lançamentos' }
+
+  // Grava o rascunho preservando o restante do estado das integrações.
+  const { data: comp } = await supabase.from('competencias').select('integracoes').eq('id', compId).maybeSingle()
+  const integ = (comp?.integracoes && typeof comp.integracoes === 'object') ? comp.integracoes : {}
+  const fin = (integ.financeira && typeof integ.financeira === 'object') ? integ.financeira : {}
+  const bancos = { ...(fin.bancos || {}) }
+  const prev = bancos[String(conta)] || {}
+  bancos[String(conta)] = { estado: 'rascunho', doc: file.name, usuario, draft: norm, saldoExtrato: prev.saldoExtrato || null, cruza: prev.cruza || null, concluido: false }
+  await supabase.from('competencias').update({ integracoes: { ...integ, financeira: { ...fin, bancos } } }).eq('id', compId)
+
+  return { classificado: true, total: norm.length, classificadas: norm.filter(l => l.contra).length }
 }
