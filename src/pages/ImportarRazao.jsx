@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { gerarSugestoesDoRazao } from '../lib/sugestoesRazao'
+import { gerarSugestoesConciliacao } from '../lib/sugestoesConciliacao'
 import DropZone from '../components/DropZone'
 import { theme } from '../lib/theme'
 import { money } from '../lib/theme'
@@ -219,6 +220,8 @@ export default function ImportarRazao() {
 
       // Gera as sugestões do mês (apropriações + correções recorrentes) no Painel de Sugestões.
       try { await gerarSugestoesDoRazao(empresaId, competencia_id, competencia, user?.email) } catch (e) { console.error('sugestões:', e) }
+      // Sugestões da conciliação: desconto/juros (baixa pelo banco) e baixa de adiantamento.
+      try { await gerarSugestoesConciliacao(empresaId, competencia_id, competencia, user?.email) } catch (e) { console.error('sugestões concil.:', e) }
 
       const totDeb = registros.reduce((s, r) => s + r.debito, 0)
       const totCred = registros.reduce((s, r) => s + r.credito, 0)
