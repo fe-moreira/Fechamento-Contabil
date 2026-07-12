@@ -59,7 +59,7 @@ export default function SugestoesContabilizacao() {
     <div>
       <h1 style={{ fontSize: 22, fontWeight: 500, marginBottom: 4 }}>Sugestões de Contabilização</h1>
       <p style={{ color: theme.sub, fontSize: 13, marginBottom: 18, maxWidth: 820 }}>
-Ao importar o razão, a plataforma já sugere: <b style={{ color: theme.text }}>apropriações do mês</b> (seguro e despesas) e <b style={{ color: theme.text }}>correções recorrentes</b> (quando uma conta que você já corrigiu antes reaparece com a mesma entidade), além da análise fiscal/contábil/folha. O que você confirmar vira lançamento e alimenta o Status → Domínio.
+Ao importar o razão, a plataforma já sugere: <b style={{ color: theme.text }}>apropriações do mês</b> (seguro e despesas), <b style={{ color: theme.text }}>correções recorrentes</b> (conta já corrigida antes que reaparece com a mesma entidade), <b style={{ color: theme.text }}>desconto/juros</b> (diferença de título baixado pelo banco) e <b style={{ color: theme.text }}>baixa de adiantamento</b> (compensação contra o cliente/fornecedor). O que você confirmar vira lançamento e alimenta o Status → Domínio; a sugestão sozinha não muda nada.
         {empresaNome && <> · <b style={{ color: theme.text }}>{empresaNome}</b> · {competencia}</>}
       </p>
 

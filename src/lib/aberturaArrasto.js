@@ -12,12 +12,12 @@ const tiraSufixo = e => e.replace(/\s+(S[./]?\s?A\.?|LTDA\.?|EIRELI|EPP|ME)\b.*$
 
 const GENERICAS = new Set(['COMPANHIA', 'CIA', 'DISTRIBUIDORA', 'DISTRIBUIDOR', 'ENERGIA', 'ENERGIAS', 'ELETRICA', 'ELETRICAS', 'FORCA', 'LUZ', 'COMERCIO', 'COMERCIAL', 'INDUSTRIA', 'INDUSTRIAL', 'SERVICO', 'SERVICOS', 'BRASIL', 'NACIONAL', 'GRUPO', 'HOLDING', 'PARTICIPACOES', 'EMPREENDIMENTOS', 'TRANSPORTE', 'TRANSPORTES', 'LOGISTICA', 'SOLUCOES', 'TECNOLOGIA', 'SISTEMAS', 'ASSOCIACAO', 'INSTITUTO', 'FUNDACAO', 'BANCO', 'SUPERMERCADO', 'SUPERMERCADOS', 'ALIMENTOS', 'DO', 'DA', 'DE', 'DOS', 'DAS', 'E', 'EM'])
 const normNome = s => String(s || '').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim()
-function tokensNome(nome) {
+export function tokensNome(nome) {
   const todos = normNome(nome).split(' ').filter(Boolean)
   const dist = todos.filter(t => t.length >= 3 && !GENERICAS.has(t))
   return dist.length ? dist : todos
 }
-function mesmoCliente(a, b) {
+export function mesmoCliente(a, b) {
   const inter = a.filter(t => b.includes(t))
   if (!inter.length) return false
   const menor = Math.min(a.length, b.length)
@@ -48,7 +48,8 @@ function lerHistorico(h) {
   return { nf, entidade: entidade || '', ident, conf }
 }
 
-function aplicarAjuste(l, aj) {
+export function lerHistoricoLanc(h) { return lerHistorico(h) }
+export function aplicarAjuste(l, aj) {
   let historico = l.historico
   let leitura = lerHistorico(historico)
   if (aj) {
@@ -62,12 +63,12 @@ function aplicarAjuste(l, aj) {
 }
 
 const baixaTxt = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
-function ehPorEntidade(nome) {
+export function ehPorEntidade(nome) {
   const n = baixaTxt(nome)
   return /client|fornecedor|duplicat|adiantament|contas? a pagar|a receber/.test(n)
 }
 
-const nfKey = nf => String(nf ?? '').replace(/\D/g, '').replace(/^0+/, '')
+export const nfKey = nf => String(nf ?? '').replace(/\D/g, '').replace(/^0+/, '')
 function baixadosPorNF(lancs) {
   const porNF = {}
   for (const l of lancs) { const nf = nfKey(l.leitura?.nf); if (nf) (porNF[nf] = porNF[nf] || []).push(l) }
