@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
-import { theme } from '../lib/theme'
+import { theme, money } from '../lib/theme'
+import { parseNomeArquivo, anexarExtratoPdf, anexarExtratoExcel } from '../lib/importacaoMassa'
 
 // Lista padrão (só nomes — sem separação por departamento).
 const PADRAO = ['Extratos bancários', 'Notas fiscais de entrada', 'Notas fiscais de saída', 'Folha de pagamento', 'Guias de impostos (DARF/GPS/DAS)', 'Razão do Domínio']
@@ -46,6 +47,8 @@ export default function DocumentosRecebidos() {
   const [editTipo, setEditTipo] = useState('')
   const [editConta, setEditConta] = useState('')
   const [msg, setMsg] = useState('')
+  const [codDominio, setCodDominio] = useState('')
+  const [massa, setMassa] = useState(false)
 
   const ro = status === 'fechado' // fechado = somente leitura
 
@@ -55,6 +58,8 @@ export default function DocumentosRecebidos() {
     setCarregando(true)
     const [mes, ano] = competencia.split('/').map(Number)
     ;(async () => {
+      supabase.from('clientes').select('codigo_dominio').eq('id', empresaId).maybeSingle()
+        .then(({ data }) => setCodDominio(data?.codigo_dominio || ''))
       const { data: comp } = await supabase.from('competencias').select('id, status, documentos')
         .eq('cliente_id', empresaId).eq('ano', ano).eq('mes', mes).maybeSingle()
       setStatus(comp?.status || null)
@@ -126,6 +131,12 @@ export default function DocumentosRecebidos() {
     setEditIdx(null); setEditNome(''); setEditTipo(''); setEditConta('')
   }
   function flash(t) { setMsg(t); setTimeout(() => setMsg(''), 4000) }
+  // Marca como recebidos os documentos que a importação em massa roteou com sucesso.
+  function marcarRecebidos(nomes) {
+    if (!nomes || !nomes.length) return
+    const set = new Set(nomes)
+    persistir(docs.map(d => set.has(d.name) ? { ...d, situacao: 'recebido', rec: true, date: hojeCurto() } : d))
+  }
 
   async function baixarModelo() {
     const XLSX = await import('xlsx')
@@ -231,6 +242,8 @@ export default function DocumentosRecebidos() {
               <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={importar} />
             </label>
             <button className="btn btn-ghost" onClick={baixarModelo}><i className="ti ti-file-spreadsheet" /> Baixar modelo</button>
+            <span style={{ width: 1, height: 24, background: theme.border, margin: '0 2px' }} />
+            <button className="btn" onClick={() => setMassa(true)} title="Solte vários extratos de uma vez — nomeados com cliente-conta"><i className="ti ti-cloud-upload" /> Importação em massa</button>
           </div>
           <p style={{ fontSize: 11.5, color: theme.sub, margin: '9px 2px 0' }}>
             <b style={{ color: theme.text }}>De conta</b> (extrato, guia) → liga numa conta contábil e conecta com a conciliação. <b style={{ color: theme.text }}>Suporte</b> (acumulador, folha) → só arquiva. Documentos novos exigem o tipo e a conta; o modelo do Excel já traz as colunas <b style={{ color: theme.text }}>Tipo</b> e <b style={{ color: theme.text }}>Conta</b>.
@@ -297,7 +310,128 @@ export default function DocumentosRecebidos() {
           </div>
         )})}
       </div>
+
+      {massa && (
+        <ImportacaoMassa
+          empresaId={empresaId} codDominio={codDominio} docs={docs} getCompetenciaId={getCompetenciaId}
+          onClose={() => setMassa(false)} onRecebidos={marcarRecebidos}
+        />
+      )}
     </Wrapper>
+  )
+}
+
+// ---- Modal: Importação em massa (arrasta extratos nomeados com cliente-conta) ----
+function ImportacaoMassa({ empresaId, codDominio, docs, getCompetenciaId, onClose, onRecebidos }) {
+  const [files, setFiles] = useState([])
+  const [rel, setRel] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [drag, setDrag] = useState(false)
+
+  const addFiles = list => { const arr = Array.from(list || []); if (arr.length) { setFiles(f => [...f, ...arr]); setRel(null) } }
+  const onDrop = e => { e.preventDefault(); setDrag(false); addFiles(e.dataTransfer?.files) }
+
+  async function processar() {
+    if (!files.length || busy) return
+    setBusy(true)
+    const compId = await getCompetenciaId()
+    if (!compId) { setBusy(false); setRel([{ nome: '—', nivel: 'erro', msg: 'Abra um fechamento para esta competência primeiro.' }]); return }
+    // Índice conta → documento (só os do tipo "conta").
+    const porConta = {}
+    for (const d of docs) if (d.tipo === 'conta' && String(d.conta || '').trim()) porConta[String(d.conta).trim()] = d
+    const resultado = [], recebidos = new Set(), vistos = new Set()
+    for (const file of files) {
+      const p = parseNomeArquivo(file.name)
+      const linha = { nome: file.name, conta: p.conta }
+      if (!p.cli || !p.conta) { resultado.push({ ...linha, nivel: 'erro', msg: 'Nome fora do padrão cliente-conta' }); continue }
+      if (codDominio && String(p.cli) !== String(codDominio)) { resultado.push({ ...linha, nivel: 'erro', msg: `Cliente ${p.cli} ≠ ${codDominio} (este cadastro)` }); continue }
+      const doc = porConta[String(p.conta).trim()]
+      if (!doc) { resultado.push({ ...linha, nivel: 'erro', msg: `Conta ${p.conta} não cadastrada como documento "de conta"` }); continue }
+      const chave = p.conta + '|' + p.ext
+      if (vistos.has(chave)) { resultado.push({ ...linha, nivel: 'erro', msg: 'Duplicado no lote (mesma conta e formato)' }); continue }
+      vistos.add(chave)
+      try {
+        if (p.ext === 'pdf') {
+          const { saldoLido } = await anexarExtratoPdf({ compId, conta: p.conta, file })
+          recebidos.add(doc.name)
+          resultado.push(saldoLido != null
+            ? { ...linha, nivel: 'ok', msg: `Conciliação · saldo lido ${money(saldoLido)}` }
+            : { ...linha, nivel: 'duvida', msg: 'Conciliação · anexado, mas informe o saldo lá' })
+        } else if (['xlsx', 'xls', 'csv'].includes(p.ext)) {
+          await anexarExtratoExcel({ compId, conta: p.conta, file })
+          recebidos.add(doc.name)
+          resultado.push({ ...linha, nivel: 'ok', msg: 'Integração · Excel recebido, pronto para importar' })
+        } else {
+          resultado.push({ ...linha, nivel: 'erro', msg: `Formato .${p.ext} não suportado (use PDF ou Excel)` })
+        }
+      } catch (e) { resultado.push({ ...linha, nivel: 'erro', msg: 'Falha ao subir: ' + e.message }) }
+    }
+    setRel(resultado); setBusy(false)
+    if (recebidos.size) onRecebidos([...recebidos])
+  }
+
+  const COR = { ok: theme.green, duvida: theme.yellow, erro: theme.red }
+  const ICO = { ok: 'ti-circle-check', duvida: 'ti-alert-triangle', erro: 'ti-circle-x' }
+  const resumo = rel ? { ok: rel.filter(r => r.nivel === 'ok').length, duvida: rel.filter(r => r.nivel === 'duvida').length, erro: rel.filter(r => r.nivel === 'erro').length } : null
+
+  return (
+    <div onClick={e => { if (e.target === e.currentTarget) onClose() }} style={{ position: 'fixed', inset: 0, background: 'rgba(8,11,18,0.64)', zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+      <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: 14, width: 'min(680px,96vw)', maxHeight: '90vh', overflow: 'auto', padding: '22px 24px' }}>
+        <h3 style={{ fontSize: 16, fontWeight: 700, margin: '0 0 4px' }}>Importação em massa</h3>
+        <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 16px' }}>
+          Nomeie cada arquivo com <b style={{ color: theme.text }}>{codDominio || 'código'}-conta-…</b>. <b style={{ color: theme.text }}>PDF</b> vai para a Conciliação (lê o saldo); <b style={{ color: theme.text }}>Excel</b> vai para a Integração. Só sobe o que casar com uma conta cadastrada.
+        </p>
+
+        <label onDragOver={e => { e.preventDefault(); setDrag(true) }} onDragLeave={() => setDrag(false)} onDrop={onDrop}
+          style={{ display: 'block', border: `1.5px dashed ${drag ? theme.accent : theme.border}`, borderRadius: 12, padding: '22px 16px', textAlign: 'center', cursor: 'pointer', background: drag ? 'rgba(74,124,255,0.06)' : theme.input }}>
+          <i className="ti ti-cloud-upload" style={{ fontSize: 26, color: theme.accent }} />
+          <p style={{ margin: '8px 0 0', fontSize: 13, color: theme.text }}>Arraste os extratos aqui, ou clique para escolher</p>
+          <p style={{ margin: '2px 0 0', fontSize: 11.5, color: theme.sub }}>PDF, XLSX, XLS ou CSV</p>
+          <input type="file" multiple accept=".pdf,.xlsx,.xls,.csv" style={{ display: 'none' }} onChange={e => { addFiles(e.target.files); e.target.value = '' }} />
+        </label>
+
+        {files.length > 0 && !rel && (
+          <div style={{ marginTop: 12, display: 'grid', gap: 6 }}>
+            {files.map((f, i) => {
+              const p = parseNomeArquivo(f.name)
+              return (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12.5, padding: '7px 10px', background: theme.input, borderRadius: 8 }}>
+                  <span style={{ fontFamily: 'monospace', fontSize: 10.5, fontWeight: 800, color: '#fff', background: p.ext === 'pdf' ? theme.accent : theme.green, borderRadius: 5, padding: '2px 5px' }}>{(p.ext || '?').toUpperCase()}</span>
+                  <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
+                  <span style={{ color: theme.sub, fontSize: 11 }}>{p.conta ? 'conta ' + p.conta : 'sem conta'}</span>
+                  <i className="ti ti-x" style={{ cursor: 'pointer', color: theme.sub }} onClick={() => setFiles(files.filter((_, j) => j !== i))} />
+                </div>
+              )
+            })}
+          </div>
+        )}
+
+        {rel && (
+          <div style={{ marginTop: 14 }}>
+            <div style={{ display: 'flex', gap: 14, fontSize: 12.5, marginBottom: 10 }}>
+              <span style={{ color: theme.green }}><b>{resumo.ok}</b> ok</span>
+              <span style={{ color: theme.yellow }}><b>{resumo.duvida}</b> dúvida</span>
+              <span style={{ color: theme.red }}><b>{resumo.erro}</b> erro</span>
+            </div>
+            <div style={{ display: 'grid', gap: 6 }}>
+              {rel.map((r, i) => (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12.5, padding: '8px 10px', background: theme.input, borderRadius: 8, borderLeft: `3px solid ${COR[r.nivel]}` }}>
+                  <i className={`ti ${ICO[r.nivel]}`} style={{ color: COR[r.nivel], fontSize: 16 }} />
+                  <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.nome}</span>
+                  <span style={{ color: theme.sub, fontSize: 11.5, textAlign: 'right', maxWidth: '55%' }}>{r.msg}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 18 }}>
+          <button className="btn btn-ghost" onClick={onClose}>{rel ? 'Fechar' : 'Cancelar'}</button>
+          {!rel && <button className="btn" disabled={!files.length || busy} onClick={processar}>{busy ? 'Processando…' : `Processar ${files.length || ''}`.trim()}</button>}
+          {rel && <button className="btn" onClick={() => { setFiles([]); setRel(null) }}>Subir mais</button>}
+        </div>
+      </div>
+    </div>
   )
 }
 
