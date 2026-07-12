@@ -53,27 +53,29 @@ export default function PainelCliente() {
         if (!comp) { setTemComp(false); return }
         setTemComp(true)
 
-        // Balancete hierárquico do RAZÃO PURO (igual ao Comparativo) — MESMA fonte do resultado,
-        // para a identidade fechar: Ativo − (Passivo + PL) = Resultado acumulado. Se o balanço
-        // usasse lançamentos e o resultado não, o estorno (D resultado / C ativo) desbalancearia.
-        const { linhas: hier } = await montarBalancete(empresaId, comp.id)
+        // Balancete hierárquico VIVO (razão + lançamentos confirmados) — MESMA fonte da
+        // Conciliação e do resultado abaixo, para o ativo bater com a Conciliação e a identidade
+        // fechar: Ativo − (Passivo + PL) = Resultado acumulado. As correções (ex.: estorno de
+        // rendimento lançado em dobro) entram nos dois lados, mantendo tudo consistente.
+        const { linhas: hier } = await montarBalancete(empresaId, comp.id, 0, { comLancamentos: true })
         const analit = (hier || []).filter(l => !l.sintetica)
         const g = l => String(l.classifRaw || '')[0] // grupo pela CLASSIFICAÇÃO (não pelo reduzido)
 
         const comparativo = await apurarVariacoes(empresaId, { comLancamentos: true }) // só p/ o gate de variações
         const dist = await apurarDistribuicao(empresaId, comp.id, ano, mes)
 
-        // --- Receita / Custo / Despesa / Resultado — IGUAL AO COMPARATIVO (razão puro) ---
-        // Soma por GRUPO (líquido) a partir do balancete SEM sobrepor lançamentos, para bater
-        // exatamente com o Comparativo de Movimento: receita = grupo 3 (credor), custo = grupo 4,
-        // despesa = grupo 5 (LÍQUIDO — rendimentos financeiros do 5.5, credores, já compensam as
-        // despesas dentro do próprio grupo 5, como na linha "DESPESAS OPERACIONAIS" do balancete).
-        // As correções pendentes aparecem à parte no Comparativo, não infladas aqui.
+        // --- Receita / Custo / Despesa / Resultado — VIVO (com as correções) ---
+        // Soma por GRUPO (líquido) a partir do balancete VIVO (razão + lançamentos confirmados),
+        // MESMA fonte do balanço acima e da Conciliação: receita = grupo 3 (credor), custo = grupo 4,
+        // despesa = grupo 5 (LÍQUIDO — rendimentos financeiros do 5.5, credores, compensam as
+        // despesas dentro do próprio grupo 5). Assim as correções que ainda não subiram ao Comparativo
+        // (ex.: estorno de rendimento lançado em dobro) já entram aqui e a identidade fecha:
+        // Ativo − (Passivo + PL) = Resultado acumulado.
         const { data: compsAno } = await supabase.from('competencias').select('id, mes')
           .eq('cliente_id', empresaId).eq('ano', ano).order('mes', { ascending: true })
         const porMes = {}, linhasResMes = {}, meses = []
         for (const c of (compsAno || [])) {
-          const linhasC = (await montarBalancete(empresaId, c.id)).linhas // razão puro (igual ao Comparativo)
+          const linhasC = c.id === comp.id ? hier : (await montarBalancete(empresaId, c.id, 0, { comLancamentos: true })).linhas // vivo (com correções)
           const res = (linhasC || []).filter(l => !l.sintetica && ['3', '4', '5'].includes(String(l.classifRaw || '')[0]))
           if (!res.length) continue
           let g3 = 0, g4 = 0, g5 = 0
