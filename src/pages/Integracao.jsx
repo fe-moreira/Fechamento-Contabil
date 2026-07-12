@@ -1343,7 +1343,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     const [mes, ano] = (competencia || '').split('/').map(Number)
     const { data: comp } = await supabase.from('competencias').select('id').eq('cliente_id', empresaId).eq('ano', ano).eq('mes', mes).maybeSingle()
     if (!comp) { setSaldoAnterior(null); return }
-    const { linhas } = await montarBalancete(empresaId, comp.id)
+    const { linhas } = await montarBalancete(empresaId, comp.id, 0, { comLancamentos: true })
     const l = (linhas || []).find(x => String(x.reduzido) === String(banco))
     setSaldoAnterior(l ? Number(l.saldo_inicial) : null)
   }
@@ -2480,7 +2480,7 @@ function Patrimonio({ empresaId, competencia, planoMap = {}, est, onEstado, onSe
       const [mes, ano] = (competencia || '').split('/').map(Number)
       const { data: comp } = await supabase.from('competencias').select('id').eq('cliente_id', empresaId).eq('ano', ano).eq('mes', mes).maybeSingle()
       if (!comp) { if (ativo) setLinhas([]); return }
-      const { linhas: L } = await montarBalancete(empresaId, comp.id)
+      const { linhas: L } = await montarBalancete(empresaId, comp.id, 0, { comLancamentos: true })
       if (ativo) setLinhas(L)
     })()
     return () => { ativo = false }

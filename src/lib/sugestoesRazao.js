@@ -122,9 +122,10 @@ export async function aprenderDaCorrecao({ clienteId, historico, contrapartida, 
 // Idempotente: não duplica sugestões já existentes nem itens já lançados.
 export async function gerarSugestoesDoRazao(clienteId, competenciaId, competencia, usuario) {
   if (!clienteId || !competenciaId || !competencia) return { apropriacoes: 0, correcoes: 0 }
-  // Sugestões já existentes nesta competência (por item), para não duplicar.
+  // Sugestões já existentes nesta competência (por item), para não duplicar. Inclui as
+  // já CONFIRMADAS e DESCARTADAS (tipo 'Sugestão*') — uma sugestão tratada não volta.
   const { data: jaSug } = await supabase.from('auditoria').select('item')
-    .eq('competencia_id', competenciaId).eq('tipo', 'Sugestão')
+    .eq('competencia_id', competenciaId).like('tipo', 'Sugest%')
   const itensExist = new Set((jaSug || []).map(s => s.item))
   const novas = []
 

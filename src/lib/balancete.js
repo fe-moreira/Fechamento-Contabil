@@ -310,7 +310,13 @@ export async function composicaoAbertura(empresaId, compId, contaCod, classifRaw
 // Os movimentos (razão/balancete) vêm pelo CÓDIGO da conta (reduzido); o plano traduz
 // cada código para a sua CLASSIFICAÇÃO hierárquica (coluna O) e nome, e as sintéticas
 // são os totais agregados por prefixo da classificação (segundo a máscara).
-export async function montarBalancete(empresaId, compId, _depth = 0) {
+// opts.comLancamentos: sobrepõe os LANÇAMENTOS gerados (correções, apropriações,
+// contabilizações confirmadas — tabela `lancamentos`) sobre o razão importado, para
+// que os relatórios/cockpit/documentos leiam o razão "vivo" (mescla de tudo). LIGAR só
+// nos consumidores que NÃO fazem a própria sobreposição (Relatórios, Cockpit, Book,
+// Comparativo Completo). Conciliação e a página de Comparativo de Movimento já somam os
+// lançamentos por conta própria — mantê-lo DESLIGADO lá para não contar em dobro.
+export async function montarBalancete(empresaId, compId, _depth = 0, opts = {}) {
   const { data: planoCarga } = await supabase.from('cargas_cadastro').select('dados')
     .eq('cliente_id', empresaId).eq('tipo', 'plano').order('created_at', { ascending: false }).limit(1).maybeSingle()
   const plano = parsePlano(planoCarga?.dados)
@@ -327,7 +333,24 @@ export async function montarBalancete(empresaId, compId, _depth = 0) {
 
   const { data: bal } = await supabase.from('balancete')
     .select('conta, nome, debito, credito, saldo_inicial').eq('competencia_id', compId)
-  const movs = bal || []
+  const movs = [...(bal || [])]
+
+  // SISTEMA VIVO: sobrepõe os lançamentos confirmados sobre o razão. Cada lançamento
+  // vira dois movimentos sintéticos (débito numa conta, crédito na outra), processados
+  // pelo MESMO caminho das linhas do balancete (folha + ancestrais). Vale para a própria
+  // competência e para o arrasto recursivo (mexeu no mês anterior → saldo inicial deste
+  // mês acompanha).
+  if (opts.comLancamentos) {
+    const { data: lancs } = await supabase.from('lancamentos')
+      .select('conta_debito, conta_credito, valor').eq('competencia_id', compId)
+    for (const l of (lancs || [])) {
+      const v = Number(l.valor) || 0
+      if (Math.abs(v) < 0.005) continue
+      const cd = String(l.conta_debito || '').trim(), cc = String(l.conta_credito || '').trim()
+      if (cd) movs.push({ conta: cd, nome: '', debito: v, credito: 0, saldo_inicial: 0 })
+      if (cc) movs.push({ conta: cc, nome: '', debito: 0, credito: v, saldo_inicial: 0 })
+    }
+  }
 
   const map = {}
   const ensure = classif => map[classif] || (map[classif] = {
@@ -403,7 +426,7 @@ export async function montarBalancete(empresaId, compId, _depth = 0) {
     // arrastam: o comparativo mostra o movimento do mês.
     const ant = await competenciaAnterior(empresaId, compId)
     if (ant) {
-      const { linhas: linhasAnt } = await montarBalancete(empresaId, ant, _depth + 1)
+      const { linhas: linhasAnt } = await montarBalancete(empresaId, ant, _depth + 1, opts)
       for (const lp of linhasAnt) {
         if (lp.sintetica) continue // sintéticas são recompostas por agregação abaixo
         const d = String(lp.classifRaw || '').trim()[0]

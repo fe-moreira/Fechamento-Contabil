@@ -7,7 +7,11 @@ const ANO = 2026
 // anterior ainda não justificadas no Comparativo (auditoria). Usada no gate Variações
 // do Status e no relatório Comparativo. Só CONTAS DE RESULTADO (3/4/5) — mesmo escopo
 // da tela Comp. Movimento (para o badge/Status baterem com o header do comparativo).
-export async function apurarVariacoes(empresaId) {
+// opts.comLancamentos: sobrepõe os LANÇAMENTOS confirmados (correções, apropriações,
+// contabilizações) sobre a matriz do razão — para o Cockpit ler o resultado VIVO. NÃO
+// ligar na página Comparativo de Movimento nem no gate do Status: lá as correções
+// pendentes aparecem à parte (sobreposição própria); embutir aqui contaria em dobro.
+export async function apurarVariacoes(empresaId, opts = {}) {
   const vazio = { itens: [], meses: [], contas: [], matriz: {} }
   if (!empresaId) return vazio
 
@@ -30,16 +34,33 @@ export async function apurarVariacoes(empresaId) {
     return d === '3' || d === '4' || d === '5'
   }
 
+  // SISTEMA VIVO (opt-in): lançamentos confirmados por competência, para embutir na matriz.
+  const lancPorComp = {}
+  if (opts.comLancamentos) {
+    const { data: lancs } = await supabase.from('lancamentos')
+      .select('competencia_id, conta_debito, conta_credito, valor').in('competencia_id', comps.map(c => c.id))
+    for (const l of (lancs || [])) (lancPorComp[l.competencia_id] ||= []).push(l)
+  }
+
   const matriz = {}, nomes = {}, mesPorComp = {}, mesesComDados = []
   for (const c of comps) {
     mesPorComp[c.id] = c.mes
     const { data: bal } = await supabase.from('balancete').select('conta, nome, saldo_final').eq('competencia_id', c.id)
-    if (!bal || !bal.length) continue
+    const lancsC = lancPorComp[c.id] || []
+    if ((!bal || !bal.length) && !lancsC.length) continue
     mesesComDados.push(c.mes)
-    for (const b of bal) {
+    for (const b of (bal || [])) {
       if (!b.conta || !ehResultado(b.conta)) continue
       ;(matriz[b.conta] ||= {})[c.mes] = Number(b.saldo_final) || 0
       if (b.nome && !nomes[b.conta]) nomes[b.conta] = b.nome
+    }
+    // Sobrepõe os lançamentos: débito soma, crédito subtrai no saldo_final (resultado só).
+    for (const l of lancsC) {
+      const v = Number(l.valor) || 0
+      if (Math.abs(v) < 0.005) continue
+      const cd = String(l.conta_debito || '').trim(), cc = String(l.conta_credito || '').trim()
+      if (cd && ehResultado(cd)) (matriz[cd] ||= {})[c.mes] = (matriz[cd]?.[c.mes] || 0) + v
+      if (cc && ehResultado(cc)) (matriz[cc] ||= {})[c.mes] = (matriz[cc]?.[c.mes] || 0) - v
     }
   }
   mesesComDados.sort((a, b) => a - b)
