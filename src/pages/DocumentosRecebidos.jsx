@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
 import { theme, money } from '../lib/theme'
-import { receberArquivo, verArquivoImportado } from '../lib/importacaoMassa'
+import { receberArquivo, verArquivoImportado, excluirArquivoRecebido } from '../lib/importacaoMassa'
 import CampoConta from '../components/CampoConta'
 
 // Lista padrão (só nomes — sem separação por departamento).
@@ -131,6 +131,19 @@ export default function DocumentosRecebidos() {
     } catch (e) { setMsg('Erro ao subir: ' + e.message) } finally { setSubindo(null) }
   }
   async function verArquivo(path) { try { await verArquivoImportado(path) } catch (e) { setMsg('Não consegui abrir o arquivo: ' + e.message) } }
+  // Exclui o arquivo (subiu errado / conta errada): apaga do Storage, limpa o anexo/saldo
+  // da conciliação se for o caso, e o documento volta a PENDENTE.
+  async function excluirArquivo(i) {
+    const d = docs[i]
+    if (!d.arquivo_path || ro) return
+    if (!confirm(`Excluir o arquivo de “${d.name}”? O documento volta a ficar pendente.`)) return
+    setSubindo(i)
+    try {
+      await excluirArquivoRecebido({ path: d.arquivo_path, conta: (d.conta || '').trim(), compId: await getCompetenciaId() })
+      persistir(docs.map((x, j) => j === i ? { ...x, arquivo_path: '', arquivo: '', situacao: '', rec: false, date: '' } : x))
+      setMsg(`Arquivo de “${d.name}” excluído — voltou a pendente.`)
+    } catch (e) { setMsg('Erro ao excluir: ' + e.message) } finally { setSubindo(null) }
+  }
 
   async function baixarModelo() {
     const XLSX = await import('xlsx')
@@ -246,8 +259,12 @@ export default function DocumentosRecebidos() {
                   ? <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 20, background: 'rgba(74,124,255,0.13)', color: theme.accent, fontFamily: 'monospace' }} title="Conta amarrada — casa com o arquivo código-conta">conta {d.conta}</span>
                   : <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 20, background: theme.input, color: theme.sub }} title="Sem conta — não casa com arquivo por código">sem conta</span>}
                 {d.arquivo_path && (
-                  <button className="btn btn-ghost" onClick={() => verArquivo(d.arquivo_path)} style={{ fontSize: 11, padding: '3px 8px', color: theme.green, borderColor: theme.green }} title={d.arquivo || 'Ver o arquivo recebido'}>
-                    <i className="ti ti-eye" /> ver arquivo</button>
+                  <>
+                    <button className="btn btn-ghost" onClick={() => verArquivo(d.arquivo_path)} style={{ fontSize: 11, padding: '3px 8px', color: theme.green, borderColor: theme.green }} title={d.arquivo || 'Ver o arquivo recebido'}>
+                      <i className="ti ti-eye" /> ver arquivo</button>
+                    {!ro && <button className="btn btn-ghost" onClick={() => excluirArquivo(i)} disabled={subindo != null} style={{ fontSize: 11, padding: '3px 8px', color: theme.red, borderColor: theme.red }} title="Excluir o arquivo (subiu errado) — volta a pendente">
+                      <i className="ti ti-trash" /> excluir</button>}
+                  </>
                 )}
               </span>
             )}

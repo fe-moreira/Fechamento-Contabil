@@ -61,6 +61,19 @@ export async function verArquivoImportado(path) {
   window.open(data.signedUrl, '_blank', 'noopener')
 }
 
+// Exclui o arquivo recebido de um documento: apaga do Storage e, se aquele arquivo era o
+// anexo de conciliação da conta, limpa o documento/saldo lá (não mexe se for outro anexo).
+export async function excluirArquivoRecebido({ path, conta, compId }) {
+  if (path) { try { await supabase.storage.from('extratos').remove([path]) } catch { /* já pode não existir */ } }
+  if (conta && compId && path) {
+    const { data: ex } = await supabase.from('conciliacao_conta').select('id, documento_path')
+      .eq('competencia_id', compId).eq('conta', String(conta)).limit(1)
+    if (ex && ex[0] && ex[0].documento_path === path) {
+      await supabase.from('conciliacao_conta').update({ documento_path: null, documento: null, saldo_documento: null }).eq('id', ex[0].id)
+    }
+  }
+}
+
 // Guarda um arquivo avulso (documento sem conta que roteie — ex.: folha, acumulador).
 export async function anexarDocumentoAvulso({ compId, chave, file }) {
   const ext = (file.name.match(/\.[a-z0-9]+$/i) || [''])[0].toLowerCase()
