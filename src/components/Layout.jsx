@@ -6,7 +6,7 @@ import SeletorEmpresa from './SeletorEmpresa'
 import { theme, applyThemeMode, getThemeMode } from '../lib/theme'
 
 // Rotas (funções do fechamento) que só liberam com um fechamento aberto.
-const ROTAS_FECHAMENTO = new Set(['/razao', '/documentos', '/integracao', '/conciliacao', '/comparativo', '/sugestoes', '/outras', '/contabilizar', '/relatorios', '/painel-cliente', '/status', '/base'])
+const ROTAS_FECHAMENTO = new Set(['/razao', '/documentos', '/recebimento', '/integracao', '/conciliacao', '/comparativo', '/sugestoes', '/outras', '/contabilizar', '/relatorios', '/painel-cliente', '/status', '/base'])
 
 const PRINCIPAL = [
   { to: '/', end: true, icon: 'ti-layout-dashboard', label: 'Dashboard' },
@@ -15,6 +15,7 @@ const PRINCIPAL = [
 const FECHAMENTO = [
   { to: '/fechamentos', icon: 'ti-folders', label: 'Fechamentos' },
   { to: '/documentos', icon: 'ti-file-check', label: 'Documentos Recebidos' },
+  { to: '/recebimento', icon: 'ti-cloud-upload', label: 'Recebimento de Documentos' },
   { to: '/razao', icon: 'ti-file-import', label: 'Importar Razão' },
   { to: '/sugestoes', icon: 'ti-bulb', label: 'Sugestões de Contab.' },
   { to: '/outras', icon: 'ti-layout-grid-add', label: 'Outras Contabilizações' },
