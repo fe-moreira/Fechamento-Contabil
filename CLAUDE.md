@@ -23,6 +23,10 @@ layout dos arquivos, ordem de construção).
    Só a `anon`/publishable, via `VITE_SUPABASE_ANON_KEY` no `.env.local` (que está no `.gitignore`).
 5. Pare e peça confirmação antes de: criar repositório, push, deploy de produção, e antes
    de criar/alterar tabelas no Supabase.
+6. **Manual sempre atualizado:** o Manual do Time (`src/pages/Manual.jsx`, acessível pelo
+   menu **Ajuda**) é documentação viva. Todo PR que cria/altera/remove uma funcionalidade,
+   tela ou regra **deve atualizar a seção correspondente do manual no mesmo PR** — nunca
+   deixar o manual desatualizado em relação ao produto.
 
 ## Rodar localmente
 
