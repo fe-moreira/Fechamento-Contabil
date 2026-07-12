@@ -2,7 +2,8 @@ import { useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
 import { fechaSozinho } from '../lib/clientes'
-import { theme } from '../lib/theme'
+import { theme, money } from '../lib/theme'
+import { parseNomeArquivo, anexarExtratoPdf, anexarExtratoExcel, alimentarIntegracaoFinanceira } from '../lib/importacaoMassa'
 
 const PADRAO = ['Extratos bancários', 'Notas fiscais de entrada', 'Notas fiscais de saída', 'Folha de pagamento', 'Guias de impostos (DARF/GPS/DAS)', 'Razão do Domínio']
 const cnpj14 = (v) => { const d = String(v ?? '').replace(/\D/g, ''); return d.length >= 11 && d.length <= 14 ? d.padStart(14, '0') : d }
@@ -122,6 +123,9 @@ export default function ImportacaoMassa() {
             <button className="btn btn-ghost" style={{ fontSize: 13 }} onClick={baixarModeloDocs}><i className="ti ti-file-spreadsheet" /> Baixar modelo</button>
           </div>
         </Bloco>
+
+        {/* Recebimento de arquivos (extratos PDF/Excel) */}
+        <RecebeArquivos competencias={competencias} competencia={competencia} />
       </div>
 
       {/* Confirmação da importação */}
@@ -180,4 +184,146 @@ function Bloco({ icon, titulo, desc, children, emBreve }) {
 
 function Tag({ c, n, t }) {
   return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: theme.text }}><b style={{ color: c, fontSize: 15 }}>{n}</b> {t}</span>
+}
+
+// ---- Card: Recebimento de arquivos (extratos PDF/Excel, cross-client pelo nome) ----
+// Nome do arquivo: <codigoCliente>-<contaContabil>-…​.<ext>. A extensão decide o destino:
+// PDF → Conciliação (anexa + lê o saldo); Excel → Integração (classifica e sugere).
+function RecebeArquivos({ competencias, competencia }) {
+  const [alvo, setAlvo] = useState(competencia)
+  const [open, setOpen] = useState(false)
+  const [files, setFiles] = useState([])
+  const [rel, setRel] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [drag, setDrag] = useState(false)
+
+  const addFiles = list => { const arr = Array.from(list || []); if (arr.length) { setFiles(f => [...f, ...arr]); setRel(null) } }
+  const onDrop = e => { e.preventDefault(); setDrag(false); addFiles(e.dataTransfer?.files) }
+  const fechar = () => { setOpen(false); setFiles([]); setRel(null) }
+
+  async function processar() {
+    if (!files.length || busy) return
+    setBusy(true)
+    const [mes, ano] = alvo.split('/').map(Number)
+    const { data: clientes } = await supabase.from('clientes').select('id, codigo_dominio, razao_social')
+    const porCod = new Map((clientes || []).map(c => [String(c.codigo_dominio).trim(), c]))
+    const compCache = new Map()
+    const compDe = async cli => {
+      if (compCache.has(cli.id)) return compCache.get(cli.id)
+      const { data } = await supabase.from('competencias').select('id, status').eq('cliente_id', cli.id).eq('ano', ano).eq('mes', mes).maybeSingle()
+      compCache.set(cli.id, data || null); return data || null
+    }
+    const resultado = [], vistos = new Set()
+    for (const file of files) {
+      const p = parseNomeArquivo(file.name)
+      const linha = { nome: file.name }
+      if (!p.cli || !p.conta) { resultado.push({ ...linha, nivel: 'erro', msg: 'Nome fora do padrão código-conta' }); continue }
+      const cli = porCod.get(String(p.cli).trim())
+      if (!cli) { resultado.push({ ...linha, nivel: 'erro', msg: `Código ${p.cli} não encontrado` }); continue }
+      linha.cliente = cli.razao_social
+      const destino = p.ext === 'pdf' ? 'conciliacao' : (['xlsx', 'xls', 'csv'].includes(p.ext) ? 'integracao' : null)
+      if (!destino) { resultado.push({ ...linha, nivel: 'erro', msg: `Formato .${p.ext} não suportado` }); continue }
+      const comp = await compDe(cli)
+      if (!comp) { resultado.push({ ...linha, nivel: 'erro', msg: `Sem fechamento ${alvo}` }); continue }
+      if (comp.status === 'fechado') { resultado.push({ ...linha, nivel: 'erro', msg: 'Fechamento fechado' }); continue }
+      const chave = cli.id + '|' + p.conta + '|' + destino
+      if (vistos.has(chave)) { resultado.push({ ...linha, nivel: 'erro', msg: 'Duplicado no lote' }); continue }
+      vistos.add(chave)
+      try {
+        if (destino === 'conciliacao') {
+          const { saldoLido } = await anexarExtratoPdf({ compId: comp.id, conta: p.conta, file })
+          resultado.push(saldoLido != null
+            ? { ...linha, nivel: 'ok', msg: `Conciliação · conta ${p.conta} · saldo ${money(saldoLido)}` }
+            : { ...linha, nivel: 'duvida', msg: `Conciliação · conta ${p.conta} · informe o saldo lá` })
+        } else {
+          await anexarExtratoExcel({ compId: comp.id, conta: p.conta, file })
+          let r
+          try { r = await alimentarIntegracaoFinanceira({ compId: comp.id, empresaId: cli.id, conta: p.conta, file }) } catch (e) { r = { classificado: false, motivo: e.message } }
+          resultado.push(r?.classificado
+            ? { ...linha, nivel: 'ok', msg: `Integração · conta ${p.conta} · ${r.classificadas}/${r.total} sugeridos` }
+            : { ...linha, nivel: 'duvida', msg: `Integração · conta ${p.conta} · classifique lá (${r?.motivo || '—'})` })
+        }
+      } catch (e) { resultado.push({ ...linha, nivel: 'erro', msg: 'Falha: ' + e.message }) }
+    }
+    setRel(resultado); setBusy(false)
+  }
+
+  const COR = { ok: theme.green, duvida: theme.yellow, erro: theme.red }
+  const ICO = { ok: 'ti-circle-check', duvida: 'ti-alert-triangle', erro: 'ti-circle-x' }
+  const resumo = rel ? { ok: rel.filter(r => r.nivel === 'ok').length, duvida: rel.filter(r => r.nivel === 'duvida').length, erro: rel.filter(r => r.nivel === 'erro').length } : null
+
+  return (
+    <>
+      <Bloco icon="ti-cloud-upload" titulo="Recebimento de arquivos" desc="Solte os extratos de vários clientes de uma vez. O nome (código-conta-…) roteia cada arquivo: PDF vai para a Conciliação (lê o saldo) e Excel para a Integração (classifica e sugere).">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+          <span style={{ fontSize: 12.5, color: theme.sub }}>Competência:</span>
+          <select className="input" style={{ width: 'auto', padding: '6px 10px', fontSize: 13 }} value={alvo} onChange={e => setAlvo(e.target.value)}>
+            {(competencias || [competencia]).map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </div>
+        <button className="btn" style={{ fontSize: 13 }} onClick={() => setOpen(true)}><i className="ti ti-upload" /> Importar arquivos</button>
+      </Bloco>
+
+      {open && (
+        <div onClick={e => { if (e.target === e.currentTarget && !busy) fechar() }} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 55 }}>
+          <div onClick={e => e.stopPropagation()} style={{ width: 'min(680px,96vw)', maxHeight: '90vh', overflow: 'auto', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
+            <h2 style={{ fontSize: 17, margin: '0 0 4px' }}>Recebimento de arquivos · {alvo}</h2>
+            <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 16px' }}>Nomeie cada arquivo com <b style={{ color: theme.text }}>código-conta-…</b>. Só sobe o que casar com um cliente e um fechamento aberto na competência.</p>
+
+            <label onDragOver={e => { e.preventDefault(); setDrag(true) }} onDragLeave={() => setDrag(false)} onDrop={onDrop}
+              style={{ display: 'block', border: `1.5px dashed ${drag ? theme.accent : theme.border}`, borderRadius: 12, padding: '24px 16px', textAlign: 'center', cursor: 'pointer', background: drag ? 'rgba(74,124,255,0.06)' : theme.input }}>
+              <i className="ti ti-cloud-upload" style={{ fontSize: 26, color: theme.accent }} />
+              <p style={{ margin: '8px 0 0', fontSize: 13, color: theme.text }}>Arraste os arquivos aqui, ou clique para escolher</p>
+              <p style={{ margin: '2px 0 0', fontSize: 11.5, color: theme.sub }}>PDF, XLSX, XLS ou CSV</p>
+              <input type="file" multiple accept=".pdf,.xlsx,.xls,.csv" style={{ display: 'none' }} onChange={e => { addFiles(e.target.files); e.target.value = '' }} />
+            </label>
+
+            {files.length > 0 && !rel && (
+              <div style={{ marginTop: 12, display: 'grid', gap: 6 }}>
+                {files.map((f, i) => {
+                  const p = parseNomeArquivo(f.name)
+                  return (
+                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12.5, padding: '7px 10px', background: theme.input, borderRadius: 8 }}>
+                      <span style={{ fontFamily: 'monospace', fontSize: 10.5, fontWeight: 800, color: '#fff', background: p.ext === 'pdf' ? theme.accent : theme.green, borderRadius: 5, padding: '2px 5px' }}>{(p.ext || '?').toUpperCase()}</span>
+                      <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
+                      <span style={{ color: theme.sub, fontSize: 11 }}>{p.cli ? p.cli + '·' + p.conta : 'sem código'}</span>
+                      <i className="ti ti-x" style={{ cursor: 'pointer', color: theme.sub }} onClick={() => setFiles(files.filter((_, j) => j !== i))} />
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+
+            {rel && (
+              <div style={{ marginTop: 14 }}>
+                <div style={{ display: 'flex', gap: 16, fontSize: 12.5, marginBottom: 10 }}>
+                  <span style={{ color: theme.green }}><b>{resumo.ok}</b> ok</span>
+                  <span style={{ color: theme.yellow }}><b>{resumo.duvida}</b> dúvida</span>
+                  <span style={{ color: theme.red }}><b>{resumo.erro}</b> erro</span>
+                </div>
+                <div style={{ display: 'grid', gap: 6 }}>
+                  {rel.map((r, i) => (
+                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12.5, padding: '8px 10px', background: theme.input, borderRadius: 8, borderLeft: `3px solid ${COR[r.nivel]}` }}>
+                      <i className={`ti ${ICO[r.nivel]}`} style={{ color: COR[r.nivel], fontSize: 16 }} />
+                      <span style={{ minWidth: 0, flex: 1 }}>
+                        <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.nome}</span>
+                        {r.cliente && <span style={{ color: theme.sub, fontSize: 11 }}>{r.cliente}</span>}
+                      </span>
+                      <span style={{ color: theme.sub, fontSize: 11.5, textAlign: 'right', maxWidth: '50%' }}>{r.msg}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 18 }}>
+              <button className="btn btn-ghost" onClick={fechar} disabled={busy}>{rel ? 'Fechar' : 'Cancelar'}</button>
+              {!rel && <button className="btn" disabled={!files.length || busy} onClick={processar}>{busy ? 'Processando…' : `Receber ${files.length || ''}`.trim()}</button>}
+              {rel && <button className="btn" onClick={() => { setFiles([]); setRel(null) }}>Receber mais</button>}
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  )
 }
