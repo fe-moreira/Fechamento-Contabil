@@ -1,6 +1,7 @@
 // Manual do Time — documentação viva da plataforma. Mora dentro do sistema (menu Ajuda)
-// e é versionada no repo: quando o sistema muda, o manual muda junto. O botão "Gerar PDF"
-// usa a impressão do navegador (Salvar como PDF) — sai fiel e sempre atualizado.
+// e é versionada no repo: quando o sistema muda, o manual muda junto. Tem busca (leva
+// direto à seção) e "Gerar PDF" pela impressão do navegador — sai fiel e sempre atualizado.
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 const CSS = `
 #manual-root{
@@ -97,8 +98,34 @@ const CSS = `
 #manual-root .m-foot{color:var(--m-faint);font-size:13px;border-top:1px solid var(--m-line);padding-top:18px;margin-top:30px}
 
 /* Barra de ações (fica fora do PDF) */
-#manual-root .manual-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:18px}
+#manual-root .manual-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px}
 #manual-root .manual-actions .hint{font-size:12.5px;color:var(--m-muted)}
+
+/* Busca no manual (fica fora do PDF) */
+#manual-root .manual-search{position:relative;margin-bottom:22px;max-width:560px}
+#manual-root .manual-search .box{display:flex;align-items:center;gap:10px;border:1px solid var(--m-line);
+  background:var(--m-surface);border-radius:11px;padding:11px 14px}
+#manual-root .manual-search .box:focus-within{border-color:var(--m-accent);box-shadow:0 0 0 3px var(--m-accent-weak)}
+#manual-root .manual-search input{flex:1;border:none;outline:none;background:transparent;color:var(--m-ink);
+  font-size:14.5px;font-family:inherit}
+#manual-root .manual-search input::placeholder{color:var(--m-faint)}
+#manual-root .manual-search .ico{color:var(--m-faint);font-size:18px}
+#manual-root .manual-search .clr{color:var(--m-faint);font-size:16px;cursor:pointer}
+#manual-root .m-res{margin-top:8px;border:1px solid var(--m-line);background:var(--m-surface);border-radius:11px;
+  overflow:hidden;box-shadow:0 10px 30px rgba(10,20,40,.10)}
+#manual-root .m-res .head{font-size:11.5px;color:var(--m-faint);padding:9px 14px 4px;font-weight:600}
+#manual-root .m-res button{display:block;width:100%;text-align:left;background:none;border:none;cursor:pointer;
+  padding:10px 14px;border-top:1px solid var(--m-line2);font-family:inherit}
+#manual-root .m-res button:first-of-type{border-top:none}
+#manual-root .m-res button:hover{background:var(--m-accent-weak)}
+#manual-root .m-res .rt{font-size:13.5px;font-weight:650;color:var(--m-ink);display:flex;align-items:center;gap:8px}
+#manual-root .m-res .rt .tag{font-family:var(--m-mono);font-size:11px;color:var(--m-accent)}
+#manual-root .m-res .rs{font-size:12.5px;color:var(--m-muted);margin-top:2px;line-height:1.45}
+#manual-root .m-res mark{background:var(--m-amber-weak);color:inherit;font-weight:700;border-radius:3px;padding:0 2px}
+#manual-root .m-res .vazio{padding:14px;font-size:13px;color:var(--m-muted)}
+@keyframes m-flash{0%{background:var(--m-amber-weak)}100%{background:transparent}}
+#manual-root section.m-hit{animation:m-flash 1.6s ease-out}
+@media (prefers-reduced-motion:reduce){#manual-root section.m-hit{animation:none}}
 
 /* ===== Impressão / PDF: isola o manual, força tema claro, mantém as cores ===== */
 @media print{
@@ -111,7 +138,7 @@ const CSS = `
     --m-accent:#2E5FE0; --m-accent-weak:#2e5fe012; --m-accent-line:#2e5fe040;
     --m-green:#137A49; --m-amber:#9A6D06; --m-red:#C22C22;
     --m-green-weak:#137a4912; --m-amber-weak:#9a6d0612; --m-red-weak:#c22c2212;}
-  #manual-root .manual-actions{display:none !important}
+  #manual-root .manual-actions, #manual-root .manual-search{display:none !important}
   #manual-root section{break-inside:avoid-page}
   #manual-root .m-hero{break-after:avoid}
   @page{margin:14mm}
@@ -366,12 +393,70 @@ const HTML = `
     <div class="m-mod"><div class="h"><span class="ic">⏱</span> Timesheet</div><p>O tempo da sessão conta no topo e zera ao trocar de empresa; o histórico fica em Tempo (Timesheet).</p></div>
     <div class="m-mod"><div class="h"><span class="ic">↺</span> Errou o arquivo?</div><p>Em Documentos, “excluir” apaga o arquivo, limpa a conciliação e volta o documento a pendente.</p></div>
     <div class="m-mod"><div class="h"><span class="ic">PDF</span> Gerar PDF</div><p>Use o botão <b>Gerar PDF</b> no topo desta tela e escolha “Salvar como PDF” na janela de impressão.</p></div>
+    <div class="m-mod"><div class="h"><span class="ic">⌕</span> Buscar no manual</div><p>Manual grande? Use o campo de <b>busca</b> no topo: digite uma palavra (ex.: <span class="m-code">LALUR</span>, <span class="m-code">F4</span>) e clique no resultado para pular direto à seção.</p></div>
   </div>
   <div class="m-foot"><b>Contabilidade by Attentive</b> — Manual do Time. Documento vivo: acompanha as atualizações do sistema. Dúvida sobre regra contábil específica do Domínio: falar com o João. Decisões de produto: Fernando.</div>
 </section>
 `
 
+const dobra = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+
+// Trecho do texto ao redor do 1º ponto onde o termo aparece, com o termo destacado.
+function trecho(texto, termo) {
+  const raw = String(texto || '')
+  const i = dobra(raw).indexOf(dobra(termo))
+  if (i < 0) return { pre: raw.slice(0, 96), hit: '', pos: raw.length > 96 ? '…' : '' }
+  const ini = Math.max(0, i - 42)
+  return {
+    pre: (ini > 0 ? '…' : '') + raw.slice(ini, i),
+    hit: raw.slice(i, i + termo.length),
+    pos: raw.slice(i + termo.length, i + termo.length + 60) + (i + termo.length + 60 < raw.length ? '…' : ''),
+  }
+}
+
 export default function Manual() {
+  const contentRef = useRef(null)
+  const [indice, setIndice] = useState([])
+  const [q, setQ] = useState('')
+
+  // Índice de busca: monta a partir das seções renderizadas (id · título · texto).
+  useEffect(() => {
+    const root = contentRef.current
+    if (!root) return
+    const itens = []
+    root.querySelectorAll('section[id]').forEach(sec => {
+      const tituloEl = sec.querySelector('h2.m-sec, .m-hero h1')
+      const titulo = (tituloEl?.textContent || '').trim()
+      const texto = (sec.textContent || '').replace(/\s+/g, ' ').trim()
+      if (titulo) itens.push({ id: sec.id, titulo, texto })
+    })
+    setIndice(itens)
+  }, [])
+
+  const termo = q.trim()
+  const resultados = useMemo(() => {
+    if (termo.length < 2) return []
+    const d = dobra(termo)
+    return indice
+      .map(it => {
+        const noTitulo = dobra(it.titulo).includes(d)
+        const noTexto = dobra(it.texto).includes(d)
+        if (!noTitulo && !noTexto) return null
+        return { ...it, score: noTitulo ? 0 : 1 }
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.score - b.score)
+      .slice(0, 8)
+  }, [termo, indice])
+
+  function irPara(id) {
+    const el = document.getElementById(id)
+    if (!el) return
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    el.classList.remove('m-hit'); void el.offsetWidth; el.classList.add('m-hit')
+    setQ('')
+  }
+
   return (
     <div id="manual-root">
       <style>{CSS}</style>
@@ -381,7 +466,37 @@ export default function Manual() {
         </button>
         <span className="hint">Na janela de impressão, escolha <b>“Salvar como PDF”</b>.</span>
       </div>
-      <div dangerouslySetInnerHTML={{ __html: HTML }} />
+
+      <div className="manual-search">
+        <div className="box">
+          <i className="ti ti-search ico" />
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Buscar no manual (ex.: conciliação, LALUR, F4, razão vivo…)"
+            onKeyDown={e => { if (e.key === 'Enter' && resultados[0]) irPara(resultados[0].id); if (e.key === 'Escape') setQ('') }} />
+          {q && <i className="ti ti-x clr" title="Limpar" onClick={() => setQ('')} />}
+        </div>
+        {termo.length >= 2 && (
+          <div className="m-res">
+            {resultados.length === 0 ? (
+              <div className="vazio">Nada encontrado para “{termo}”. Tente outra palavra.</div>
+            ) : (
+              <>
+                <div className="head">{resultados.length} resultado(s) — clique para ir</div>
+                {resultados.map(r => {
+                  const t = trecho(r.texto, termo)
+                  return (
+                    <button key={r.id} onClick={() => irPara(r.id)}>
+                      <span className="rt"><i className="ti ti-arrow-right tag" /> {r.titulo}</span>
+                      <span className="rs">{t.pre}<mark>{t.hit}</mark>{t.pos}</span>
+                    </button>
+                  )
+                })}
+              </>
+            )}
+          </div>
+        )}
+      </div>
+
+      <div ref={contentRef} dangerouslySetInnerHTML={{ __html: HTML }} />
     </div>
   )
 }
