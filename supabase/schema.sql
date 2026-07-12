@@ -259,6 +259,41 @@ create table if not exists public.adiantamentos_importacao (
 );
 create index if not exists adiant_imp_cliente_idx on public.adiantamentos_importacao(cliente_id);
 
+-- PER/DCOMP: crédito federal com saldo, baixado conforme compensa débitos de tributo.
+create table if not exists public.perdcomp (
+  id uuid primary key default gen_random_uuid(),
+  cliente_id uuid not null references public.clientes(id) on delete cascade,
+  numero_declaracao text, data date,
+  credito_atualizado numeric(16,2) default 0,
+  valor_utilizado numeric(16,2) default 0,
+  tributo_compensado text,
+  conta_credito text, conta_compensada text,
+  observacao text,
+  status text default 'ativo', usuario text,
+  created_at timestamptz default now(), updated_at timestamptz default now()
+);
+create index if not exists perdcomp_cliente_idx on public.perdcomp(cliente_id);
+
+-- Juros sobre Capital Próprio (JSCP): memória de cálculo e contabilização.
+create table if not exists public.jcp (
+  id uuid primary key default gen_random_uuid(),
+  cliente_id uuid not null references public.clientes(id) on delete cascade,
+  descricao text, data_base date,
+  pl_ajustado numeric(16,2) default 0,
+  taxa_tjlp numeric(9,4) default 0,
+  valor_juros numeric(16,2) default 0,
+  limite_dedutibilidade numeric(16,2) default 0,
+  juros_provisionados numeric(16,2) default 0,
+  juros_a_pagar numeric(16,2) default 0,
+  irrf_pct numeric(7,4) default 0,
+  irrf_valor numeric(16,2) default 0,
+  liquido numeric(16,2) default 0,
+  conta_despesa text, conta_irrf text, conta_pagar text,
+  status text default 'ativo', usuario text,
+  created_at timestamptz default now(), updated_at timestamptz default now()
+);
+create index if not exists jcp_cliente_idx on public.jcp(cliente_id);
+
 alter table public.seguros                 enable row level security;
 alter table public.despesas_apropriar      enable row level security;
 alter table public.emprestimos             enable row level security;
@@ -266,10 +301,12 @@ alter table public.parcelamentos           enable row level security;
 alter table public.participacoes           enable row level security;
 alter table public.importacoes             enable row level security;
 alter table public.adiantamentos_importacao enable row level security;
+alter table public.perdcomp                 enable row level security;
+alter table public.jcp                      enable row level security;
 do $$
 declare t text;
 begin
-  foreach t in array array['seguros','despesas_apropriar','emprestimos','parcelamentos','participacoes','importacoes','adiantamentos_importacao']
+  foreach t in array array['seguros','despesas_apropriar','emprestimos','parcelamentos','participacoes','importacoes','adiantamentos_importacao','perdcomp','jcp']
   loop
     execute format('drop policy if exists "auth_all_%1$s" on public.%1$s;', t);
     execute format('create policy "auth_all_%1$s" on public.%1$s for all to authenticated using (true) with check (true);', t);

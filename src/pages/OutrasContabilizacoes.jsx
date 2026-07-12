@@ -16,7 +16,7 @@ function CampoContaForm({ valor, set }) {
   return <CampoConta value={valor} onChange={set} onPick={p => set(p.cod)} placeholder="Código (F4)" />
 }
 
-const ACC = { seguro: '#4A7CFF', despesa: '#33B4C6', importacao: '#2FB6A8', emprestimo: '#9A7CF0', parcelamento: '#E8923B', equivalencia: '#E06C9F', outros: '#7C89A6' }
+const ACC = { seguro: '#4A7CFF', despesa: '#33B4C6', importacao: '#2FB6A8', emprestimo: '#9A7CF0', parcelamento: '#E8923B', equivalencia: '#E06C9F', perdcomp: '#3FA66A', jcp: '#C9A227', outros: '#7C89A6' }
 const BLOCOS = [
   { key: 'seguro', label: 'Seguro', icon: 'ti-shield-half', sub: 'Apólices & apropriação' },
   { key: 'despesa', label: 'Despesa a Apropriar', icon: 'ti-calendar-repeat', sub: 'IPVA, IPTU, etc.' },
@@ -24,6 +24,8 @@ const BLOCOS = [
   { key: 'emprestimo', label: 'Empréstimo', icon: 'ti-building-bank', sub: 'Contratos & conferência' },
   { key: 'parcelamento', label: 'Parc. Impostos', icon: 'ti-receipt', sub: 'Só juros & multa' },
   { key: 'equivalencia', label: 'Equiv. Patrimonial', icon: 'ti-scale', sub: 'Participações (MEP)' },
+  { key: 'perdcomp', label: 'PER/DCOMP', icon: 'ti-arrows-exchange', sub: 'Crédito & compensação' },
+  { key: 'jcp', label: 'JSCP', icon: 'ti-coins', sub: 'Juros s/ capital próprio' },
   { key: 'outros', label: 'Outros Lançamentos', icon: 'ti-pencil-plus', sub: 'Manual' },
 ]
 
@@ -261,6 +263,9 @@ function brData(iso) {
   return m ? `${m[3]}/${m[2]}/${m[1]}` : String(iso || '')
 }
 
+// Número BR sem símbolo (para placeholders de cálculo sugerido).
+const fmtNum = v => (Number(v) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })
+
 // ---- form genérico (controlado) ----
 function useForm(init) {
   const [f, setF] = useState(init)
@@ -325,7 +330,7 @@ export default function OutrasContabilizacoes() {
   if (!empresaId) return <Aviso texto="Selecione uma empresa no menu lateral." />
 
   const props = { clienteId: empresaId, user, competencia, abrirGerar, enviarSaldoInicial, compInicio, empresaNome, planoMap, versao }
-  const Pane = { seguro: PaneSeguro, despesa: PaneDespesaApropriar, importacao: PaneImportacao, emprestimo: PaneEmprestimo, parcelamento: PaneParcelamento, equivalencia: PaneEquivalencia, outros: PaneOutros }[tab]
+  const Pane = { seguro: PaneSeguro, despesa: PaneDespesaApropriar, importacao: PaneImportacao, emprestimo: PaneEmprestimo, parcelamento: PaneParcelamento, equivalencia: PaneEquivalencia, perdcomp: PanePerdcomp, jcp: PaneJcp, outros: PaneOutros }[tab]
 
   return (
     <div>
@@ -822,6 +827,112 @@ function PaneEquivalencia({ clienteId, user, competencia, abrirGerar }) {
             <tr key={r.id}><td style={td}><b>{r.investida}</b></td><td style={td}>{r.vinculo}</td><td style={{ ...td, textAlign: 'right' }}>{r.participacao_pct}%</td>
               <td style={td}><input className="input" style={{ maxWidth: 160 }} value={res[r.id] || ''} onChange={e => setRes(s => ({ ...s, [r.id]: e.target.value }))} placeholder="lucro + / prejuízo -" /></td>
               <td style={{ ...td, whiteSpace: 'nowrap', textAlign: 'right' }}><GerarBtn onClick={() => gerarMEP(r)}>Gerar MEP</GerarBtn>{' '}<DelBtn onClick={() => excluir(r.id)} /></td></tr>
+          ))}
+        </tbody></table></div>
+      </Card>
+    </div>
+  )
+}
+
+// ================= PER/DCOMP =================
+function PanePerdcomp({ clienteId, user, competencia, abrirGerar }) {
+  const { rows, recarregar, excluir } = useLista('perdcomp', clienteId)
+  const [f, on, reset, setF] = useForm({ numero_declaracao: '', data: '', credito_atualizado: '', valor_utilizado: '', tributo_compensado: '', conta_credito: '', conta_compensada: '', observacao: '' })
+  async function salvar(e) {
+    e.preventDefault()
+    try {
+      await inserir('perdcomp', { cliente_id: clienteId, numero_declaracao: f.numero_declaracao, data: f.data || null, credito_atualizado: num(f.credito_atualizado), valor_utilizado: num(f.valor_utilizado), tributo_compensado: f.tributo_compensado, conta_credito: f.conta_credito, conta_compensada: f.conta_compensada, observacao: f.observacao, usuario: user?.email })
+      reset(); recarregar()
+    } catch (er) { alert(er.message) }
+  }
+  return (
+    <div style={{ display: 'grid', gap: 14 }}>
+      <FormCard titulo={<><i className="ti ti-arrows-exchange" style={{ color: ACC.perdcomp }} /> Novo PER/DCOMP</>}>
+        <SecSub>Cadastre a <b>declaração de compensação</b>: o crédito (saldo atualizado) e o valor utilizado para compensar o débito do tributo. Em <b>Compensar</b>, a baixa gerada é <b>D tributo compensado / C crédito a recuperar</b> — reduzindo o saldo do crédito.</SecSub>
+        <form onSubmit={salvar} style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10 }}>
+          <Field label="Nº da declaração" col={2}><input className="input" value={f.numero_declaracao} onChange={on('numero_declaracao')} placeholder="02425.11562.170925.1.3.57-5287" required /></Field>
+          <Field label="Data de transmissão"><input className="input" type="date" value={f.data} onChange={on('data')} /></Field>
+          <Field label="Tributo compensado"><input className="input" value={f.tributo_compensado} onChange={on('tributo_compensado')} placeholder="IPI 5123-01 · ago/2025" /></Field>
+          <Field label="Crédito atualizado (saldo)"><input className="input" value={f.credito_atualizado} onChange={on('credito_atualizado')} placeholder="0,00" /></Field>
+          <Field label="Valor utilizado"><input className="input" value={f.valor_utilizado} onChange={on('valor_utilizado')} placeholder="0,00" /></Field>
+          <Field label="Conta do crédito (ativo)"><CampoContaForm valor={f.conta_credito} set={v => setF(x => ({ ...x, conta_credito: v }))} /></Field>
+          <Field label="Conta compensada (passivo)"><CampoContaForm valor={f.conta_compensada} set={v => setF(x => ({ ...x, conta_compensada: v }))} /></Field>
+          <Field label="Observação" col={4}><input className="input" value={f.observacao} onChange={on('observacao')} placeholder="Origem do crédito (ação judicial, saldo negativo…)" /></Field>
+          <div style={{ gridColumn: 'span 4' }}><button className="btn">＋ Salvar PER/DCOMP</button></div>
+        </form>
+      </FormCard>
+      <Card>
+        <SecTitle>PER/DCOMP cadastrados ({rows.length})</SecTitle>
+        <div style={{ overflowX: 'auto' }}><table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 780 }}><thead><tr>{['Nº declaração', 'Data', 'Tributo', 'Saldo crédito', 'Utilizado', ''].map((h, i) => <th key={i} style={th}>{h}</th>)}</tr></thead><tbody>
+          {rows.length === 0 ? <Vazio colSpan={6} texto="Nenhum PER/DCOMP." /> : rows.map(r => (
+            <tr key={r.id}><td style={{ ...td, fontFamily: 'monospace', fontSize: 11.5 }}>{r.numero_declaracao}</td><td style={td}>{r.data ? brData(r.data) : '—'}</td><td style={td}>{r.tributo_compensado}</td><td style={{ ...td, textAlign: 'right' }}>{money(r.credito_atualizado)}</td><td style={{ ...td, textAlign: 'right' }}>{money(r.valor_utilizado)}</td>
+              <td style={{ ...td, whiteSpace: 'nowrap', textAlign: 'right' }}>
+                <GerarBtn onClick={() => abrirGerar({ data: r.data || dataComp(competencia), conta_debito: r.conta_compensada, conta_credito: r.conta_credito, valor: r.valor_utilizado, historico: `Compensação PER/DCOMP ${r.numero_declaracao || ''} · ${r.tributo_compensado || ''}`.trim(), origem: 'perdcomp', documento: r.numero_declaracao }, `Compensar — ${r.tributo_compensado || 'PER/DCOMP'}`)}>Compensar</GerarBtn>{' '}
+                <DelBtn onClick={() => excluir(r.id)} />
+              </td></tr>
+          ))}
+        </tbody></table></div>
+      </Card>
+    </div>
+  )
+}
+
+// ================= JUROS SOBRE CAPITAL PRÓPRIO (JSCP) =================
+function PaneJcp({ clienteId, user, competencia, abrirGerar }) {
+  const { rows, recarregar, excluir } = useLista('jcp', clienteId)
+  const [f, on, reset, setF] = useForm({ descricao: '', data_base: '', pl_ajustado: '', taxa_tjlp: '', valor_juros: '', limite_dedutibilidade: '', juros_provisionados: '', juros_a_pagar: '', irrf_pct: '', irrf_valor: '', liquido: '', conta_despesa: '', conta_irrf: '', conta_pagar: '' })
+  // Cálculos automáticos (sugestões, editáveis): juros = PL ajustado × taxa; IRRF = juros a pagar × %;
+  // líquido = juros a pagar − IRRF. Não sobrescreve o que o usuário digitou manualmente.
+  const jurosCalc = Math.round(num(f.pl_ajustado) * num(f.taxa_tjlp)) / 100
+  const irrfCalc = Math.round(num(f.juros_a_pagar) * num(f.irrf_pct)) / 100
+  const liqCalc = Math.round((num(f.juros_a_pagar) - (num(f.irrf_valor) || irrfCalc)) * 100) / 100
+  async function salvar(e) {
+    e.preventDefault()
+    try {
+      await inserir('jcp', {
+        cliente_id: clienteId, descricao: f.descricao, data_base: f.data_base || null,
+        pl_ajustado: num(f.pl_ajustado), taxa_tjlp: num(f.taxa_tjlp),
+        valor_juros: num(f.valor_juros) || jurosCalc, limite_dedutibilidade: num(f.limite_dedutibilidade),
+        juros_provisionados: num(f.juros_provisionados), juros_a_pagar: num(f.juros_a_pagar),
+        irrf_pct: num(f.irrf_pct), irrf_valor: num(f.irrf_valor) || irrfCalc, liquido: num(f.liquido) || liqCalc,
+        conta_despesa: f.conta_despesa, conta_irrf: f.conta_irrf, conta_pagar: f.conta_pagar, usuario: user?.email,
+      })
+      reset(); recarregar()
+    } catch (er) { alert(er.message) }
+  }
+  const dataDe = r => r.data_base || dataComp(competencia)
+  return (
+    <div style={{ display: 'grid', gap: 14 }}>
+      <FormCard titulo={<><i className="ti ti-coins" style={{ color: ACC.jcp }} /> Novo cálculo de JSCP</>}>
+        <SecSub>Memória do <b>juros sobre capital próprio</b>: PL ajustado × TJLP (pró-rata), menos os juros já provisionados, dá o <b>valor a pagar na data base</b>. Contabilização em duas partidas: <b>D Despesa JSCP / C JSCP a pagar</b> (bruto) e <b>D JSCP a pagar / C IRRF a recolher</b> (retenção).</SecSub>
+        <form onSubmit={salvar} style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10 }}>
+          <Field label="Descrição" col={2}><input className="input" value={f.descricao} onChange={on('descricao')} placeholder="JSCP 06/2026" /></Field>
+          <Field label="Data base"><input className="input" type="date" value={f.data_base} onChange={on('data_base')} /></Field>
+          <Field label="PL ajustado (base)"><input className="input" value={f.pl_ajustado} onChange={on('pl_ajustado')} placeholder="0,00" /></Field>
+          <Field label="Taxa TJLP % (pró-rata)"><input className="input" value={f.taxa_tjlp} onChange={on('taxa_tjlp')} placeholder="4,5025" /></Field>
+          <Field label="Valor dos juros"><input className="input" value={f.valor_juros} onChange={on('valor_juros')} placeholder={jurosCalc ? fmtNum(jurosCalc) : '0,00'} /></Field>
+          <Field label="Limite dedutibilidade"><input className="input" value={f.limite_dedutibilidade} onChange={on('limite_dedutibilidade')} placeholder="0,00" /></Field>
+          <Field label="Juros já provisionados"><input className="input" value={f.juros_provisionados} onChange={on('juros_provisionados')} placeholder="0,00" /></Field>
+          <Field label="Juros a pagar (data base)"><input className="input" value={f.juros_a_pagar} onChange={on('juros_a_pagar')} placeholder="0,00" required /></Field>
+          <Field label="IRRF %"><input className="input" value={f.irrf_pct} onChange={on('irrf_pct')} placeholder="15" /></Field>
+          <Field label="IRRF valor"><input className="input" value={f.irrf_valor} onChange={on('irrf_valor')} placeholder={irrfCalc ? fmtNum(irrfCalc) : '0,00'} /></Field>
+          <Field label="Líquido a pagar"><input className="input" value={f.liquido} onChange={on('liquido')} placeholder={liqCalc ? fmtNum(liqCalc) : '0,00'} /></Field>
+          <Field label="Conta despesa JSCP"><CampoContaForm valor={f.conta_despesa} set={v => setF(x => ({ ...x, conta_despesa: v }))} /></Field>
+          <Field label="Conta IRRF a recolher"><CampoContaForm valor={f.conta_irrf} set={v => setF(x => ({ ...x, conta_irrf: v }))} /></Field>
+          <Field label="Conta JSCP a pagar"><CampoContaForm valor={f.conta_pagar} set={v => setF(x => ({ ...x, conta_pagar: v }))} /></Field>
+          <div style={{ gridColumn: 'span 4' }}><button className="btn">＋ Salvar cálculo</button></div>
+        </form>
+      </FormCard>
+      <Card>
+        <SecTitle>Cálculos de JSCP ({rows.length})</SecTitle>
+        <div style={{ overflowX: 'auto' }}><table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 820 }}><thead><tr>{['Descrição', 'Data base', 'PL ajustado', 'A pagar', 'IRRF', 'Líquido', ''].map((h, i) => <th key={i} style={th}>{h}</th>)}</tr></thead><tbody>
+          {rows.length === 0 ? <Vazio colSpan={7} texto="Nenhum cálculo de JSCP." /> : rows.map(r => (
+            <tr key={r.id}><td style={td}><b>{r.descricao || '—'}</b></td><td style={td}>{r.data_base ? brData(r.data_base) : '—'}</td><td style={{ ...td, textAlign: 'right' }}>{money(r.pl_ajustado)}</td><td style={{ ...td, textAlign: 'right' }}>{money(r.juros_a_pagar)}</td><td style={{ ...td, textAlign: 'right' }}>{money(r.irrf_valor)}</td><td style={{ ...td, textAlign: 'right' }}>{money(r.liquido)}</td>
+              <td style={{ ...td, whiteSpace: 'nowrap', textAlign: 'right' }}>
+                <GerarBtn onClick={() => abrirGerar({ data: dataDe(r), conta_debito: r.conta_despesa, conta_credito: r.conta_pagar, valor: r.juros_a_pagar, historico: `JSCP ${r.descricao || ''} · provisão`.trim(), origem: 'jcp', documento: r.descricao }, `Provisão JSCP — ${r.descricao || ''}`)}>Provisão</GerarBtn>{' '}
+                {num(r.irrf_valor) > 0 && <><GerarBtn onClick={() => abrirGerar({ data: dataDe(r), conta_debito: r.conta_pagar, conta_credito: r.conta_irrf, valor: r.irrf_valor, historico: `JSCP ${r.descricao || ''} · IRRF (DARF 5706)`.trim(), origem: 'jcp', documento: r.descricao }, `IRRF JSCP — ${r.descricao || ''}`)}>IRRF</GerarBtn>{' '}</>}
+                <DelBtn onClick={() => excluir(r.id)} />
+              </td></tr>
           ))}
         </tbody></table></div>
       </Card>
