@@ -284,7 +284,9 @@ export default function DocumentosRecebidos() {
             {!ro && editIdx !== i && (
               <>
                 <div style={{ display: 'flex', gap: 6 }}>
-                  {['recebido', 'nao_tem', 'nao_enviou'].map(k => (
+                  {/* 'Recebido' NÃO é manual — só fica recebido quando o arquivo sobe em
+                      Recebimento de Documentos. Aqui só as marcações que não têm arquivo. */}
+                  {['nao_tem', 'nao_enviou'].map(k => (
                     <button key={k} className={s === k ? 'btn' : 'btn btn-ghost'} title={SIT[k].label}
                       style={{ fontSize: 12, padding: '5px 9px', ...(s === k ? { background: SIT[k].cor, borderColor: SIT[k].cor } : { color: SIT[k].cor, borderColor: SIT[k].cor }) }}
                       onClick={() => setSit(i, k)}>
@@ -318,7 +320,7 @@ function Wrapper({ children }) {
     <div>
       <h1 style={{ fontSize: 22, fontWeight: 500, marginBottom: 4 }}>Documentos Recebidos</h1>
       <p style={{ color: theme.sub, fontSize: 13, marginBottom: 22 }}>
-        Lista de documentos esperados por cliente. Marque cada um como <b style={{ color: theme.green }}>Recebido</b>, <b style={{ color: theme.sub }}>Não tem</b> (não se aplica no mês) ou <b style={{ color: theme.red }}>Não enviou</b> (não bloqueia o fechamento, mas entra no relatório de pendências para cobrar o cliente). O que ficar <b style={{ color: theme.yellow }}>pendente</b> continua bloqueando. Alterações valem desta competência <b style={{ color: theme.text }}>em diante</b>.
+        Lista de documentos esperados por cliente. <b style={{ color: theme.green }}>Recebido</b> é automático — só marca quando o arquivo sobe em <b style={{ color: theme.text }}>Recebimento de Documentos</b> (não dá para dar baixa manual). Você ainda marca à mão <b style={{ color: theme.sub }}>Não tem</b> (não se aplica no mês) ou <b style={{ color: theme.red }}>Não enviou</b> (não bloqueia o fechamento, mas entra no relatório de pendências). O que ficar <b style={{ color: theme.yellow }}>pendente</b> continua bloqueando. Alterações de cadastro valem desta competência <b style={{ color: theme.text }}>em diante</b>.
       </p>
       {children}
     </div>
