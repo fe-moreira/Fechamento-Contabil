@@ -53,9 +53,10 @@ export default function PainelCliente() {
         if (!comp) { setTemComp(false); return }
         setTemComp(true)
 
-        // Balancete hierárquico — MESMA fonte da Conciliação/Relatórios: saldo inicial por
-        // arrasto + carga inicial, e saldo_final = a "última coluna da conciliação".
-        const { linhas: hier } = await montarBalancete(empresaId, comp.id, 0, { comLancamentos: true })
+        // Balancete hierárquico do RAZÃO PURO (igual ao Comparativo) — MESMA fonte do resultado,
+        // para a identidade fechar: Ativo − (Passivo + PL) = Resultado acumulado. Se o balanço
+        // usasse lançamentos e o resultado não, o estorno (D resultado / C ativo) desbalancearia.
+        const { linhas: hier } = await montarBalancete(empresaId, comp.id)
         const analit = (hier || []).filter(l => !l.sintetica)
         const g = l => String(l.classifRaw || '')[0] // grupo pela CLASSIFICAÇÃO (não pelo reduzido)
 
