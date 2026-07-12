@@ -29,7 +29,6 @@ const BLOCOS = [
   { key: 'outros', label: 'Outros Lançamentos', icon: 'ti-pencil-plus', sub: 'Manual' },
 ]
 
-function hexA(hex, a) { const n = parseInt(hex.slice(1), 16); return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})` }
 const th = { textAlign: 'left', padding: '9px 12px', fontSize: 11, color: theme.sub, textTransform: 'uppercase', letterSpacing: .3, whiteSpace: 'nowrap', borderBottom: `1px solid ${theme.border}` }
 const td = { padding: '10px 12px', fontSize: 13, color: theme.text, borderBottom: `1px solid ${theme.border}`, verticalAlign: 'top' }
 function Card({ children, style }) { return <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: 12, padding: 18, ...style }}>{children}</div> }
@@ -344,22 +343,8 @@ export default function OutrasContabilizacoes() {
 
       <ObservacoesConciliacao clienteId={empresaId} competencia={competencia} user={user} irPara={setTab} />
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(168px,1fr))', gap: 12, marginBottom: 18 }}>
-        {BLOCOS.map(b => {
-          const on = tab === b.key
-          return (
-            <div key={b.key} onClick={() => setTab(b.key)} style={{ background: theme.card, border: `1px solid ${on ? ACC[b.key] : theme.border}`, borderRadius: 12, padding: 16, cursor: 'pointer', position: 'relative', overflow: 'hidden' }}>
-              <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 3, background: ACC[b.key] }} />
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <div style={{ width: 38, height: 38, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 19, background: hexA(ACC[b.key], 0.16), color: ACC[b.key] }}><i className={`ti ${b.icon}`} /></div>
-                <div><div style={{ fontSize: 14, fontWeight: 700 }}>{b.label}</div><div style={{ fontSize: 11.5, color: theme.sub }}>{b.sub}</div></div>
-              </div>
-            </div>
-          )
-        })}
-      </div>
-
-      <div style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${theme.border}`, marginBottom: 20, flexWrap: 'wrap' }}>
+      {/* Só a barra de abas (nome + cor) — tela mais limpa. Clicar abre o cadastro. */}
+      <div style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${theme.border}`, margin: '4px 0 20px', flexWrap: 'wrap' }}>
         {BLOCOS.map(b => (
           <button key={b.key} onClick={() => setTab(b.key)} style={{ background: 'none', border: 'none', padding: '10px 14px', fontSize: 13.5, fontWeight: 600, color: tab === b.key ? theme.text : theme.sub, borderBottom: `2px solid ${tab === b.key ? theme.accent : 'transparent'}`, marginBottom: -1, cursor: 'pointer' }}>
             <span style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', marginRight: 7, background: ACC[b.key] }} />{b.label}
