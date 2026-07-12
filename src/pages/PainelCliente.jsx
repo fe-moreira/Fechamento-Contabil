@@ -62,25 +62,26 @@ export default function PainelCliente() {
         const comparativo = await apurarVariacoes(empresaId, { comLancamentos: true }) // só p/ o gate de variações
         const dist = await apurarDistribuicao(empresaId, comp.id, ano, mes)
 
-        // --- Receita / Custo / Despesa / Resultado — MESMA fonte do Comparativo/DRE ---
-        // Monta a matriz de RESULTADO com o balancete VIVO por mês e classifica cada conta
-        // pela NATUREZA (crédito = receita, débito = custo/despesa). Assim rendimentos
-        // financeiros (grupo 5.5, credores) contam como RECEITA e não inflam a despesa; e
-        // resultado = receita − despesa bate com a última linha do Comparativo (lucro líquido).
+        // --- Receita / Custo / Despesa / Resultado — IGUAL AO COMPARATIVO (razão puro) ---
+        // Soma por GRUPO (líquido) a partir do balancete SEM sobrepor lançamentos, para bater
+        // exatamente com o Comparativo de Movimento: receita = grupo 3 (credor), custo = grupo 4,
+        // despesa = grupo 5 (LÍQUIDO — rendimentos financeiros do 5.5, credores, já compensam as
+        // despesas dentro do próprio grupo 5, como na linha "DESPESAS OPERACIONAIS" do balancete).
+        // As correções pendentes aparecem à parte no Comparativo, não infladas aqui.
         const { data: compsAno } = await supabase.from('competencias').select('id, mes')
           .eq('cliente_id', empresaId).eq('ano', ano).order('mes', { ascending: true })
         const porMes = {}, linhasResMes = {}, meses = []
         for (const c of (compsAno || [])) {
-          const linhasC = c.id === comp.id ? hier : ((await montarBalancete(empresaId, c.id, 0, { comLancamentos: true })).linhas)
+          const linhasC = (await montarBalancete(empresaId, c.id)).linhas // razão puro (igual ao Comparativo)
           const res = (linhasC || []).filter(l => !l.sintetica && ['3', '4', '5'].includes(String(l.classifRaw || '')[0]))
           if (!res.length) continue
-          let receita = 0, custo = 0, despesa = 0
+          let g3 = 0, g4 = 0, g5 = 0
           for (const l of res) {
             const sf = Number(l.saldo_final) || 0
-            if (sf < 0) receita += -sf                                // crédito = receita (inclui rendimentos financeiros)
-            else if (String(l.classifRaw)[0] === '4') custo += sf     // débito grupo 4 = custo
-            else despesa += sf                                        // débito grupo 3/5 = despesa/dedução
+            const grp = String(l.classifRaw || '')[0]
+            if (grp === '3') g3 += sf; else if (grp === '4') g4 += sf; else g5 += sf
           }
+          const receita = -g3, custo = g4, despesa = g5 // grupo 3 credor → receita positiva; 4/5 devedores
           meses.push(c.mes)
           porMes[c.mes] = { receita, custo, despesa, resultado: receita - custo - despesa }
           linhasResMes[c.mes] = res
