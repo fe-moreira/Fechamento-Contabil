@@ -49,8 +49,10 @@ export async function anexarExtratoPdf({ compId, conta, file }) {
   if (saldo != null) campos.saldo_documento = saldo
   const { data: ex } = await supabase.from('conciliacao_conta').select('id')
     .eq('competencia_id', compId).eq('conta', String(conta)).limit(1)
-  if (ex && ex[0]) await supabase.from('conciliacao_conta').update(campos).eq('id', ex[0].id)
-  else await supabase.from('conciliacao_conta').insert(campos)
+  const { error: eConc } = (ex && ex[0])
+    ? await supabase.from('conciliacao_conta').update(campos).eq('id', ex[0].id)
+    : await supabase.from('conciliacao_conta').insert(campos)
+  if (eConc) throw new Error('anexo salvo, mas falhou ao ligar na conciliação: ' + eConc.message)
   return { saldoLido: saldo, path }
 }
 

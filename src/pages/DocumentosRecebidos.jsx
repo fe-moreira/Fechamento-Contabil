@@ -130,19 +130,30 @@ export default function DocumentosRecebidos() {
       setMsg(`“${docs[i].name}” recebido${extra}.`)
     } catch (e) { setMsg('Erro ao subir: ' + e.message) } finally { setSubindo(null) }
   }
-  async function verArquivo(path) { try { await verArquivoImportado(path) } catch (e) { setMsg('Não consegui abrir o arquivo: ' + e.message) } }
+  const limparDoc = (i) => persistir(docs.map((x, j) => j === i ? { ...x, arquivo_path: '', arquivo: '', situacao: '', rec: false, date: '' } : x))
+  // Ver o arquivo; se ele não existir mais no Storage, auto-corrige: volta o documento a pendente.
+  async function verArquivo(i) {
+    const d = docs[i]
+    try { await verArquivoImportado(d.arquivo_path) }
+    catch (e) {
+      if (/not found|não encontrad|no such|does not exist/i.test(e.message || '')) {
+        await limparDoc(i)
+        setMsg(`O arquivo de “${d.name}” não está mais no armazenamento — o documento voltou a pendente. Suba novamente.`)
+      } else setMsg('Não consegui abrir o arquivo: ' + e.message)
+    }
+  }
   // Exclui o arquivo (subiu errado / conta errada): apaga do Storage, limpa o anexo/saldo
-  // da conciliação se for o caso, e o documento volta a PENDENTE.
+  // da conciliação se for o caso, e o documento volta a PENDENTE. A limpeza é best-effort —
+  // mesmo que ela falhe, o documento SEMPRE é resetado (não pode ficar travado em "recebido").
   async function excluirArquivo(i) {
     const d = docs[i]
     if (!d.arquivo_path || ro) return
     if (!confirm(`Excluir o arquivo de “${d.name}”? O documento volta a ficar pendente.`)) return
     setSubindo(i)
-    try {
-      await excluirArquivoRecebido({ path: d.arquivo_path, conta: (d.conta || '').trim(), compId: await getCompetenciaId() })
-      persistir(docs.map((x, j) => j === i ? { ...x, arquivo_path: '', arquivo: '', situacao: '', rec: false, date: '' } : x))
-      setMsg(`Arquivo de “${d.name}” excluído — voltou a pendente.`)
-    } catch (e) { setMsg('Erro ao excluir: ' + e.message) } finally { setSubindo(null) }
+    try { await excluirArquivoRecebido({ path: d.arquivo_path, conta: (d.conta || '').trim(), compId: await getCompetenciaId() }) } catch (e) { console.error('excluir arquivo:', e) }
+    await limparDoc(i)
+    setMsg(`Arquivo de “${d.name}” excluído — voltou a pendente.`)
+    setSubindo(null)
   }
 
   async function baixarModelo() {
@@ -260,7 +271,7 @@ export default function DocumentosRecebidos() {
                   : <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 20, background: theme.input, color: theme.sub }} title="Sem conta — não casa com arquivo por código">sem conta</span>}
                 {d.arquivo_path && (
                   <>
-                    <button className="btn btn-ghost" onClick={() => verArquivo(d.arquivo_path)} style={{ fontSize: 11, padding: '3px 8px', color: theme.green, borderColor: theme.green }} title={d.arquivo || 'Ver o arquivo recebido'}>
+                    <button className="btn btn-ghost" onClick={() => verArquivo(i)} style={{ fontSize: 11, padding: '3px 8px', color: theme.green, borderColor: theme.green }} title={d.arquivo || 'Ver o arquivo recebido'}>
                       <i className="ti ti-eye" /> ver arquivo</button>
                     {!ro && <button className="btn btn-ghost" onClick={() => excluirArquivo(i)} disabled={subindo != null} style={{ fontSize: 11, padding: '3px 8px', color: theme.red, borderColor: theme.red }} title="Excluir o arquivo (subiu errado) — volta a pendente">
                       <i className="ti ti-trash" /> excluir</button>}
