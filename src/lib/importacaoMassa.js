@@ -61,6 +61,34 @@ export async function verArquivoImportado(path) {
   window.open(data.signedUrl, '_blank', 'noopener')
 }
 
+// Guarda um arquivo avulso (documento sem conta que roteie — ex.: folha, acumulador).
+export async function anexarDocumentoAvulso({ compId, chave, file }) {
+  const ext = (file.name.match(/\.[a-z0-9]+$/i) || [''])[0].toLowerCase()
+  const path = `${sanit(compId + '/docs/' + (chave || 'doc'))}${ext}`
+  const { error } = await supabase.storage.from('extratos').upload(path, file, { upsert: true, contentType: file.type || undefined })
+  if (error) throw new Error(error.message)
+  return { path }
+}
+
+// Rota unificada de recebimento de UM arquivo, usada pelo upload individual e pela massa.
+// Deduz o destino pela extensão: PDF → Conciliação (anexa + lê saldo); Excel → Integração
+// (guarda + classifica/sugere). Sem conta (ou formato desconhecido) → arquivo avulso.
+export async function receberArquivo({ compId, empresaId, conta, file }) {
+  const ext = (file.name.match(/\.([a-z0-9]+)$/i)?.[1] || '').toLowerCase()
+  if (conta && ext === 'pdf') {
+    const { saldoLido, path } = await anexarExtratoPdf({ compId, conta, file })
+    return { path, destino: 'conciliacao', saldoLido }
+  }
+  if (conta && ['xlsx', 'xls', 'csv'].includes(ext)) {
+    const { path } = await anexarExtratoExcel({ compId, conta, file })
+    let integ = null
+    try { integ = await alimentarIntegracaoFinanceira({ compId, empresaId, conta, file }) } catch (e) { integ = { classificado: false, motivo: e.message } }
+    return { path, destino: 'integracao', integ }
+  }
+  const { path } = await anexarDocumentoAvulso({ compId, chave: conta || file.name, file })
+  return { path, destino: 'arquivo' }
+}
+
 // Guarda o extrato Excel amarrado à conta/competência (referência/consulta).
 export async function anexarExtratoExcel({ compId, conta, file }) {
   const ext = (file.name.match(/\.[a-z0-9]+$/i) || ['.xlsx'])[0].toLowerCase()
