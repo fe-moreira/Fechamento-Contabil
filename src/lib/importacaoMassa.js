@@ -23,6 +23,29 @@ export function parseNomeArquivo(name) {
 const sanit = s => String(s).replace(/[^a-zA-Z0-9/_-]/g, '_')
 const soDigitos = s => String(s ?? '').replace(/\D/g, '')
 
+// Tipo de documento pelo DESTINO/extensão: PDF (extrato do banco) → 'conciliacao';
+// Excel/CSV (planilha do sistema do cliente) → 'integracao'.
+export function tipoPorExtensao(ext) {
+  const e = String(ext || '').toLowerCase()
+  if (e === 'pdf') return 'conciliacao'
+  if (['xlsx', 'xls', 'csv'].includes(e)) return 'integracao'
+  return ''
+}
+
+// Palpite do tipo pela DESCRIÇÃO do documento — o FORMATO manda: "(Excel)"/"planilha" →
+// integração; "(PDF)"/"extrato" → conciliação. Serve quando o documento não tem tipo à mão.
+export function inferirTipoDoc(name) {
+  const n = String(name || '').toLowerCase()
+  if (/\(excel\)|\bxlsx?\b|planilha/.test(n)) return 'integracao'
+  if (/\(pdf\)|extrato/.test(n)) return 'conciliacao'
+  return ''
+}
+
+// Tipo efetivo do documento: o marcado à mão vence; senão, o palpite pela descrição.
+export function tipoEfetivoDoc(doc) {
+  return (doc?.tipo && String(doc.tipo)) || inferirTipoDoc(doc?.name)
+}
+
 // Impressão digital de uma conta bancária (agência|conta, só dígitos). É a CHAVE da memória:
 // o mesmo banco/conta gera a mesma chave todo mês, então o roteamento vira automático.
 export function chaveContaBanco(agencia, conta) {
