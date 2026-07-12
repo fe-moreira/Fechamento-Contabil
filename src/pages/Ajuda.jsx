@@ -29,11 +29,6 @@ export default function Ajuda() {
           </div>
         ))}
       </div>
-
-      <a href="/prototipo.html" target="_blank" rel="noreferrer" className="btn btn-ghost"
-        style={{ display: 'inline-flex', alignItems: 'center', gap: 8, marginTop: 22, fontSize: 13 }}>
-        <i className="ti ti-eye" /> Abrir o protótipo de referência
-      </a>
     </div>
   )
 }
