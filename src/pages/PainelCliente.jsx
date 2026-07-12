@@ -59,45 +59,57 @@ export default function PainelCliente() {
         const analit = (hier || []).filter(l => !l.sintetica)
         const g = l => String(l.classifRaw || '')[0] // grupo pela CLASSIFICAÇÃO (não pelo reduzido)
 
-        const comparativo = await apurarVariacoes(empresaId, { comLancamentos: true })
+        const comparativo = await apurarVariacoes(empresaId, { comLancamentos: true }) // só p/ o gate de variações
         const dist = await apurarDistribuicao(empresaId, comp.id, ano, mes)
 
-        // --- Resultado por mês (receita, despesa e lucro) ---
-        // Grupo de cada conta vem da classificação (via balancete hierárquico).
-        const grpDe = {}
-        for (const l of analit) grpDe[String(l.reduzido)] = g(l)
-        const somaGrupoMesM = (dig, m) => (comparativo.contas || [])
-          .filter(c => grpDe[String(c.conta)] === dig)
-          .reduce((s, c) => s + (comparativo.matriz[c.conta]?.[m] || 0), 0)
-        const receitaMes = m => Math.abs(somaGrupoMesM('3', m))              // receita (credora) positiva
-        const despesaMes = m => Math.abs(somaGrupoMesM('4', m)) + Math.abs(somaGrupoMesM('5', m)) // custo + despesa
-        // Lucro = mesma magnitude da última linha do Comparativo, com sinal de gestão
-        // (lucro positivo, prejuízo negativo).
-        const resMes = m => receitaMes(m) - despesaMes(m)
-        const serie = (comparativo.meses || []).map(m => ({ mes: m, receita: receitaMes(m), despesa: despesaMes(m), resultado: resMes(m) }))
+        // --- Receita / Custo / Despesa / Resultado — MESMA fonte do Comparativo/DRE ---
+        // Monta a matriz de RESULTADO com o balancete VIVO por mês e classifica cada conta
+        // pela NATUREZA (crédito = receita, débito = custo/despesa). Assim rendimentos
+        // financeiros (grupo 5.5, credores) contam como RECEITA e não inflam a despesa; e
+        // resultado = receita − despesa bate com a última linha do Comparativo (lucro líquido).
+        const { data: compsAno } = await supabase.from('competencias').select('id, mes')
+          .eq('cliente_id', empresaId).eq('ano', ano).order('mes', { ascending: true })
+        const porMes = {}, linhasResMes = {}, meses = []
+        for (const c of (compsAno || [])) {
+          const linhasC = c.id === comp.id ? hier : ((await montarBalancete(empresaId, c.id, 0, { comLancamentos: true })).linhas)
+          const res = (linhasC || []).filter(l => !l.sintetica && ['3', '4', '5'].includes(String(l.classifRaw || '')[0]))
+          if (!res.length) continue
+          let receita = 0, custo = 0, despesa = 0
+          for (const l of res) {
+            const sf = Number(l.saldo_final) || 0
+            if (sf < 0) receita += -sf                                // crédito = receita (inclui rendimentos financeiros)
+            else if (String(l.classifRaw)[0] === '4') custo += sf     // débito grupo 4 = custo
+            else despesa += sf                                        // débito grupo 3/5 = despesa/dedução
+          }
+          meses.push(c.mes)
+          porMes[c.mes] = { receita, custo, despesa, resultado: receita - custo - despesa }
+          linhasResMes[c.mes] = res
+        }
+        meses.sort((a, b) => a - b)
+        const receitaMes = m => porMes[m]?.receita || 0
+        const custoMes = m => porMes[m]?.custo || 0
+        const despesaMes = m => porMes[m]?.despesa || 0
+        const resMes = m => porMes[m]?.resultado || 0
+        const serie = meses.map(m => ({ mes: m, receita: receitaMes(m), despesa: custoMes(m) + despesaMes(m), resultado: resMes(m) }))
         const resultado = resMes(mes)
-        const acumulado = (comparativo.meses || []).filter(m => m <= mes).reduce((s, m) => s + resMes(m), 0)
+        const acumulado = meses.filter(m => m <= mes).reduce((s, m) => s + resMes(m), 0)
 
-        // Série do gráfico de desempenho (combo): por mês, a DRE dá Receita Líquida,
-        // EBITDA e Lucro Líquido; as margens saem sobre a receita líquida. Reaproveita
-        // montarDRE alimentando linhas sintéticas com o movimento do mês.
-        const classifRawDe = {}
-        for (const l of analit) if (!classifRawDe[String(l.reduzido)]) classifRawDe[String(l.reduzido)] = l.classifRaw
+        // Gráfico de desempenho (combo): a DRE do mês (Receita Líquida, EBITDA, Lucro Líquido)
+        // a partir das linhas de resultado — o mesmo montarDRE dos Relatórios.
         const dreMes = m => {
-          const linhasMes = (comparativo.contas || []).map(c => ({ sintetica: false, classifRaw: classifRawDe[String(c.conta)] || '', saldo_final: comparativo.matriz[c.conta]?.[m] || 0 }))
-          const rows = montarDRE(linhasMes)
+          const rows = montarDRE(linhasResMes[m] || [])
           const val = lbl => (rows.find(r => r.label === lbl)?.valor) || 0
           return { receitaLiq: val('RECEITA LÍQUIDA'), ebitda: val('RESULTADO OPERACIONAL (EBITDA)'), lucroLiq: val('LUCRO LÍQUIDO DO EXERCÍCIO') }
         }
-        const serieCombo = (comparativo.meses || []).map(m => {
+        const serieCombo = meses.map(m => {
           const r = dreMes(m)
           return { mes: m, rotulo: MESES[m - 1], ...r, margemEbitda: r.receitaLiq ? (r.ebitda / r.receitaLiq) * 100 : 0, margemLiquida: r.receitaLiq ? (r.lucroLiq / r.receitaLiq) * 100 : 0 }
         })
 
         // Nível 1 resumido do mês da competência.
         const faturamento = receitaMes(mes)
-        const custo = Math.abs(somaGrupoMesM('4', mes))
-        const despesa = Math.abs(somaGrupoMesM('5', mes))
+        const custo = custoMes(mes)
+        const despesa = despesaMes(mes)
         const lucro = resultado
 
         // --- Balanço: saldo_final = última coluna da conciliação ---
