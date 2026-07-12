@@ -12,6 +12,7 @@ import Usuarios from './pages/Usuarios'
 import Fechamentos from './pages/Fechamentos'
 import ImportarRazao from './pages/ImportarRazao'
 import DocumentosRecebidos from './pages/DocumentosRecebidos'
+import RecebimentoDocumentos from './pages/RecebimentoDocumentos'
 import Integracao from './pages/Integracao'
 import Conciliacao from './pages/Conciliacao'
 import CompMovimento from './pages/CompMovimento'
@@ -49,6 +50,7 @@ function Rotas() {
         <Route path="fechamentos" element={<Fechamentos />} />
         <Route path="razao" element={<ImportarRazao />} />
         <Route path="documentos" element={<DocumentosRecebidos />} />
+        <Route path="recebimento" element={<RecebimentoDocumentos />} />
         <Route path="integracao" element={<Integracao />} />
         <Route path="conciliacao" element={<Conciliacao />} />
         <Route path="comparativo" element={<CompMovimento />} />

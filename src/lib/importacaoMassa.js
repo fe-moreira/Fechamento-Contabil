@@ -51,7 +51,14 @@ export async function anexarExtratoPdf({ compId, conta, file }) {
     .eq('competencia_id', compId).eq('conta', String(conta)).limit(1)
   if (ex && ex[0]) await supabase.from('conciliacao_conta').update(campos).eq('id', ex[0].id)
   else await supabase.from('conciliacao_conta').insert(campos)
-  return { saldoLido: saldo }
+  return { saldoLido: saldo, path }
+}
+
+// Abre (link assinado) um arquivo guardado no bucket 'extratos'.
+export async function verArquivoImportado(path) {
+  const { data, error } = await supabase.storage.from('extratos').createSignedUrl(path, 300)
+  if (error) throw new Error(error.message)
+  window.open(data.signedUrl, '_blank', 'noopener')
 }
 
 // Guarda o extrato Excel amarrado à conta/competência (referência/consulta).
