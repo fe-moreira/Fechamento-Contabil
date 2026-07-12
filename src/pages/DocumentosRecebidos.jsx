@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
 import { theme, money } from '../lib/theme'
 import { parseNomeArquivo, anexarExtratoPdf, anexarExtratoExcel } from '../lib/importacaoMassa'
+import CampoConta from '../components/CampoConta'
 
 // Lista padrão (só nomes — sem separação por departamento).
 const PADRAO = ['Extratos bancários', 'Notas fiscais de entrada', 'Notas fiscais de saída', 'Folha de pagamento', 'Guias de impostos (DARF/GPS/DAS)', 'Razão do Domínio']
@@ -232,8 +233,7 @@ export default function DocumentosRecebidos() {
               <option value="suporte">Suporte</option>
             </select>
             {tipoNovo === 'conta' && (
-              <input className="input" style={{ width: 150 }} placeholder="Conta contábil" value={contaNovo}
-                onChange={e => setContaNovo(e.target.value)} onKeyDown={e => e.key === 'Enter' && incluir()} />
+              <CampoConta value={contaNovo} onChange={setContaNovo} onEnter={incluir} placeholder="Conta (F4)" style={{ width: 170 }} />
             )}
             <button className="btn" onClick={incluir}><i className="ti ti-plus" /> Incluir</button>
             <span style={{ width: 1, height: 24, background: theme.border, margin: '0 2px' }} />
@@ -272,9 +272,7 @@ export default function DocumentosRecebidos() {
                   <option value="conta">De conta</option><option value="suporte">Suporte</option>
                 </select>
                 {editTipo === 'conta' && (
-                  <input className="input" style={{ width: 130 }} placeholder="Conta contábil" value={editConta}
-                    onChange={e => setEditConta(e.target.value)}
-                    onKeyDown={e => { if (e.key === 'Enter') salvarEdicao(); if (e.key === 'Escape') { setEditIdx(null) } }} />
+                  <CampoConta value={editConta} onChange={setEditConta} onEnter={salvarEdicao} placeholder="Conta (F4)" style={{ width: 160 }} />
                 )}
                 <button className="btn" style={{ fontSize: 12, padding: '6px 10px' }} onClick={salvarEdicao}>Salvar</button>
               </div>
