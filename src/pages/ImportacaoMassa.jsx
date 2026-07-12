@@ -5,7 +5,7 @@ import { fechaSozinho } from '../lib/clientes'
 import { parsePlano } from '../lib/balancete'
 import { theme, money } from '../lib/theme'
 import CampoConta from '../components/CampoConta'
-import { parseNomeArquivo, anexarExtratoPdf, anexarExtratoExcel, alimentarIntegracaoFinanceira, lerIdentificacao, lerMemoriaContas, lembrarContaBancaria, chaveContaBanco } from '../lib/importacaoMassa'
+import { parseNomeArquivo, anexarExtratoPdf, anexarExtratoExcel, alimentarIntegracaoFinanceira, lerIdentificacao, lerMemoriaContas, lembrarContaBancaria, chaveContaBanco, tipoEfetivoDoc } from '../lib/importacaoMassa'
 
 const PADRAO = ['Extratos bancários', 'Notas fiscais de entrada', 'Notas fiscais de saída', 'Folha de pagamento', 'Guias de impostos (DARF/GPS/DAS)', 'Razão do Domínio']
 const cnpj14 = (v) => { const d = String(v ?? '').replace(/\D/g, ''); return d.length >= 11 && d.length <= 14 ? d.padStart(14, '0') : d }
@@ -315,7 +315,7 @@ function RecebeArquivos({ competencias, competencia, recalcularPendencias }) {
             ? { ...base, nivel: 'ok', msg: `Integração · conta ${conta} · ${r.classificadas}/${r.total} sugeridos` }
             : { ...base, nivel: 'duvida', msg: `Integração · conta ${conta} · classifique lá (${r?.motivo || '—'})` })
         }
-        const arr = marc.get(comp.id) || []; arr.push({ conta, path, arquivo: row.nome }); marc.set(comp.id, arr)
+        const arr = marc.get(comp.id) || []; arr.push({ conta, tipo: row.destino, path, arquivo: row.nome }); marc.set(comp.id, arr)
         // Aprende: número da conta do extrato → conta contábil confirmada (para o próximo mês).
         if (row.contaBanco) { try { await lembrarContaBancaria(cli.id, { conta_contabil: conta, agencia: row.agencia, conta: row.contaBanco }) } catch { /* aprendizado é best-effort */ } }
       } catch (e) { resultado.push({ ...base, nivel: 'erro', msg: 'Falha: ' + e.message }) }
@@ -326,14 +326,21 @@ function RecebeArquivos({ competencias, competencia, recalcularPendencias }) {
       const { data: c } = await supabase.from('competencias').select('documentos').eq('id', compId).maybeSingle()
       const lista = Array.isArray(c?.documentos) ? c.documentos : []
       if (!lista.length) continue
-      const porConta = new Map(itens.map(it => [String(it.conta), it]))
+      const novos = [...lista]
+      const usados = new Set()
       let mudou = false
-      const novos = lista.map(d => {
-        const key = String(d.conta || '').trim()
-        const it = key && porConta.get(key)
-        if (it) { mudou = true; return { ...d, situacao: 'recebido', rec: true, date: hoje, arquivo_path: it.path, arquivo: it.arquivo } }
-        return d
-      })
+      // Cada arquivo marca a linha do checklist que casa por CONTA + TIPO (PDF→conciliação,
+      // Excel→integração). Assim, dois documentos na mesma conta (extrato e planilha) não se
+      // atropelam. Sem tipo definido → casa por conta (compatível com o que já existe).
+      const casa = (it, exigirTipo) => novos.findIndex((d, j) => !usados.has(j)
+        && String(d.conta || '').trim() === String(it.conta)
+        && (exigirTipo == null ? true : tipoEfetivoDoc(d) === exigirTipo))
+      for (const it of itens) {
+        let idx = casa(it, it.tipo)          // conta + tipo do arquivo
+        if (idx < 0) idx = casa(it, '')      // conta + documento sem tipo definido
+        if (idx < 0) idx = casa(it, null)    // qualquer documento com a conta
+        if (idx >= 0) { usados.add(idx); novos[idx] = { ...novos[idx], situacao: 'recebido', rec: true, date: hoje, arquivo_path: it.path, arquivo: it.arquivo }; mudou = true }
+      }
       if (mudou) await supabase.from('competencias').update({ documentos: novos }).eq('id', compId)
     }
     if (marc.size) recalcularPendencias?.()
