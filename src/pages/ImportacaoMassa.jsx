@@ -125,7 +125,7 @@ export default function ImportacaoMassa() {
         </Bloco>
 
         {/* Recebimento de arquivos (extratos PDF/Excel) */}
-        <RecebeArquivos competencias={competencias} competencia={competencia} />
+        <RecebeArquivos competencias={competencias} competencia={competencia} recalcularPendencias={recalcularPendencias} />
       </div>
 
       {/* Confirmação da importação */}
@@ -189,7 +189,7 @@ function Tag({ c, n, t }) {
 // ---- Card: Recebimento de arquivos (extratos PDF/Excel, cross-client pelo nome) ----
 // Nome do arquivo: <codigoCliente>-<contaContabil>-…​.<ext>. A extensão decide o destino:
 // PDF → Conciliação (anexa + lê o saldo); Excel → Integração (classifica e sugere).
-function RecebeArquivos({ competencias, competencia }) {
+function RecebeArquivos({ competencias, competencia, recalcularPendencias }) {
   const [alvo, setAlvo] = useState(competencia)
   const [open, setOpen] = useState(false)
   const [files, setFiles] = useState([])
@@ -213,7 +213,7 @@ function RecebeArquivos({ competencias, competencia }) {
       const { data } = await supabase.from('competencias').select('id, status').eq('cliente_id', cli.id).eq('ano', ano).eq('mes', mes).maybeSingle()
       compCache.set(cli.id, data || null); return data || null
     }
-    const resultado = [], vistos = new Set()
+    const resultado = [], vistos = new Set(), marc = new Map() // compId → [{conta, path, arquivo}]
     for (const file of files) {
       const p = parseNomeArquivo(file.name)
       const linha = { nome: file.name }
@@ -230,21 +230,41 @@ function RecebeArquivos({ competencias, competencia }) {
       if (vistos.has(chave)) { resultado.push({ ...linha, nivel: 'erro', msg: 'Duplicado no lote' }); continue }
       vistos.add(chave)
       try {
+        let path
         if (destino === 'conciliacao') {
-          const { saldoLido } = await anexarExtratoPdf({ compId: comp.id, conta: p.conta, file })
-          resultado.push(saldoLido != null
-            ? { ...linha, nivel: 'ok', msg: `Conciliação · conta ${p.conta} · saldo ${money(saldoLido)}` }
+          const r = await anexarExtratoPdf({ compId: comp.id, conta: p.conta, file }); path = r.path
+          resultado.push(r.saldoLido != null
+            ? { ...linha, nivel: 'ok', msg: `Conciliação · conta ${p.conta} · saldo ${money(r.saldoLido)}` }
             : { ...linha, nivel: 'duvida', msg: `Conciliação · conta ${p.conta} · informe o saldo lá` })
         } else {
-          await anexarExtratoExcel({ compId: comp.id, conta: p.conta, file })
+          const e1 = await anexarExtratoExcel({ compId: comp.id, conta: p.conta, file }); path = e1.path
           let r
           try { r = await alimentarIntegracaoFinanceira({ compId: comp.id, empresaId: cli.id, conta: p.conta, file }) } catch (e) { r = { classificado: false, motivo: e.message } }
           resultado.push(r?.classificado
             ? { ...linha, nivel: 'ok', msg: `Integração · conta ${p.conta} · ${r.classificadas}/${r.total} sugeridos` }
             : { ...linha, nivel: 'duvida', msg: `Integração · conta ${p.conta} · classifique lá (${r?.motivo || '—'})` })
         }
+        // Registra para marcar o documento no checklist do cliente (por conta).
+        const arr = marc.get(comp.id) || []; arr.push({ conta: String(p.conta).trim(), path, arquivo: file.name }); marc.set(comp.id, arr)
       } catch (e) { resultado.push({ ...linha, nivel: 'erro', msg: 'Falha: ' + e.message }) }
     }
+    // Marca "recebido" + guarda o arquivo nos documentos que têm a conta recebida.
+    const hoje = new Date().toLocaleDateString('pt-BR').slice(0, 5)
+    for (const [compId, itens] of marc) {
+      const { data: c } = await supabase.from('competencias').select('documentos').eq('id', compId).maybeSingle()
+      const lista = Array.isArray(c?.documentos) ? c.documentos : []
+      if (!lista.length) continue
+      const porConta = new Map(itens.map(it => [String(it.conta), it]))
+      let mudou = false
+      const novos = lista.map(d => {
+        const key = String(d.conta || '').trim()
+        const it = key && porConta.get(key)
+        if (it) { mudou = true; return { ...d, situacao: 'recebido', rec: true, date: hoje, arquivo_path: it.path, arquivo: it.arquivo } }
+        return d
+      })
+      if (mudou) await supabase.from('competencias').update({ documentos: novos }).eq('id', compId)
+    }
+    if (marc.size) recalcularPendencias?.()
     setRel(resultado); setBusy(false)
   }
 
