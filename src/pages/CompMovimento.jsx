@@ -286,7 +286,10 @@ export default function CompMovimento() {
         const m = {}               // classifRaw → { 'ano-mm': saldo_final }
 
         for (const c of competencias) {
-          const { linhas } = await montarBalancete(empresaId, c.id)
+          // Razão VIVO: o balancete importado + os lançamentos confirmados (correções da
+          // Conciliação, estornos, apropriações). Assim o ajuste feito em qualquer tela
+          // (ex.: estorno de rendimento em dobro na 759) aparece aqui no débito da conta.
+          const { linhas } = await montarBalancete(empresaId, c.id, 0, { comLancamentos: true })
           if (!vivo) return
           // Comparativo trata só contas de resultado: Receita (3), Custos (4) e Despesas (5).
           const res = linhas.filter(l => { const d = String(l.classifRaw || l.classif).trim()[0]; return d === '3' || d === '4' || d === '5' })
@@ -753,27 +756,6 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
     } catch (e) { setMsg('Erro ao desfazer: ' + (e.message || e)) } finally { setSalvando(false) }
   }
 
-  // Aplica um delta de débito/crédito no cache do balancete de uma conta (competência),
-  // recalculando o saldo_final — é o que faz a correção refletir na conciliação e no
-  // comparativo (que leem o balancete). Cria a linha se a conta ainda não tiver saldo.
-  async function aplicarNoBalancete(competencia_id, cod, dDeb, dCred) {
-    const { data: row } = await supabase.from('balancete')
-      .select('id, debito, credito, saldo_final').eq('competencia_id', competencia_id).eq('conta', cod).maybeSingle()
-    if (row) {
-      await supabase.from('balancete').update({
-        debito: (Number(row.debito) || 0) + dDeb,
-        credito: (Number(row.credito) || 0) + dCred,
-        saldo_final: (Number(row.saldo_final) || 0) + dDeb - dCred,
-      }).eq('id', row.id)
-    } else {
-      const p = (plano || []).find(x => String(x.cod) === String(cod))
-      await supabase.from('balancete').insert({
-        competencia_id, conta: cod, nome: p?.nome || null,
-        saldo_inicial: 0, debito: dDeb, credito: dCred, saldo_final: dDeb - dCred,
-      })
-    }
-  }
-
   // Gera o lançamento de CORREÇÃO (partida dobrada) que reclassifica o valor da conta
   // errada para a conta certa — é o lançamento que vai ser importado no Domínio.
   async function gerarCorrecao(l, { contaCerta, valor, historico }) {
@@ -796,9 +778,9 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
         origem: 'correcao', razao_id: l.id, usuario,
       })
       if (error) throw error
-      // Propaga para o balancete (conciliação + comparativo leem daqui).
-      await aplicarNoBalancete(cid, conta_debito, v, 0)
-      await aplicarNoBalancete(cid, conta_credito, 0, v)
+      // A correção vive SÓ no lançamento (origem 'correcao'). Todos os relatórios (este
+      // comparativo, conciliação, cockpit) leem o razão VIVO e já sobrepõem o lançamento —
+      // não se mexe no balancete importado, para não contar o ajuste em dobro.
       // Trilha de auditoria.
       await supabase.from('auditoria').insert({
         competencia_id: cid, modulo: 'Comparativo',
@@ -809,7 +791,7 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
       // Aprendizado: contra banco → memória da integração; senão → memória de correção
       // contábil (que vira sugestão quando a mesma conta errada reaparecer no razão).
       const aprendido = await aprenderDaCorrecao({ clienteId: empresaId, historico: l.historico, contrapartida: l.contrapartida, contaErrada: conta, contaCerta, usuario })
-      setMsg('Correção gerada — lançamento no painel Contabilizar e saldos atualizados.' + (aprendido ? ` · Aprendido: ${aprendido}` : ''))
+      setMsg('Correção gerada — lançamento no painel Contabilizar e refletido no comparativo.' + (aprendido ? ` · Aprendido: ${aprendido}` : ''))
       setAcaoLanc(null)
       await carregarLinhas()
       onCorrigido && onCorrigido()
@@ -817,15 +799,13 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
   }
 
 
-  // Desfaz a correção: remove o lançamento, reverte o balancete e apaga a auditoria.
+  // Desfaz a correção: remove o lançamento e apaga a auditoria. O comparativo lê o razão
+  // vivo, então basta sumir com o lançamento — os saldos voltam sozinhos.
   async function desfazerCorrecao(l, corr) {
     if (!window.confirm('Desfazer esta correção? O lançamento de correção será removido e os saldos revertidos.')) return
     setSalvando(true)
     try {
-      const v = Number(corr.valor) || 0
       await supabase.from('lancamentos').delete().eq('id', corr.id)
-      await aplicarNoBalancete(corr.competencia_id, corr.conta_debito, -v, 0)
-      await aplicarNoBalancete(corr.competencia_id, corr.conta_credito, 0, -v)
       await supabase.from('auditoria').delete()
         .eq('modulo', 'Comparativo').eq('tipo', 'Correção').eq('razao_id', l.id)
       setMsg('Correção desfeita — saldos revertidos.')

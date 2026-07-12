@@ -312,10 +312,11 @@ export async function composicaoAbertura(empresaId, compId, contaCod, classifRaw
 // são os totais agregados por prefixo da classificação (segundo a máscara).
 // opts.comLancamentos: sobrepõe os LANÇAMENTOS gerados (correções, apropriações,
 // contabilizações confirmadas — tabela `lancamentos`) sobre o razão importado, para
-// que os relatórios/cockpit/documentos leiam o razão "vivo" (mescla de tudo). LIGAR só
-// nos consumidores que NÃO fazem a própria sobreposição (Relatórios, Cockpit, Book,
-// Comparativo Completo). Conciliação e a página de Comparativo de Movimento já somam os
-// lançamentos por conta própria — mantê-lo DESLIGADO lá para não contar em dobro.
+// que os relatórios/cockpit/documentos leiam o razão "vivo" (mescla de tudo). É a fonte
+// ÚNICA das correções: nenhum fluxo mexe no balancete importado; todo ajuste vira um
+// lançamento e aparece por esta sobreposição. LIGAR nos consumidores que mostram o razão
+// vivo (Relatórios, Cockpit, Book, Comparativo Completo, Comparativo de Movimento).
+// DESLIGAR só na Conciliação, que faz a própria sobreposição por conta (não contar em dobro).
 export async function montarBalancete(empresaId, compId, _depth = 0, opts = {}) {
   const { data: planoCarga } = await supabase.from('cargas_cadastro').select('dados')
     .eq('cliente_id', empresaId).eq('tipo', 'plano').order('created_at', { ascending: false }).limit(1).maybeSingle()
