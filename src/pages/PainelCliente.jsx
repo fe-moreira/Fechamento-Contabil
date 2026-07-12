@@ -507,8 +507,8 @@ function BlocoBalanco({ d }) {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(210px,1fr))', gap: 12 }}>
         <Tile label="Total do ativo" valor={money(d.totAtivo)} />
         <Tile label="Total do passivo + PL" valor={money(d.totPassivo)} />
-        <Tile label="Resultado acumulado" valor={money(d.totAtivo - Math.abs(d.totPassivo))}
-          cor={corResultado(d.totAtivo - Math.abs(d.totPassivo))} sub="ativo − (passivo + PL)" />
+        <Tile label="Resultado acumulado" valor={money(d.acumulado)}
+          cor={corResultado(d.acumulado)} sub="acumulado do Comparativo de Movimento" />
         <Tile label="Clientes (a receber)" valor={money(d.clientes)} cor={theme.green} />
         <Tile label="Fornecedores (a pagar)" valor={money(d.fornecedores)} cor={theme.red} />
         <Tile label="Distribuição de lucros (mês)" valor={money(d.ata.pagoMes || d.distTotal)} sub="pago aos sócios no mês" />
