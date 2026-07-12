@@ -25,15 +25,19 @@ const situOf = d => { const s = d?.situacao ?? (d?.rec ? 'recebido' : ''); retur
 const novoDoc = (name, tipo = '', conta = '') => ({ name, tipo, conta, situacao: '', rec: false, date: '' })
 // Mantém a lista sempre em ordem alfabética (inclusive itens novos).
 const ordenar = arr => [...(arr || [])].sort((a, b) => String(a.name).localeCompare(String(b.name), 'pt-BR', { sensitivity: 'base' }))
-// tipo do documento (de-para): 'conta' = roteia para uma conta contábil (extrato, guia);
-// 'suporte' = apoio do mês, sem conta única (acumulador fiscal, folha); '' = ainda a definir.
+// tipo do documento = DESTINO: 'conciliacao' (sobe o arquivo para a conciliação da conta)
+// ou 'integracao' (alimenta a Integração Financeira da conta). Todo documento liga numa
+// conta contábil. (Legado: 'conta' = conciliação.)
 const normaliza = (arr) => (arr || []).map(x => {
   const name = String(x.name || '').trim()
   const situacao = situOf(x)
   return { name, tipo: x.tipo || '', conta: x.conta || '', situacao, rec: situacao === 'recebido', date: x.date || '' }
 }).filter(x => x.name)
-// Documento ainda sem cadastro completo? 'conta' exige a conta; 'suporte' dispensa; '' falta o tipo.
-const faltaDepara = d => !d.tipo || (d.tipo === 'conta' && !String(d.conta || '').trim())
+// Destino do documento a partir do tipo (com compatibilidade do legado 'conta').
+const rotaDoc = d => d.tipo === 'integracao' ? 'integracao' : (d.tipo === 'conciliacao' || d.tipo === 'conta') ? 'conciliacao' : ''
+const rotaLabel = r => r === 'integracao' ? 'integração' : 'conciliação'
+// Falta cadastro se não tem destino definido OU não tem conta (todo documento tem conta).
+const faltaDepara = d => !rotaDoc(d) || !String(d.conta || '').trim()
 
 export default function DocumentosRecebidos() {
   const { empresaId, empresaNome, competencia, getCompetenciaId, recalcularPendencias } = useAppData()
@@ -41,7 +45,7 @@ export default function DocumentosRecebidos() {
   const [status, setStatus] = useState(null)
   const [carregando, setCarregando] = useState(true)
   const [nome, setNome] = useState('')
-  const [tipoNovo, setTipoNovo] = useState('conta')
+  const [tipoNovo, setTipoNovo] = useState('conciliacao')
   const [contaNovo, setContaNovo] = useState('')
   const [editIdx, setEditIdx] = useState(null)
   const [editNome, setEditNome] = useState('')
@@ -117,18 +121,15 @@ export default function DocumentosRecebidos() {
   // sem cadastro não travam — só recebem o alerta na lista, corrigidos aos poucos.
   const incluir = () => {
     if (ro || !nome.trim()) return
-    if (!tipoNovo) { flash('Escolha o tipo do documento (de conta ou suporte).'); return }
-    if (tipoNovo === 'conta' && !contaNovo.trim()) { flash('Documento do tipo “de conta” exige a conta contábil.'); return }
-    persistir([...docs, novoDoc(nome.trim(), tipoNovo, tipoNovo === 'conta' ? contaNovo.trim() : '')], true)
-    setNome(''); setContaNovo(''); setTipoNovo('conta')
+    if (!tipoNovo) { flash('Escolha o destino (Conciliação ou Integração).'); return }
+    if (!contaNovo.trim()) { flash('Informe a conta contábil (F4).'); return }
+    persistir([...docs, novoDoc(nome.trim(), tipoNovo, contaNovo.trim())], true)
+    setNome(''); setContaNovo(''); setTipoNovo('conciliacao')
   }
-  const abrirEdicao = (i) => { setEditIdx(i); setEditNome(docs[i].name); setEditTipo(docs[i].tipo || 'conta'); setEditConta(docs[i].conta || '') }
+  const abrirEdicao = (i) => { setEditIdx(i); setEditNome(docs[i].name); setEditTipo(rotaDoc(docs[i]) || 'conciliacao'); setEditConta(docs[i].conta || '') }
   const salvarEdicao = () => {
     const n = editNome.trim()
-    if (n && editIdx !== null) {
-      const conta = editTipo === 'conta' ? editConta.trim() : ''
-      persistir(docs.map((d, j) => j === editIdx ? { ...d, name: n, tipo: editTipo, conta } : d), true)
-    }
+    if (n && editIdx !== null) persistir(docs.map((d, j) => j === editIdx ? { ...d, name: n, tipo: editTipo, conta: editConta.trim() } : d), true)
     setEditIdx(null); setEditNome(''); setEditTipo(''); setEditConta('')
   }
   function flash(t) { setMsg(t); setTimeout(() => setMsg(''), 4000) }
@@ -142,21 +143,21 @@ export default function DocumentosRecebidos() {
   async function baixarModelo() {
     const XLSX = await import('xlsx')
     const ws = XLSX.utils.aoa_to_sheet([
-      ['Documento', 'Tipo (conta/suporte)', 'Conta contábil'],
-      ...PADRAO.map(n => [n, /extrato|banc/i.test(n) ? 'conta' : 'suporte', '']),
+      ['Documento', 'Destino (conciliação/integração)', 'Conta contábil'],
+      ...PADRAO.map(n => [n, 'conciliação', '']),
     ])
-    ws['!cols'] = [{ wch: 46 }, { wch: 20 }, { wch: 18 }]
+    ws['!cols'] = [{ wch: 46 }, { wch: 28 }, { wch: 18 }]
     const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, ws, 'Documentos')
     XLSX.writeFile(wb, 'modelo-documentos.xlsx')
   }
 
-  // Normaliza o tipo vindo da planilha: "suporte/apoio" → suporte; qualquer coisa com
-  // "conta" (ou uma conta preenchida) → conta; vazio → a definir.
+  // Normaliza o destino vindo da planilha: "integração/financeira" → integracao;
+  // "conciliação" (ou qualquer coisa com conta preenchida) → conciliacao; vazio → a definir.
   function tipoPlanilha(raw, conta) {
-    const t = String(raw ?? '').trim().toLowerCase()
-    if (/suport|apoio|global/.test(t)) return 'suporte'
-    if (/conta/.test(t) || String(conta || '').trim()) return 'conta'
+    const t = String(raw ?? '').trim().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+    if (/integra|financeira/.test(t)) return 'integracao'
+    if (/concilia/.test(t) || String(conta || '').trim()) return 'conciliacao'
     return ''
   }
 
@@ -228,13 +229,11 @@ export default function DocumentosRecebidos() {
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
             <input className="input" style={{ flex: 1, minWidth: 180 }} placeholder="Nome do documento" value={nome}
               onChange={e => setNome(e.target.value)} onKeyDown={e => e.key === 'Enter' && incluir()} />
-            <select className="input" style={{ width: 130 }} value={tipoNovo} onChange={e => setTipoNovo(e.target.value)} title="Tipo do documento">
-              <option value="conta">De conta</option>
-              <option value="suporte">Suporte</option>
+            <select className="input" style={{ width: 140 }} value={tipoNovo} onChange={e => setTipoNovo(e.target.value)} title="Destino do documento">
+              <option value="conciliacao">Conciliação</option>
+              <option value="integracao">Integração</option>
             </select>
-            {tipoNovo === 'conta' && (
-              <CampoConta value={contaNovo} onChange={setContaNovo} onEnter={incluir} placeholder="Conta (F4)" style={{ width: 170 }} />
-            )}
+            <CampoConta value={contaNovo} onChange={setContaNovo} onEnter={incluir} placeholder="Conta (F4)" style={{ width: 170 }} />
             <button className="btn" onClick={incluir}><i className="ti ti-plus" /> Incluir</button>
             <span style={{ width: 1, height: 24, background: theme.border, margin: '0 2px' }} />
             <label className="btn btn-ghost" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
@@ -246,7 +245,7 @@ export default function DocumentosRecebidos() {
             <button className="btn" onClick={() => setMassa(true)} title="Solte vários extratos de uma vez — nomeados com cliente-conta"><i className="ti ti-cloud-upload" /> Importação em massa</button>
           </div>
           <p style={{ fontSize: 11.5, color: theme.sub, margin: '9px 2px 0' }}>
-            <b style={{ color: theme.text }}>De conta</b> (extrato, guia) → liga numa conta contábil e conecta com a conciliação. <b style={{ color: theme.text }}>Suporte</b> (acumulador, folha) → só arquiva. Documentos novos exigem o tipo e a conta; o modelo do Excel já traz as colunas <b style={{ color: theme.text }}>Tipo</b> e <b style={{ color: theme.text }}>Conta</b>.
+            Todo documento liga numa <b style={{ color: theme.text }}>conta</b>. <b style={{ color: theme.text }}>Conciliação</b> → o arquivo (PDF) sobe para a conciliação da conta e lê o saldo. <b style={{ color: theme.text }}>Integração</b> → o arquivo (Excel) vai classificado para a Integração Financeira. O modelo do Excel já traz as colunas <b style={{ color: theme.text }}>Destino</b> e <b style={{ color: theme.text }}>Conta</b>.
           </p>
         </div>
       )}
@@ -268,12 +267,10 @@ export default function DocumentosRecebidos() {
                   onChange={e => setEditNome(e.target.value)}
                   onKeyDown={e => { if (e.key === 'Enter') salvarEdicao(); if (e.key === 'Escape') { setEditIdx(null); setEditNome('') } }}
                   style={{ flex: 1, minWidth: 140 }} />
-                <select className="input" style={{ width: 118 }} value={editTipo} onChange={e => setEditTipo(e.target.value)}>
-                  <option value="conta">De conta</option><option value="suporte">Suporte</option>
+                <select className="input" style={{ width: 128 }} value={editTipo} onChange={e => setEditTipo(e.target.value)}>
+                  <option value="conciliacao">Conciliação</option><option value="integracao">Integração</option>
                 </select>
-                {editTipo === 'conta' && (
-                  <CampoConta value={editConta} onChange={setEditConta} onEnter={salvarEdicao} placeholder="Conta (F4)" style={{ width: 160 }} />
-                )}
+                <CampoConta value={editConta} onChange={setEditConta} onEnter={salvarEdicao} placeholder="Conta (F4)" style={{ width: 160 }} />
                 <button className="btn" style={{ fontSize: 12, padding: '6px 10px' }} onClick={salvarEdicao}>Salvar</button>
               </div>
             ) : (
@@ -282,11 +279,10 @@ export default function DocumentosRecebidos() {
                 {faltaDepara(d)
                   ? <button className="btn btn-ghost" onClick={() => abrirEdicao(i)} disabled={ro}
                       style={{ fontSize: 11, padding: '3px 8px', color: theme.yellow, borderColor: theme.yellow }}
-                      title="Falta cadastrar a conta e/ou o tipo deste documento">
-                      <i className="ti ti-alert-triangle" /> falta conta/tipo</button>
-                  : d.tipo === 'suporte'
-                    ? <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 20, background: theme.input, color: theme.sub }}>suporte</span>
-                    : <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 20, background: 'rgba(74,124,255,0.12)', color: theme.accent, fontFamily: 'monospace' }} title="Conta contábil ligada — conecta com a conciliação">conta {d.conta}</span>}
+                      title="Falta cadastrar o destino e/ou a conta deste documento">
+                      <i className="ti ti-alert-triangle" /> falta destino/conta</button>
+                  : (() => { const r = rotaDoc(d); const integ = r === 'integracao'
+                      return <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 20, background: integ ? 'rgba(48,164,108,0.14)' : 'rgba(74,124,255,0.13)', color: integ ? theme.green : theme.accent }} title={integ ? 'Vai para a Integração Financeira' : 'Sobe para a conciliação da conta'}>{rotaLabel(r)} · <b style={{ fontFamily: 'monospace' }}>{d.conta}</b></span> })()}
               </span>
             )}
             {editIdx !== i && <span style={{ color: SIT[s].cor, fontSize: 12, fontWeight: 500, minWidth: 76 }}>{SIT[s].label}{s === 'recebido' && d.date ? ` ${d.date}` : ''}</span>}
@@ -334,28 +330,31 @@ function ImportacaoMassa({ empresaId, codDominio, docs, getCompetenciaId, onClos
     setBusy(true)
     const compId = await getCompetenciaId()
     if (!compId) { setBusy(false); setRel([{ nome: '—', nivel: 'erro', msg: 'Abra um fechamento para esta competência primeiro.' }]); return }
-    // Índice conta → documento (só os do tipo "conta").
+    // Índice conta → { conciliacao: doc, integracao: doc } (uma conta pode ter os dois).
     const porConta = {}
-    for (const d of docs) if (d.tipo === 'conta' && String(d.conta || '').trim()) porConta[String(d.conta).trim()] = d
+    for (const d of docs) { const r = rotaDoc(d); const c = String(d.conta || '').trim(); if (r && c) { (porConta[c] = porConta[c] || {})[r] = d } }
     const resultado = [], recebidos = new Set(), vistos = new Set()
     for (const file of files) {
       const p = parseNomeArquivo(file.name)
       const linha = { nome: file.name, conta: p.conta }
       if (!p.cli || !p.conta) { resultado.push({ ...linha, nivel: 'erro', msg: 'Nome fora do padrão cliente-conta' }); continue }
       if (codDominio && String(p.cli) !== String(codDominio)) { resultado.push({ ...linha, nivel: 'erro', msg: `Cliente ${p.cli} ≠ ${codDominio} (este cadastro)` }); continue }
-      const doc = porConta[String(p.conta).trim()]
-      if (!doc) { resultado.push({ ...linha, nivel: 'erro', msg: `Conta ${p.conta} não cadastrada como documento "de conta"` }); continue }
-      const chave = p.conta + '|' + p.ext
-      if (vistos.has(chave)) { resultado.push({ ...linha, nivel: 'erro', msg: 'Duplicado no lote (mesma conta e formato)' }); continue }
+      // Destino pela extensão: PDF → conciliação; Excel → integração.
+      const destino = p.ext === 'pdf' ? 'conciliacao' : (['xlsx', 'xls', 'csv'].includes(p.ext) ? 'integracao' : null)
+      if (!destino) { resultado.push({ ...linha, nivel: 'erro', msg: `Formato .${p.ext} não suportado (use PDF ou Excel)` }); continue }
+      const doc = porConta[String(p.conta).trim()]?.[destino]
+      if (!doc) { resultado.push({ ...linha, nivel: 'erro', msg: `Conta ${p.conta} sem documento de ${rotaLabel(destino)} cadastrado` }); continue }
+      const chave = p.conta + '|' + destino
+      if (vistos.has(chave)) { resultado.push({ ...linha, nivel: 'erro', msg: 'Duplicado no lote (mesma conta e destino)' }); continue }
       vistos.add(chave)
       try {
-        if (p.ext === 'pdf') {
+        if (destino === 'conciliacao') {
           const { saldoLido } = await anexarExtratoPdf({ compId, conta: p.conta, file })
           recebidos.add(doc.name)
           resultado.push(saldoLido != null
             ? { ...linha, nivel: 'ok', msg: `Conciliação · saldo lido ${money(saldoLido)}` }
             : { ...linha, nivel: 'duvida', msg: 'Conciliação · anexado, mas informe o saldo lá' })
-        } else if (['xlsx', 'xls', 'csv'].includes(p.ext)) {
+        } else {
           await anexarExtratoExcel({ compId, conta: p.conta, file })
           recebidos.add(doc.name)
           // Já alimenta a Integração Financeira: classifica com o perfil+memória e deixa os
@@ -365,8 +364,6 @@ function ImportacaoMassa({ empresaId, codDominio, docs, getCompetenciaId, onClos
           resultado.push(r?.classificado
             ? { ...linha, nivel: 'ok', msg: `Integração · ${r.classificadas}/${r.total} lançamentos sugeridos` }
             : { ...linha, nivel: 'duvida', msg: `Integração · Excel recebido; classifique lá (${r?.motivo || 'não classificado'})` })
-        } else {
-          resultado.push({ ...linha, nivel: 'erro', msg: `Formato .${p.ext} não suportado (use PDF ou Excel)` })
         }
       } catch (e) { resultado.push({ ...linha, nivel: 'erro', msg: 'Falha ao subir: ' + e.message }) }
     }
