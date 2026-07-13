@@ -513,6 +513,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
   const [msg, setMsg] = useState('')
   const [verComposic, setVerComposic] = useState(null) // { titulo, itens } — composição de um saldo
   const [tratados, setTratados] = useState(new Set()) // razao_ids já corrigidos/estornados/justificados
+  const [soConfirmaveis, setSoConfirmaveis] = useState(false) // filtro: só entidades zeradas p/ confirmar em lote
 
   async function carregarTratados() {
     const { data } = await supabase.from('auditoria').select('razao_id')
@@ -665,6 +666,11 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
     return new Set(g.lancs.filter(l => Number(l[ladoBaixa]) > 0.005 && l.leitura.nf && !nfsTitulo.has(nfKey(l.leitura.nf))))
   }
   const totalSemTitulo = lista.reduce((n, g) => n + baixaSemTitulo(g).size, 0)
+  // Linhas pendentes (não tratadas) de uma entidade e se ela pode ser confirmada em lote:
+  // composição já ZERADA, nome identificado, sem erro de NF/natureza e com pendências.
+  const pendentesEnt = g => g.lancs.filter(l => l.id && !l.acerto && !tratados.has(l.id))
+  const podeConfirmarEnt = g => Math.abs(g.total) < 0.005 && g.total >= -0.005 && !g.unk && baixaSemTitulo(g).size === 0 && pendentesEnt(g).length > 0
+  const confirmaveis = lista.filter(podeConfirmarEnt)
 
   async function registrar(tipo, payload) {
     const id = await getCompetenciaId()
@@ -732,6 +738,30 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
     if (error) { setMsg('Não consegui confirmar em lote: ' + error.message); return }
     setTratados(prev => { const s = new Set(prev); alvo.forEach(l => s.add(l.id)); return s })
     setMsg(`${alvo.length} lançamento(s) de "${nome}" confirmado(s).`)
+    carregarTratados()
+  }
+
+  // Confirma DE UMA VEZ todas as entidades zeradas/identificadas (uma pergunta só).
+  async function confirmarTodos(grupos) {
+    const items = []
+    for (const g of (grupos || [])) for (const l of g.lancs) { if (l.id && !l.acerto && !tratados.has(l.id)) items.push({ nome: g.nome, l }) }
+    if (!items.length) return
+    if (!window.confirm(`Confirmar ${items.length} lançamento(s) de ${grupos.length} ${lab}(s) que já zeraram e estão identificados (sem NF)? Marca todas as linhas como conferidas, com justificativa (usuário e data). Você pode desfazer linha a linha depois.`)) return
+    const id = await getCompetenciaId()
+    const rows = items.map(({ nome, l }) => ({
+      competencia_id: id, modulo: 'Conciliação',
+      item: `${conta.conta} · ${l.data || ''} · NF ${l.leitura.nf || '—'}`,
+      tipo: 'Justificativa',
+      detalhe: `Confirmado em lote — ${nome}: composição identificada e zerada no mês (título e baixa se compensam), sem NF.`,
+      razao_id: l.id, usuario,
+    }))
+    for (let i = 0; i < rows.length; i += 500) {
+      const { error } = await supabase.from('auditoria').insert(rows.slice(i, i + 500))
+      if (error) { setMsg('Não consegui confirmar em lote: ' + error.message); return }
+    }
+    setTratados(prev => { const s = new Set(prev); items.forEach(({ l }) => s.add(l.id)); return s })
+    setSoConfirmaveis(false)
+    setMsg(`${items.length} lançamento(s) de ${grupos.length} ${lab}(s) confirmado(s).`)
     carregarTratados()
   }
 
@@ -859,7 +889,20 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
           <i className="ti ti-circle-check" style={{ fontSize: 22, color: theme.green }} />
           <p style={{ fontSize: 13.5, color: theme.text, margin: 0 }}>Nada em aberto — débitos e créditos se conciliaram por NF (saldo zerado). Anexe o relatório de {natCredito ? 'contas a pagar' : 'contas a receber'} ou justifique no card acima.</p>
         </div>
-      ) : lista.map((g, gi) => {
+      ) : (<>
+      {confirmaveis.length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '10px 14px', marginBottom: 12, background: 'rgba(48,164,108,0.10)', border: `1px solid ${theme.green}`, borderRadius: 12 }}>
+          <i className="ti ti-checks" style={{ color: theme.green, fontSize: 18 }} />
+          <span style={{ color: theme.text, fontSize: 13, flex: 1, minWidth: 200 }}><b>{confirmaveis.length}</b> {lab}(s) identificado(s) e <b>zerado(s) sem NF</b> — dá para confirmar todos de uma vez.</span>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: theme.sub, cursor: 'pointer' }}>
+            <input type="checkbox" checked={soConfirmaveis} onChange={e => setSoConfirmaveis(e.target.checked)} /> Mostrar só esses
+          </label>
+          <button className="btn" style={{ fontSize: 12.5, background: theme.green, borderColor: theme.green }} onClick={() => confirmarTodos(confirmaveis)}>
+            <i className="ti ti-checks" /> Confirmar todos ({confirmaveis.length})
+          </button>
+        </div>
+      )}
+      {(soConfirmaveis ? confirmaveis : lista).map((g, gi) => {
         const grp = g.lancs
         const gt = g.total
         const unk = g.unk
@@ -869,8 +912,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
         const borda = (anom || semTit.size > 0) ? theme.red : hasRev ? theme.yellow : theme.cb
         // Confirmar em lote: só quando a composição já ZEROU, o nome está identificado e não
         // há erro de NF/natureza — e ainda restam linhas pendentes (não tratadas).
-        const pendentesEnt = grp.filter(l => l.id && !l.acerto && !tratados.has(l.id))
-        const podeConfirmar = Math.abs(gt) < 0.005 && !anom && !unk && semTit.size === 0 && pendentesEnt.length > 0
+        const podeConfirmar = podeConfirmarEnt(g)
         return (
           <div key={gi} style={{ background: theme.card, border: `1px solid ${borda}`, borderRadius: 12, overflow: 'hidden', marginBottom: 12 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '13px 16px', background: theme.input, flexWrap: 'wrap', gap: 8 }}>
@@ -884,7 +926,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
                   <button className="btn" style={{ fontSize: 12, padding: '5px 11px', background: theme.green, borderColor: theme.green }}
                     title="A composição já zerou — confirma todas as linhas de uma vez (justificativa de compensação sem NF), sem abrir uma a uma."
                     onClick={e => { e.stopPropagation(); confirmarEntidade(grp, g.nome) }}>
-                    <i className="ti ti-checks" /> Confirmar ({pendentesEnt.length})
+                    <i className="ti ti-checks" /> Confirmar ({pendentesEnt(g).length})
                   </button>
                 )}
                 <span style={{ color: anom ? theme.red : theme.text, fontSize: 14, fontWeight: 600 }}>{money(gt)}</span>
@@ -943,6 +985,8 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
           </div>
         )
       })}
+      </>
+      )}
       </>
       ) : (
         <ListaLancamentos lanc={emAbertoTodos} carregando={carregando} contraDe={contraDe} planoMap={planoMap} tratados={tratados} onTratar={abrirLinha} />
