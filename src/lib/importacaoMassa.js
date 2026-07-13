@@ -257,7 +257,8 @@ export async function alimentarIntegracaoFinanceira({ compId, empresaId, conta, 
   const fin = (integ.financeira && typeof integ.financeira === 'object') ? integ.financeira : {}
   const bancos = { ...(fin.bancos || {}) }
   const prev = bancos[String(conta)] || {}
-  bancos[String(conta)] = { estado: 'rascunho', doc: file.name, usuario, draft: norm, saldoExtrato: prev.saldoExtrato || null, cruza: prev.cruza || null, concluido: false }
+  // Guarda o arquivo bruto (arr + mesclas) para permitir "Ajustar leitura" depois, sem reimportar.
+  bancos[String(conta)] = { estado: 'rascunho', doc: file.name, usuario, draft: norm, saldoExtrato: prev.saldoExtrato || null, cruza: prev.cruza || null, concluido: false, arr, catByRow }
   await supabase.from('competencias').update({ integracoes: { ...integ, financeira: { ...fin, bancos } } }).eq('id', compId)
 
   return { classificado: true, total: norm.length, classificadas: norm.filter(l => l.contra).length }

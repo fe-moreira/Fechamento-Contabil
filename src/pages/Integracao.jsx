@@ -1126,9 +1126,13 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   function salvarBancoDraft(conta, estadoB, doc, draftLinhas, concluidoFlag) {
     const bancos = { ...(est?.bancos || {}) }
     const prev = bancos[conta] || {}
+    // Guarda o ARQUIVO BRUTO (arr + mesclas) junto do rascunho: assim dá para "Ajustar
+    // leitura" no arquivo JÁ IMPORTADO, sem reimportar. Vem do `raw` atual (import desta
+    // sessão) ou preserva o que já estava salvo.
+    const temRaw = raw?.banco === conta && Array.isArray(raw?.arr)
     // `concluido` (trava de edição) é um flag PRÓPRIO — não se confunde com `estado`
     // ('validado' também é setado no import). Só o botão Concluir liga; Reabrir desliga.
-    bancos[conta] = { estado: estadoB, doc: doc || null, usuario: user?.email || null, draft: draftLinhas || null, saldoExtrato: saldoExtrato || null, cruza: cruza || null, concluido: concluidoFlag ?? prev.concluido ?? false }
+    bancos[conta] = { estado: estadoB, doc: doc || null, usuario: user?.email || null, draft: draftLinhas || null, saldoExtrato: saldoExtrato || null, cruza: cruza || null, concluido: concluidoFlag ?? prev.concluido ?? false, arr: temRaw ? raw.arr : (prev.arr ?? null), catByRow: temRaw ? (raw.catByRow ?? null) : (prev.catByRow ?? null) }
     onEstado({ ...est, bancos })
   }
   function marcarCombinado(doc) { onEstado({ ...est, combinado: { estado: 'validado', doc, usuario: user?.email || null } }) }
@@ -1275,7 +1279,8 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   function continuarRascunho(conta) {
     const s = (est?.bancos || {})[conta]
     if (!s?.draft) return
-    setRaw({ nome: s.doc || 'Rascunho', banco: conta, viaPerfil: true, resumo: true })
+    // Recupera o arquivo bruto salvo (se houver) para permitir "Ajustar leitura" sem reimportar.
+    setRaw({ nome: s.doc || 'Rascunho', banco: conta, viaPerfil: true, resumo: true, arr: Array.isArray(s.arr) ? s.arr : undefined, catByRow: s.catByRow ?? null })
     setLinhas(s.draft); setSel(new Set()); setErro(''); setSaldoExtrato(s.saldoExtrato || ''); setCruza(s.cruza || null); setCruzaOpen(false)
     setMsg(`Rascunho carregado — ${s.draft.length} linha(s). Continue de onde parou.`)
   }
@@ -1852,7 +1857,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', margin: '14px 0 6px' }}>
               <span style={{ fontSize: 12, color: theme.sub }}><i className="ti ti-adjustments" style={{ color: theme.accent }} /> Extrato normalizado pelo perfil de leitura deste cliente.</span>
               {Array.isArray(raw.arr)
-                ? <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => setCfg({ arr: raw.arr, catByRow: raw.catByRow, nome: raw.nome, banco: raw.banco, perfil: perfilInicial(raw.banco, raw.arr) })}><i className="ti ti-adjustments" /> Ajustar leitura</button>
+                ? <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => setCfg({ arr: raw.arr, catByRow: raw.catByRow, nome: raw.nome, banco: raw.banco, perfil: perfilInicial(raw.banco, raw.arr), modo: 'substituir' })}><i className="ti ti-adjustments" /> Ajustar leitura</button>
                 : <label className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', cursor: 'pointer' }} title="Rascunho aberto sem o arquivo — reimporte o extrato para ajustar a leitura">
                     <i className="ti ti-adjustments" /> Ajustar leitura (reimportar)
                     <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={e => raw.banco && importar(e.target.files?.[0], raw.banco)} />
