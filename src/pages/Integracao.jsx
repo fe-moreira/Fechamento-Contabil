@@ -975,6 +975,8 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   const [fES, setFES] = useState('')             // filtro entrada/saída ('' | 'entrada' | 'saida')
   const [fConta, setFConta] = useState('')       // filtro por conta de contrapartida
   const [fNivel, setFNivel] = useState('')       // filtro por nível de confiança ('' | alta | media | manual | sem)
+  const [fNome, setFNome] = useState('')         // filtro por NOME da conta de contrapartida
+  const [fNomeMode, setFNomeMode] = useState('contem') // 'contem' | 'naocontem'
   const [lote, setLote] = useState('')           // conta para preencher em lote nas selecionadas
   const [sel, setSel] = useState(() => new Set())// linhas selecionadas (índice original)
   const [quebra, setQuebra] = useState(null)      // { i, linha } divisão de um lançamento
@@ -1334,6 +1336,11 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     if (fData && !dataBR(l.data).includes(fData.trim())) return false
     if (fES && (fES === 'entrada') !== !!l.entrada) return false
     if (fConta && String(l.contra || '').trim() !== String(fConta).trim()) return false
+    if (fNome.trim()) {
+      const nomeConta = normTxt(planoMap[String(l.contra || '').trim()]?.nome || '')
+      const has = nomeConta.includes(normTxt(fNome.trim()))
+      if (fNomeMode === 'naocontem' ? has : !has) return false
+    }
     return true
   }
   const toggleUm = i => setSel(prev => { const n = new Set(prev); n.has(i) ? n.delete(i) : n.add(i); return n })
@@ -1607,7 +1614,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   const difSaldo = Math.round((saldoFinal - parseValor(saldoExtrato)) * 100) / 100
   const visiveis = linhas.map((l, i) => ({ l, i })).filter(({ l }) => linhaVisivel(l))
   // Totalizador do que está filtrado (útil ao filtrar por dia): quanto de + e de −.
-  const filtroAtivo = fSem || !!fHist || !!fData || !!fES || !!fConta || !!fNivel
+  const filtroAtivo = fSem || !!fHist || !!fData || !!fES || !!fConta || !!fNivel || !!fNome.trim()
   const totVisEnt = visiveis.filter(({ l }) => l.entrada).reduce((s, { l }) => s + (l.valor || 0), 0)
   const totVisSai = visiveis.filter(({ l }) => !l.entrada).reduce((s, { l }) => s + (l.valor || 0), 0)
   const visIdx = visiveis.map(v => v.i)
@@ -1785,7 +1792,11 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
               <option value="sem">Sem contrapartida</option>
             </select>
             <CampoConta value={fConta} onChange={setFConta} placeholder="Filtrar conta (F4)" style={{ width: 170 }} />
-            {filtroAtivo && <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', color: theme.sub }} onClick={() => { setFSem(false); setFHist(''); setFData(''); setFES(''); setFConta(''); setFNivel('') }}>limpar filtros</button>}
+            <input className="input" style={{ maxWidth: 170, fontSize: 12, padding: '6px 10px' }} placeholder="Nome da conta…" value={fNome} onChange={e => setFNome(e.target.value)} title="Filtra pelo nome da conta de contrapartida (do plano)" />
+            <select className="input" style={{ maxWidth: 130, fontSize: 12, padding: '6px 8px' }} value={fNomeMode} onChange={e => setFNomeMode(e.target.value)} title="Contém / Não contém — pelo nome da conta">
+              <option value="contem">Contém</option><option value="naocontem">Não contém</option>
+            </select>
+            {filtroAtivo && <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', color: theme.sub }} onClick={() => { setFSem(false); setFHist(''); setFData(''); setFES(''); setFConta(''); setFNivel(''); setFNome('') }}>limpar filtros</button>}
             <span style={{ flex: 1 }} />
             <span style={{ fontSize: 12, color: theme.sub }}>Aplicar às selecionadas:</span>
             <CampoConta value={lote} onChange={setLote} onEnter={aplicarLote} placeholder="Conta (F4)" style={{ width: 190 }} />
