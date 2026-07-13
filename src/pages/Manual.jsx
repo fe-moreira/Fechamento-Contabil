@@ -244,6 +244,7 @@ const HTML = `
   <ul>
     <li><b>Particularidades e Contatos</b> — listas com incluir/editar/excluir, cada mudança carimbada com <b>usuário e data</b>.</li>
     <li><b>Parâmetros do fechamento</b> — cargas com <b>vigência versionada</b>: plano de contas, de/para de integrações, apelidos de leitura, contas bancárias, amarração banco × resultado, período de início e histórico de lançamentos financeiros.</li>
+    <li><b>Cadastro do Lucro Real (LALUR)</b> — só para clientes no Lucro Real. Define o que o card LALUR usa: contas de <b>adição</b> e <b>exclusão</b>, contas de <b>IRRF</b> (retido e sobre aplicação financeira), o saldo de <b>prejuízo a compensar</b> (limite de 30%) e as <b>contas de contabilização</b> (IRPJ/CSLL despesa e a pagar).</li>
   </ul>
   <div class="m-rule warn"><span class="k">Regra de vigência</span> Toda carga de cadastro <b>preserva o histórico</b>. Ao atualizar, cria-se uma nova vigência — o passado continua íntegro para reprocessar meses anteriores.</div>
 </section>
