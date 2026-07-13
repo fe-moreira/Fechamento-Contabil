@@ -221,7 +221,18 @@ function contemDoc(hist, doc) {
   return dig.length >= 2 && h.replace(/\D/g, '').includes(dig)
 }
 
-export function aplicarPerfil(arr, perfil, memoria, catByRow, adiantContas, bancos) {
+export function aplicarPerfil(arr, perfil, memoria, catByRow, adiantContas, bancos, centros = []) {
+  // Índices p/ resolver o centro de custo da planilha: alguns clientes põem o CÓDIGO,
+  // outros o NOME. Guarda sempre o CÓDIGO (o que o Domínio precisa); o nome aparece na tela.
+  const normCC = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim()
+  const ccPorCod = new Map((centros || []).map(c => [String(c.cod).trim(), String(c.cod).trim()]))
+  const ccPorNome = new Map((centros || []).map(c => [normCC(c.nome), String(c.cod).trim()]))
+  const resolverCC = v => {
+    const s = String(v ?? '').trim(); if (!s) return ''
+    if (ccPorCod.has(s)) return ccPorCod.get(s)      // já é código
+    const porNome = ccPorNome.get(normCC(s))
+    return porNome || s                               // nome → código; senão mantém o que veio
+  }
   const p = perfil || {}
   const temAdiant = adiantContas && adiantContas.size > 0
   const ini = Number.isInteger(p.linhaInicio) ? p.linhaInicio : 1
@@ -282,7 +293,7 @@ export function aplicarPerfil(arr, perfil, memoria, catByRow, adiantContas, banc
     if (doc && contra && temAdiant && adiantContas.has(String(contra))) { contra = ''; contra_nivel = '' }
     // Centro de custo: vem SEMPRE da planilha do mês (coluna colCC do perfil) — não entra
     // na memória. Se a célula vier vazia, fica vazio para o usuário preencher à mão.
-    const centro_custo = p.colCC != null && p.colCC >= 0 ? String(r[p.colCC] ?? '').trim() : ''
+    const centro_custo = p.colCC != null && p.colCC >= 0 ? resolverCC(r[p.colCC]) : ''
     out.push({ historico, credor, valor, entrada, data, contra, contra_nivel, centro_custo })
   }
   return out
