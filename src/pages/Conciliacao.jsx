@@ -535,6 +535,10 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const [nomesConf, setNomesConf] = useState(new Set())   // nomes CONFIÁVEIS do cliente (não pede revisão)
   const [nomesIsolados, setNomesIsolados] = useState(new Set()) // nomes a NÃO unir com parecidos (desvincular)
   const [nomesAlias, setNomesAlias] = useState({}) // APELIDOS: nomeAntigoKey -> nome correto (renomeia em todo lugar)
+  const [aberturaAj, setAberturaAj] = useState({}) // ajustes por item de saldo inicial: {chave:{nf,entidade,historico}}
+  // Chave ESTÁVEL de um item de saldo inicial (não muda ao editar NF/nome/histórico): conta +
+  // valor + nome ORIGINAL da carga. Usa _origEntidade quando já foi ajustado antes.
+  const chaveAberturaAj = l => `${conta.conta}·${Math.round(((Number(l.debito) || 0) - (Number(l.credito) || 0)) * 100)}·${chaveNome(l._origEntidade || l.leitura?.entidade || '')}`
 
   // Cadastro permanente de nomes do cliente (confiáveis + isolados + apelidos) — cargas_cadastro
   // tipo 'conciliacao_nomes', um por cliente (vale para todos os meses).
@@ -545,13 +549,14 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     setNomesConf(new Set((d.confiaveis || []).map(chaveNome)))
     setNomesIsolados(new Set((d.isolados || []).map(chaveNome)))
     setNomesAlias(d.aliases && typeof d.aliases === 'object' ? d.aliases : {})
+    setAberturaAj(d.aberturaAjustes && typeof d.aberturaAjustes === 'object' ? d.aberturaAjustes : {})
   }
   useEffect(() => { if (empresaId) carregarNomes() }, [empresaId]) // eslint-disable-line react-hooks/exhaustive-deps
-  async function salvarNomes(conf, iso, aliases = nomesAlias) {
+  async function salvarNomes(conf, iso, aliases = nomesAlias, aberAj = aberturaAj) {
     await supabase.from('cargas_cadastro').delete().eq('cliente_id', empresaId).eq('tipo', 'conciliacao_nomes')
     // vigencia é NOT NULL — usa a competência atual (o registro é único por cliente, lido sempre o mais recente).
-    const { error } = await supabase.from('cargas_cadastro').insert({ cliente_id: empresaId, tipo: 'conciliacao_nomes', vigencia: competencia || '00/0000', dados: { confiaveis: [...conf], isolados: [...iso], aliases: aliases || {} }, usuario })
-    if (error) { setMsg('Não consegui salvar os nomes: ' + error.message); return error }
+    const { error } = await supabase.from('cargas_cadastro').insert({ cliente_id: empresaId, tipo: 'conciliacao_nomes', vigencia: competencia || '00/0000', dados: { confiaveis: [...conf], isolados: [...iso], aliases: aliases || {}, aberturaAjustes: aberAj || {} }, usuario })
+    if (error) { setMsg('Não consegui salvar: ' + error.message); return error }
   }
   async function marcarConfiavel(nome) {
     const k = chaveNome(nome); if (!k) return
@@ -603,13 +608,26 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     const aliasMap = (cn?.dados?.aliases && typeof cn.dados.aliases === 'object') ? cn.dados.aliases : {}
     // Nomes CONFIÁVEIS do cliente → quem bate sobe para conf 'alta' (não pede revisão).
     const confSet = new Set(((cn?.dados?.confiaveis) || []).map(chaveNome))
+    // Ajustes por item de saldo inicial (NF/nome/histórico) — não têm razao_id.
+    const aberAjMap = (cn?.dados?.aberturaAjustes && typeof cn.dados.aberturaAjustes === 'object') ? cn.dados.aberturaAjustes : {}
     const bump = l => {
       if (!l?.leitura) return l
-      let leitura = l.leitura
+      let leitura = l.leitura, hist = l.historico
+      // Saldo inicial: guarda o nome ORIGINAL (para a chave estável) e aplica o ajuste salvo.
+      if (l._abertura) {
+        const orig = l._origEntidade || leitura.entidade
+        l = { ...l, _origEntidade: orig }
+        const ov = aberAjMap[`${conta.conta}·${Math.round(((Number(l.debito) || 0) - (Number(l.credito) || 0)) * 100)}·${chaveNome(orig)}`]
+        if (ov) {
+          leitura = { ...leitura, entidade: ov.entidade || leitura.entidade, nf: (ov.nf != null && ov.nf !== '') ? ov.nf : leitura.nf, ident: true }
+          if (ov.historico) hist = ov.historico
+        }
+      }
       const al = leitura.entidade ? aliasMap[chaveNome(leitura.entidade)] : null
       if (al && al !== leitura.entidade) leitura = { ...leitura, entidade: al, ident: true }
-      if (leitura.ident && leitura.entidade && confSet.has(chaveNome(leitura.entidade)) && leitura.conf !== 'alta') leitura = { ...leitura, conf: 'alta', confiavel: true }
-      return leitura === l.leitura ? l : { ...l, leitura }
+      // Recalcula a confiança após ajustes (nome + NF = alta).
+      if (leitura.ident && leitura.entidade && ((leitura.nf && leitura.entidade.length >= 4) || confSet.has(chaveNome(leitura.entidade))) && leitura.conf !== 'alta') leitura = { ...leitura, conf: 'alta', confiavel: !leitura.nf }
+      return (leitura === l.leitura && hist === l.historico) ? l : { ...l, leitura, historico: hist }
     }
     const ajById = {}; for (const a of (aj || [])) ajById[a.razao_id] = a
     // Correções pendentes (estornos/acertos) que tocam ESTA conta entram na composição
@@ -838,14 +856,18 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     // Não se aplica à abertura (a leitura dela vem da carga inicial, não do razão).
     let ajustouLeitura = false
     const aj = payload.ajuste
-    if (aj && ehAb && aj.entidade) {
-      // Saldo inicial não tem razao_id → corrige o NOME por APELIDO (vale sempre).
-      const de = chaveNome(acao?.leitura?.entidade || ''), para = String(aj.entidade).trim()
-      if (de && para && de !== chaveNome(para)) {
-        const aliases = { ...nomesAlias, [de]: para }
-        setNomesAlias(aliases); await salvarNomes(nomesConf, nomesIsolados, aliases)
-        ajustouLeitura = true
-      }
+    if (aj && ehAb && (aj.nf || aj.entidade || aj.historico)) {
+      // Saldo inicial não tem razao_id → guarda o ajuste (NF/nome/histórico) por item, com
+      // chave estável (conta+valor+nome original). Vale para todos os meses.
+      const key = chaveAberturaAj(acao)
+      const novo = { ...(aberturaAj[key] || {}) }
+      if (aj.entidade) novo.entidade = String(aj.entidade).trim()
+      if (aj.nf != null && aj.nf !== '') novo.nf = String(aj.nf).trim()
+      if (aj.historico) novo.historico = String(aj.historico).trim()
+      const map = { ...aberturaAj, [key]: novo }
+      setAberturaAj(map)
+      await salvarNomes(nomesConf, nomesIsolados, nomesAlias, map)
+      ajustouLeitura = true
     } else if (aj && acao?.id && !ehAb && (aj.nf || aj.entidade || aj.historico)) {
       await supabase.from('ajuste_leitura').upsert({
         competencia_id: id, razao_id: acao.id,
