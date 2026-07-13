@@ -346,6 +346,7 @@ const HTML = `
     <li>A plataforma <b>aponta o provável culpado</b> da variação, com o motivo (valor fora do padrão, histórico genérico, não recorre nos meses anteriores).</li>
     <li>Por lançamento: <b>justificar</b> (tira a pendência) ou <b>corrigir</b> (reclassifica → vira lançamento).</li>
     <li>O drill-down do razão mostra o razão importado <b>e</b> as linhas de <b>AJUSTE</b> (os lançamentos feitos), fechando o total no valor vivo.</li>
+    <li>Ao clicar num lançamento de despesa, dá para marcar <b>Dedutível / Indedutível</b> (LALUR). O <b>indedutível</b> vira <b>adição</b> no card do LALUR e no relatório de despesas indedutíveis — sem duplicar contas já cadastradas.</li>
   </ul>
 </section>
 
