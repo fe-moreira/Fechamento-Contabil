@@ -4,6 +4,7 @@ import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import DropZone from '../components/DropZone'
 import CampoConta from '../components/CampoConta'
+import ModalLalurConfig from '../components/ModalLalurConfig'
 import { theme, money } from '../lib/theme'
 import { parsePlano, applyMask, normalizaCompetencia } from '../lib/balancete'
 import { gerarExcelTimbrado } from '../lib/excel'
@@ -237,6 +238,7 @@ export default function BaseInformacoes() {
   const [cargaSaldos, setCargaSaldos] = useState(false)   // empresa tem saldo inicial (não é nova)
   const [cargaFeita, setCargaFeita] = useState(false)     // carga inicial já lançada
   const [dist, setDist] = useState(null)   // linha de dist_lucros_config
+  const [regime, setRegime] = useState('') // regime tributário do cliente (habilita o LALUR)
   const [modal, setModal] = useState(null)
 
   async function carregarCargas() {
@@ -256,13 +258,14 @@ export default function BaseInformacoes() {
     setParticularidades([]); setContatos([]); setCargas({}); setPeriodo(''); setDist(null); setCargaSaldos(false); setCargaFeita(false)
     if (!empresaId) return
     carregarCargas(); carregarDist()
-    supabase.from('clientes').select('particularidades, contatos, competencia_inicio, carga_saldos, carga_inicial_feita').eq('id', empresaId).single()
+    supabase.from('clientes').select('particularidades, contatos, competencia_inicio, carga_saldos, carga_inicial_feita, regime_tributario').eq('id', empresaId).single()
       .then(({ data }) => {
         setParticularidades(data?.particularidades || [])
         setContatos(data?.contatos || [])
         setPeriodo(data?.competencia_inicio || '')
         setCargaSaldos(!!data?.carga_saldos)
         setCargaFeita(!!data?.carga_inicial_feita)
+        setRegime(data?.regime_tributario || '')
       })
   }, [empresaId])
 
@@ -385,6 +388,24 @@ export default function BaseInformacoes() {
         <SimplesCard icon="ti-users" title="Distribuição de lucros" sub="Limite, alíquota e sócios (IRRF 2026)"
           badge={dist ? { txt: 'configurado', cor: theme.green, bg: 'rgba(48,164,108,0.15)' } : null}
           onClick={() => setModal({ tipo: 'dist' })} />
+        {(() => {
+          const ehLR = /LUCRO REAL/i.test(regime)
+          const cfgLalur = cargas.lalur?.at(-1)
+          return (
+            <div onClick={ehLR ? () => setModal({ tipo: 'lalur' }) : undefined}
+              title={ehLR ? undefined : 'Disponível apenas para clientes no Lucro Real.'}
+              style={{ ...cardBase, cursor: ehLR ? 'pointer' : 'not-allowed', opacity: ehLR ? 1 : .5 }}>
+              <IconeBadge icon="ti-report-money" />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <p style={{ color: theme.text, fontSize: 14, fontWeight: 500, margin: 0 }}>Cadastro do Lucro Real (LALUR)</p>
+                <p style={{ color: theme.sub, fontSize: 12, margin: '2px 0 0' }}>{ehLR ? 'Adição/exclusão, IRRF, contabilização e prejuízo' : 'Só para clientes no Lucro Real'}</p>
+              </div>
+              {ehLR && (cfgLalur
+                ? <span style={badge('rgba(48,164,108,0.15)', theme.green)}>configurado</span>
+                : <span style={badge('rgba(245,166,35,0.15)', theme.yellow)}>pendente</span>)}
+            </div>
+          )
+        })()}
         <CargaCard {...CARGAS[5]} ultima={cargas.centro_custo?.at(-1)}
           disabled={!usaCentroCusto} dicaDisabled="Ative “Usa centro de custo” no cadastro do cliente para habilitar."
           onClick={() => setModal({ tipo: 'carga', carga: CARGAS[5] })} />
@@ -436,6 +457,10 @@ export default function BaseInformacoes() {
       )}
       {modal?.tipo === 'dist' && (
         <ModalDist inicial={dist} empresaId={empresaId} competencia={competencia} empresaNome={empresaNome} planoMap={planoMap} onClose={() => setModal(null)} onSalvar={salvarDist} />
+      )}
+      {modal?.tipo === 'lalur' && (
+        <ModalLalurConfig empresaId={empresaId} usuario={user?.email} competencia={competencia} regime={regime}
+          inicial={cargas.lalur?.at(-1)?.dados} onClose={() => setModal(null)} onSaved={carregarCargas} />
       )}
       {modal?.tipo === 'verCargaInicial' && (
         <Modal titulo="Carga inicial — conteúdo importado" sub={String(modal.carga.obs || '').replace(/^Carga inicial · /, '')} onClose={() => setModal(null)} largura={760}>
