@@ -230,8 +230,8 @@ function ehDuplaNatureza(nome) {
   const n = baixaTxt(nome)
   return /ajuste.{0,6}exerc|exerc.{0,8}anterior|lucros?.{0,8}preju|preju[ií]zos?.{0,6}acumulad|lucros?.{0,6}acumulad|resultado.{0,8}(do\s+)?exerc|resultado.{0,6}acumulad|conta.?corrente.{0,14}(s[oó]cio|acionist|cotist)|(s[oó]cio|acionist|cotist).{0,14}conta.?corrente/.test(n)
 }
-function saldoInvertido(classifRaw, nome, saldoFinal) {
-  if (ehRedutora(nome) || ehDuplaNatureza(nome)) return null
+function saldoInvertido(classifRaw, nome, saldoFinal, redutoraCtx) {
+  if (redutoraCtx || ehRedutora(nome) || ehDuplaNatureza(nome)) return null
   const d = String(classifRaw || '').replace(/\D/g, '')[0]
   const s = Number(saldoFinal) || 0
   if (d === '1' && s < -0.005) return 'credor'
@@ -392,6 +392,10 @@ export default function Conciliacao() {
   const chaveClassif = c => String(c.classifRaw || c.classif || '').replace(/\D/g, '')
   const contas = (extras.length ? [...baseContas, ...extras] : [...baseContas])
     .sort((a, b) => { const ka = chaveClassif(a), kb = chaveClassif(b); return ka < kb ? -1 : ka > kb ? 1 : 0 })
+  // Redutora por herança da sintética: se a SINTÉTICA-mãe é redutora (ex.: "(–) Depreciações
+  // Acumuladas"), a analítica também é — então saldo na natureza invertida é NORMAL nela.
+  const prefixosRedutores = contas.filter(c => c.sintetica && ehRedutora(c.nome)).map(chaveClassif).filter(Boolean)
+  const herdaRedutora = c => { const cr = chaveClassif(c); return !!cr && prefixosRedutores.some(sr => cr.length > sr.length && cr.startsWith(sr)) }
 
   if (!empresaId) return <Wrapper><Aviso texto="Selecione uma empresa no menu lateral." /></Wrapper>
   if (carregando) return <Wrapper><p style={{ color: theme.sub, fontSize: 13 }}>Carregando…</p></Wrapper>
@@ -469,7 +473,7 @@ export default function Conciliacao() {
               const sint = c.sintetica
               const peso = sint ? 700 : 400 // só as sintéticas em negrito
               const t = tipoEf(c)
-              const inv = sint ? null : saldoInvertido(c.classifRaw, c.nome, c.saldo_final)
+              const inv = sint ? null : saldoInvertido(c.classifRaw, c.nome, c.saldo_final, herdaRedutora(c))
               return (
                 <tr key={i} onClick={() => !sint && setSel(c)}
                   style={{ borderTop: `1px solid ${theme.border}`, cursor: sint ? 'default' : 'pointer', background: inv ? 'rgba(229,72,77,0.08)' : sint ? theme.input : 'transparent', fontWeight: peso }}>
@@ -568,10 +572,15 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
   useEffect(() => {
     supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'plano')
       .order('created_at', { ascending: false }).limit(1).maybeSingle()
-      .then(({ data }) => setPlano(parsePlano(data?.dados).map(p => ({ cod: p.reduzido, nome: p.nome, sintetica: p.sintetica })).filter(p => p.cod)))
+      .then(({ data }) => setPlano(parsePlano(data?.dados).map(p => ({ cod: p.reduzido, nome: p.nome, classif: p.classif, sintetica: p.sintetica })).filter(p => p.cod)))
   }, [empresaId])
 
   const planoMap = Object.fromEntries(plano.map(p => [p.cod, p.nome]))
+  // Redutora por herança: sintética-mãe redutora (ex.: "(–) Depreciações") → a analítica
+  // herda a natureza, então saldo invertido é normal e não vira alerta.
+  const digCl = s => String(s ?? '').replace(/\D/g, '')
+  const prefixosRedutores = plano.filter(p => p.sintetica && ehRedutora(p.nome)).map(p => digCl(p.classif)).filter(Boolean)
+  const herdaRedutoraConta = c => { const cr = digCl(c.classifRaw || c.classif); return !!cr && prefixosRedutores.some(sr => cr.length > sr.length && cr.startsWith(sr)) }
 
   // Natureza pela classificação: Ativo (1) é devedora (clientes); Passivo (2) credora (fornecedores).
   const natCredito = String(conta.classifRaw || conta.classif || '').replace(/\D/g, '')[0] === '2'
@@ -839,7 +848,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
 
       {/* Natureza do saldo: Ativo credor / Passivo devedor (sem ser redutora) */}
       {(() => {
-        const inv = saldoInvertido(conta.classifRaw, conta.nome, conta.saldo_final)
+        const inv = saldoInvertido(conta.classifRaw, conta.nome, conta.saldo_final, herdaRedutoraConta(conta))
         if (!inv) return null
         const classe = inv === 'credor' ? 'Ativo' : 'Passivo'
         return (
