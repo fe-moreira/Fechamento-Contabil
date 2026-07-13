@@ -409,7 +409,7 @@ export default function Conciliacao() {
   if (carregando) return <Wrapper><p style={{ color: theme.sub, fontSize: 13 }}>Carregando…</p></Wrapper>
   if (!compId || contas.length === 0) return <Wrapper><Aviso icon="ti-table-off" texto="Nenhum balancete nesta competência. Importe o razão primeiro." /></Wrapper>
 
-  if (sel) return <Detalhe conta={sel} tipoCta={tipoEf(sel)} reg={conf[sel.conta]} compId={compId} empresaId={empresaId} usuario={user?.email} ajuste={acertos[sel.conta] || null} getCompetenciaId={getCompetenciaId} onSalvarConf={recarregar} onMudou={recarregar} onVoltar={() => setSel(null)} />
+  if (sel) return <Detalhe conta={sel} tipoCta={tipoEf(sel)} reg={conf[sel.conta]} compId={compId} empresaId={empresaId} usuario={user?.email} competencia={competencia} ajuste={acertos[sel.conta] || null} getCompetenciaId={getCompetenciaId} onSalvarConf={recarregar} onMudou={recarregar} onVoltar={() => setSel(null)} />
 
   // A SINTÉTICA é a soma das ANALÍTICAS: as correções/estornos pendentes ficam nas
   // analíticas (acertos por conta), então acumulamos o ajuste nas sintéticas ancestrais
@@ -514,7 +514,7 @@ export default function Conciliacao() {
   )
 }
 
-function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = null, getCompetenciaId, onSalvarConf, onMudou, onVoltar }) {
+function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia, ajuste = null, getCompetenciaId, onSalvarConf, onMudou, onVoltar }) {
   const ajDeb = ajuste?.deb || 0, ajCred = ajuste?.cred || 0, ajNet = ajDeb - ajCred // correções pendentes
   const [lanc, setLanc] = useState([])
   const [carregando, setCarregando] = useState(true)
@@ -549,7 +549,9 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
   useEffect(() => { if (empresaId) carregarNomes() }, [empresaId]) // eslint-disable-line react-hooks/exhaustive-deps
   async function salvarNomes(conf, iso, aliases = nomesAlias) {
     await supabase.from('cargas_cadastro').delete().eq('cliente_id', empresaId).eq('tipo', 'conciliacao_nomes')
-    await supabase.from('cargas_cadastro').insert({ cliente_id: empresaId, tipo: 'conciliacao_nomes', dados: { confiaveis: [...conf], isolados: [...iso], aliases: aliases || {} }, usuario })
+    // vigencia é NOT NULL — usa a competência atual (o registro é único por cliente, lido sempre o mais recente).
+    const { error } = await supabase.from('cargas_cadastro').insert({ cliente_id: empresaId, tipo: 'conciliacao_nomes', vigencia: competencia || '00/0000', dados: { confiaveis: [...conf], isolados: [...iso], aliases: aliases || {} }, usuario })
+    if (error) { setMsg('Não consegui salvar os nomes: ' + error.message); return error }
   }
   async function marcarConfiavel(nome) {
     const k = chaveNome(nome); if (!k) return
