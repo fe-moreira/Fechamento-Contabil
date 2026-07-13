@@ -55,7 +55,7 @@ create table if not exists public.competencias (
 create table if not exists public.cargas_cadastro (
   id          uuid primary key default gen_random_uuid(),
   cliente_id  uuid not null references public.clientes(id) on delete cascade,
-  tipo        text not null check (tipo in ('plano','depara','apelidos','bancoresult','financeiro','contas_bancarias','memoria_financeira','centro_custo','lalur')),
+  tipo        text not null check (tipo in ('plano','depara','apelidos','bancoresult','financeiro','contas_bancarias','memoria_financeira','centro_custo','lalur','conciliacao_nomes')),
   vigencia    text not null,            -- 'MM/AAAA'
   dados       jsonb not null default '[]'::jsonb,  -- conteúdo da carga
   usuario     text,

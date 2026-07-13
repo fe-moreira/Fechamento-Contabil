@@ -529,6 +529,34 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
   const [confirmados, setConfirmados] = useState(new Set()) // linhas confirmadas EM LOTE — saem do em aberto (Conciliados)
   const [verConferidos, setVerConferidos] = useState(false) // mostra a seção "Conferidos" (p/ reabrir)
   const [buscaNome, setBuscaNome] = useState('') // busca por nome na composição de clientes/fornecedores
+  const [nomesConf, setNomesConf] = useState(new Set())   // nomes CONFIÁVEIS do cliente (não pede revisão)
+  const [nomesIsolados, setNomesIsolados] = useState(new Set()) // nomes a NÃO unir com parecidos (desvincular)
+
+  // Cadastro permanente de nomes do cliente (confiáveis + isolados) — cargas_cadastro tipo
+  // 'conciliacao_nomes', um por cliente (vale para todos os meses).
+  const chaveNome = s => baixaTxt(s).replace(/\s+/g, ' ').trim()
+  async function carregarNomes() {
+    const { data } = await supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'conciliacao_nomes').order('created_at', { ascending: false }).limit(1).maybeSingle()
+    const d = data?.dados && typeof data.dados === 'object' ? data.dados : {}
+    setNomesConf(new Set((d.confiaveis || []).map(chaveNome)))
+    setNomesIsolados(new Set((d.isolados || []).map(chaveNome)))
+  }
+  useEffect(() => { if (empresaId) carregarNomes() }, [empresaId]) // eslint-disable-line react-hooks/exhaustive-deps
+  async function salvarNomes(conf, iso) {
+    await supabase.from('cargas_cadastro').delete().eq('cliente_id', empresaId).eq('tipo', 'conciliacao_nomes')
+    await supabase.from('cargas_cadastro').insert({ cliente_id: empresaId, tipo: 'conciliacao_nomes', dados: { confiaveis: [...conf], isolados: [...iso] }, usuario })
+  }
+  async function marcarConfiavel(nome) {
+    const k = chaveNome(nome); if (!k) return
+    const conf = new Set(nomesConf); conf.add(k); setNomesConf(conf)
+    await salvarNomes(conf, nomesIsolados)
+  }
+  async function marcarIsolado(nome) {
+    const k = chaveNome(nome); if (!k) return
+    const iso = new Set(nomesIsolados); iso.add(k); setNomesIsolados(iso)
+    await salvarNomes(nomesConf, iso)
+    carregarLanc()
+  }
   const [filtroSit, setFiltroSit] = useState('') // filtro por situação: ''|devedor|semtitulo|unificados|incerta|confirmaveis
   const [selEnt, setSelEnt] = useState(() => new Set()) // entidades marcadas p/ baixa em lote (por nome)
 
@@ -557,12 +585,17 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
 
   async function carregarLanc() {
     setCarregando(true)
-    const [{ data: rz }, { data: aj }, { data: acs }, abertura] = await Promise.all([
+    const [{ data: rz }, { data: aj }, { data: acs }, abertura, { data: cn }] = await Promise.all([
       supabase.from('razao').select('id, data, contrapartida, historico, debito, credito').eq('competencia_id', compId).eq('conta', conta.conta).order('data'),
       supabase.from('ajuste_leitura').select('razao_id, nf, entidade, historico').eq('competencia_id', compId),
       supabase.from('lancamentos').select('id, data, conta_debito, conta_credito, valor, historico, razao_id, origem').eq('competencia_id', compId),
       composicaoAbertura(empresaId, compId, conta.conta, conta.classifRaw, conta.nome),
+      supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'conciliacao_nomes').order('created_at', { ascending: false }).limit(1).maybeSingle(),
     ])
+    // Nomes CONFIÁVEIS do cliente → quem bate sobe para conf 'alta' (não pede revisão).
+    const confSet = new Set(((cn?.dados?.confiaveis) || []).map(chaveNome))
+    const bump = l => (l?.leitura?.ident && l.leitura.entidade && confSet.has(chaveNome(l.leitura.entidade)) && l.leitura.conf !== 'alta')
+      ? { ...l, leitura: { ...l.leitura, conf: 'alta', confiavel: true } } : l
     const ajById = {}; for (const a of (aj || [])) ajById[a.razao_id] = a
     // Correções pendentes (estornos/acertos) que tocam ESTA conta entram na composição
     // como lançamentos: o estorno aparece aqui e casa por NF com a baixa original → zera
@@ -581,7 +614,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
         return { ...base, acerto: true, origem: a.origem || null, razaoRef: a.razao_id || null }
       })
     // Títulos de abertura (saldo anterior) primeiro; depois o movimento do mês; por fim os acertos.
-    setLanc([...(abertura || []).map(a => ({ ...a, _abertura: true })), ...(rz || []).map(l => aplicarAjuste(l, ajById[l.id])), ...acertoLancs])
+    setLanc([...(abertura || []).map(a => bump({ ...a, _abertura: true })), ...(rz || []).map(l => bump(aplicarAjuste(l, ajById[l.id]))), ...acertoLancs])
     setCarregando(false)
   }
   useEffect(() => { carregarLanc() }, [compId, conta.conta]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -664,8 +697,10 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
   const tk = Object.fromEntries(idents.map(k => [k, tokensNome(k)]))
   const clusters = []
   for (const k of idents) {
-    const alvo = clusters.find(cl => cl.membros.some(m => mesmoCliente(tk[k], tk[m])))
-    if (alvo) alvo.membros.push(k); else clusters.push({ membros: [k] })
+    // Nome ISOLADO (o usuário desvinculou): nunca une com outro — fica no seu próprio grupo.
+    const isoladoK = nomesIsolados.has(chaveNome(k))
+    const alvo = isoladoK ? null : clusters.find(cl => !cl.isolado && cl.membros.some(m => mesmoCliente(tk[k], tk[m])))
+    if (alvo) alvo.membros.push(k); else clusters.push({ membros: [k], isolado: isoladoK })
   }
   const lista = clusters.map(cl => {
     const membros = cl.membros.slice().sort((a, b) => b.length - a.length)
@@ -840,8 +875,10 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
     const { error } = await supabase.from('auditoria').insert(row)
     if (error) { setMsg('Não consegui confirmar: ' + error.message); return }
     marcarTratadas([l])
-    setMsg(`Nome conferido — ${nome}.`)
-    carregarTratados()
+    // APRENDE: o nome vira confiável do cliente — não pede revisão dele nos próximos meses.
+    if (nome) await marcarConfiavel(nome)
+    setMsg(`Nome conferido e aprendido — ${nome}. Não vou mais pedir revisão dele.`)
+    carregarTratados(); carregarLanc()
   }
 
   // Confirma DE UMA VEZ todas as entidades zeradas/identificadas (uma pergunta só).
@@ -1190,7 +1227,8 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
       {acao && (
         <ModalLancamento lanc={acao} conta={conta} lab={lab} plano={plano} natCredito={natCredito}
           residuo={ehEntidadeConta ? residuoNF(acao) : 0}
-          onClose={() => setAcao(null)} onRegistrar={registrar} />
+          onClose={() => setAcao(null)} onRegistrar={registrar}
+          onDesvincular={async nome => { setAcao(null); await marcarIsolado(nome); setMsg(`"${nome}" desvinculado — não vou mais unir com nomes parecidos.`) }} />
       )}
       {verCorr && (
         <ModalCorrigido linha={verCorr} conta={conta} compId={compId} planoMap={planoMap}
@@ -1767,7 +1805,7 @@ function RelatoriosComposicao({ conta, emAberto, zerados, contraDe }) {
 
 // Menu de ação de um lançamento: Justificar (texto) ou Corrigir (já informa a partida
 // contábil de acerto, que vai para o painel Contabilizar gerar o arquivo do Domínio).
-function ModalLancamento({ lanc, conta, lab, plano, natCredito, residuo = 0, onClose, onRegistrar }) {
+function ModalLancamento({ lanc, conta, lab, plano, natCredito, residuo = 0, onClose, onRegistrar, onDesvincular }) {
   const [tipo, setTipo] = useState(null) // 'Justificativa' | 'Correção'
   const [txt, setTxt] = useState('')
   const valorLan = Number(lanc.debito) || Number(lanc.credito) || 0
@@ -1882,6 +1920,13 @@ function ModalLancamento({ lanc, conta, lab, plano, natCredito, residuo = 0, onC
               <div />
               <div style={{ gridColumn: '1 / -1' }}><label>Histórico</label><textarea className="input" rows={2} value={ajuste.historico} onChange={setAj('historico')} /></div>
             </div>
+            {(ajuste.entidade || lanc.leitura?.entidade) && onDesvincular && (
+              <button className="btn btn-ghost" style={{ fontSize: 12, color: theme.yellow, borderColor: theme.yellow, marginBottom: 10 }}
+                title="O sistema uniu este nome com outro parecido por engano. Desvincular mantém este separado — vale para todos os meses."
+                onClick={() => onDesvincular(ajuste.entidade || lanc.leitura?.entidade)}>
+                <i className="ti ti-arrows-split" /> Desvincular — este {lab} é diferente (não unir com nomes parecidos)
+              </button>
+            )}
 
             <div style={{ borderTop: `1px solid ${theme.border}`, paddingTop: 12, marginTop: 6 }}>
               <p style={{ fontSize: 12.5, color: theme.sub, margin: '0 0 8px' }}>Partida de acerto (opcional) — vai para o Contabilizar. Atalhos:</p>
