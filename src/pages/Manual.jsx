@@ -298,7 +298,8 @@ const HTML = `
 
 <section id="m-razao">
   <h2 class="m-sec">09 · Importar Razão</h2>
-  <p>Traz o razão exportado do Domínio (Excel). É a <b>base de tudo</b>: dele saem o balancete, o comparativo e as conciliações. O sistema lê pela <b>classificação</b> do plano de contas e monta as sintéticas por prefixo. Para clientes que entram no meio do ano, dá para importar os <b>meses anteriores</b> num arquivo único (dá histórico para a régua de variação).</p>
+  <p>Traz o razão exportado do Domínio (Excel). É a <b>base de tudo</b>: dele saem o balancete, o comparativo e as conciliações. O código da conta é lido <b>exatamente como vem no arquivo</b> (o <b>código reduzido</b> do Domínio, sem pontos) — e é ele que identifica cada conta e casa com o plano e com o saldo inicial. As sintéticas (totais) são montadas por prefixo da <b>classificação</b>. Para clientes que entram no meio do ano, dá para importar os <b>meses anteriores</b> num arquivo único (dá histórico para a régua de variação).</p>
+  <div class="m-rule"><span class="k">Código reduzido é a identidade</span> Várias contas analíticas podem dividir a mesma classificação (ex.: todos os bancos, ou vários custos no mesmo grupo). O que separa uma da outra é o <b>código reduzido</b> (ex.: Itaú 11202 ≠ Bradesco 11201) — por isso o razão é lido por ele, sem máscara/pontos. Se você já tinha razão importado com pontos, <b>reimporte</b> o mesmo arquivo para atualizar.</div>
 </section>
 
 <section id="m-sugestoes">

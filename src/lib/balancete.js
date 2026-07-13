@@ -354,16 +354,24 @@ export async function montarBalancete(empresaId, compId, _depth = 0, opts = {}) 
   }
 
   const map = {}
-  const ensure = classif => map[classif] || (map[classif] = {
+  // `key` = identidade do nó no mapa. FOLHAS (analíticas) são keyed pelo CÓDIGO REDUZIDO
+  // (#reduzido) — nunca pela classificação, porque várias analíticas dividem a mesma
+  // classificação (ex.: todos os bancos = 1101030100) e se fundiriam numa linha só.
+  // SINTÉTICAS (totais) continuam keyed pelo prefixo da classificação. `classif` guarda a
+  // classificação (crua) para ordenar e montar a máscara.
+  const ensure = (key, classif = key) => map[key] || (map[key] = {
     reduzido: '', classif, nome: '', folha: false, debito: 0, credito: 0, saldo_inicial: 0,
   })
+  // Chave da folha: o código reduzido do plano; sem plano, o próprio código do arquivo.
+  const folhaKey = (p, cod, classif) => p?.reduzido ? '#' + p.reduzido : classif
 
   for (const mv of movs) {
     const cod = String(mv.conta || '').trim(); if (!cod) continue
     const deb = Number(mv.debito) || 0, cre = Number(mv.credito) || 0, ini = Number(mv.saldo_inicial) || 0
-    const p = porReduzido[cod]
+    // Casa pelo código do arquivo: primeiro como reduzido (o normal), senão como classificação.
+    const p = porReduzido[cod] || porClassif[cod]
     const classif = p ? p.classif : cod
-    const folha = ensure(classif)
+    const folha = ensure(folhaKey(p, cod, classif), classif)
     folha.folha = true
     folha.debito += deb; folha.credito += cre; folha.saldo_inicial += ini
     if (!folha.nome && (p?.nome || mv.nome)) folha.nome = p?.nome || mv.nome
@@ -410,8 +418,9 @@ export async function montarBalancete(empresaId, compId, _depth = 0, opts = {}) 
         if (Math.abs(val) < 0.005) continue
         const p = porReduzido[cod] || byRedDig[soDig(cod)] || porClassif[cod] || byClsDig[soDig(cod)] || byMask[cod]
         const classif = p ? p.classif : cod
-        if (jaTinha.has(classif)) continue
-        const folha = ensure(classif); folha.folha = true
+        const chave = folhaKey(p, cod, classif)
+        if (jaTinha.has(chave)) continue
+        const folha = ensure(chave, classif); folha.folha = true
         if (!folha.nome && p?.nome) folha.nome = p.nome
         if (!folha.reduzido) folha.reduzido = p?.reduzido || cod
         folha.saldo_inicial += val
@@ -435,7 +444,7 @@ export async function montarBalancete(empresaId, compId, _depth = 0, opts = {}) 
         const val = Number(lp.saldo_final) || 0
         if (Math.abs(val) < 0.005) continue
         const classif = lp.classifRaw
-        const folha = ensure(classif); folha.folha = true
+        const folha = ensure(lp.reduzido ? '#' + lp.reduzido : classif, classif); folha.folha = true
         if (!folha.nome && lp.nome) folha.nome = lp.nome
         if (!folha.reduzido) folha.reduzido = lp.reduzido
         folha.saldo_inicial += val
@@ -445,17 +454,22 @@ export async function montarBalancete(empresaId, compId, _depth = 0, opts = {}) 
     }
   }
 
-  // Enriquecer cada nó com nome/reduzido do plano (sintéticas inclusive).
+  // Enriquecer cada nó com nome/reduzido do plano (sintéticas inclusive). NÃO sobrescreve o
+  // que a folha já resolveu: como várias analíticas dividem a classificação, porClassif
+  // devolveria só a primeira — o nome/reduzido corretos da folha já vieram do movimento.
   for (const e of Object.values(map)) {
     const p = porClassif[e.classif]
-    if (p) { if (p.reduzido) e.reduzido = p.reduzido; if (p.nome) e.nome = p.nome }
+    if (p) { if (p.reduzido && !e.reduzido) e.reduzido = p.reduzido; if (p.nome && !e.nome) e.nome = p.nome }
   }
 
   const comMov = l => Math.abs(l.debito) > 0.005 || Math.abs(l.credito) > 0.005 || Math.abs(l.saldo_inicial) > 0.005
   // Ordem de balancete = ordem da árvore: comparação lexicográfica da classificação.
   // Como a máscara tem tamanhos fixos por nível, o prefixo (sintética) vem sempre antes
   // dos seus filhos — diferente da ordem numérica, que misturaria os níveis.
-  const ordena = (a, b) => a.classifRaw < b.classifRaw ? -1 : a.classifRaw > b.classifRaw ? 1 : 0
+  // Ordena pela classificação; empate (analíticas que dividem a mesma classificação, ex.:
+  // bancos) desempata pelo código reduzido, para a ordem ficar estável.
+  const rd = x => String(x.reduzido ?? '')
+  const ordena = (a, b) => a.classifRaw < b.classifRaw ? -1 : a.classifRaw > b.classifRaw ? 1 : (rd(a) < rd(b) ? -1 : rd(a) > rd(b) ? 1 : 0)
   const grauDe = classif => temPlano ? Math.max(1, cortes.filter(c => c <= classif.length).length) : classif.split('.').length
 
   const linhas = Object.values(map).map(e => ({

@@ -144,11 +144,13 @@ export default function ImportarRazao() {
     return idx === '' || idx == null ? '' : linha[Number(idx)]
   }
 
-  // Código da conta já com a máscara aplicada (quando o arquivo trouxer a coluna "mascara").
+  // Código da conta EXATAMENTE como vem no arquivo (o código reduzido do Domínio, sem
+  // pontos). NÃO aplica máscara: várias contas analíticas dividem a mesma classificação
+  // (ex.: todos os bancos), então o que identifica a conta é o código reduzido — e é ele
+  // que casa com o plano e com o saldo inicial. Mascarar o reduzido gerava pontos e
+  // desalinhava a conta (o banco "sumia").
   function contaDe(linha) {
-    let conta = String(valorCol(linha, 'conta') ?? '').trim()
-    if (mascaraIdx >= 0 && /^\d+$/.test(conta)) conta = applyMask(conta, linha[mascaraIdx])
-    return conta
+    return String(valorCol(linha, 'conta') ?? '').trim()
   }
 
   async function importar() {
