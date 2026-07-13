@@ -528,6 +528,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
   const [tratadosAb, setTratadosAb] = useState(new Set()) // itens de ABERTURA já conferidos (sem razao_id, chave AB·…)
   const [confirmados, setConfirmados] = useState(new Set()) // linhas confirmadas EM LOTE — saem do em aberto (Conciliados)
   const [verConferidos, setVerConferidos] = useState(false) // mostra a seção "Conferidos" (p/ reabrir)
+  const [buscaNome, setBuscaNome] = useState('') // busca por nome na composição de clientes/fornecedores
   const [filtroSit, setFiltroSit] = useState('') // filtro por situação: ''|devedor|semtitulo|unificados|incerta|confirmaveis
   const [selEnt, setSelEnt] = useState(() => new Set()) // entidades marcadas p/ baixa em lote (por nome)
 
@@ -723,7 +724,12 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
     incerta: g => g.lancs.some(l => Math.abs(ov(l)) >= 0.005 && l.leitura.conf !== 'alta'),
     confirmaveis: podeConfirmarEnt,
   }
-  const listaVis = (filtroSit && sitPred[filtroSit]) ? lista.filter(sitPred[filtroSit]) : lista
+  const listaBase = (filtroSit && sitPred[filtroSit]) ? lista.filter(sitPred[filtroSit]) : lista
+  // Busca por nome: mostra as entidades cujo nome (ou variação) OU algum histórico contém o texto.
+  const termoBusca = baixaTxt(buscaNome).trim()
+  const listaVis = termoBusca
+    ? listaBase.filter(g => baixaTxt(g.nome).includes(termoBusca) || (g.variacoes || []).some(v => baixaTxt(v).includes(termoBusca)) || g.lancs.some(l => baixaTxt(l.historico).includes(termoBusca)))
+    : listaBase
   // Props para transformar uma faixa de aviso em FILTRO clicável (mostra só as entidades
   // daquela situação). Não baixa nada — só filtra a lista.
   const faixaFiltro = key => ({
@@ -935,9 +941,18 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
       {(ehPorEntidade(conta.nome) && tipoCta !== 'saldo') ? (
       <>
       {/* Composição agrupada por cliente/fornecedor */}
-      <p style={{ color: theme.sub, fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: .5, margin: '4px 0 10px' }}>
-        O que compõe o saldo — por {lab}
-      </p>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', margin: '4px 0 10px' }}>
+        <p style={{ color: theme.sub, fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: .5, margin: 0 }}>
+          O que compõe o saldo — por {lab}
+        </p>
+        <div style={{ position: 'relative', minWidth: 240 }}>
+          <i className="ti ti-search" style={{ position: 'absolute', left: 9, top: '50%', transform: 'translateY(-50%)', color: theme.sub, fontSize: 14 }} />
+          <input className="input" value={buscaNome} onChange={e => setBuscaNome(e.target.value)}
+            placeholder={`Buscar ${lab} por nome…`} style={{ fontSize: 12.5, padding: '6px 28px 6px 30px', width: '100%' }} />
+          {buscaNome && <i className="ti ti-x" onClick={() => setBuscaNome('')} style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', color: theme.sub, cursor: 'pointer', fontSize: 14 }} />}
+        </div>
+      </div>
+      {termoBusca && <p style={{ color: theme.sub, fontSize: 12, margin: '0 0 10px' }}><i className="ti ti-filter" style={{ color: theme.accent }} /> {listaVis.length} {lab}(s) com “{buscaNome}”. <span onClick={() => setBuscaNome('')} style={{ color: theme.accent, cursor: 'pointer' }}>limpar</span></p>}
 
       {anomalos.length > 0 && (
         <div {...faixaFiltro('devedor')} style={{ background: 'rgba(229,72,77,0.10)', border: `1px solid ${theme.red}`, borderRadius: 12, display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', marginBottom: 12, ...estiloFiltro('devedor') }}>
