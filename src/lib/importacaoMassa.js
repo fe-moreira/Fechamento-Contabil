@@ -224,9 +224,17 @@ export async function alimentarIntegracaoFinanceira({ compId, empresaId, conta, 
     supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'memoria_financeira').order('created_at', { ascending: false }).limit(1).maybeSingle(),
     supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'plano').order('created_at', { ascending: false }).limit(1).maybeSingle(),
   ])
+  // Perfil de leitura POR BANCO: usa o específico da conta; cai no legado (cadastro
+  // antigo com um só perfil) apenas se o banco ainda não tiver o seu.
   let perfil = null
-  try { const o = JSON.parse(cb?.obs || ''); if (o && typeof o === 'object' && o.perfil) perfil = o.perfil } catch { /* obs antigo */ }
-  if (!perfil) return { classificado: false, motivo: 'perfil de leitura não configurado' }
+  try {
+    const o = JSON.parse(cb?.obs || '')
+    if (o && typeof o === 'object') {
+      if (o.perfis && typeof o.perfis === 'object' && o.perfis[String(conta)]) perfil = o.perfis[String(conta)]
+      if (!perfil && o.perfil) perfil = o.perfil
+    }
+  } catch { /* obs antigo */ }
+  if (!perfil) return { classificado: false, motivo: 'perfil de leitura não configurado para este banco' }
   const memoria = Array.isArray(mem?.dados) ? mem.dados : []
   const adiantContas = new Set(parsePlano(planoCarga?.dados).filter(p => /adiant/i.test(p.nome || '')).map(p => String(p.reduzido)))
 
