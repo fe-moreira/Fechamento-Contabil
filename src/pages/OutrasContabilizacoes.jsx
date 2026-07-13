@@ -18,11 +18,12 @@ function CampoContaForm({ valor, set }) {
   return <CampoConta value={valor} onChange={set} onPick={p => set(p.cod)} placeholder="Código (F4)" />
 }
 
-const ACC = { seguro: '#4A7CFF', despesa: '#33B4C6', importacao: '#2FB6A8', emprestimo: '#9A7CF0', parcelamento: '#E8923B', equivalencia: '#E06C9F', perdcomp: '#3FA66A', jcp: '#C9A227', lalur: '#D46A6A', outros: '#7C89A6' }
+const ACC = { seguro: '#4A7CFF', despesa: '#33B4C6', receita_diferida: '#2FA8A0', importacao: '#2FB6A8', emprestimo: '#9A7CF0', parcelamento: '#E8923B', equivalencia: '#E06C9F', perdcomp: '#3FA66A', jcp: '#C9A227', lalur: '#D46A6A', outros: '#7C89A6' }
 const BLOCO_LALUR = { key: 'lalur', label: 'LALUR', icon: 'ti-report-money', sub: 'IRPJ e CSLL (Lucro Real)' }
 const BLOCOS = [
   { key: 'seguro', label: 'Seguro', icon: 'ti-shield-half', sub: 'Apólices & apropriação' },
   { key: 'despesa', label: 'Despesa a Apropriar', icon: 'ti-calendar-repeat', sub: 'IPVA, IPTU, etc.' },
+  { key: 'receita_diferida', label: 'Receitas Diferidas', icon: 'ti-calendar-dollar', sub: 'Reconhecer + impostos (baixa manual)' },
   { key: 'importacao', label: 'Importação', icon: 'ti-ship', sub: 'Processos de mercadoria' },
   { key: 'emprestimo', label: 'Empréstimo', icon: 'ti-building-bank', sub: 'Contratos & conferência' },
   { key: 'parcelamento', label: 'Parc. Impostos', icon: 'ti-receipt', sub: 'Só juros & multa' },
@@ -339,7 +340,7 @@ export default function OutrasContabilizacoes() {
 
   const props = { clienteId: empresaId, user, competencia, abrirGerar, enviarSaldoInicial, compInicio, empresaNome, planoMap, versao, regime }
   const blocos = ehLucroReal ? [...BLOCOS, BLOCO_LALUR] : BLOCOS
-  const paneMap = { seguro: PaneSeguro, despesa: PaneDespesaApropriar, importacao: PaneImportacao, emprestimo: PaneEmprestimo, parcelamento: PaneParcelamento, equivalencia: PaneEquivalencia, perdcomp: PanePerdcomp, jcp: PaneJcp, lalur: PaneLalur, outros: PaneOutros }
+  const paneMap = { seguro: PaneSeguro, despesa: PaneDespesaApropriar, receita_diferida: PaneReceitasDiferidas, importacao: PaneImportacao, emprestimo: PaneEmprestimo, parcelamento: PaneParcelamento, equivalencia: PaneEquivalencia, perdcomp: PanePerdcomp, jcp: PaneJcp, lalur: PaneLalur, outros: PaneOutros }
   const Pane = paneMap[tab] || PaneSeguro
 
   return (
@@ -1081,6 +1082,119 @@ function PaneLalur({ clienteId, competencia, regime, abrirGerar, planoMap, user 
           </button>
         </div>
         <p style={{ color: theme.sub, fontSize: 11.5, margin: '12px 0 0' }}>As retenções (IRRF) abatem o <b>a pagar</b> por compensação do ativo já registrado; nesta versão elas entram como informação do cálculo. A baixa da retenção contra o passivo pode ser feita depois, conforme formos evoluindo.</p>
+      </Card>
+    </div>
+  )
+}
+
+// ================= RECEITAS DIFERIDAS =================
+// Faturamento reconhecido aos poucos (baixa MANUAL). Cada reconhecimento gera a receita
+// (D receita diferida / C receita) e, proporcional ao valor, os impostos PIS/COFINS/ISS
+// (D despesa do imposto / C imposto diferido — tira do ativo e joga no resultado).
+function PaneReceitasDiferidas({ clienteId, user, competencia, abrirGerar }) {
+  const { rows, recarregar, excluir } = useLista('receitas_diferidas', clienteId)
+  const [f, on, reset, setF] = useForm({
+    descricao: '', data: '', faturamento_total: '', conta_receita_diferida: '', conta_receita: '',
+    pis_valor: '', pis_despesa: '', pis_diferido: '', cofins_valor: '', cofins_despesa: '', cofins_diferido: '', iss_valor: '', iss_despesa: '', iss_diferido: '',
+  })
+  const [rec, setRec] = useState({})   // id → valor de receita a reconhecer no mês
+  const [ac, setAc] = useState({})     // id → reconhecido acumulado (edição inline)
+
+  async function salvar(e) {
+    e.preventDefault()
+    try {
+      await inserir('receitas_diferidas', {
+        cliente_id: clienteId, descricao: f.descricao, data: f.data || null, faturamento_total: num(f.faturamento_total), reconhecido: 0,
+        conta_receita_diferida: f.conta_receita_diferida, conta_receita: f.conta_receita,
+        pis_valor: num(f.pis_valor), pis_despesa: f.pis_despesa, pis_diferido: f.pis_diferido,
+        cofins_valor: num(f.cofins_valor), cofins_despesa: f.cofins_despesa, cofins_diferido: f.cofins_diferido,
+        iss_valor: num(f.iss_valor), iss_despesa: f.iss_despesa, iss_diferido: f.iss_diferido, usuario: user?.email,
+      })
+      reset(); recarregar()
+    } catch (er) { alert(er.message) }
+  }
+
+  // Proporção do reconhecimento (valor a reconhecer ÷ faturamento total).
+  const prop = r => { const t = Number(r.faturamento_total) || 0; return t ? num(rec[r.id] || 0) / t : 0 }
+  const impostoDoMes = (r, valorImp) => r2((Number(valorImp) || 0) * prop(r))
+
+  // Gera o reconhecimento da RECEITA e soma no acumulado (baixa manual).
+  function reconhecerReceita(r) {
+    const valor = num(rec[r.id] || 0)
+    if (valor <= 0) { alert('Informe o valor da receita a reconhecer neste mês.'); return }
+    if (!r.conta_receita_diferida || !r.conta_receita) { alert('Cadastre as contas de receita diferida e receita.'); return }
+    abrirGerar({ data: dataComp(competencia), conta_debito: r.conta_receita_diferida, conta_credito: r.conta_receita, valor, historico: `Reconhecimento de receita diferida${r.descricao ? ' · ' + r.descricao : ''}`, origem: 'receita_diferida', documento: r.descricao }, `Reconhecer receita — ${r.descricao || ''}`)
+    atualizar('receitas_diferidas', r.id, { reconhecido: r2((Number(r.reconhecido) || 0) + valor) }).then(recarregar)
+  }
+  // Gera o imposto proporcional: D despesa do imposto / C imposto diferido (ativo).
+  function baixarImposto(r, nome, valorImp, contaDesp, contaDif) {
+    const v = impostoDoMes(r, valorImp)
+    if (v <= 0) { alert('Informe o valor da receita a reconhecer (para calcular a proporção).'); return }
+    if (!contaDesp || !contaDif) { alert(`Cadastre as contas de ${nome} (despesa e diferido).`); return }
+    abrirGerar({ data: dataComp(competencia), conta_debito: contaDesp, conta_credito: contaDif, valor: v, historico: `${nome} s/ receita diferida${r.descricao ? ' · ' + r.descricao : ''}`, origem: 'receita_diferida', documento: r.descricao }, `${nome} — ${r.descricao || ''}`)
+  }
+  async function salvarAcum(r) {
+    const v = num(ac[r.id])
+    if (String(ac[r.id] ?? '') === '' || v === (Number(r.reconhecido) || 0)) return
+    await atualizar('receitas_diferidas', r.id, { reconhecido: v }); recarregar()
+  }
+
+  return (
+    <div style={{ display: 'grid', gap: 14 }}>
+      <FormCard titulo={<><i className="ti ti-calendar-dollar" style={{ color: ACC.receita_diferida }} /> Nova receita diferida</>}>
+        <SecSub>O cliente faturou tudo, mas a <b>receita</b> (e os impostos sobre ela) só é reconhecida aos poucos. Cadastre o faturamento e as contas; depois use a <b>baixa manual</b> na lista, informando quanto reconhecer no mês.</SecSub>
+        <form onSubmit={salvar} style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10 }}>
+          <Field label="Descrição" col={2}><input className="input" value={f.descricao} onChange={on('descricao')} placeholder="Contrato / NF de faturamento" required /></Field>
+          <Field label="Data do faturamento"><input className="input" type="date" value={f.data} onChange={on('data')} /></Field>
+          <Field label="Faturamento total"><input className="input" value={f.faturamento_total} onChange={on('faturamento_total')} placeholder="0,00" required /></Field>
+          <Field label="Conta receita diferida (passivo)"><CampoContaForm valor={f.conta_receita_diferida} set={v => setF(x => ({ ...x, conta_receita_diferida: v }))} /></Field>
+          <Field label="Conta receita (resultado)"><CampoContaForm valor={f.conta_receita} set={v => setF(x => ({ ...x, conta_receita: v }))} /></Field>
+          <div style={{ gridColumn: 'span 4', marginTop: 4, fontSize: 12, fontWeight: 700, color: theme.sub }}>Impostos sobre a receita (valor total · conta despesa · conta diferido/ativo)</div>
+          {[['PIS', 'pis'], ['COFINS', 'cofins'], ['ISS', 'iss']].map(([lbl, k]) => (
+            <div key={k} style={{ gridColumn: 'span 4', display: 'grid', gridTemplateColumns: '90px 1fr 1fr 1fr', gap: 10, alignItems: 'end' }}>
+              <Field label={lbl}><input className="input" value={f[`${k}_valor`]} onChange={on(`${k}_valor`)} placeholder="0,00" /></Field>
+              <Field label="Conta despesa"><CampoContaForm valor={f[`${k}_despesa`]} set={v => setF(x => ({ ...x, [`${k}_despesa`]: v }))} /></Field>
+              <Field label="Conta imposto diferido (ativo)"><CampoContaForm valor={f[`${k}_diferido`]} set={v => setF(x => ({ ...x, [`${k}_diferido`]: v }))} /></Field>
+              <div />
+            </div>
+          ))}
+          <div style={{ gridColumn: 'span 4' }}><button className="btn">＋ Salvar receita diferida</button></div>
+        </form>
+      </FormCard>
+
+      <Card>
+        <SecTitle>Receitas diferidas ({rows.length})</SecTitle>
+        <SecSub>Informe o <b>valor a reconhecer</b> no mês e gere: <b>Receita</b> (D receita diferida / C receita) e cada imposto proporcional (D despesa / C imposto diferido).</SecSub>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 820 }}>
+            <thead><tr>{['Descrição', 'Faturamento', 'Reconhecido', 'Saldo', 'Reconhecer no mês', ''].map((h, i) => <th key={i} style={th}>{h}</th>)}</tr></thead>
+            <tbody>
+              {rows.length === 0 ? <Vazio colSpan={6} texto="Nenhuma receita diferida cadastrada." /> : rows.map(r => {
+                const total = Number(r.faturamento_total) || 0
+                const reconh = Number(r.reconhecido) || 0
+                const saldo = r2(total - reconh)
+                return (
+                  <tr key={r.id}>
+                    <td style={td}><b>{r.descricao || '—'}</b>{r.data ? <div style={{ color: theme.sub, fontSize: 11 }}>{brData(r.data)}</div> : null}</td>
+                    <td style={{ ...td, textAlign: 'right' }}>{money(total)}</td>
+                    <td style={{ ...td, textAlign: 'right' }}>
+                      <input className="input" style={{ maxWidth: 120, textAlign: 'right' }} value={ac[r.id] ?? String(reconh)} onChange={e => setAc(s => ({ ...s, [r.id]: e.target.value }))} onBlur={() => salvarAcum(r)} title="Reconhecido acumulado (editável)" />
+                    </td>
+                    <td style={{ ...td, textAlign: 'right', color: saldo > 0.005 ? theme.text : theme.green, whiteSpace: 'nowrap' }}>{money(saldo)}</td>
+                    <td style={td}><input className="input" style={{ maxWidth: 130, textAlign: 'right' }} value={rec[r.id] || ''} onChange={e => setRec(s => ({ ...s, [r.id]: e.target.value }))} placeholder="0,00" /></td>
+                    <td style={{ ...td, whiteSpace: 'nowrap', textAlign: 'right' }}>
+                      <GerarBtn onClick={() => reconhecerReceita(r)}>Receita</GerarBtn>{' '}
+                      {num(r.pis_valor) > 0 && <><GerarBtn onClick={() => baixarImposto(r, 'PIS', r.pis_valor, r.pis_despesa, r.pis_diferido)}>PIS</GerarBtn>{' '}</>}
+                      {num(r.cofins_valor) > 0 && <><GerarBtn onClick={() => baixarImposto(r, 'COFINS', r.cofins_valor, r.cofins_despesa, r.cofins_diferido)}>COFINS</GerarBtn>{' '}</>}
+                      {num(r.iss_valor) > 0 && <><GerarBtn onClick={() => baixarImposto(r, 'ISS', r.iss_valor, r.iss_despesa, r.iss_diferido)}>ISS</GerarBtn>{' '}</>}
+                      <DelBtn onClick={() => excluir(r.id)} />
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
       </Card>
     </div>
   )

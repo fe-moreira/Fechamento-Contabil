@@ -305,10 +305,26 @@ alter table public.importacoes             enable row level security;
 alter table public.adiantamentos_importacao enable row level security;
 alter table public.perdcomp                 enable row level security;
 alter table public.jcp                      enable row level security;
+
+-- Receitas diferidas: faturamento reconhecido aos poucos (baixa manual), com PIS/COFINS/ISS.
+create table if not exists public.receitas_diferidas (
+  id uuid primary key default gen_random_uuid(),
+  cliente_id uuid not null references public.clientes(id) on delete cascade,
+  descricao text, data date,
+  faturamento_total numeric(16,2) default 0,
+  reconhecido numeric(16,2) default 0,
+  conta_receita_diferida text, conta_receita text,
+  pis_valor numeric(16,2) default 0, pis_despesa text, pis_diferido text,
+  cofins_valor numeric(16,2) default 0, cofins_despesa text, cofins_diferido text,
+  iss_valor numeric(16,2) default 0, iss_despesa text, iss_diferido text,
+  usuario text, created_at timestamptz default now()
+);
+create index if not exists receitas_diferidas_cliente_idx on public.receitas_diferidas(cliente_id);
+alter table public.receitas_diferidas       enable row level security;
 do $$
 declare t text;
 begin
-  foreach t in array array['seguros','despesas_apropriar','emprestimos','parcelamentos','participacoes','importacoes','adiantamentos_importacao','perdcomp','jcp']
+  foreach t in array array['seguros','despesas_apropriar','emprestimos','parcelamentos','participacoes','importacoes','adiantamentos_importacao','perdcomp','jcp','receitas_diferidas']
   loop
     execute format('drop policy if exists "auth_all_%1$s" on public.%1$s;', t);
     execute format('create policy "auth_all_%1$s" on public.%1$s for all to authenticated using (true) with check (true);', t);
