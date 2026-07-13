@@ -534,20 +534,22 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
   const [conectarDif, setConectarDif] = useState(null) // { alvo, net } — apontar desconto/juros da diferença
   const [nomesConf, setNomesConf] = useState(new Set())   // nomes CONFIÁVEIS do cliente (não pede revisão)
   const [nomesIsolados, setNomesIsolados] = useState(new Set()) // nomes a NÃO unir com parecidos (desvincular)
+  const [nomesAlias, setNomesAlias] = useState({}) // APELIDOS: nomeAntigoKey -> nome correto (renomeia em todo lugar)
 
-  // Cadastro permanente de nomes do cliente (confiáveis + isolados) — cargas_cadastro tipo
-  // 'conciliacao_nomes', um por cliente (vale para todos os meses).
+  // Cadastro permanente de nomes do cliente (confiáveis + isolados + apelidos) — cargas_cadastro
+  // tipo 'conciliacao_nomes', um por cliente (vale para todos os meses).
   const chaveNome = s => baixaTxt(s).replace(/\s+/g, ' ').trim()
   async function carregarNomes() {
     const { data } = await supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'conciliacao_nomes').order('created_at', { ascending: false }).limit(1).maybeSingle()
     const d = data?.dados && typeof data.dados === 'object' ? data.dados : {}
     setNomesConf(new Set((d.confiaveis || []).map(chaveNome)))
     setNomesIsolados(new Set((d.isolados || []).map(chaveNome)))
+    setNomesAlias(d.aliases && typeof d.aliases === 'object' ? d.aliases : {})
   }
   useEffect(() => { if (empresaId) carregarNomes() }, [empresaId]) // eslint-disable-line react-hooks/exhaustive-deps
-  async function salvarNomes(conf, iso) {
+  async function salvarNomes(conf, iso, aliases = nomesAlias) {
     await supabase.from('cargas_cadastro').delete().eq('cliente_id', empresaId).eq('tipo', 'conciliacao_nomes')
-    await supabase.from('cargas_cadastro').insert({ cliente_id: empresaId, tipo: 'conciliacao_nomes', dados: { confiaveis: [...conf], isolados: [...iso] }, usuario })
+    await supabase.from('cargas_cadastro').insert({ cliente_id: empresaId, tipo: 'conciliacao_nomes', dados: { confiaveis: [...conf], isolados: [...iso], aliases: aliases || {} }, usuario })
   }
   async function marcarConfiavel(nome) {
     const k = chaveNome(nome); if (!k) return
@@ -595,10 +597,18 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
       composicaoAbertura(empresaId, compId, conta.conta, conta.classifRaw, conta.nome),
       supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'conciliacao_nomes').order('created_at', { ascending: false }).limit(1).maybeSingle(),
     ])
+    // APELIDOS: renomeia o nome lido pelo nome correto (vale p/ saldo inicial e razão).
+    const aliasMap = (cn?.dados?.aliases && typeof cn.dados.aliases === 'object') ? cn.dados.aliases : {}
     // Nomes CONFIÁVEIS do cliente → quem bate sobe para conf 'alta' (não pede revisão).
     const confSet = new Set(((cn?.dados?.confiaveis) || []).map(chaveNome))
-    const bump = l => (l?.leitura?.ident && l.leitura.entidade && confSet.has(chaveNome(l.leitura.entidade)) && l.leitura.conf !== 'alta')
-      ? { ...l, leitura: { ...l.leitura, conf: 'alta', confiavel: true } } : l
+    const bump = l => {
+      if (!l?.leitura) return l
+      let leitura = l.leitura
+      const al = leitura.entidade ? aliasMap[chaveNome(leitura.entidade)] : null
+      if (al && al !== leitura.entidade) leitura = { ...leitura, entidade: al, ident: true }
+      if (leitura.ident && leitura.entidade && confSet.has(chaveNome(leitura.entidade)) && leitura.conf !== 'alta') leitura = { ...leitura, conf: 'alta', confiavel: true }
+      return leitura === l.leitura ? l : { ...l, leitura }
+    }
     const ajById = {}; for (const a of (aj || [])) ajById[a.razao_id] = a
     // Correções pendentes (estornos/acertos) que tocam ESTA conta entram na composição
     // como lançamentos: o estorno aparece aqui e casa por NF com a baixa original → zera
@@ -948,15 +958,22 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
   // lote): útil quando o sistema leu o nome errado em várias linhas do mesmo fornecedor.
   async function aplicarFornecedorLote(lines, nome, aprender) {
     const nm = String(nome || '').trim()
-    const alvo = (lines || []).filter(l => !l._abertura && !l.acerto && l.id) // ajuste_leitura precisa do razao_id
-    if (!nm || !alvo.length) { setLoteForn(null); return }
-    const id = await getCompetenciaId()
-    const rows = alvo.map(l => ({ competencia_id: id, razao_id: l.id, entidade: nm, usuario }))
-    const { error } = await supabase.from('ajuste_leitura').upsert(rows, { onConflict: 'razao_id' })
-    if (error) { setMsg('Não consegui corrigir em lote: ' + error.message); return }
-    if (aprender) await marcarConfiavel(nm)
-    setSelLin(new Set()); setLoteForn(null)
-    setMsg(`Fornecedor "${nm}" aplicado a ${alvo.length} lançamento(s)${aprender ? ' e aprendido' : ''}.`)
+    const comNome = (lines || []).filter(l => !l.acerto && (l.leitura?.entidade || '').trim())
+    if (!nm) { setLoteForn(null); return }
+    // Renomeia por APELIDO: cada nome atual dos selecionados vira o nome correto — vale para
+    // saldo inicial E razão, e em todos os meses. Precisão por linha (razão) via ajuste_leitura.
+    const aliases = { ...nomesAlias }
+    for (const l of comNome) { const k = chaveNome(l.leitura.entidade); if (k && k !== chaveNome(nm)) aliases[k] = nm }
+    const conf = new Set(nomesConf); if (aprender) conf.add(chaveNome(nm))
+    await salvarNomes(conf, nomesIsolados, aliases)
+    // Razão: também grava ajuste_leitura (correção específica da linha).
+    const razaoLines = comNome.filter(l => !l._abertura && l.id)
+    if (razaoLines.length) {
+      const id = await getCompetenciaId()
+      await supabase.from('ajuste_leitura').upsert(razaoLines.map(l => ({ competencia_id: id, razao_id: l.id, entidade: nm, usuario })), { onConflict: 'razao_id' })
+    }
+    setNomesConf(conf); setNomesAlias(aliases); setSelLin(new Set()); setLoteForn(null)
+    setMsg(`Nome "${nm}" aplicado a ${comNome.length} lançamento(s)${aprender ? ' e aprendido' : ''}.`)
     carregarLanc()
   }
 
@@ -1952,11 +1969,12 @@ function ModalConectarDif({ net, plano, onClose, onAplicar }) {
 
 // Corrigir o fornecedor/cliente de vários lançamentos de uma vez.
 function ModalLoteForn({ lines, lab, onClose, onAplicar }) {
-  const razaoLines = (lines || []).filter(l => !l._abertura && !l.acerto && l.id)
-  const puladas = (lines || []).length - razaoLines.length
+  // Aplica a TODAS as linhas com nome (saldo inicial e razão); acertos ficam de fora.
+  const comNome = (lines || []).filter(l => !l.acerto && (l.leitura?.entidade || '').trim())
+  const puladas = (lines || []).length - comNome.length
   // Prefill: o nome mais frequente entre os selecionados.
   const cont = {}
-  for (const l of razaoLines) { const n = (l.leitura?.entidade || '').trim(); if (n) cont[n] = (cont[n] || 0) + 1 }
+  for (const l of comNome) { const n = (l.leitura?.entidade || '').trim(); if (n) cont[n] = (cont[n] || 0) + 1 }
   const sugestao = Object.entries(cont).sort((a, b) => b[1] - a[1])[0]?.[0] || ''
   const [nome, setNome] = useState(sugestao)
   const [aprender, setAprender] = useState(true)
@@ -1965,7 +1983,7 @@ function ModalLoteForn({ lines, lab, onClose, onAplicar }) {
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 95 }}>
       <div onClick={e => e.stopPropagation()} style={{ width: 'min(480px,96vw)', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 14, padding: 20 }}>
         <h3 style={{ fontSize: 15, margin: '0 0 8px' }}><i className="ti ti-user-edit" style={{ color: theme.accent, marginRight: 6 }} />Corrigir {lab} em lote</h3>
-        <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 12px' }}>Aplica o nome a <b style={{ color: theme.text }}>{razaoLines.length}</b> lançamento(s) selecionado(s){puladas > 0 ? ` (${puladas} de saldo inicial/acerto foram ignorados)` : ''}.</p>
+        <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 12px' }}>Aplica o nome a <b style={{ color: theme.text }}>{comNome.length}</b> lançamento(s) selecionado(s){puladas > 0 ? ` (${puladas} acerto foram ignorados)` : ''}. Renomeia esse {lab} em todos os meses.</p>
         <label style={{ fontSize: 12, color: theme.sub }}>Nome correto do {lab}</label>
         <input className="input" autoFocus value={nome} onChange={e => setNome(e.target.value)} placeholder={`Nome correto do ${lab}`} style={{ marginBottom: 12 }} />
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: theme.sub, cursor: 'pointer', marginBottom: 16 }}>
@@ -1973,7 +1991,7 @@ function ModalLoteForn({ lines, lab, onClose, onAplicar }) {
         </label>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
           <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
-          <button className="btn" disabled={!nome.trim() || !razaoLines.length || busy} onClick={async () => { setBusy(true); await onAplicar(razaoLines, nome, aprender) }}><i className="ti ti-check" /> Aplicar</button>
+          <button className="btn" disabled={!nome.trim() || !comNome.length || busy} onClick={async () => { setBusy(true); await onAplicar(lines, nome, aprender) }}><i className="ti ti-check" /> Aplicar</button>
         </div>
       </div>
     </div>
