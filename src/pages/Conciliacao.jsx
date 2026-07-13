@@ -517,14 +517,22 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
   const [msg, setMsg] = useState('')
   const [verComposic, setVerComposic] = useState(null) // { titulo, itens } — composição de um saldo
   const [tratados, setTratados] = useState(new Set()) // razao_ids já corrigidos/estornados/justificados
+  const [tratadosAb, setTratadosAb] = useState(new Set()) // itens de ABERTURA já conferidos (sem razao_id, chave AB·…)
   const [filtroSit, setFiltroSit] = useState('') // filtro por situação: ''|devedor|semtitulo|unificados|incerta|confirmaveis
   const [selEnt, setSelEnt] = useState(() => new Set()) // entidades marcadas p/ baixa em lote (por nome)
 
   async function carregarTratados() {
-    const { data } = await supabase.from('auditoria').select('razao_id')
-      .eq('competencia_id', compId).eq('modulo', 'Conciliação').not('razao_id', 'is', null)
-    setTratados(new Set((data || []).map(a => a.razao_id)))
+    // Linhas de razão são tratadas por razao_id (uuid). Linhas de ABERTURA (saldo inicial)
+    // não têm razao_id — são tratadas por uma chave estável no campo `item` (prefixo "AB·").
+    const { data } = await supabase.from('auditoria').select('razao_id, item')
+      .eq('competencia_id', compId).eq('modulo', 'Conciliação')
+    const rz = new Set(), ab = new Set()
+    for (const a of (data || [])) { if (a.razao_id) rz.add(a.razao_id); else if (String(a.item || '').startsWith('AB·')) ab.add(a.item) }
+    setTratados(rz); setTratadosAb(ab)
   }
+  // Chave estável de uma linha de abertura (saldo inicial) e teste unificado de "já tratada".
+  const chaveAbertura = l => `AB·${conta.conta}·${nfKey(l.leitura?.nf)}·${baixaTxt(l.leitura?.entidade || '')}·${Math.round(((Number(l.debito) || 0) - (Number(l.credito) || 0)) * 100)}`
+  const jaTratada = l => l._abertura ? tratadosAb.has(chaveAbertura(l)) : tratados.has(l.id)
   useEffect(() => { carregarTratados() }, [compId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function carregarLanc() {
@@ -678,7 +686,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
   const totalSemTitulo = lista.reduce((n, g) => n + baixaSemTitulo(g).size, 0)
   // Linhas pendentes (não tratadas) de uma entidade e se ela pode ser confirmada em lote:
   // composição já ZERADA, nome identificado, sem erro de NF/natureza e com pendências.
-  const pendentesEnt = g => g.lancs.filter(l => l.id && !l.acerto && !tratados.has(l.id))
+  const pendentesEnt = g => g.lancs.filter(l => l.id && !l.acerto && !jaTratada(l))
   const podeConfirmarEnt = g => Math.abs(g.total) < 0.005 && g.total >= -0.005 && !g.unk && baixaSemTitulo(g).size === 0 && pendentesEnt(g).length > 0
   const confirmaveis = lista.filter(podeConfirmarEnt)
   // Filtro por situação — mesma definição de cada faixa de aviso. Só filtra a lista
@@ -706,9 +714,13 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
 
   async function registrar(tipo, payload) {
     const id = await getCompetenciaId()
+    // Linha de ABERTURA (saldo inicial) não tem razao_id: é identificada pela chave estável
+    // "AB·…" no campo item; a razão vai pelo razao_id (uuid).
+    const ehAb = !!acao?._abertura
+    const razaoIdLinha = ehAb ? null : (acao?.id || null)
     // Trava: um lançamento só pode ter UMA correção/estorno por vez. Se já houver,
     // bloqueia — para refazer, o usuário abre a linha (já tratada) e clica em Desfazer.
-    if (payload.lancamento && acao?.id) {
+    if (payload.lancamento && acao?.id && !ehAb) {
       const { count } = await supabase.from('lancamentos').select('id', { count: 'exact', head: true })
         .eq('competencia_id', id).eq('razao_id', acao.id)
       if (count) {
@@ -717,8 +729,8 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
         return
       }
     }
-    const item = `${conta.conta} · ${acao?.data || ''} · NF ${acao?.leitura.nf || '—'}`
-    await supabase.from('auditoria').insert({ competencia_id: id, modulo: 'Conciliação', item, tipo, detalhe: payload.detalhe || null, razao_id: acao?.id || null, usuario })
+    const item = ehAb ? chaveAbertura(acao) : `${conta.conta} · ${acao?.data || ''} · NF ${acao?.leitura.nf || '—'}`
+    await supabase.from('auditoria').insert({ competencia_id: id, modulo: 'Conciliação', item, tipo, detalhe: payload.detalhe || null, razao_id: razaoIdLinha, usuario })
     let virouLancamento = false
     if (tipo === 'Correção' && payload.lancamento && (payload.lancamento.conta_debito || payload.lancamento.conta_credito)) {
       const L = payload.lancamento
@@ -729,14 +741,15 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
         conta_debito: L.conta_debito || null, conta_credito: L.conta_credito || null,
         valor: Number(L.valor) || 0, historico: L.historico || null,
         documento: acao?.leitura.nf ? `NF ${acao.leitura.nf}` : null,
-        origem: 'correcao', razao_id: acao?.id || null, usuario,
+        origem: 'correcao', razao_id: razaoIdLinha, usuario,
       })
       virouLancamento = true
     }
     // Ajuste de leitura (nome/NF/histórico) — ajuda o sistema a cruzar; reaplicado sempre.
+    // Não se aplica à abertura (a leitura dela vem da carga inicial, não do razão).
     let ajustouLeitura = false
     const aj = payload.ajuste
-    if (aj && acao?.id && (aj.nf || aj.entidade || aj.historico)) {
+    if (aj && acao?.id && !ehAb && (aj.nf || aj.entidade || aj.historico)) {
       await supabase.from('ajuste_leitura').upsert({
         competencia_id: id, razao_id: acao.id,
         nf: aj.nf || null, entidade: aj.entidade || null, historico: aj.historico || null, usuario,
@@ -744,7 +757,8 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
       ajustouLeitura = true
     }
     setMsg(ajustouLeitura ? 'Leitura ajustada — o sistema vai recruzar.' : virouLancamento ? 'Correção registrada — lançamento enviado para o painel Contabilizar.' : `${tipo} registrada na auditoria.`)
-    if (acao?.id) setTratados(prev => new Set(prev).add(acao.id)) // marca a linha como tratada na hora
+    if (ehAb) setTratadosAb(prev => new Set(prev).add(chaveAbertura(acao))) // abertura: marca pela chave
+    else if (acao?.id) setTratados(prev => new Set(prev).add(acao.id)) // marca a linha como tratada na hora
     setAcao(null)
     carregarTratados()
     if (virouLancamento) { onMudou && onMudou(); carregarLanc() } // atualiza saldo e mostra o acerto na composição
@@ -754,21 +768,27 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
   // Confirma EM LOTE uma entidade (cliente/fornecedor) cuja composição já está ZERADA:
   // registra uma justificativa por linha (com usuário e data) e marca as linhas como
   // conferidas — evita abrir uma a uma quando o nome está identificado e falta só a NF.
+  // Monta a linha de auditoria de um lançamento — abertura (saldo inicial) vai sem razao_id,
+  // identificada pela chave estável "AB·…" no campo item; razão vai pelo razao_id (uuid).
+  const linhaAuditoria = (l, id, nome) => ({
+    competencia_id: id, modulo: 'Conciliação',
+    item: l._abertura ? chaveAbertura(l) : `${conta.conta} · ${l.data || ''} · NF ${l.leitura.nf || '—'}`,
+    tipo: 'Justificativa',
+    detalhe: `Confirmado em lote — ${nome}: composição identificada e zerada no mês (título e baixa se compensam), sem NF.`,
+    razao_id: l._abertura ? null : l.id, usuario,
+  })
+  const marcarTratadas = linhas => {
+    setTratados(prev => { const s = new Set(prev); linhas.filter(l => !l._abertura).forEach(l => s.add(l.id)); return s })
+    setTratadosAb(prev => { const s = new Set(prev); linhas.filter(l => l._abertura).forEach(l => s.add(chaveAbertura(l))); return s })
+  }
   async function confirmarEntidade(grupo, nome) {
-    const alvo = (grupo || []).filter(l => l.id && !l.acerto && !tratados.has(l.id))
+    const alvo = (grupo || []).filter(l => l.id && !l.acerto && !jaTratada(l))
     if (!alvo.length) return
     if (!window.confirm(`Confirmar ${alvo.length} lançamento(s) de "${nome}" como conferidos? A composição já está zerada (título e baixa se compensam) — isso marca as linhas como revisadas com justificativa, sem abrir uma a uma.`)) return
     const id = await getCompetenciaId()
-    const rows = alvo.map(l => ({
-      competencia_id: id, modulo: 'Conciliação',
-      item: `${conta.conta} · ${l.data || ''} · NF ${l.leitura.nf || '—'}`,
-      tipo: 'Justificativa',
-      detalhe: `Confirmado em lote — ${nome}: composição identificada e zerada no mês (título e baixa se compensam), sem NF.`,
-      razao_id: l.id, usuario,
-    }))
-    const { error } = await supabase.from('auditoria').insert(rows)
+    const { error } = await supabase.from('auditoria').insert(alvo.map(l => linhaAuditoria(l, id, nome)))
     if (error) { setMsg('Não consegui confirmar em lote: ' + error.message); return }
-    setTratados(prev => { const s = new Set(prev); alvo.forEach(l => s.add(l.id)); return s })
+    marcarTratadas(alvo)
     setMsg(`${alvo.length} lançamento(s) de "${nome}" confirmado(s).`)
     carregarTratados()
   }
@@ -776,22 +796,16 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
   // Confirma DE UMA VEZ todas as entidades zeradas/identificadas (uma pergunta só).
   async function confirmarTodos(grupos) {
     const items = []
-    for (const g of (grupos || [])) for (const l of g.lancs) { if (l.id && !l.acerto && !tratados.has(l.id)) items.push({ nome: g.nome, l }) }
+    for (const g of (grupos || [])) for (const l of g.lancs) { if (l.id && !l.acerto && !jaTratada(l)) items.push({ nome: g.nome, l }) }
     if (!items.length) return
     if (!window.confirm(`Confirmar ${items.length} lançamento(s) de ${grupos.length} ${lab}(s) que já zeraram e estão identificados (sem NF)? Marca todas as linhas como conferidas, com justificativa (usuário e data). Você pode desfazer linha a linha depois.`)) return
     const id = await getCompetenciaId()
-    const rows = items.map(({ nome, l }) => ({
-      competencia_id: id, modulo: 'Conciliação',
-      item: `${conta.conta} · ${l.data || ''} · NF ${l.leitura.nf || '—'}`,
-      tipo: 'Justificativa',
-      detalhe: `Confirmado em lote — ${nome}: composição identificada e zerada no mês (título e baixa se compensam), sem NF.`,
-      razao_id: l.id, usuario,
-    }))
+    const rows = items.map(({ nome, l }) => linhaAuditoria(l, id, nome))
     for (let i = 0; i < rows.length; i += 500) {
       const { error } = await supabase.from('auditoria').insert(rows.slice(i, i + 500))
       if (error) { setMsg('Não consegui confirmar em lote: ' + error.message); return }
     }
-    setTratados(prev => { const s = new Set(prev); items.forEach(({ l }) => s.add(l.id)); return s })
+    marcarTratadas(items.map(x => x.l))
     setSelEnt(prev => { const s = new Set(prev); grupos.forEach(g => s.delete(g.nome)); return s })
     setFiltroSit('')
     setMsg(`${items.length} lançamento(s) de ${grupos.length} ${lab}(s) confirmado(s).`)
@@ -800,7 +814,17 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
 
   // Desfazer uma correção/estorno: remove o lançamento de acerto e o registro de
   // auditoria daquela linha; a linha volta a ficar pendente e o saldo se reverte.
-  async function desfazerCorrecao(razaoId) {
+  async function desfazerCorrecao(alvo) {
+    const linha = (alvo && typeof alvo === 'object') ? alvo : null
+    // Linha de ABERTURA: a conferência está na auditoria pela chave "AB·…" (sem razao_id).
+    if (linha && linha._abertura) {
+      const chave = chaveAbertura(linha)
+      await supabase.from('auditoria').delete().eq('competencia_id', compId).eq('modulo', 'Conciliação').eq('item', chave)
+      setTratadosAb(prev => { const s = new Set(prev); s.delete(chave); return s })
+      setVerCorr(null); setMsg('Conferência desfeita — a linha voltou a ficar pendente.')
+      carregarTratados(); carregarLanc(); return
+    }
+    const razaoId = linha ? linha.id : alvo
     await supabase.from('lancamentos').delete().eq('competencia_id', compId).eq('razao_id', razaoId)
     await supabase.from('auditoria').delete().eq('competencia_id', compId).eq('modulo', 'Conciliação').eq('razao_id', razaoId)
     await supabase.from('ajuste_leitura').delete().eq('competencia_id', compId).eq('razao_id', razaoId)
@@ -816,7 +840,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
   function abrirLinha(l) {
     setMsg('')
     if (l.acerto) { if (l.razaoRef) setVerCorr({ ...l, id: l.razaoRef }); return }
-    tratados.has(l.id) ? setVerCorr(l) : setAcao(l)
+    jaTratada(l) ? setVerCorr(l) : setAcao(l)
   }
 
   return (
@@ -1012,8 +1036,8 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
                   const contras = contraDe(l)
                   return (
                     <tr key={i} onClick={() => abrirLinha(l)}
-                      style={{ borderTop: `1px solid ${theme.border}`, cursor: 'pointer', opacity: (l.acerto || tratados.has(l.id)) ? 0.7 : 1, background: (l.acerto || tratados.has(l.id)) ? 'rgba(48,164,108,0.08)' : semNF ? 'rgba(229,72,77,0.08)' : 'transparent' }}
-                      title={l.acerto ? `${tagAcertoLanc(l).titulo} — clique para ver ou desfazer` : tratados.has(l.id) ? 'Já tratado — clique para ver o que foi feito ou desfazer' : semNF ? 'Baixa com NF que não confere com o título — justifique ou corrija' : 'Justificar ou corrigir este lançamento'}>
+                      style={{ borderTop: `1px solid ${theme.border}`, cursor: 'pointer', opacity: (l.acerto || jaTratada(l)) ? 0.7 : 1, background: (l.acerto || jaTratada(l)) ? 'rgba(48,164,108,0.08)' : semNF ? 'rgba(229,72,77,0.08)' : 'transparent' }}
+                      title={l.acerto ? `${tagAcertoLanc(l).titulo} — clique para ver ou desfazer` : jaTratada(l) ? 'Já conferido — clique para ver ou desfazer' : semNF ? 'Baixa com NF que não confere com o título — justifique ou corrija' : 'Justificar ou corrigir este lançamento'}>
                       <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{l.data || '—'}</td>
                       <td style={{ ...td, color: semNF ? theme.red : theme.sub, fontWeight: 600 }}>NF {l.leitura.nf || '—'}</td>
                       <td style={{ ...td, color: theme.sub, fontFamily: 'monospace', fontSize: 11, maxWidth: 280 }}>{l.historico}</td>
@@ -1027,8 +1051,8 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
                       <td style={{ ...td, textAlign: 'center' }}>
                         {l.acerto
                           ? <span title={tagAcertoLanc(l).titulo} style={{ color: theme.accent, fontSize: 10.5, fontWeight: 700, whiteSpace: 'nowrap' }}><i className={`ti ${tagAcertoLanc(l).icon}`} /> {tagAcertoLanc(l).txt}</span>
-                          : tratados.has(l.id)
-                            ? <span title="Já tratado" style={{ color: theme.green, fontSize: 10.5, fontWeight: 700, whiteSpace: 'nowrap' }}><i className="ti ti-arrow-back-up" /> corrigido</span>
+                          : jaTratada(l)
+                            ? <span title="Já conferido" style={{ color: theme.green, fontSize: 10.5, fontWeight: 700, whiteSpace: 'nowrap' }}><i className="ti ti-circle-check" /> {l._abertura ? 'conferido' : 'corrigido'}</span>
                             : semNF
                               ? <span title="NF não confere com nenhum título" style={{ color: theme.red, fontSize: 10.5, fontWeight: 700 }}>NF s/ título</span>
                               : rev
@@ -1058,7 +1082,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
       )}
       {verCorr && (
         <ModalCorrigido linha={verCorr} conta={conta} compId={compId} planoMap={planoMap}
-          onClose={() => setVerCorr(null)} onDesfazer={() => desfazerCorrecao(verCorr.id)} />
+          onClose={() => setVerCorr(null)} onDesfazer={() => desfazerCorrecao(verCorr)} />
       )}
       {verComposic && (
         <ModalComposicao titulo={verComposic.titulo} itens={verComposic.itens} onClose={() => setVerComposic(null)} />
