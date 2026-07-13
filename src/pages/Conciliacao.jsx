@@ -705,28 +705,34 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
     const alvo = isoladoK ? null : clusters.find(cl => !cl.isolado && cl.membros.some(m => mesmoCliente(tk[k], tk[m])))
     if (alvo) alvo.membros.push(k); else clusters.push({ membros: [k], isolado: isoladoK })
   }
-  const lista = clusters.map(cl => {
+  const listaTodas = clusters.map(cl => {
     const membros = cl.membros.slice().sort((a, b) => b.length - a.length)
     const lancs = cl.membros.flatMap(m => grupos[m])
     return { nome: membros[0], variacoes: membros, lancs, total: lancs.reduce((s, l) => s + ov(l), 0), unido: membros.length > 1, unk: false }
   })
   if (grupos['(não identificado)']) {
     const lancs = grupos['(não identificado)']
-    lista.push({ nome: '(não identificado)', variacoes: [], lancs, total: lancs.reduce((s, l) => s + ov(l), 0), unido: false, unk: true })
+    listaTodas.push({ nome: '(não identificado)', variacoes: [], lancs, total: lancs.reduce((s, l) => s + ov(l), 0), unido: false, unk: true })
   }
-  lista.sort((a, b) => (a.unk ? 1 : 0) - (b.unk ? 1 : 0) || a.nome.localeCompare(b.nome, 'pt-BR'))
-  const algoEmAberto = lista.length > 0
+  listaTodas.sort((a, b) => (a.unk ? 1 : 0) - (b.unk ? 1 : 0) || a.nome.localeCompare(b.nome, 'pt-BR'))
+  // Entidade RESOLVIDA: zerou e TODAS as linhas já foram tratadas (conferido/corrigido/baixa)
+  // → sai do em aberto e vai para os Conciliados (o que zerou). É o caso "bateu e está certo".
+  const ehResolvida = g => !g.unk && Math.abs(g.total) < 0.005 && g.lancs.length > 0 && g.lancs.every(l => l.acerto || jaTratada(l))
+  const resolvidasEnt = listaTodas.filter(ehResolvida)
+  const lista = listaTodas.filter(g => !ehResolvida(g))
 
-  // Para os relatórios: o que está em aberto (compõe o saldo) e o que zerou (baixado por NF).
+  // Para os relatórios: o que está em aberto (compõe o saldo) e o que zerou (baixa/confirmação/resolvida).
   const ehEntidade = ehEntidadeConta
   const emAbertoTodos = ehEntidade ? lista.flatMap(g => g.lancs) : lanc.filter(l => Math.abs(ov(l)) >= 0.005)
-  // Confirmados em lote saíram do em aberto — entram nos "Conciliados" (o que zerou) e ficam
-  // acessíveis numa seção para reabrir. Agrupa por entidade só para exibir/reabrir.
+  // Conciliados (saíram do em aberto): confirmados em lote + entidades que zeraram e foram
+  // tratadas. Ficam numa seção colapsável para reabrir.
   const confirmadosLancs = lanc.filter(l => foiConfirmado(l) && Math.abs(ov(l)) >= 0.005)
-  const zerados = [...baixados, ...confirmadosLancs]
+  const conferidosLancs = [...confirmadosLancs, ...resolvidasEnt.flatMap(g => g.lancs).filter(l => Math.abs(ov(l)) >= 0.005)]
+  const zerados = [...baixados, ...conferidosLancs]
   const conferidosPorNome = {}
-  for (const l of confirmadosLancs) { const k = l.leitura?.entidade || '(sem nome)'; (conferidosPorNome[k] = conferidosPorNome[k] || []).push(l) }
+  for (const l of conferidosLancs) { const k = l.leitura?.entidade || '(sem nome)'; (conferidosPorNome[k] = conferidosPorNome[k] || []).push(l) }
   const conferidosGrupos = Object.entries(conferidosPorNome).map(([nome, lancs]) => ({ nome, lancs }))
+  const algoEmAberto = lista.length > 0 || conferidosGrupos.length > 0
 
   const revs = lanc.filter(l => Math.abs(ov(l)) >= 0.005 && l.leitura.conf !== 'alta').length
 
@@ -979,8 +985,9 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
     if (!lancs?.length) return
     if (!window.confirm(`Reabrir ${lancs.length} lançamento(s)? Eles voltam para "em aberto" para você revisar/corrigir de novo.`)) return
     for (const l of lancs) {
-      let q = supabase.from('auditoria').delete().eq('competencia_id', compId).eq('modulo', 'Conciliação').like('detalhe', 'Confirmado em lote%')
-      q = l._abertura ? q.eq('item', chaveAbertura(l)) : q.eq('razao_id', l.id)
+      // Remove o registro que fez a linha sair (confirmação em lote OU conferência individual).
+      let q = supabase.from('auditoria').delete().eq('competencia_id', compId).eq('modulo', 'Conciliação')
+      q = l._abertura ? q.eq('item', chaveAbertura(l)) : (l.acerto ? q.eq('razao_id', String(l.id).replace(/^ac_/, '')) : q.eq('razao_id', l.id))
       await q
     }
     setMsg(`${lancs.length} lançamento(s) reaberto(s) — voltaram para o em aberto.`)
@@ -1267,7 +1274,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
       {conferidosGrupos.length > 0 && (
         <div style={{ marginTop: 6 }}>
           <button onClick={() => setVerConferidos(v => !v)} style={{ background: 'none', border: 'none', color: theme.sub, cursor: 'pointer', fontSize: 12.5, padding: '6px 2px', display: 'flex', alignItems: 'center', gap: 6 }}>
-            <i className={`ti ${verConferidos ? 'ti-chevron-down' : 'ti-chevron-right'}`} /> <i className="ti ti-circle-check" style={{ color: theme.green }} /> Conferidos neste mês ({confirmadosLancs.length}) — {verConferidos ? 'clique para ocultar' : 'clique para ver e reabrir'}
+            <i className={`ti ${verConferidos ? 'ti-chevron-down' : 'ti-chevron-right'}`} /> <i className="ti ti-circle-check" style={{ color: theme.green }} /> Conferidos neste mês ({conferidosLancs.length}) — {verConferidos ? 'clique para ocultar' : 'clique para ver e reabrir'}
           </button>
           {verConferidos && conferidosGrupos.map((g, gi) => (
             <div key={gi} style={{ background: theme.card, border: `1px solid ${theme.cb}`, borderRadius: 12, overflow: 'hidden', marginBottom: 10, opacity: 0.9 }}>
