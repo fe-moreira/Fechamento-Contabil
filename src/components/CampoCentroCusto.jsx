@@ -7,17 +7,26 @@ const baixa = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-�
 // na lupa) para buscar/escolher. value = código; onChange(cod). `centros` = [{cod, nome, resp}].
 export default function CampoCentroCusto({ value, onChange, centros = [], disabled, placeholder = 'C.Custo (F4)', style, inputRef }) {
   const [aberto, setAberto] = useState(false)
+  // Nome do centro correspondente ao código digitado — mostra "código · nome" para conferir.
+  const val = String(value ?? '').trim()
+  const achado = val ? (centros || []).find(c => String(c.cod) === val) : null
+  const nome = achado?.nome || ''
+  const invalido = !!val && !achado
   return (
     <div style={{ position: 'relative', ...style }}>
-      <input
-        className="input" value={value || ''} ref={inputRef} disabled={disabled}
-        onChange={e => onChange(e.target.value)}
-        onKeyDown={e => { if (e.key === 'F4') { e.preventDefault(); if (!disabled) setAberto(true) } }}
-        placeholder={placeholder}
-        style={{ paddingRight: 26, fontSize: 11.5, padding: '4px 24px 4px 7px', width: 96 }}
-      />
-      <i className="ti ti-sitemap" title="Buscar centro de custo (F4)" onClick={() => !disabled && setAberto(true)}
-        style={{ position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)', color: theme.sub, cursor: disabled ? 'default' : 'pointer', fontSize: 14 }} />
+      <div style={{ position: 'relative' }}>
+        <input
+          className="input" value={value || ''} ref={inputRef} disabled={disabled}
+          onChange={e => onChange(e.target.value)}
+          onKeyDown={e => { if (e.key === 'F4') { e.preventDefault(); if (!disabled) setAberto(true) } }}
+          placeholder={placeholder}
+          style={{ paddingRight: 26, fontSize: 11.5, padding: '4px 24px 4px 7px', width: 96, borderColor: invalido ? theme.red : undefined }}
+        />
+        <i className="ti ti-sitemap" title="Buscar centro de custo (F4)" onClick={() => !disabled && setAberto(true)}
+          style={{ position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)', color: theme.sub, cursor: disabled ? 'default' : 'pointer', fontSize: 14 }} />
+      </div>
+      {nome && <div title={nome} style={{ fontSize: 10.5, color: theme.green, marginTop: 2, maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>· {nome}</div>}
+      {invalido && <div style={{ fontSize: 10.5, color: theme.red, marginTop: 2 }}>código não encontrado</div>}
       {aberto && (
         <CentroCustoPicker centros={centros} onClose={() => setAberto(false)}
           onSelecionar={c => { onChange(c.cod); setAberto(false) }} />
