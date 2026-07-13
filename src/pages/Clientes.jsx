@@ -4,7 +4,7 @@ import { theme } from '../lib/theme'
 import { normalizaCompetencia } from '../lib/balancete'
 
 // Regimes tributários — nomenclatura padrão da carteira.
-const REGIMES = ['SIMPLES NACIONAL', 'LUCRO PRESUMIDO', 'LUCRO REAL', 'LUCRO REAL TRIMESTRAL', 'ISENTA FEDERAL']
+const REGIMES = ['SIMPLES NACIONAL', 'LUCRO PRESUMIDO', 'LUCRO REAL ANUAL', 'LUCRO REAL TRIMESTRAL', 'ISENTA FEDERAL']
 
 const vazio = {
   codigo_dominio: '', tipo: 'Matriz', codigo_matriz: '', razao_social: '',
