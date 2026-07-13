@@ -81,10 +81,15 @@ export function dataISO(v) {
   if (v instanceof Date && !isNaN(v)) {
     return `${v.getFullYear()}-${String(v.getMonth() + 1).padStart(2, '0')}-${String(v.getDate()).padStart(2, '0')}`
   }
+  const s = String(v ?? '').trim()
+  // ISO "AAAA-MM-DD" (opcionalmente com hora) — é o que sobra quando um Date do Excel é
+  // salvo em JSON (ex.: extrato guardado para reajustar a leitura depois). Ancorado no fim.
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T].*)?$/)
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`
   // A célula tem de ser SÓ uma data (opcionalmente com hora) — ancorado no fim para NÃO
   // casar códigos de conta como "1.10.05.0001" (que pareciam "1.10.05" → data e faziam a
   // coluna de natureza ser detectada como Data, deixando os lançamentos "sem data").
-  const m = String(v ?? '').trim().match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})(?:[ T].*)?$/)
+  const m = s.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})(?:[ T].*)?$/)
   if (!m) return ''
   let [, d, mo, y] = m; if (y.length === 2) y = '20' + y
   return `${y}-${mo.padStart(2, '0')}-${d.padStart(2, '0')}`
