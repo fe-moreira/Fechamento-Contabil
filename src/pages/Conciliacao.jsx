@@ -744,7 +744,9 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
   const conferidosGrupos = Object.entries(conferidosPorNome).map(([nome, lancs]) => ({ nome, lancs }))
   const algoEmAberto = lista.length > 0 || conferidosGrupos.length > 0
 
-  const revs = lanc.filter(l => Math.abs(ov(l)) >= 0.005 && l.leitura.conf !== 'alta').length
+  // Leitura incerta = ainda PENDENTE (não conferida/confirmada). O que já foi tratado sai da conta.
+  const leituraIncerta = l => Math.abs(ov(l)) >= 0.005 && l.leitura.conf !== 'alta' && !jaTratada(l) && !foiConfirmado(l)
+  const revs = lanc.filter(leituraIncerta).length
 
   // Anomalia de natureza: conta de cliente (Ativo) deve ficar devedora; fornecedor (Passivo) credora.
   // Um grupo com total na natureza invertida (total < 0) é estranho e precisa ser verificado.
@@ -775,7 +777,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
     devedor: g => g.total < -0.005,
     semtitulo: g => baixaSemTitulo(g).size > 0,
     unificados: g => g.unido,
-    incerta: g => g.lancs.some(l => Math.abs(ov(l)) >= 0.005 && l.leitura.conf !== 'alta'),
+    incerta: g => g.lancs.some(leituraIncerta),
     confirmaveis: podeConfirmarEnt,
   }
   const listaBase = (filtroSit && sitPred[filtroSit]) ? lista.filter(sitPred[filtroSit]) : lista
@@ -1192,7 +1194,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
         const gt = g.total
         const unk = g.unk
         const semTit = baixaSemTitulo(g) // baixas com NF que não casa com título
-        const hasRev = grp.some(l => l.leitura.conf !== 'alta')
+        const hasRev = grp.some(l => l.leitura.conf !== 'alta' && !jaTratada(l))
         const anom = gt < -0.005 // natureza invertida (cliente credor / fornecedor devedor)
         const borda = (anom || semTit.size > 0) ? theme.red : hasRev ? theme.yellow : theme.cb
         // Confirmar em lote: só quando a composição já ZEROU, o nome está identificado e não
