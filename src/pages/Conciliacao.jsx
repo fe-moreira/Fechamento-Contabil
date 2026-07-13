@@ -531,6 +531,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
   const [buscaNome, setBuscaNome] = useState('') // busca por nome na composição de clientes/fornecedores
   const [selLin, setSelLin] = useState(() => new Set()) // linhas marcadas p/ conectar (baixa manual)
   const [loteForn, setLoteForn] = useState(null) // { lines } — corrigir fornecedor em lote
+  const [conectarDif, setConectarDif] = useState(null) // { alvo, net } — apontar desconto/juros da diferença
   const [nomesConf, setNomesConf] = useState(new Set())   // nomes CONFIÁVEIS do cliente (não pede revisão)
   const [nomesIsolados, setNomesIsolados] = useState(new Set()) // nomes a NÃO unir com parecidos (desvincular)
 
@@ -580,7 +581,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
   }
   // Chave estável de uma linha de abertura (saldo inicial) e testes de "já tratada"/"confirmada".
   const chaveAbertura = l => `AB·${conta.conta}·${nfKey(l.leitura?.nf)}·${baixaTxt(l.leitura?.entidade || '')}·${Math.round(((Number(l.debito) || 0) - (Number(l.credito) || 0)) * 100)}`
-  const chaveTrat = l => l._abertura ? chaveAbertura(l) : l.id
+  const chaveTrat = l => l.acerto ? String(l.id).replace(/^ac_/, '') : (l._abertura ? chaveAbertura(l) : l.id)
   const jaTratada = l => l._abertura ? tratadosAb.has(chaveAbertura(l)) : tratados.has(l.id)
   const foiConfirmado = l => confirmados.has(chaveTrat(l)) // saiu do em aberto (conciliado)
   useEffect(() => { carregarTratados() }, [compId]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -890,24 +891,51 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
     const alvo = lanc.filter(l => selLin.has(l.id) && !l.acerto && l.id && !jaTratada(l))
     if (alvo.length < 2) { setMsg('Selecione ao menos 2 lançamentos (a nota e o pagamento) para conectar.'); return }
     const net = alvo.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
-    const msgNet = Math.abs(net) < 0.005
-      ? `Conectar ${alvo.length} lançamento(s)? Eles zeram entre si e vão para Conciliados.`
-      : `Atenção: os selecionados NÃO zeram (diferença ${money(net)}). Conectar mesmo assim? Vão para Conciliados com essa diferença.`
-    if (!window.confirm(msgNet)) return
+    // Se NÃO zera, é obrigatório apontar se a diferença é DESCONTO ou JUROS/MULTA (com a
+    // conta) — abre o passo dedicado. Só zerando conecta direto.
+    if (Math.abs(net) >= 0.005) { setConectarDif({ alvo, net }); return }
+    if (!window.confirm(`Conectar ${alvo.length} lançamento(s)? Eles zeram entre si e vão para Conciliados.`)) return
+    await baixarConexao(alvo)
+    setMsg(`${alvo.length} lançamento(s) conectado(s) — foram para Conciliados.`)
+  }
+  // Marca as linhas da conexão como confirmadas (saem para Conciliados). `extraRazaoId` é o
+  // lançamento de acerto da diferença (desconto/juros), que também deve sair do em aberto.
+  async function baixarConexao(alvo, extraRazaoId) {
     const id = await getCompetenciaId()
     const rows = alvo.map(l => ({
       competencia_id: id, modulo: 'Conciliação',
       item: l._abertura ? chaveAbertura(l) : `${conta.conta} · ${l.data || ''} · NF ${l.leitura?.nf || '—'}`,
       tipo: 'Justificativa',
-      detalhe: `Confirmado em lote — conexão manual (nota + pagamento) de ${alvo.length} lançamento(s).`,
+      detalhe: `Confirmado em lote — conexão manual (nota + pagamento).`,
       razao_id: l._abertura ? null : l.id, usuario,
     }))
+    if (extraRazaoId) rows.push({ competencia_id: id, modulo: 'Conciliação', item: `${conta.conta} · acerto`, tipo: 'Justificativa', detalhe: 'Confirmado em lote — conexão manual (diferença).', razao_id: extraRazaoId, usuario })
     const { error } = await supabase.from('auditoria').insert(rows)
-    if (error) { setMsg('Não consegui conectar: ' + error.message); return }
+    if (error) { setMsg('Não consegui conectar: ' + error.message); return false }
     marcarTratadas(alvo)
-    setSelLin(new Set())
-    setMsg(`${alvo.length} lançamento(s) conectado(s) — foram para Conciliados.`)
-    carregarTratados()
+    setSelLin(new Set()); setConectarDif(null)
+    carregarTratados(); carregarLanc(); onMudou && onMudou()
+    return true
+  }
+  // Aplica a diferença como desconto/juros: gera o lançamento de acerto que ZERA a conta e
+  // conecta tudo (par + acerto) para Conciliados.
+  async function aplicarConexaoDif(alvo, net, kind, contaDif) {
+    if (!contaDif) { setMsg('Escolha a conta do desconto/juros.'); return }
+    const eSint = erroContaSintetica(plano, net > 0 ? contaDif : conta.conta, net > 0 ? conta.conta : contaDif)
+    if (eSint) { setMsg(eSint); return }
+    const dif = Math.abs(net)
+    const id = await getCompetenciaId()
+    // net>0 (débito residual na conta) → credita a conta p/ zerar; net<0 → debita a conta.
+    const { data: lan, error: e1 } = await supabase.from('lancamentos').insert({
+      competencia_id: id, data: null,
+      conta_debito: net > 0 ? contaDif : conta.conta,
+      conta_credito: net > 0 ? conta.conta : contaDif,
+      valor: dif, historico: `${kind === 'juros' ? 'Juros/multa' : 'Desconto financeiro'} — conexão manual · ${conta.nome}`,
+      origem: 'correcao', razao_id: null, usuario,
+    }).select('id').single()
+    if (e1) { setMsg('Não consegui gerar o acerto: ' + e1.message); return }
+    await baixarConexao(alvo, lan.id)
+    setMsg(`Conectado com ${kind === 'juros' ? 'juros/multa' : 'desconto'} de ${money(dif)} — foi para Conciliados e o acerto para o Contabilizar.`)
   }
 
   // Corrige o FORNECEDOR/CLIENTE de vários lançamentos de uma vez (ajuste de leitura em
@@ -1294,6 +1322,11 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
 
       {loteForn && (
         <ModalLoteForn lines={loteForn.lines} lab={lab} onClose={() => setLoteForn(null)} onAplicar={aplicarFornecedorLote} />
+      )}
+
+      {conectarDif && (
+        <ModalConectarDif net={conectarDif.net} plano={plano} onClose={() => setConectarDif(null)}
+          onAplicar={(kind, contaDif) => aplicarConexaoDif(conectarDif.alvo, conectarDif.net, kind, contaDif)} />
       )}
 
       {acao && (
@@ -1877,6 +1910,39 @@ function RelatoriosComposicao({ conta, emAberto, zerados, contraDe }) {
 
 // Menu de ação de um lançamento: Justificar (texto) ou Corrigir (já informa a partida
 // contábil de acerto, que vai para o painel Contabilizar gerar o arquivo do Domínio).
+// Ao conectar com diferença: apontar se é DESCONTO ou JUROS/MULTA e a conta. Obrigatório.
+function ModalConectarDif({ net, plano, onClose, onAplicar }) {
+  const baixa = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+  const achaConta = re => (plano || []).find(p => re.test(baixa(p.nome)))?.cod || ''
+  const [kind, setKind] = useState('')     // 'desconto' | 'juros'
+  const [contaDif, setContaDif] = useState('')
+  const [busy, setBusy] = useState(false)
+  const dif = Math.abs(net)
+  const escolher = k => { setKind(k); setContaDif(k === 'juros' ? achaConta(/juros|encargo|multa/) : achaConta(/desconto/)) }
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 95 }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 'min(500px,96vw)', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 14, padding: 20 }}>
+        <h3 style={{ fontSize: 15, margin: '0 0 6px' }}><i className="ti ti-arrows-diff" style={{ color: theme.yellow, marginRight: 6 }} />Os selecionados não zeram</h3>
+        <p style={{ color: theme.sub, fontSize: 13, margin: '0 0 4px' }}>Diferença de <b style={{ color: theme.text }}>{money(dif)}</b>. Aponte o que é para gerar a contabilização — <b>não dá para conectar sem classificar</b>.</p>
+        <div style={{ display: 'flex', gap: 8, margin: '12px 0' }}>
+          <button className={kind === 'desconto' ? 'btn' : 'btn btn-ghost'} style={{ flex: 1, fontSize: 13 }} onClick={() => escolher('desconto')}><i className="ti ti-discount" /> Desconto</button>
+          <button className={kind === 'juros' ? 'btn' : 'btn btn-ghost'} style={{ flex: 1, fontSize: 13 }} onClick={() => escolher('juros')}><i className="ti ti-percentage" /> Juros / multa</button>
+        </div>
+        {kind && (
+          <div style={{ marginBottom: 14 }}>
+            <label style={{ fontSize: 12, color: theme.sub }}>Conta do {kind === 'juros' ? 'juros/multa' : 'desconto'} (F4)</label>
+            <CampoConta value={contaDif} onChange={setContaDif} plano={plano} />
+          </div>
+        )}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+          <button className="btn" disabled={!kind || !contaDif || busy} onClick={async () => { setBusy(true); await onAplicar(kind, contaDif) }}><i className="ti ti-check" /> Conectar com {kind === 'juros' ? 'juros/multa' : 'desconto'}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // Corrigir o fornecedor/cliente de vários lançamentos de uma vez.
 function ModalLoteForn({ lines, lab, onClose, onAplicar }) {
   const razaoLines = (lines || []).filter(l => !l._abertura && !l.acerto && l.id)
