@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
+import { supabase } from '../lib/supabase'
 import { theme, money } from '../lib/theme'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
+import { apurarVariacoes } from '../lib/variacoes'
 import { listar, inserir, remover, atualizar, gerarLancamento, enviarSaldoInicialContrato, anexarArquivoContrato, urlArquivoContrato, removerArquivoContrato, competenciaInicioCliente, apropriacoesDoMes } from '../lib/outras'
 import { gerarExcelTimbrado } from '../lib/excel'
 import { abrePdfTimbrado } from '../lib/pdf'
@@ -16,7 +18,8 @@ function CampoContaForm({ valor, set }) {
   return <CampoConta value={valor} onChange={set} onPick={p => set(p.cod)} placeholder="Código (F4)" />
 }
 
-const ACC = { seguro: '#4A7CFF', despesa: '#33B4C6', importacao: '#2FB6A8', emprestimo: '#9A7CF0', parcelamento: '#E8923B', equivalencia: '#E06C9F', perdcomp: '#3FA66A', jcp: '#C9A227', outros: '#7C89A6' }
+const ACC = { seguro: '#4A7CFF', despesa: '#33B4C6', importacao: '#2FB6A8', emprestimo: '#9A7CF0', parcelamento: '#E8923B', equivalencia: '#E06C9F', perdcomp: '#3FA66A', jcp: '#C9A227', lalur: '#D46A6A', outros: '#7C89A6' }
+const BLOCO_LALUR = { key: 'lalur', label: 'LALUR', icon: 'ti-report-money', sub: 'IRPJ e CSLL (Lucro Real)' }
 const BLOCOS = [
   { key: 'seguro', label: 'Seguro', icon: 'ti-shield-half', sub: 'Apólices & apropriação' },
   { key: 'despesa', label: 'Despesa a Apropriar', icon: 'ti-calendar-repeat', sub: 'IPVA, IPTU, etc.' },
@@ -294,7 +297,13 @@ export default function OutrasContabilizacoes() {
   const [versao, setVersao] = useState(0)  // incrementa após gerar lançamento → recarrega status "Apropriado"
   const [msg, setMsg] = useState('')
   const [compInicio, setCompInicio] = useState('') // competência de início do cliente (abertura)
+  const [regime, setRegime] = useState('')         // regime tributário (habilita a aba LALUR)
   useEffect(() => { if (empresaId) competenciaInicioCliente(empresaId).then(setCompInicio); else setCompInicio('') }, [empresaId])
+  useEffect(() => {
+    if (!empresaId) { setRegime(''); return }
+    supabase.from('clientes').select('regime_tributario').eq('id', empresaId).maybeSingle().then(({ data }) => setRegime(data?.regime_tributario || ''))
+  }, [empresaId])
+  const ehLucroReal = /LUCRO REAL/i.test(regime)
 
   function abrirGerar(prefill, titulo) { setGerar({ ...prefill, _titulo: titulo }) }
 
@@ -328,8 +337,10 @@ export default function OutrasContabilizacoes() {
 
   if (!empresaId) return <Aviso texto="Selecione uma empresa no menu lateral." />
 
-  const props = { clienteId: empresaId, user, competencia, abrirGerar, enviarSaldoInicial, compInicio, empresaNome, planoMap, versao }
-  const Pane = { seguro: PaneSeguro, despesa: PaneDespesaApropriar, importacao: PaneImportacao, emprestimo: PaneEmprestimo, parcelamento: PaneParcelamento, equivalencia: PaneEquivalencia, perdcomp: PanePerdcomp, jcp: PaneJcp, outros: PaneOutros }[tab]
+  const props = { clienteId: empresaId, user, competencia, abrirGerar, enviarSaldoInicial, compInicio, empresaNome, planoMap, versao, regime }
+  const blocos = ehLucroReal ? [...BLOCOS, BLOCO_LALUR] : BLOCOS
+  const paneMap = { seguro: PaneSeguro, despesa: PaneDespesaApropriar, importacao: PaneImportacao, emprestimo: PaneEmprestimo, parcelamento: PaneParcelamento, equivalencia: PaneEquivalencia, perdcomp: PanePerdcomp, jcp: PaneJcp, lalur: PaneLalur, outros: PaneOutros }
+  const Pane = paneMap[tab] || PaneSeguro
 
   return (
     <div>
@@ -345,7 +356,7 @@ export default function OutrasContabilizacoes() {
 
       {/* Só a barra de abas (nome + cor) — tela mais limpa. Clicar abre o cadastro. */}
       <div style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${theme.border}`, margin: '4px 0 20px', flexWrap: 'wrap' }}>
-        {BLOCOS.map(b => (
+        {blocos.map(b => (
           <button key={b.key} onClick={() => setTab(b.key)} style={{ background: 'none', border: 'none', padding: '10px 14px', fontSize: 13.5, fontWeight: 600, color: tab === b.key ? theme.text : theme.sub, borderBottom: `2px solid ${tab === b.key ? theme.accent : 'transparent'}`, marginBottom: -1, cursor: 'pointer' }}>
             <span style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', marginRight: 7, background: ACC[b.key] }} />{b.label}
           </button>
@@ -921,6 +932,141 @@ function PaneJcp({ clienteId, user, competencia, abrirGerar }) {
               </td></tr>
           ))}
         </tbody></table></div>
+      </Card>
+    </div>
+  )
+}
+
+// ================= LALUR (IRPJ e CSLL — Lucro Real) =================
+const MESES_LALUR = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
+
+function PaneLalur({ clienteId, competencia, regime, abrirGerar, planoMap, user }) { // eslint-disable-line no-unused-vars
+  const trimestral = /TRIMESTRAL/i.test(regime)
+  const [carregando, setCarregando] = useState(true)
+  const [cfg, setCfg] = useState(null)
+  const [auto, setAuto] = useState(null)   // valores calculados (defaults)
+  const [f, setF] = useState(null)         // linhas editáveis
+
+  useEffect(() => {
+    let vivo = true
+    setCarregando(true); setF(null)
+    ;(async () => {
+      const [cm, ca] = String(competencia || '').split('/').map(Number)
+      const inicioMes = trimestral ? Math.floor((cm - 1) / 3) * 3 + 1 : 1
+      const mesesPeriodo = []; for (let m = inicioMes; m <= cm; m++) mesesPeriodo.push(m)
+      // Configuração do Lucro Real (Base de Informações).
+      const { data: cfgRow } = await supabase.from('cargas_cadastro').select('dados')
+        .eq('cliente_id', clienteId).eq('tipo', 'lalur').order('created_at', { ascending: false }).limit(1).maybeSingle()
+      const config = (cfgRow?.dados && typeof cfgRow.dados === 'object' && !Array.isArray(cfgRow.dados)) ? cfgRow.dados : {}
+      // Lucro do Balancete = resultado acumulado do Comparativo (vivo, com ajustes).
+      const { matriz } = await apurarVariacoes(clienteId, { comLancamentos: true })
+      const lucroMes = m => { let s = 0; for (const c of Object.keys(matriz)) { const v = matriz[c]?.[m]; if (v != null) s += Number(v) || 0 } return -s }
+      const lucro = r2(mesesPeriodo.reduce((s, m) => s + lucroMes(m), 0))
+      // Movimento das contas cadastradas (adição/exclusão/IRRF), no período.
+      const { data: comps } = await supabase.from('competencias').select('id, mes').eq('cliente_id', clienteId).eq('ano', ca)
+      const idsPeriodo = (comps || []).filter(c => mesesPeriodo.includes(c.mes)).map(c => c.id)
+      let balRows = []
+      if (idsPeriodo.length) { const { data } = await supabase.from('balancete').select('conta, saldo_final').in('competencia_id', idsPeriodo); balRows = data || [] }
+      const soma = lista => { const set = new Set((lista || []).map(x => String(x.cod))); if (!set.size) return 0; let s = 0; for (const b of balRows) if (set.has(String(b.conta))) s += Math.abs(Number(b.saldo_final) || 0); return r2(s) }
+      if (!vivo) return
+      const a = {
+        lucro, nMeses: mesesPeriodo.length,
+        adicao: soma(config.adicao), exclusao: soma(config.exclusao),
+        irrf: soma(config.irrf), irrfAplic: soma(config.irrfAplic),
+        periodo: `${MESES_LALUR[inicioMes - 1]}–${MESES_LALUR[cm - 1]}/${ca}`,
+      }
+      setCfg(config); setAuto(a)
+      setF({ lucro: a.lucro, adicao: a.adicao, exclusao: a.exclusao, prejuizo: Number(config.prejuizo) || 0, irrf: a.irrf, irrfAplic: a.irrfAplic, antIrpj: 0, antCsll: 0 })
+      setCarregando(false)
+    })()
+    return () => { vivo = false }
+  }, [clienteId, competencia, regime, trimestral])
+
+  if (carregando || !f) return <Card><p style={{ color: theme.sub, fontSize: 13 }}><i className="ti ti-loader" /> Montando a memória do LALUR ({competencia})…</p></Card>
+
+  const lucro = num(f.lucro), adicao = num(f.adicao), exclusao = num(f.exclusao), prejuizo = num(f.prejuizo)
+  const irrf = num(f.irrf), irrfAplic = num(f.irrfAplic)
+  const lucroFiscal = r2(lucro + adicao - exclusao)
+  const limite30 = lucroFiscal > 0 ? r2(lucroFiscal * 0.30) : 0
+  const compensa = r2(Math.min(prejuizo, limite30))
+  const base = Math.max(0, r2(lucroFiscal - compensa))
+  const irpj15 = r2(base * 0.15)
+  const limiteAdic = 20000 * auto.nMeses
+  const adicional = r2(Math.max(0, base - limiteAdic) * 0.10)
+  const irpjDevido = r2(irpj15 + adicional)
+  const csll = r2(base * 0.09)
+  const retTotal = r2(irrf + irrfAplic)
+  const irpjProvisionar = r2(Math.max(0, irpjDevido - num(f.antIrpj)))
+  const csllProvisionar = r2(Math.max(0, csll - num(f.antCsll)))
+  const irpjAPagar = r2(irpjDevido - retTotal - num(f.antIrpj))
+  const csllAPagar = r2(csll - num(f.antCsll))
+
+  const set = k => e => setF(x => ({ ...x, [k]: e.target.value }))
+  const contas = cfg?.contas || {}
+  const faltaConta = (a, b) => !String(contas[a] || '').trim() || !String(contas[b] || '').trim()
+  const semCad = !cfg || (!(cfg.adicao || []).length && !(cfg.exclusao || []).length && !contas.irpjDesp)
+
+  const InputCel = ({ k }) => <input className="input" style={{ maxWidth: 150, textAlign: 'right', padding: '5px 8px' }} value={f[k]} onChange={set(k)} onBlur={e => setF(x => ({ ...x, [k]: r2(num(e.target.value)) }))} />
+  const Lin = ({ label, children, forte, neg }) => (
+    <tr style={{ borderTop: `1px solid ${theme.border}`, background: forte ? theme.input : 'transparent', fontWeight: forte ? 700 : 400 }}>
+      <td style={{ ...td, borderBottom: 'none' }}>{label}</td>
+      <td style={{ ...td, borderBottom: 'none', textAlign: 'right', whiteSpace: 'nowrap', color: neg && '' }}>{children}</td>
+    </tr>
+  )
+  const val = v => <span style={{ color: v < 0 ? theme.red : theme.text }}>{money(v)}</span>
+
+  return (
+    <div style={{ display: 'grid', gap: 14 }}>
+      <Card style={{ borderLeft: `3px solid ${ACC.lalur}` }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 6 }}>
+          <SecTitle><i className="ti ti-report-money" style={{ color: ACC.lalur }} /> Memória de cálculo — IRPJ e CSLL</SecTitle>
+          <span style={{ fontSize: 12, color: theme.sub }}>{trimestral ? 'Lucro Real Trimestral' : 'Lucro Real Anual'} · período <b style={{ color: theme.text }}>{auto.periodo}</b> ({auto.nMeses} {auto.nMeses === 1 ? 'mês' : 'meses'})</span>
+        </div>
+        <SecSub>O <b>Lucro do Balancete</b> vem do resultado acumulado do Comparativo (vivo). Adições, exclusões e retenções vêm das contas do <b>Cadastro do Lucro Real</b> (Base de Informações) — você pode ajustar aqui.</SecSub>
+
+        {semCad && <p style={{ color: theme.yellow, fontSize: 12.5, margin: '0 0 12px' }}><i className="ti ti-alert-triangle" /> Cadastro do Lucro Real vazio — preencha em <b>Base de Informações → Cadastro do Lucro Real</b> (contas de adição/exclusão, IRRF e de contabilização). Você ainda pode informar os valores à mão abaixo.</p>}
+
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 460, maxWidth: 620 }}>
+            <tbody>
+              <Lin label="Lucro do Balancete (acumulado)">{val(lucro)}</Lin>
+              <Lin label="( + ) Adições"><InputCel k="adicao" /></Lin>
+              <Lin label="( − ) Exclusões"><InputCel k="exclusao" /></Lin>
+              <Lin label="( = ) Lucro Fiscal" forte>{val(lucroFiscal)}</Lin>
+              <Lin label="Prejuízo a compensar (saldo)"><InputCel k="prejuizo" /></Lin>
+              <Lin label={`( − ) Compensação (limite 30% = ${money(limite30)})`}>{val(-compensa)}</Lin>
+              <Lin label="( = ) Base de Cálculo" forte>{val(base)}</Lin>
+              <Lin label="IRPJ 15%">{val(irpj15)}</Lin>
+              <Lin label={`IRPJ adicional 10% (acima de ${money(limiteAdic)})`}>{val(adicional)}</Lin>
+              <Lin label="( = ) IRPJ devido" forte>{val(irpjDevido)}</Lin>
+              <Lin label="( − ) IRRF retido na fonte"><InputCel k="irrf" /></Lin>
+              <Lin label="( − ) IRRF s/ aplicação financeira"><InputCel k="irrfAplic" /></Lin>
+              <Lin label="( − ) IRPJ já provisionado (antecipado)"><InputCel k="antIrpj" /></Lin>
+              <Lin label="( = ) IRPJ a pagar" forte>{val(irpjAPagar)}</Lin>
+              <Lin label="CSLL 9%">{val(csll)}</Lin>
+              <Lin label="( − ) CSLL já provisionada (antecipado)"><InputCel k="antCsll" /></Lin>
+              <Lin label="( = ) CSLL a pagar" forte>{val(csllAPagar)}</Lin>
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      <Card>
+        <SecTitle>Contabilizar</SecTitle>
+        <SecSub>Gera a provisão do período (o que ainda não foi provisionado): <b>D despesa / C a pagar</b>. As contas vêm do Cadastro do Lucro Real.</SecSub>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <button className="btn" disabled={faltaConta('irpjDesp', 'irpjPagar') || irpjProvisionar <= 0}
+            title={faltaConta('irpjDesp', 'irpjPagar') ? 'Cadastre as contas de IRPJ (despesa e a pagar) na Base de Informações.' : undefined}
+            onClick={() => abrirGerar({ data: dataComp(competencia), conta_debito: contas.irpjDesp, conta_credito: contas.irpjPagar, valor: irpjProvisionar, historico: `IRPJ ${trimestral ? 'trimestral' : 'anual'} · ${auto.periodo} (Lucro Real)`, origem: 'lalur', documento: 'IRPJ ' + competencia }, `IRPJ — ${auto.periodo}`)}>
+            <i className="ti ti-file-plus" /> Contabilizar IRPJ · {money(irpjProvisionar)}
+          </button>
+          <button className="btn" disabled={faltaConta('csllDesp', 'csllPagar') || csllProvisionar <= 0}
+            title={faltaConta('csllDesp', 'csllPagar') ? 'Cadastre as contas de CSLL (despesa e a pagar) na Base de Informações.' : undefined}
+            onClick={() => abrirGerar({ data: dataComp(competencia), conta_debito: contas.csllDesp, conta_credito: contas.csllPagar, valor: csllProvisionar, historico: `CSLL ${trimestral ? 'trimestral' : 'anual'} · ${auto.periodo} (Lucro Real)`, origem: 'lalur', documento: 'CSLL ' + competencia }, `CSLL — ${auto.periodo}`)}>
+            <i className="ti ti-file-plus" /> Contabilizar CSLL · {money(csllProvisionar)}
+          </button>
+        </div>
+        <p style={{ color: theme.sub, fontSize: 11.5, margin: '12px 0 0' }}>As retenções (IRRF) abatem o <b>a pagar</b> por compensação do ativo já registrado; nesta versão elas entram como informação do cálculo. A baixa da retenção contra o passivo pode ser feita depois, conforme formos evoluindo.</p>
       </Card>
     </div>
   )
