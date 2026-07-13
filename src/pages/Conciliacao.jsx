@@ -836,7 +836,15 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
     // Não se aplica à abertura (a leitura dela vem da carga inicial, não do razão).
     let ajustouLeitura = false
     const aj = payload.ajuste
-    if (aj && acao?.id && !ehAb && (aj.nf || aj.entidade || aj.historico)) {
+    if (aj && ehAb && aj.entidade) {
+      // Saldo inicial não tem razao_id → corrige o NOME por APELIDO (vale sempre).
+      const de = chaveNome(acao?.leitura?.entidade || ''), para = String(aj.entidade).trim()
+      if (de && para && de !== chaveNome(para)) {
+        const aliases = { ...nomesAlias, [de]: para }
+        setNomesAlias(aliases); await salvarNomes(nomesConf, nomesIsolados, aliases)
+        ajustouLeitura = true
+      }
+    } else if (aj && acao?.id && !ehAb && (aj.nf || aj.entidade || aj.historico)) {
       await supabase.from('ajuste_leitura').upsert({
         competencia_id: id, razao_id: acao.id,
         nf: aj.nf || null, entidade: aj.entidade || null, historico: aj.historico || null, usuario,
