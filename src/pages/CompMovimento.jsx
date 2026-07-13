@@ -298,9 +298,12 @@ export default function CompMovimento() {
           amArr.push({ ano: c.ano, mes: c.mes, id: c.id })
           if (c.ano === ANO) compsComDados.push({ id: c.id, mes: c.mes })
           for (const l of res) {
-            const key = l.classifRaw || l.classif
+            // Identidade da linha = código reduzido nas ANALÍTICAS (várias dividem a mesma
+            // classificação — ex.: 6 contas em 4102021800 — e se fundiriam se a chave fosse
+            // a classificação); nas SINTÉTICAS, o prefixo da classificação.
+            const key = (!l.sintetica && l.reduzido) ? '#' + l.reduzido : (l.classifRaw || l.classif)
             if (!meta[key]) {
-              meta[key] = { reduzido: l.reduzido, classif: l.classif, classifRaw: key, nome: l.nome, grau: l.grau, sintetica: l.sintetica }
+              meta[key] = { key, reduzido: l.reduzido, classif: l.classif, classifRaw: l.classifRaw || l.classif, nome: l.nome, grau: l.grau, sintetica: l.sintetica }
             } else {
               if (!meta[key].nome && l.nome) meta[key].nome = l.nome
               if (!meta[key].reduzido && l.reduzido) meta[key].reduzido = l.reduzido
@@ -384,9 +387,9 @@ export default function CompMovimento() {
   // não justificado conta 1 — mesmo conceito do Status e do badge do menu.
   // Só nas analíticas — as sintéticas são totais (não se justificam diretamente).
   let pendentes = 0
-  for (const { reduzido, classifRaw, sintetica } of contas) {
+  for (const { reduzido, key, sintetica } of contas) {
     if (sintetica) continue
-    if (comps.some(c => desviante(classifRaw, c.mes) && !justificadas.has(chaveCelula(reduzido, c.mes)))) pendentes++
+    if (comps.some(c => desviante(key, c.mes) && !justificadas.has(chaveCelula(reduzido, c.mes)))) pendentes++
   }
 
   // Níveis de sintéticas disponíveis (grau), para o filtro por nível do comparativo.
@@ -452,7 +455,7 @@ export default function CompMovimento() {
   }
   const totalConta = key => colunas.reduce((s, col) => s + (valorCol(key, col) || 0), 0)
   // Lucro (ou prejuízo) do período = −(soma dos saldos das contas de resultado analíticas).
-  const lucroCol = col => -contas.filter(c => !c.sintetica).reduce((s, c) => s + (valorCol(c.classifRaw, col) || 0), 0)
+  const lucroCol = col => -contas.filter(c => !c.sintetica).reduce((s, c) => s + (valorCol(c.key, col) || 0), 0)
   const lucroTotal = colunas.reduce((s, col) => s + lucroCol(col), 0)
 
   if (!empresaId) {
@@ -561,14 +564,14 @@ export default function CompMovimento() {
                 </tr>
               </thead>
               <tbody>
-                {contas.filter(c => nivel === 'tudo' ? true : (c.sintetica && c.grau <= nivel)).map(({ reduzido, classif, classifRaw, nome, sintetica, grau }) => {
-                  const tot = totalConta(classifRaw)
+                {contas.filter(c => nivel === 'tudo' ? true : (c.sintetica && c.grau <= nivel)).map(({ reduzido, classif, classifRaw, key, nome, sintetica, grau }) => {
+                  const tot = totalConta(key)
                   // Destaque por nível: sintética de 1º nível mais forte; níveis mais fundos, mais leves.
                   const bgNivel = !sintetica ? 'transparent' : grau <= 1 ? theme.input : grau === 2 ? 'rgba(74,124,255,0.07)' : 'rgba(74,124,255,0.035)'
                   const pesoNivel = sintetica ? (grau <= 1 ? 800 : grau === 2 ? 700 : 600) : 400
                   const recuo = 14 + Math.max(0, (grau || 1) - 1) * 16
                   return (
-                    <tr key={classifRaw} style={{ borderTop: `1px solid ${theme.border}`, background: bgNivel, fontWeight: pesoNivel }}>
+                    <tr key={key} style={{ borderTop: `1px solid ${theme.border}`, background: bgNivel, fontWeight: pesoNivel }}>
                       <td style={{ ...td, color: theme.sub, fontSize: 11 }}>{reduzido || ''}</td>
                       <td style={{ ...td, color: theme.sub, fontSize: 11 }}>{classif}</td>
                       <td style={{ ...td, fontWeight: pesoNivel, maxWidth: 320, paddingLeft: recuo }}>
@@ -576,7 +579,7 @@ export default function CompMovimento() {
                         {nome || '—'}
                       </td>
                       {colunas.map(col => {
-                        const v = valorCol(classifRaw, col)
+                        const v = valorCol(key, col)
                         const vazio = v == null || Number(v) === 0
                         // Sintética: total do grupo — "—" quando não há saldo, sem clique.
                         if (sintetica) {
@@ -587,7 +590,7 @@ export default function CompMovimento() {
                           return <td key={col.key} style={{ ...td, textAlign: 'right', color: vazio ? theme.sub : theme.text }}>{vazio ? '—' : moneyDC(v)}</td>
                         }
                         const mes = col.mesJust
-                        const red = desviante(classifRaw, mes)
+                        const red = desviante(key, mes)
                         const ok = red && justificadas.has(chaveCelula(reduzido, mes))
                         // Sem saldo e sem variação: traço apagado, sem clique.
                         if (vazio && !red) {
@@ -596,7 +599,7 @@ export default function CompMovimento() {
                         return (
                           <td key={col.key} style={{ ...td, textAlign: 'right' }}>
                             <button
-                              onClick={() => setDetalhe({ conta: reduzido, classif, nome, mes, compId: col.compId, varInfo: infoVariacao(classifRaw, mes) })}
+                              onClick={() => setDetalhe({ conta: reduzido, classif, nome, mes, compId: col.compId, varInfo: infoVariacao(key, mes) })}
                               style={{
                                 display: 'inline-flex', alignItems: 'center', gap: 4, justifyContent: 'flex-end',
                                 background: 'none', border: 'none', padding: 0, cursor: 'pointer',
