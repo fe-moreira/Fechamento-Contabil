@@ -203,20 +203,28 @@ function baixadosPorNF(lancs) {
   for (const l of lancs) { const nf = nfKey(l.leitura?.nf); if (nf) (porNF[nf] = porNF[nf] || []).push(l) }
   const baixados = new Set()
   const aproximadas = []
-  for (const nf in porNF) {
-    const grp = porNF[nf]
+  // Tenta baixar um conjunto de lançamentos da mesma NF+cliente: precisa de débito e
+  // crédito e o líquido tem que zerar.
+  const tryBaix = grp => {
     const temD = grp.some(l => Number(l.debito) > 0.005)
     const temC = grp.some(l => Number(l.credito) > 0.005)
-    if (!temD || !temC) continue // precisa de débito e crédito na mesma NF
-    if (Math.abs(grp.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)) >= 0.005) continue // não zera
-    // Cliente tem que bater (nome aproximado) entre os lançamentos da NF.
-    const nomes = [...new Set(grp.map(l => (l.leitura?.ident && l.leitura.entidade) ? l.leitura.entidade : null).filter(Boolean))]
-    let mesmoCli = true
-    for (let i = 1; i < nomes.length; i++) if (!mesmoCliente(tokensNome(nomes[0]), tokensNome(nomes[i]))) { mesmoCli = false; break }
-    if (!mesmoCli) continue
+    if (!temD || !temC) return
+    if (Math.abs(grp.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)) >= 0.005) return
     for (const l of grp) baixados.add(l)
     const strs = [...new Set(grp.map(l => String(l.leitura?.nf ?? '').trim()).filter(Boolean))]
-    if (strs.length > 1) aproximadas.push(strs.join(' = ')) // NFs diferentes em texto, iguais ignorando zeros
+    if (strs.length > 1) aproximadas.push(strs.join(' = '))
+  }
+  const nomeDe = l => (l.leitura?.ident && l.leitura.entidade) ? l.leitura.entidade : null
+  for (const nf in porNF) {
+    const grp = porNF[nf]
+    // Clusters de cliente DENTRO desta NF — números pequenos (NF 64) se repetem entre
+    // fornecedores diferentes; sem separar, o nome não bate entre todos e nada baixava.
+    const nomes = [...new Set(grp.map(nomeDe).filter(Boolean))]
+    const clusters = []
+    for (const nm of nomes) { const tk = tokensNome(nm); const c = clusters.find(c => mesmoCliente(c.tk, tk)); if (c) c.nomes.push(nm); else clusters.push({ tk, nomes: [nm] }) }
+    if (clusters.length <= 1) { tryBaix(grp); continue } // um cliente só (ou nenhum identificado) → como antes
+    // Vários clientes na mesma NF → casa cada cliente isoladamente (o par certo baixa).
+    for (const c of clusters) tryBaix(grp.filter(l => { const nm = nomeDe(l); return nm && mesmoCliente(tokensNome(nm), c.tk) }))
   }
   return { baixados, aproximadas }
 }
@@ -518,21 +526,32 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
   const [verComposic, setVerComposic] = useState(null) // { titulo, itens } — composição de um saldo
   const [tratados, setTratados] = useState(new Set()) // razao_ids já corrigidos/estornados/justificados
   const [tratadosAb, setTratadosAb] = useState(new Set()) // itens de ABERTURA já conferidos (sem razao_id, chave AB·…)
+  const [confirmados, setConfirmados] = useState(new Set()) // linhas confirmadas EM LOTE — saem do em aberto (Conciliados)
+  const [verConferidos, setVerConferidos] = useState(false) // mostra a seção "Conferidos" (p/ reabrir)
   const [filtroSit, setFiltroSit] = useState('') // filtro por situação: ''|devedor|semtitulo|unificados|incerta|confirmaveis
   const [selEnt, setSelEnt] = useState(() => new Set()) // entidades marcadas p/ baixa em lote (por nome)
 
   async function carregarTratados() {
     // Linhas de razão são tratadas por razao_id (uuid). Linhas de ABERTURA (saldo inicial)
     // não têm razao_id — são tratadas por uma chave estável no campo `item` (prefixo "AB·").
-    const { data } = await supabase.from('auditoria').select('razao_id, item')
+    // CONFIRMADAS em lote (detalhe "Confirmado em lote…") SAEM do em aberto → Conciliados;
+    // justificativas individuais continuam na composição (não escondem título aberto).
+    const { data } = await supabase.from('auditoria').select('razao_id, item, detalhe')
       .eq('competencia_id', compId).eq('modulo', 'Conciliação')
-    const rz = new Set(), ab = new Set()
-    for (const a of (data || [])) { if (a.razao_id) rz.add(a.razao_id); else if (String(a.item || '').startsWith('AB·')) ab.add(a.item) }
-    setTratados(rz); setTratadosAb(ab)
+    const rz = new Set(), ab = new Set(), conf = new Set()
+    for (const a of (data || [])) {
+      const chave = a.razao_id || (String(a.item || '').startsWith('AB·') ? a.item : null)
+      if (!chave) continue
+      if (a.razao_id) rz.add(a.razao_id); else ab.add(a.item)
+      if (String(a.detalhe || '').startsWith('Confirmado em lote')) conf.add(chave)
+    }
+    setTratados(rz); setTratadosAb(ab); setConfirmados(conf)
   }
-  // Chave estável de uma linha de abertura (saldo inicial) e teste unificado de "já tratada".
+  // Chave estável de uma linha de abertura (saldo inicial) e testes de "já tratada"/"confirmada".
   const chaveAbertura = l => `AB·${conta.conta}·${nfKey(l.leitura?.nf)}·${baixaTxt(l.leitura?.entidade || '')}·${Math.round(((Number(l.debito) || 0) - (Number(l.credito) || 0)) * 100)}`
+  const chaveTrat = l => l._abertura ? chaveAbertura(l) : l.id
   const jaTratada = l => l._abertura ? tratadosAb.has(chaveAbertura(l)) : tratados.has(l.id)
+  const foiConfirmado = l => confirmados.has(chaveTrat(l)) // saiu do em aberto (conciliado)
   useEffect(() => { carregarTratados() }, [compId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function carregarLanc() {
@@ -633,7 +652,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
   // Agrupa só o que está EM ABERTO (não baixado) por nome; incerto cai em "(não identificado)".
   const grupos = {}, nomes = []
   for (const l of lanc) {
-    if (baixados.has(l)) continue
+    if (baixados.has(l) || foiConfirmado(l)) continue // baixado por NF ou confirmado em lote → saiu
     if (Math.abs(ov(l)) < 0.005) continue
     const key = l.leitura.ident && l.leitura.entidade ? l.leitura.entidade : '(não identificado)'
     if (!grupos[key]) { grupos[key] = []; nomes.push(key) }
@@ -662,7 +681,13 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
   // Para os relatórios: o que está em aberto (compõe o saldo) e o que zerou (baixado por NF).
   const ehEntidade = ehEntidadeConta
   const emAbertoTodos = ehEntidade ? lista.flatMap(g => g.lancs) : lanc.filter(l => Math.abs(ov(l)) >= 0.005)
-  const zerados = [...baixados]
+  // Confirmados em lote saíram do em aberto — entram nos "Conciliados" (o que zerou) e ficam
+  // acessíveis numa seção para reabrir. Agrupa por entidade só para exibir/reabrir.
+  const confirmadosLancs = lanc.filter(l => foiConfirmado(l) && Math.abs(ov(l)) >= 0.005)
+  const zerados = [...baixados, ...confirmadosLancs]
+  const conferidosPorNome = {}
+  for (const l of confirmadosLancs) { const k = l.leitura?.entidade || '(sem nome)'; (conferidosPorNome[k] = conferidosPorNome[k] || []).push(l) }
+  const conferidosGrupos = Object.entries(conferidosPorNome).map(([nome, lancs]) => ({ nome, lancs }))
 
   const revs = lanc.filter(l => Math.abs(ov(l)) >= 0.005 && l.leitura.conf !== 'alta').length
 
@@ -810,6 +835,20 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
     setFiltroSit('')
     setMsg(`${items.length} lançamento(s) de ${grupos.length} ${lab}(s) confirmado(s).`)
     carregarTratados()
+  }
+
+  // Reabre lançamentos CONFIRMADOS em lote: apaga só o registro de confirmação (mantém
+  // qualquer justificativa individual) e devolve as linhas para "em aberto".
+  async function reabrirConferidos(lancs) {
+    if (!lancs?.length) return
+    if (!window.confirm(`Reabrir ${lancs.length} lançamento(s)? Eles voltam para "em aberto" para você revisar/corrigir de novo.`)) return
+    for (const l of lancs) {
+      let q = supabase.from('auditoria').delete().eq('competencia_id', compId).eq('modulo', 'Conciliação').like('detalhe', 'Confirmado em lote%')
+      q = l._abertura ? q.eq('item', chaveAbertura(l)) : q.eq('razao_id', l.id)
+      await q
+    }
+    setMsg(`${lancs.length} lançamento(s) reaberto(s) — voltaram para o em aberto.`)
+    carregarTratados(); carregarLanc()
   }
 
   // Desfazer uma correção/estorno: remove o lançamento de acerto e o registro de
@@ -1068,6 +1107,36 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
           </div>
         )
       })}
+      {conferidosGrupos.length > 0 && (
+        <div style={{ marginTop: 6 }}>
+          <button onClick={() => setVerConferidos(v => !v)} style={{ background: 'none', border: 'none', color: theme.sub, cursor: 'pointer', fontSize: 12.5, padding: '6px 2px', display: 'flex', alignItems: 'center', gap: 6 }}>
+            <i className={`ti ${verConferidos ? 'ti-chevron-down' : 'ti-chevron-right'}`} /> <i className="ti ti-circle-check" style={{ color: theme.green }} /> Conferidos neste mês ({confirmadosLancs.length}) — {verConferidos ? 'clique para ocultar' : 'clique para ver e reabrir'}
+          </button>
+          {verConferidos && conferidosGrupos.map((g, gi) => (
+            <div key={gi} style={{ background: theme.card, border: `1px solid ${theme.cb}`, borderRadius: 12, overflow: 'hidden', marginBottom: 10, opacity: 0.9 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', background: theme.input, gap: 8 }}>
+                <span style={{ color: theme.text, fontSize: 13, fontWeight: 600 }}><i className="ti ti-circle-check" style={{ color: theme.green, marginRight: 6 }} />{g.nome}</span>
+                <button className="btn btn-ghost" style={{ fontSize: 12, padding: '4px 10px', color: theme.yellow, borderColor: theme.yellow }} onClick={() => reabrirConferidos(g.lancs)}><i className="ti ti-rotate-2" /> Reabrir ({g.lancs.length})</button>
+              </div>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 640 }}>
+                  <tbody>
+                    {g.lancs.map((l, i) => (
+                      <tr key={i} style={{ borderTop: `1px solid ${theme.border}`, fontSize: 12 }}>
+                        <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{l.data || '—'}</td>
+                        <td style={{ ...td, color: theme.sub }}>NF {l.leitura?.nf || '—'}</td>
+                        <td style={{ ...td, color: theme.sub, fontFamily: 'monospace', fontSize: 11, maxWidth: 320 }}>{l.historico}</td>
+                        <td style={{ ...tdR, color: theme.green }}>{Number(l.debito) ? money(l.debito) : '—'}</td>
+                        <td style={{ ...tdR, color: theme.red }}>{Number(l.credito) ? money(l.credito) : '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
       </>
       )}
       </>
