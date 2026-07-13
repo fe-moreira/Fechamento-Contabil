@@ -1055,6 +1055,24 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   function obsContas(perfMap = perfis, legado = perfil) { return JSON.stringify({ perfil: legado || null, perfis: perfMap || {} }) }
   // Resolve o perfil de um banco: primeiro o específico do banco, senão o legado.
   function perfilDeBanco(banco) { return perfis[String(banco)] || perfil || null }
+  // Um perfil "serve" para este arquivo se a linha de início cabe e a coluna de valor
+  // existe e tem números. Evita aplicar o perfil de OUTRO banco (colunas/linhas que nem
+  // existem neste extrato → prévia vazia). Nesse caso o palpite vem do próprio arquivo.
+  function perfilServe(p, arr) {
+    if (!p || !Array.isArray(arr) || !arr.length) return false
+    const nc = arr.reduce((m, r) => Math.max(m, (r || []).length), 0)
+    if (p.linhaInicio == null || p.linhaInicio >= arr.length) return false
+    if (p.colValor == null || p.colValor < 0 || p.colValor >= nc) return false
+    return arr.slice(p.linhaInicio, p.linhaInicio + 60).some(r => { const v = parseValor(r?.[p.colValor]); return v && Math.abs(v) >= 1 })
+  }
+  // Palpite inicial ao abrir "Ajustar leitura": perfil salvo do banco se couber, senão
+  // o legado se couber, senão auto-detecta do próprio arquivo.
+  function perfilInicial(banco, arr) {
+    const esp = perfis[String(banco)]
+    if (perfilServe(esp, arr)) return esp
+    if (!esp && perfilServe(perfil, arr)) return perfil
+    return perfilPadrao(arr)
+  }
   async function salvarContas(arr) { setContas(arr); await salvarCarga('contas_bancarias', arr, obsContas()) }
   async function salvarPerfil(perf, banco) {
     const chave = String(banco ?? '').trim()
@@ -1278,7 +1296,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
         // SEMPRE abre a tela de configuração para o usuário CONFERIR se o sistema entendeu
         // as colunas (parte do perfil salvo, quando houver — é só conferir e confirmar).
         // Ao confirmar, importa (aplicarEProsseguir no onSalvar da tela).
-        setCfg({ arr, catByRow, nome: file.name, banco: bancoFixo, perfil: perfilDeBanco(bancoFixo) || perfilPadrao(arr) })
+        setCfg({ arr, catByRow, nome: file.name, banco: bancoFixo, perfil: perfilInicial(bancoFixo, arr) })
         return
       }
       const header = arr[0] || []
@@ -1804,7 +1822,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', margin: '14px 0 6px' }}>
               <span style={{ fontSize: 12, color: theme.sub }}><i className="ti ti-adjustments" style={{ color: theme.accent }} /> Extrato normalizado pelo perfil de leitura deste cliente.</span>
               {Array.isArray(raw.arr)
-                ? <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => setCfg({ arr: raw.arr, catByRow: raw.catByRow, nome: raw.nome, banco: raw.banco, perfil: perfilDeBanco(raw.banco) || perfilPadrao(raw.arr) })}><i className="ti ti-adjustments" /> Ajustar leitura</button>
+                ? <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => setCfg({ arr: raw.arr, catByRow: raw.catByRow, nome: raw.nome, banco: raw.banco, perfil: perfilInicial(raw.banco, raw.arr) })}><i className="ti ti-adjustments" /> Ajustar leitura</button>
                 : <label className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', cursor: 'pointer' }} title="Rascunho aberto sem o arquivo — reimporte o extrato para ajustar a leitura">
                     <i className="ti ti-adjustments" /> Ajustar leitura (reimportar)
                     <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={e => raw.banco && importar(e.target.files?.[0], raw.banco)} />
