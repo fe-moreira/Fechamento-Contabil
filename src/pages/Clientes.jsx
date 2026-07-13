@@ -9,6 +9,7 @@ const REGIMES = ['SIMPLES NACIONAL', 'LUCRO PRESUMIDO', 'LUCRO REAL ANUAL', 'LUC
 const vazio = {
   codigo_dominio: '', tipo: 'Matriz', codigo_matriz: '', razao_social: '',
   nome_fantasia: '', cnpj: '', regime_tributario: 'SIMPLES NACIONAL',
+  regime_calculo_imposto: 'COMPETENCIA',
   competencia_inicio: '', sistema_financeiro: '', integracao_financeira: 'Não usa',
   usa_centro_custo: false, modelo_rel_gerencial_id: '',
   analista: '', observacoes: '', prazo_entrega: '', tipo_fechamento: 'Consolidado',
@@ -367,6 +368,12 @@ export default function Clientes() {
               <Campo label="Regime tributário" req>
                 <select className="input" value={form.regime_tributario} onChange={set('regime_tributario')}>
                   {(!form.regime_tributario || REGIMES.includes(form.regime_tributario) ? REGIMES : [form.regime_tributario, ...REGIMES]).map(r => <option key={r}>{r}</option>)}
+                </select>
+              </Campo>
+              <Campo label="Regime de cálculo do imposto">
+                <select className="input" value={form.regime_calculo_imposto || 'COMPETENCIA'} onChange={set('regime_calculo_imposto')}>
+                  <option value="COMPETENCIA">Competência</option>
+                  <option value="CAIXA">Caixa</option>
                 </select>
               </Campo>
               <Campo label="Tipo de fechamento" req>

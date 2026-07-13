@@ -233,7 +233,8 @@ const HTML = `
 <section id="m-clientes">
   <div class="m-eyebrow">Nível cliente</div>
   <h2 class="m-sec">03 · Clientes</h2>
-  <p>Cadastro das empresas (matriz e filiais). Cada cliente tem <b>código no Domínio</b> (a chave que amarra tudo), CNPJ, regime tributário, tipo de fechamento, analista e as flags de integração. O onboarding em lote é por planilha; matriz e filiais são linhas na mesma aba, ligadas pelo código da matriz.</p>
+  <p>Cadastro das empresas (matriz e filiais). Cada cliente tem <b>código no Domínio</b> (a chave que amarra tudo), CNPJ, <b>regime tributário</b>, <b>regime de cálculo do imposto</b> (Caixa/Competência), tipo de fechamento, analista e as flags de integração. O onboarding em lote é por planilha; matriz e filiais são linhas na mesma aba, ligadas pelo código da matriz.</p>
+  <div class="m-rule"><span class="k">Regime de cálculo do imposto</span> <b>Caixa</b> ou <b>Competência</b> — define a base de PIS/COFINS e do Simples. É o que habilita esses itens no card <b>Impostos</b> (só entram para empresas em regime <b>Caixa</b>). Todos começam em Competência.</div>
   <div class="m-rule"><span class="k">Chaves que o sistema usa</span> <b>Código do Domínio</b> identifica o cliente no roteamento de arquivos por nome; o <b>CNPJ</b> identifica pela leitura de conteúdo (ver Importação em massa).</div>
 </section>
 
