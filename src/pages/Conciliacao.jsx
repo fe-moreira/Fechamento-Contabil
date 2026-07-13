@@ -938,7 +938,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // não casou sozinho (NF diferente, sem NF, ou nomes separados). Vão para Conciliados.
   const toggleSelLin = l => setSelLin(prev => { const s = new Set(prev); s.has(l.id) ? s.delete(l.id) : s.add(l.id); return s })
   async function conectarSelecionados() {
-    const alvo = lanc.filter(l => selLin.has(l.id) && !l.acerto && l.id && !jaTratada(l))
+    const alvo = lanc.filter(l => selLin.has(l.id) && !l.acerto && l.id)
     if (alvo.length < 2) { setMsg('Selecione ao menos 2 lançamentos (a nota e o pagamento) para conectar.'); return }
     const net = alvo.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
     // Se NÃO zera, é obrigatório apontar se a diferença é DESCONTO ou JUROS/MULTA (com a
@@ -1296,7 +1296,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
                       style={{ borderTop: `1px solid ${theme.border}`, cursor: 'pointer', opacity: (l.acerto || jaTratada(l)) ? 0.7 : 1, background: (l.acerto || jaTratada(l)) ? 'rgba(48,164,108,0.08)' : semNF ? 'rgba(229,72,77,0.08)' : 'transparent' }}
                       title={l.acerto ? `${tagAcertoLanc(l).titulo} — clique para ver ou desfazer` : jaTratada(l) ? 'Já conferido — clique para ver ou desfazer' : semNF ? 'Baixa com NF que não confere com o título — justifique ou corrija' : 'Justificar ou corrigir este lançamento'}>
                       <td style={{ ...td, textAlign: 'center' }} onClick={e => e.stopPropagation()}>
-                        {!l.acerto && !jaTratada(l) && <input type="checkbox" title="Conectar com outro (baixa manual)" checked={selLin.has(l.id)} onChange={() => toggleSelLin(l)} style={{ cursor: 'pointer', width: 15, height: 15 }} />}
+                        {!l.acerto && <input type="checkbox" title="Conectar com outro (baixa manual)" checked={selLin.has(l.id)} onChange={() => toggleSelLin(l)} style={{ cursor: 'pointer', width: 15, height: 15 }} />}
                       </td>
                       <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{l.data || '—'}</td>
                       <td style={{ ...td, color: semNF ? theme.red : theme.sub, fontWeight: 600 }}>NF {l.leitura.nf || '—'}</td>
@@ -1374,7 +1374,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       )}
 
       {(() => {
-        const selLancs = lanc.filter(l => selLin.has(l.id) && !l.acerto && !jaTratada(l))
+        const selLancs = lanc.filter(l => selLin.has(l.id) && !l.acerto)
         if (!selLancs.length) return null
         const net = selLancs.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
         const zera = Math.abs(net) < 0.005
