@@ -219,11 +219,15 @@ export async function anexarExtratoExcel({ compId, conta, file }) {
 // competencias.integracoes.financeira.bancos[conta] — o mesmo que a tela mostra ao abrir.
 // Não conclui o banco (fica como rascunho, com os lançamentos já sugeridos).
 export async function alimentarIntegracaoFinanceira({ compId, empresaId, conta, file, usuario = null }) {
-  const [{ data: cb }, { data: mem }, { data: planoCarga }] = await Promise.all([
+  const [{ data: cb }, { data: mem }, { data: planoCarga }, { data: ccCarga }] = await Promise.all([
     supabase.from('cargas_cadastro').select('dados, obs').eq('cliente_id', empresaId).eq('tipo', 'contas_bancarias').order('created_at', { ascending: false }).limit(1).maybeSingle(),
     supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'memoria_financeira').order('created_at', { ascending: false }).limit(1).maybeSingle(),
     supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'plano').order('created_at', { ascending: false }).limit(1).maybeSingle(),
+    supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'centro_custo').order('created_at', { ascending: false }).limit(1).maybeSingle(),
   ])
+  // Centros de custo (código/nome) — p/ resolver o CC da planilha (vem código OU nome).
+  const kByCC = (o, re) => { const k = Object.keys(o || {}).find(k => re.test(String(k).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, ''))); return k ? String(o[k] ?? '').trim() : '' }
+  const centros = (Array.isArray(ccCarga?.dados) ? ccCarga.dados : []).map(r => ({ cod: kByCC(r, /cod/), nome: kByCC(r, /nome|descri/), resp: kByCC(r, /respons/) })).filter(c => c.cod || c.nome)
   // Perfil de leitura POR BANCO: usa o específico da conta; cai no legado (cadastro
   // antigo com um só perfil) apenas se o banco ainda não tiver o seu.
   let perfil = null
@@ -247,7 +251,7 @@ export async function alimentarIntegracaoFinanceira({ compId, empresaId, conta, 
 
   // Classifica por banco (a conta é um lado da partida; a contrapartida nunca é o próprio banco).
   const excl = new Set([String(conta)])
-  const norm = aplicarPerfil(arr, perfil, memoria, catByRow, adiantContas, excl)
+  const norm = aplicarPerfil(arr, perfil, memoria, catByRow, adiantContas, excl, centros)
     .map(l => ({ ...l, banco: String(conta), contra: String(l.contra || '') === String(conta) ? '' : l.contra }))
   if (!norm.length) return { classificado: false, motivo: 'o perfil não encontrou lançamentos' }
 
