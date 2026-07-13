@@ -318,6 +318,7 @@ const HTML = `
     <div class="m-mod"><div class="h"><span class="ic">PD</span> PER/DCOMP</div><p>Crédito e compensação — a declaração que o time fiscal faz. Registra o crédito e o abatimento.</p></div>
     <div class="m-mod"><div class="h"><span class="ic">%</span> JSCP</div><p>Juros sobre capital próprio, com os campos da planilha real. IRRF padrão <b>17,5%</b> (alíquota vigente em 2026).</p></div>
     <div class="m-mod"><div class="h"><span class="ic">LR</span> LALUR</div><p>Só para <b>Lucro Real</b>. Puxa o resultado acumulado do Comparativo, aplica adições/exclusões e prejuízo (limite 30%) e calcula <b>IRPJ 15% + adicional 10%</b> (acima de R$ 20 mil/mês) <b>+ CSLL 9%</b>. Anual (acumula no ano) ou Trimestral. Usa o Cadastro do Lucro Real e contabiliza a provisão.</p></div>
+    <div class="m-mod"><div class="h"><span class="ic">RD</span> Receitas Diferidas</div><p>Faturamento reconhecido aos poucos (<b>baixa manual</b>). Você informa quanto reconhecer no mês e gera a <b>receita</b> (D receita diferida / C receita) e os impostos <b>PIS/COFINS/ISS</b> proporcionais (D despesa / C imposto diferido). Mostra faturamento, reconhecido e saldo.</p></div>
   </div>
 </section>
 
