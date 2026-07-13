@@ -1277,7 +1277,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     setErro(''); setMsg('Importação desfeita — pode iniciar uma nova.')
   }
 
-  async function importar(file, bancoFixo) {
+  async function importar(file, bancoFixo, modoForcado) {
     if (!file) return
     setErro(''); setMsg('')
     try {
@@ -1296,7 +1296,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
         // SEMPRE abre a tela de configuração para o usuário CONFERIR se o sistema entendeu
         // as colunas (parte do perfil salvo, quando houver — é só conferir e confirmar).
         // Ao confirmar, importa (aplicarEProsseguir no onSalvar da tela).
-        setCfg({ arr, catByRow, nome: file.name, banco: bancoFixo, perfil: perfilInicial(bancoFixo, arr) })
+        setCfg({ arr, catByRow, nome: file.name, banco: bancoFixo, perfil: perfilInicial(bancoFixo, arr), modo: modoForcado || null })
         return
       }
       const header = arr[0] || []
@@ -1965,9 +1965,15 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
           <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
             {raw.banco && <button className="btn btn-ghost" onClick={salvarRascunho}><i className="ti ti-device-floppy" /> Salvar e continuar depois</button>}
             {raw.banco && !concluido && (
-              <label className="btn btn-ghost" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer', color: theme.accent, borderColor: theme.accent }} title="Importar outro arquivo deste banco — o sistema pergunta se é para substituir ou complementar">
-                <i className="ti ti-cloud-upload" /> Importar arquivo
-                <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) importar(f, raw.banco) }} />
+              <label className="btn btn-ghost" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer', color: theme.accent, borderColor: theme.accent }} title={linhas.length ? 'Trocar por outro arquivo deste banco (substitui os lançamentos atuais)' : 'Importar o extrato deste banco'}>
+                <i className="ti ti-cloud-upload" /> {linhas.length ? 'Substituir arquivo' : 'Importar arquivo'}
+                <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) importar(f, raw.banco, linhas.length ? 'substituir' : null) }} />
+              </label>
+            )}
+            {raw.banco && !concluido && linhas.length > 0 && (
+              <label className="btn btn-ghost" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer', color: theme.green, borderColor: theme.green }} title="Somar os lançamentos de OUTRO arquivo aos que já estão aqui (ex.: 2º extrato para fechar o mês). Não apaga nada.">
+                <i className="ti ti-plus" /> Importar complemento
+                <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) importar(f, raw.banco, 'complementar') }} />
               </label>
             )}
             <button className="btn" onClick={aprenderSalvar}><i className="ti ti-brain" /> Aprender e salvar</button>
@@ -2006,7 +2012,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
         <PerfilExtratoCfg
           arr={cfg.arr} catByRow={cfg.catByRow} adiantContas={adiantContas} nome={cfg.nome} bancoNome={nomeBanco(cfg.banco)} bancoCod={cfg.banco} perfilInicial={cfg.perfil} memoria={memoria}
           onCancelar={() => setCfg(null)}
-          onSalvar={async (perf) => { await salvarPerfil(perf, cfg.banco); setCfg(null); aplicarEProsseguir(cfg.arr, cfg.nome, cfg.banco, perf, cfg.catByRow) }}
+          onSalvar={async (perf) => { const m = cfg.modo; await salvarPerfil(perf, cfg.banco); setCfg(null); aplicarEProsseguir(cfg.arr, cfg.nome, cfg.banco, perf, cfg.catByRow, m) }}
         />
       )}
 
