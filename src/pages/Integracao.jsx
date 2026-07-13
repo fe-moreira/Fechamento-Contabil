@@ -1152,24 +1152,27 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     // partida). Se a memória/perfil devolver o próprio banco, limpa para classificar à mão.
     const norm = aplicarPerfil(arr, perf, memoria, catByRow, adiantContas, new Set([String(bancoFixo)]))
       .map(l => ({ ...l, banco: bancoFixo, contra: String(l.contra || '') === String(bancoFixo) ? '' : l.contra }))
-    // Já existe uma importação EM ANDAMENTO deste banco → pergunta: substituir ou complementar
-    // (subir um 2º arquivo somando ao que já está, para finalizar o fechamento).
-    if (!modoImp && linhas.length && raw?.banco === bancoFixo && !concluido) {
-      setImportPend({ arr, nome, bancoFixo, perf, catByRow, qtd: norm.length })
+    // "Que já existe" deste banco: os lançamentos na tela (se o painel dele está aberto) OU
+    // o rascunho salvo (quando se reimporta direto pelo slot, sem abrir com "Continuar").
+    const prevBanco0 = (est?.bancos || {})[bancoFixo]
+    const draftPrev = Array.isArray(prevBanco0?.draft) ? prevBanco0.draft : []
+    const baseAtual = (raw?.banco === bancoFixo && linhas.length) ? linhas : draftPrev
+    const bancoConcluido = prevBanco0?.estado === 'validado' || prevBanco0?.concluido
+    // Já existe importação em andamento → pergunta substituir ou complementar (subir um 2º
+    // arquivo somando ao que já está, para finalizar o fechamento).
+    if (!modoImp && baseAtual.length && !bancoConcluido) {
+      setImportPend({ arr, nome, bancoFixo, perf, catByRow, qtd: norm.length, atual: baseAtual.length })
       return
     }
     const modo = modoImp || 'substituir'
     // Reimport do mesmo arquivo (substituir): preserva as contrapartidas já preenchidas no
     // rascunho (mesmo arquivo → mesma ordem), atualizando histórico/valor/data.
     let mantidas = 0
-    if (modo === 'substituir') {
-      const prev = (est?.bancos || {})[bancoFixo]?.draft
-      if (Array.isArray(prev) && prev.length === norm.length) {
-        norm.forEach((l, i) => { if (prev[i]?.contra) { l.contra = prev[i].contra; l.contra_nivel = prev[i].contra_nivel || 'manual'; mantidas++ } })
-      }
+    if (modo === 'substituir' && draftPrev.length === norm.length) {
+      norm.forEach((l, i) => { if (draftPrev[i]?.contra) { l.contra = draftPrev[i].contra; l.contra_nivel = draftPrev[i].contra_nivel || 'manual'; mantidas++ } })
     }
-    // Complementar: adiciona os novos lançamentos aos que já estão na tela.
-    const finalLinhas = modo === 'complementar' ? [...linhas, ...norm] : norm
+    // Complementar: adiciona os novos lançamentos aos que já existem (tela ou rascunho salvo).
+    const finalLinhas = modo === 'complementar' ? [...baseAtual, ...norm] : norm
     const prevBanco = (est?.bancos || {})[bancoFixo]
     if (prevBanco?.saldoExtrato) setSaldoExtrato(prevBanco.saldoExtrato)
     setCruza(prevBanco?.cruza || null); setCruzaOpen(false)
@@ -1964,7 +1967,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
         <div onClick={() => setImportPend(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 70 }}>
           <div onClick={e => e.stopPropagation()} style={{ width: 'min(480px,96vw)', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
             <h2 style={{ fontSize: 17, margin: '0 0 6px' }}>Já existe uma importação deste banco</h2>
-            <p style={{ color: theme.sub, fontSize: 13, margin: '0 0 4px' }}>Este banco já tem <b style={{ color: theme.text }}>{linhas.length}</b> lançamento(s) na tela. O novo arquivo tem <b style={{ color: theme.text }}>{importPend.qtd}</b>.</p>
+            <p style={{ color: theme.sub, fontSize: 13, margin: '0 0 4px' }}>Este banco já tem <b style={{ color: theme.text }}>{importPend.atual}</b> lançamento(s). O novo arquivo tem <b style={{ color: theme.text }}>{importPend.qtd}</b>.</p>
             <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 16px' }}><b style={{ color: theme.text }}>Complementar</b> soma os novos aos que já estão (ex.: 2º arquivo para fechar o mês). <b style={{ color: theme.text }}>Substituir</b> troca tudo pelos do novo arquivo.</p>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap' }}>
               <button className="btn btn-ghost" onClick={() => setImportPend(null)}>Cancelar</button>
