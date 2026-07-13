@@ -56,6 +56,7 @@ export default function DocumentosRecebidos() {
   const [editTipo, setEditTipo] = useState('')
   const [subindo, setSubindo] = useState(null) // índice do documento com upload em andamento
   const [msg, setMsg] = useState('')
+  const [fSit, setFSit] = useState('todos')    // filtro por situação ('todos' | '' pendente | recebido | nao_tem | nao_enviou)
 
   const ro = status === 'fechado' // fechado = somente leitura
 
@@ -211,6 +212,7 @@ export default function DocumentosRecebidos() {
   for (const d of docs) cont[situOf(d)]++
   const rec = cont.recebido
   const pct = total ? Math.round(rec / total * 100) : 0
+  const docsVis = docs.map((d, i) => [d, i]).filter(([d]) => fSit === 'todos' ? true : situOf(d) === fSit)
 
   return (
     <Wrapper>
@@ -262,16 +264,37 @@ export default function DocumentosRecebidos() {
         </div>
       )}
 
+      {/* Filtro por situação */}
+      {docs.length > 0 && (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', margin: '0 0 10px' }}>
+          {[
+            { k: 'todos', label: 'Todos', n: total, cor: theme.text },
+            { k: '', label: 'Pendentes', n: cont[''], cor: theme.yellow },
+            { k: 'recebido', label: 'Recebidos', n: cont.recebido, cor: theme.green },
+            { k: 'nao_tem', label: 'Não tem', n: cont.nao_tem, cor: theme.sub },
+            { k: 'nao_enviou', label: 'Não enviou', n: cont.nao_enviou, cor: theme.red },
+          ].map(c => (
+            <button key={c.k} onClick={() => setFSit(c.k)}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, padding: '5px 12px', borderRadius: 20, cursor: 'pointer',
+                border: `1px solid ${fSit === c.k ? c.cor : theme.border}`, background: fSit === c.k ? `${c.cor}22` : 'transparent', color: fSit === c.k ? c.cor : theme.sub, fontWeight: fSit === c.k ? 700 : 500 }}>
+              {c.label} <b style={{ color: c.cor }}>{c.n}</b>
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Lista */}
       <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'hidden' }}>
         {carregando ? (
           <p style={{ padding: 18, color: theme.sub, fontSize: 13 }}>Carregando…</p>
         ) : docs.length === 0 ? (
           <p style={{ padding: 18, color: theme.sub, fontSize: 13 }}>Nenhum documento na lista.{!ro && ' Inclua acima ou importe do Excel.'}</p>
-        ) : docs.map((d, i) => {
+        ) : docsVis.length === 0 ? (
+          <p style={{ padding: 18, color: theme.sub, fontSize: 13 }}>Nenhum documento nesta situação.</p>
+        ) : docsVis.map(([d, i], k) => {
           const s = situOf(d)
           return (
-          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderTop: i ? `1px solid ${theme.border}` : 'none', fontSize: 13.5, flexWrap: 'wrap' }}>
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderTop: k ? `1px solid ${theme.border}` : 'none', fontSize: 13.5, flexWrap: 'wrap' }}>
             <i className={`ti ${SIT[s].icon}`} style={{ color: SIT[s].cor, fontSize: 20 }} />
             {editIdx === i ? (
               <div style={{ flex: 1, minWidth: 260, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
