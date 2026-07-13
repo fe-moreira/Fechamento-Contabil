@@ -5,7 +5,7 @@ import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { theme, money, moneyDC } from '../lib/theme'
 import CampoConta from '../components/CampoConta'
-import { normHist, casarHistorico, casarHistoricoNivel, aprender, parseValor, dataISO, aplicarPerfil, extrairEntidade, ehEmpresa, catByRowDeMerges } from '../lib/financeiro'
+import { normHist, casarHistorico, casarHistoricoNivel, aprender, parseValor, dataISO, aplicarPerfil, extrairEntidade, ehEmpresa, catByRowDeMerges, expandirMerges } from '../lib/financeiro'
 import { gerarExcelTimbrado } from '../lib/excel'
 import { gerarDominioCSV } from '../lib/dominio'
 import { contasConciliacaoAbertas, montarBalancete } from '../lib/balancete'
@@ -1249,6 +1249,9 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
       const ws = wb.Sheets[wb.SheetNames[0]]
       const arr = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
       const catByRow = catByRowDeMerges(ws['!merges'], arr)
+      // Preenche células mescladas (Data/Documento/Natureza) — sem isso as linhas "de baixo"
+      // da mescla sobem sem data. Feito DEPOIS do catByRow (que usa as mesclas originais).
+      expandirMerges(arr, ws['!merges'])
       // Extrato por banco: cada cliente exporta diferente → usa o perfil salvo;
       // se ainda não houver, abre o mapeamento (uma vez por cliente).
       if (modo === 'porBanco' && bancoFixo) {
@@ -1923,6 +1926,12 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
 
           <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
             {raw.banco && <button className="btn btn-ghost" onClick={salvarRascunho}><i className="ti ti-device-floppy" /> Salvar e continuar depois</button>}
+            {raw.banco && !concluido && (
+              <label className="btn btn-ghost" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer', color: theme.accent, borderColor: theme.accent }} title="Importar outro arquivo deste banco — o sistema pergunta se é para substituir ou complementar">
+                <i className="ti ti-cloud-upload" /> Importar arquivo
+                <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) importar(f, raw.banco) }} />
+              </label>
+            )}
             <button className="btn" onClick={aprenderSalvar}><i className="ti ti-brain" /> Aprender e salvar</button>
             {raw.banco && (concluido
               ? <button className="btn btn-ghost" style={{ color: theme.yellow, borderColor: theme.yellow }} onClick={reabrirBanco}><i className="ti ti-lock-open" /> Reabrir banco</button>

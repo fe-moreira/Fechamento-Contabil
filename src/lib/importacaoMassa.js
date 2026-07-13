@@ -1,6 +1,6 @@
 import { supabase } from './supabase'
 import { parsePlano } from './balancete'
-import { aplicarPerfil, catByRowDeMerges } from './financeiro'
+import { aplicarPerfil, catByRowDeMerges, expandirMerges } from './financeiro'
 
 // ============================================================================
 // Importação em massa de documentos. O NOME do arquivo carrega o roteamento:
@@ -235,6 +235,7 @@ export async function alimentarIntegracaoFinanceira({ compId, empresaId, conta, 
   const ws = wb.Sheets[wb.SheetNames[0]]
   const arr = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
   const catByRow = catByRowDeMerges(ws['!merges'], arr)
+  expandirMerges(arr, ws['!merges']) // preenche Data/Documento/Natureza mescladas
 
   // Classifica por banco (a conta é um lado da partida; a contrapartida nunca é o próprio banco).
   const excl = new Set([String(conta)])

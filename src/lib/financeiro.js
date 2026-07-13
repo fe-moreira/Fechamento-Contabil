@@ -81,7 +81,10 @@ export function dataISO(v) {
   if (v instanceof Date && !isNaN(v)) {
     return `${v.getFullYear()}-${String(v.getMonth() + 1).padStart(2, '0')}-${String(v.getDate()).padStart(2, '0')}`
   }
-  const m = String(v ?? '').trim().match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})/)
+  // A célula tem de ser SÓ uma data (opcionalmente com hora) — ancorado no fim para NÃO
+  // casar códigos de conta como "1.10.05.0001" (que pareciam "1.10.05" → data e faziam a
+  // coluna de natureza ser detectada como Data, deixando os lançamentos "sem data").
+  const m = String(v ?? '').trim().match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})(?:[ T].*)?$/)
   if (!m) return ''
   let [, d, mo, y] = m; if (y.length === 2) y = '20' + y
   return `${y}-${mo.padStart(2, '0')}-${d.padStart(2, '0')}`
@@ -162,6 +165,26 @@ function decidirEntrada(r, p) {
 // sufixo "Total" dos subtotais.
 function limparCategoria(s) {
   return String(s || '').replace(/^[\d.\s]+/, '').replace(/\s+total\s*$/i, '').trim()
+}
+
+// Preenche as células MESCLADAS com o valor do canto superior-esquerdo (só onde está
+// vazio). Resolve extratos como o Sisloc, em que Data (Dt. Liquidação), Documento e a
+// Natureza vêm em células mescladas — sem isso, as linhas "de baixo" da mescla ficam
+// vazias (ex.: sobem sem data). Mutação in-place do array (matriz linhas × colunas).
+export function expandirMerges(arr, merges) {
+  for (const m of (merges || [])) {
+    if (!m?.s || !m?.e) continue
+    const v = (arr[m.s.r] || [])[m.s.c]
+    if (v === '' || v == null) continue
+    for (let r = m.s.r; r <= m.e.r; r++) {
+      const row = arr[r] || (arr[r] = [])
+      for (let c = m.s.c; c <= m.e.c; c++) {
+        if (r === m.s.r && c === m.s.c) continue
+        if (row[c] === '' || row[c] == null) row[c] = v
+      }
+    }
+  }
+  return arr
 }
 
 // Mapa linha→categoria a partir das células mescladas da coluna 0. Usa só as
