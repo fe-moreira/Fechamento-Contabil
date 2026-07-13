@@ -971,6 +971,7 @@ function ModalCargaInicial({ vigencia, empresaId, onClose, onConcluir }) {
   const [saldos, setSaldos] = useState(null)        // { nome, dados:[...] } — só saldo
   const [comp, setComp] = useState(null)            // clientes e fornecedores (com NF)
   const [outras, setOutras] = useState(null)        // outras contas com composição (sem NF)
+  const [pendCarga, setPendCarga] = useState(null)  // { setter, atual, dados, nome } — pergunta substituir/complementar
   const [erro, setErro] = useState('')
   const [salvando, setSalvando] = useState(false)
   const [planoNomes, setPlanoNomes] = useState({ red: {}, cls: {} })  // nome p/ conferência
@@ -1014,16 +1015,28 @@ function ModalCargaInicial({ vigencia, empresaId, onClose, onConcluir }) {
 
   async function lerArquivo(file, setter, atual) {
     if (!file) return
-    // A ideia é SOBREPOR, não complementar: se já há um arquivo neste bloco, confirma.
-    if (atual && !confirm(`Este bloco já tem "${atual.nome}". Sobrepor pelo novo arquivo?`)) return
     setErro('')
     try {
       const XLSX = await import('xlsx')
       const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' })
       const dados = lerPlanilha(XLSX, wb.Sheets[wb.SheetNames[0]])
       if (!dados.length) { setErro('Planilha vazia.'); return }
+      // Já há um arquivo neste bloco → pergunta se é para SUBSTITUIR ou COMPLEMENTAR
+      // (subir um 2º arquivo somando ao que já está, ex.: fornecedores em duas planilhas).
+      if (atual && (atual.dados || []).length) { setPendCarga({ setter, atual, dados, nome: file.name }); return }
       setter({ nome: file.name, dados })
     } catch (err) { setErro('Não consegui ler: ' + err.message) }
+  }
+  // Resolve a pergunta substituir/complementar da carga inicial.
+  function resolverPendCarga(modo) {
+    const p = pendCarga; if (!p) return
+    if (modo === 'complementar') {
+      const nome = `${p.atual.nome} + ${p.nome}`
+      p.setter({ nome: nome.length > 60 ? p.nome + ' (+arquivos)' : nome, dados: [...(p.atual.dados || []), ...p.dados] })
+    } else {
+      p.setter({ nome: p.nome, dados: p.dados })
+    }
+    setPendCarga(null)
   }
 
   async function baixarModelo(modelo, arquivo) {
@@ -1154,6 +1167,21 @@ function ModalCargaInicial({ vigencia, empresaId, onClose, onConcluir }) {
           <i className="ti ti-cloud-upload" /> {salvando ? 'Concluindo…' : 'Concluir carga inicial'}
         </button>
       </div>
+
+      {pendCarga && (
+        <div onClick={() => setPendCarga(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 90 }}>
+          <div onClick={e => e.stopPropagation()} style={{ width: 'min(460px,96vw)', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 14, padding: 20 }}>
+            <h3 style={{ fontSize: 15, margin: '0 0 8px' }}><i className="ti ti-files" style={{ color: theme.accent, marginRight: 6 }} />Este bloco já tem arquivo</h3>
+            <p style={{ color: theme.sub, fontSize: 13, margin: '0 0 4px' }}>Já há <b style={{ color: theme.text }}>{(pendCarga.atual.dados || []).length}</b> linha(s). O novo arquivo tem <b style={{ color: theme.text }}>{pendCarga.dados.length}</b>.</p>
+            <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 16px' }}><b style={{ color: theme.text }}>Complementar</b> soma os novos aos que já estão (ex.: fornecedores em duas planilhas). <b style={{ color: theme.text }}>Substituir</b> troca tudo pelo novo arquivo.</p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button className="btn btn-ghost" onClick={() => setPendCarga(null)}>Cancelar</button>
+              <button className="btn btn-ghost" style={{ color: theme.yellow, borderColor: theme.yellow }} onClick={() => resolverPendCarga('substituir')}><i className="ti ti-refresh" /> Substituir</button>
+              <button className="btn" onClick={() => resolverPendCarga('complementar')}><i className="ti ti-plus" /> Complementar</button>
+            </div>
+          </div>
+        </div>
+      )}
     </Modal>
   )
 }

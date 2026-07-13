@@ -247,6 +247,7 @@ const HTML = `
     <li><b>Cadastro do Lucro Real (LALUR)</b> — só para clientes no Lucro Real. Define o que o card LALUR usa: contas de <b>adição</b> e <b>exclusão</b>, contas de <b>IRRF</b> (retido e sobre aplicação financeira), o saldo de <b>prejuízo a compensar</b> (limite de 30%) e as <b>contas de contabilização</b> (IRPJ/CSLL despesa e a pagar).</li>
   </ul>
   <div class="m-rule warn"><span class="k">Regra de vigência</span> Toda carga de cadastro <b>preserva o histórico</b>. Ao atualizar, cria-se uma nova vigência — o passado continua íntegro para reprocessar meses anteriores.</div>
+  <div class="m-rule"><span class="k">Carga inicial — vários arquivos por bloco</span> Na <b>Carga inicial de saldos</b>, se você subir um 2º arquivo num bloco que já tem dados (ex.: fornecedores em duas planilhas), o sistema pergunta <b>Complementar</b> (soma ao que já está) ou <b>Substituir</b> (troca tudo).</div>
 </section>
 
 <section id="m-massa">
