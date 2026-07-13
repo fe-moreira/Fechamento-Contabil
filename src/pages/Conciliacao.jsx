@@ -824,6 +824,26 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
     carregarTratados()
   }
 
+  // Confirma que o NOME do fornecedor/cliente está certo numa linha "revisar" (mesmo sem
+  // zerar): tira o "revisar", marca conferido (com usuário e data). NÃO tira do em aberto
+  // (o saldo pode seguir aberto) — é uma justificativa individual, não baixa em lote.
+  async function confirmarNome(l) {
+    if (!l?.id || l.acerto || jaTratada(l)) return
+    const id = await getCompetenciaId()
+    const nome = l.leitura?.entidade || ''
+    const row = {
+      competencia_id: id, modulo: 'Conciliação',
+      item: l._abertura ? chaveAbertura(l) : `${conta.conta} · ${l.data || ''} · NF ${l.leitura?.nf || '—'}`,
+      tipo: 'Justificativa', detalhe: `Nome conferido — ${nome} (${lab} correto).`,
+      razao_id: l._abertura ? null : l.id, usuario,
+    }
+    const { error } = await supabase.from('auditoria').insert(row)
+    if (error) { setMsg('Não consegui confirmar: ' + error.message); return }
+    marcarTratadas([l])
+    setMsg(`Nome conferido — ${nome}.`)
+    carregarTratados()
+  }
+
   // Confirma DE UMA VEZ todas as entidades zeradas/identificadas (uma pergunta só).
   async function confirmarTodos(grupos) {
     const items = []
@@ -1110,7 +1130,15 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
                             : semNF
                               ? <span title="NF não confere com nenhum título" style={{ color: theme.red, fontSize: 10.5, fontWeight: 700 }}>NF s/ título</span>
                               : rev
-                                ? <span style={{ color: theme.yellow, fontSize: 11, fontWeight: 600 }}>revisar</span>
+                                ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+                                    <span style={{ color: theme.yellow, fontSize: 11, fontWeight: 600 }}>revisar</span>
+                                    {l.leitura.ident && l.leitura.entidade && (
+                                      <button title="O nome está certo — confirmar (tira o 'revisar' e registra a conferência)" onClick={e => { e.stopPropagation(); confirmarNome(l) }}
+                                        style={{ background: 'none', border: `1px solid ${theme.green}`, color: theme.green, borderRadius: 12, fontSize: 10, fontWeight: 700, padding: '1px 7px', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                        <i className="ti ti-check" /> está certo
+                                      </button>
+                                    )}
+                                  </span>
                                 : <span style={{ color: theme.green, fontSize: 14 }}><i className="ti ti-circle-check" /></span>}
                       </td>
                     </tr>
