@@ -993,6 +993,11 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   const refsContra = useRef({})                  // foco: Enter pula para a próxima linha
 
   const nomeBanco = cod => planoMap[String(cod)]?.nome || (cod ? `Conta ${cod}` : '—')
+  // Centro de custo (só clientes que usam). Obrigatório APENAS na contrapartida de
+  // RESULTADO (classificação começa em 3, 4 ou 5). O CC vem da planilha do mês; se veio
+  // vazio, o usuário preenche à mão. `ccPendente` = falta preencher onde é obrigatório.
+  const ehResultadoContra = contra => ['3', '4', '5'].includes(String(planoMap[String(contra)]?.classif || '')[0])
+  const ccPendente = l => usaCC && l.contra && ehResultadoContra(l.contra) && !String(l.centro_custo || '').trim()
   const bancosEst = est?.bancos || {}
   // Banco concluído (validado): trava edição/inclusão/exclusão até reabrir.
   const concluido = !!(raw?.banco && bancosEst[raw.banco]?.concluido === true)
@@ -1207,7 +1212,11 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     // rascunho (mesmo arquivo → mesma ordem), atualizando histórico/valor/data.
     let mantidas = 0
     if (modo === 'substituir' && draftPrev.length === norm.length) {
-      norm.forEach((l, i) => { if (draftPrev[i]?.contra) { l.contra = draftPrev[i].contra; l.contra_nivel = draftPrev[i].contra_nivel || 'manual'; mantidas++ } })
+      norm.forEach((l, i) => {
+        if (draftPrev[i]?.contra) { l.contra = draftPrev[i].contra; l.contra_nivel = draftPrev[i].contra_nivel || 'manual'; mantidas++ }
+        // Centro de custo preenchido à mão (planilha veio vazia) — preserva no reimport do mesmo arquivo.
+        if (!l.centro_custo && draftPrev[i]?.centro_custo) l.centro_custo = draftPrev[i].centro_custo
+      })
     }
     // Complementar: adiciona os novos lançamentos aos que já existem (tela ou rascunho salvo).
     const finalLinhas = modo === 'complementar' ? [...baseAtual, ...norm] : norm
@@ -1241,6 +1250,9 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     if (semData && !window.confirm(`Atenção: ${semData} lançamento(s) SEM DATA. O Domínio precisa da data. Concluir assim mesmo?`)) return
     const faltam = linhas.filter(l => !l.contra).length
     if (faltam && !window.confirm(`Ainda há ${faltam} linha(s) sem contrapartida. Concluir assim mesmo?`)) return
+    // Centro de custo é OBRIGATÓRIO na contrapartida de resultado (3/4/5) — trava a conclusão.
+    const semCC = usaCC ? linhas.filter(ccPendente).length : 0
+    if (semCC) { setErro(`${semCC} lançamento(s) de resultado (grupos 3, 4 e 5) sem centro de custo. Preencha a coluna “C. Custo” antes de concluir.`); return }
     if (!window.confirm('Concluir o banco? Ele fica travado para edição — para alterar depois, use Reabrir banco.')) return
     // Ao concluir, JÁ APRENDE (não depende de lembrar de "Aprender e salvar"): grava
     // histórico → contrapartida de todas as linhas classificadas na memória do cliente.
@@ -1616,11 +1628,13 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     const cols = [
       { nome: 'Data', largura: 12 }, { nome: 'Banco', largura: 34 }, { nome: 'Histórico', largura: 60, wrap: true },
       { nome: 'Valor', largura: 15 }, { nome: 'E/S', largura: 9 }, { nome: 'Contrapartida', largura: 13 }, { nome: 'Conta (nome)', largura: 40 },
+      ...(usaCC ? [{ nome: 'Centro de Custo', largura: 16 }] : []),
     ]
     const rows = linhas.map(l => [
       l.data ? l.data.split('-').reverse().join('/') : '', `${l.banco || ''} ${nomeBanco(l.banco)}`.trim(),
       l.historico || '', Number(l.valor) || 0, l.entrada ? 'Entrada' : 'Saída',
       l.contra || '', planoMap[String(l.contra)]?.nome || (l.contra ? '(fora do plano)' : ''),
+      ...(usaCC ? [l.centro_custo || ''] : []),
     ])
     await gerarExcelTimbrado({
       titulo: `Financeiro classificado · ${competencia}`, sub: `${linhas.length} lançamento(s)`,
@@ -1635,12 +1649,18 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     if (!prontasL.length) { setErro('Nenhuma linha com banco e contrapartida para gerar.'); return }
     const semData = prontasL.filter(l => !l.data).length
     if (semData && !window.confirm(`Atenção: ${semData} lançamento(s) SEM DATA vão sair sem data no arquivo do Domínio. Gerar assim mesmo? (recomendo entrar no lançamento e informar a data antes)`)) return
+    // Centro de custo obrigatório na contrapartida de resultado — avisa antes de gerar.
+    const semCC = usaCC ? prontasL.filter(ccPendente).length : 0
+    if (semCC && !window.confirm(`Atenção: ${semCC} lançamento(s) de RESULTADO sem centro de custo. Gerar assim mesmo? (o Domínio vai receber sem CC nesses)`)) return
     const lanc = prontasL.map(l => ({
       data: l.data || null,
       conta_debito: l.entrada ? l.banco : l.contra,   // entrada: D banco; saída: D contrapartida
       conta_credito: l.entrada ? l.contra : l.banco,
       valor: l.valor,
       historico: l.historico,
+      // CC vai no lado da contrapartida (débito na saída, crédito na entrada).
+      cc_debito: (usaCC && !l.entrada) ? (l.centro_custo || '') : '',
+      cc_credito: (usaCC && l.entrada) ? (l.centro_custo || '') : '',
     }))
     gerarDominioCSV(lanc, `financeiro_dominio_${competencia.replace('/', '-')}.csv`)
   }
@@ -1660,6 +1680,8 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
           conta_debito: l.entrada ? l.banco : l.contra,
           conta_credito: l.entrada ? l.contra : l.banco,
           valor: l.valor, historico: l.historico,
+          cc_debito: (usaCC && !l.entrada) ? (l.centro_custo || '') : '',
+          cc_credito: (usaCC && l.entrada) ? (l.centro_custo || '') : '',
         })
       }
     }
@@ -1929,7 +1951,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
               <thead>
                 <tr style={{ background: theme.input, position: 'sticky', top: 0 }}>
                   <th style={{ ...fth, width: 34, textAlign: 'center' }}><input type="checkbox" checked={todosSel} onChange={toggleTodos} title="Selecionar os visíveis" /></th>
-                  <th style={fth}>Data</th><th style={fth}>Banco</th><th style={fth}>Histórico</th><th style={{ ...fth, textAlign: 'right' }}>Valor</th><th style={fth}>E/S</th><th style={fth}>Contrapartida</th><th style={fth}>Conta (nome)</th>
+                  <th style={fth}>Data</th><th style={fth}>Banco</th><th style={fth}>Histórico</th><th style={{ ...fth, textAlign: 'right' }}>Valor</th><th style={fth}>E/S</th><th style={fth}>Contrapartida</th><th style={fth}>Conta (nome)</th>{usaCC && <th style={fth}>C. Custo</th>}
                 </tr>
               </thead>
               <tbody>
@@ -1963,9 +1985,18 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
                           ? <span style={{ color: theme.green }}>{planoMap[String(l.contra)].nome}</span>
                           : <span style={{ color: theme.red }}><i className="ti ti-alert-triangle" /> conta não encontrada no plano</span>}
                     </td>
+                    {usaCC && (
+                      <td style={{ ...ftd, minWidth: 100 }}>
+                        <input className="input" style={{ fontSize: 11.5, padding: '4px 7px', width: 90, borderColor: ccPendente(l) ? theme.red : undefined }}
+                          value={l.centro_custo || ''} disabled={concluido}
+                          placeholder={ehResultadoContra(l.contra) ? 'obrigatório' : '—'}
+                          title={ccPendente(l) ? 'Centro de custo obrigatório (conta de resultado)' : 'Centro de custo (da planilha ou manual)'}
+                          onChange={e => setLinha(i, { centro_custo: e.target.value })} />
+                      </td>
+                    )}
                   </tr>
                 ))}
-                {!visiveis.length && <tr><td colSpan={8} style={{ ...ftd, color: theme.sub, fontSize: 12 }}>Nenhuma linha com os filtros atuais.</td></tr>}
+                {!visiveis.length && <tr><td colSpan={usaCC ? 9 : 8} style={{ ...ftd, color: theme.sub, fontSize: 12 }}>Nenhuma linha com os filtros atuais.</td></tr>}
               </tbody>
             </table>
           </div>
@@ -2018,7 +2049,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
 
       {cfg && (
         <PerfilExtratoCfg
-          arr={cfg.arr} catByRow={cfg.catByRow} adiantContas={adiantContas} nome={cfg.nome} bancoNome={nomeBanco(cfg.banco)} bancoCod={cfg.banco} perfilInicial={cfg.perfil} memoria={memoria}
+          arr={cfg.arr} catByRow={cfg.catByRow} adiantContas={adiantContas} nome={cfg.nome} bancoNome={nomeBanco(cfg.banco)} bancoCod={cfg.banco} perfilInicial={cfg.perfil} memoria={memoria} usaCC={usaCC}
           onCancelar={() => setCfg(null)}
           onSalvar={async (perf) => { const m = cfg.modo; await salvarPerfil(perf, cfg.banco); setCfg(null); aplicarEProsseguir(cfg.arr, cfg.nome, cfg.banco, perf, cfg.catByRow, m) }}
         />
@@ -2430,7 +2461,7 @@ function ModalQuebra({ linha, nomeBanco, planoMap, onClose, onConfirmar }) {
 
 // Painel de mapeamento por cliente: define como ler o extrato (linha de início,
 // colunas, entrada/saída) e monta o histórico no padrão do Domínio. Prévia ao vivo.
-function PerfilExtratoCfg({ arr, catByRow, adiantContas, nome, bancoNome, bancoCod, perfilInicial, memoria, onCancelar, onSalvar }) {
+function PerfilExtratoCfg({ arr, catByRow, adiantContas, nome, bancoNome, bancoCod, perfilInicial, memoria, usaCC, onCancelar, onSalvar }) {
   const [p, setP] = useState(perfilInicial)
   const set = patch => setP(x => ({ ...x, ...patch }))
   const nc = (arr || []).reduce((m, r) => Math.max(m, (r || []).length), 0)
@@ -2447,6 +2478,7 @@ function PerfilExtratoCfg({ arr, catByRow, adiantContas, nome, bancoNome, bancoC
   const setRole = (j, txt) => { if (j != null && j >= 0) roles[j] = txt }
   setRole(p.colData, 'Data'); setRole(p.colHist, 'Histórico'); setRole(p.colValor, 'Valor')
   setRole(p.colCredor, 'Credor/Devedor'); setRole(p.colDoc, 'Documento'); setRole(p.colCategoria, 'Categoria')
+  if (usaCC) setRole(p.colCC, 'Centro de Custo')
   if (p.es?.modo === 'coluna' || p.es?.modo === 'natureza') setRole(p.es?.col, p.es.modo === 'natureza' ? 'Natureza (D/C)' : 'Entrada/Saída')
   const amostras = (arr || []).slice(ini, ini + 3)
   const Sel = ({ val, on, vazio = '—' }) => (
@@ -2506,6 +2538,7 @@ function PerfilExtratoCfg({ arr, catByRow, adiantContas, nome, bancoNome, bancoC
           <div><label>Documento (opc.)</label><Sel val={p.colDoc} on={v => set({ colDoc: v })} /><small style={dicaS}>nº da NF/documento — só é juntado ao histórico se ele ainda não o tiver</small></div>
           <div><label>Credor/Devedor (opc.)</label><Sel val={p.colCredor} on={v => set({ colCredor: v })} /><small style={dicaS}>coluna separada com o nome do cliente/fornecedor, se houver</small></div>
           <div><label>Categoria (mesclada, opc.)</label><Sel val={p.colCategoria} on={v => set({ colCategoria: v })} /><small style={dicaS}>grupo/histórico do extrato, se houver</small></div>
+          {usaCC && <div><label>Centro de Custo (opc.)</label><Sel val={p.colCC} on={v => set({ colCC: v })} /><small style={dicaS}>coluna do centro de custo na planilha do mês — se vier vazia, preenche à mão na grade. Não entra na memória.</small></div>}
         </div>
         <div style={{ marginTop: 10 }}>
           <label>Linha de início (onde começam os lançamentos)</label>
@@ -2537,7 +2570,7 @@ function PerfilExtratoCfg({ arr, catByRow, adiantContas, nome, bancoNome, bancoC
         </div>
         <div style={{ border: `0.5px solid ${theme.cb}`, borderRadius: 10, overflow: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 640 }}>
-            <thead><tr style={{ background: theme.input }}><th style={fth}>E/S</th><th style={{ ...fth, textAlign: 'right' }}>Valor</th><th style={fth}>Data</th><th style={{ ...fth, minWidth: 380 }}>Histórico montado</th><th style={fth}>Contrap.</th></tr></thead>
+            <thead><tr style={{ background: theme.input }}><th style={fth}>E/S</th><th style={{ ...fth, textAlign: 'right' }}>Valor</th><th style={fth}>Data</th><th style={{ ...fth, minWidth: 380 }}>Histórico montado</th><th style={fth}>Contrap.</th>{usaCC && <th style={fth}>C. Custo</th>}</tr></thead>
             <tbody>
               {prev.map((l, i) => (
                 <tr key={i} style={{ borderTop: `1px solid ${theme.border}` }}>
@@ -2546,9 +2579,10 @@ function PerfilExtratoCfg({ arr, catByRow, adiantContas, nome, bancoNome, bancoC
                   <td style={{ ...ftd, fontSize: 11, color: theme.sub, whiteSpace: 'nowrap' }}>{l.data ? l.data.split('-').reverse().join('/') : '—'}</td>
                   <td style={{ ...ftd, fontSize: 11, color: theme.text, minWidth: 380, whiteSpace: 'normal', lineHeight: 1.35 }}>{l.historico || '—'}</td>
                   <td style={{ ...ftd, fontSize: 11.5 }}>{l.contra || '—'}</td>
+                  {usaCC && <td style={{ ...ftd, fontSize: 11.5, color: theme.sub }}>{l.centro_custo || '—'}</td>}
                 </tr>
               ))}
-              {!prev.length && <tr><td colSpan={5} style={{ ...ftd, color: theme.yellow, fontSize: 12 }}>Nenhum lançamento com este mapeamento. Ajuste a linha de início e a coluna de valor.</td></tr>}
+              {!prev.length && <tr><td colSpan={usaCC ? 6 : 5} style={{ ...ftd, color: theme.yellow, fontSize: 12 }}>Nenhum lançamento com este mapeamento. Ajuste a linha de início e a coluna de valor.</td></tr>}
             </tbody>
           </table>
         </div>

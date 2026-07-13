@@ -25,7 +25,7 @@ export function gerarDominioCSV(lancamentos, nome = 'lanctos_dominio.csv') {
   lancamentos.forEach((l, i) => {
     const v = (Number(l.valor) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
     const data = l.data ? l.data.split('-').reverse().join('/') : ''
-    linhas.push([data, l.conta_debito || '', l.conta_credito || '', v, '', historicoDominio(l.historico), i === 0 ? '1' : '', '9999', '', ''].join(';'))
+    linhas.push([data, l.conta_debito || '', l.conta_credito || '', v, '', historicoDominio(l.historico), i === 0 ? '1' : '', '9999', l.cc_debito || '', l.cc_credito || ''].join(';'))
   })
   baixarCsv('﻿' + linhas.join('\r\n'), nome)
 }
