@@ -670,6 +670,7 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
   const [linhas, setLinhas] = useState([])
   const [movers, setMovers] = useState([]) // entidades que mais explicam a variação (mês × mês anterior)
   const [correcoes, setCorrecoes] = useState({}) // razao_id → lançamento de correção
+  const [dedut, setDedut] = useState({})         // razao_id → 'Dedutível' | 'Indedutível'
   const [registro, setRegistro] = useState(null) // 'Justificativa'
   const [salvando, setSalvando] = useState(false)
   const [tratada, setTratada] = useState(jaJustificada)
@@ -694,6 +695,13 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
         .select('id, competencia_id, conta_debito, conta_credito, valor, historico, razao_id')
         .in('razao_id', razaoIds).eq('origem', 'correcao')
       for (const c of (corr || [])) corrMap[c.razao_id] = c
+    }
+    // Classificação dedutível/indedutível já marcada (LALUR) para estes lançamentos.
+    let dedutMap = {}
+    if (razaoIds.length) {
+      const { data: dd } = await supabase.from('auditoria').select('razao_id, dedutibilidade')
+        .in('razao_id', razaoIds).eq('modulo', 'Comparativo').not('dedutibilidade', 'is', null)
+      for (const d of (dd || [])) if (d.dedutibilidade) dedutMap[d.razao_id] = d.dedutibilidade
     }
     let anteriores = []
     if (!todos && compsAnteriores && compsAnteriores.length) {
@@ -735,9 +743,26 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
       }
     })
     setCorrecoes(corrMap)
+    setDedut(dedutMap)
     setMovers(mv)
     setLinhas([...analisarCulpados(rows, anteriores), ...lancRows])
     setCarregando(false)
+  }
+
+  // Marca (ou limpa) a dedutibilidade de um lançamento — grava em auditoria; o indedutível
+  // alimenta o LALUR (adições) e o relatório de despesas indedutíveis.
+  async function marcarDedut(linha, valor) {
+    if (!linha?.id || linha.ehLancamento) return
+    // Remove marca anterior deste lançamento (tem razao_id + dedutibilidade). Não toca em
+    // correções (dedutibilidade null) nem em justificativas de conta (sem razao_id).
+    await supabase.from('auditoria').delete().eq('razao_id', linha.id).eq('modulo', 'Comparativo').not('dedutibilidade', 'is', null)
+    if (valor) {
+      await supabase.from('auditoria').insert({
+        competencia_id: linha.competencia_id, modulo: 'Comparativo', tipo: 'Justificativa',
+        item: `${conta} · dedutibilidade`, detalhe: linha.historico || '', dedutibilidade: valor, razao_id: linha.id, usuario,
+      })
+    }
+    setDedut(m => { const n = { ...m }; if (valor) n[linha.id] = valor; else delete n[linha.id]; return n })
   }
 
   useEffect(() => {
@@ -969,6 +994,8 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
       {acaoLanc && (
         <ModalCorrecao
           acao={acaoLanc} conta={conta} salvando={salvando}
+          dedutAtual={dedut[acaoLanc.linha.id] || ''}
+          onDedut={v => marcarDedut(acaoLanc.linha, v)}
           onClose={() => setAcaoLanc(null)}
           onGerar={dados => gerarCorrecao(acaoLanc.linha, dados)}
           onDesfazer={() => desfazerCorrecao(acaoLanc.linha, acaoLanc.corr)}
@@ -980,7 +1007,7 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
 
 // Correção de um lançamento: gera um NOVO lançamento (partida dobrada) reclassificando
 // o valor da conta errada para a conta certa — o que será importado no Domínio.
-function ModalCorrecao({ acao, conta, salvando, onClose, onGerar, onDesfazer }) {
+function ModalCorrecao({ acao, conta, salvando, dedutAtual, onDedut, onClose, onGerar, onDesfazer }) {
   const { modo, linha, corr } = acao
   const foiDebito = Number(linha.debito) > 0
   const valorBase = foiDebito ? Number(linha.debito) : Number(linha.credito)
@@ -998,6 +1025,22 @@ function ModalCorrecao({ acao, conta, salvando, onClose, onGerar, onDesfazer }) 
         <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 14 }}>
           {linha.data || ''} · {linha.historico || ''} · {foiDebito ? 'Débito' : 'Crédito'} {money(valorBase)} na conta <b style={{ color: theme.text }}>{conta}</b>.
         </p>
+
+        {/* Dedutibilidade (LALUR): indedutível vira adição no LALUR e no relatório. */}
+        {onDedut && (
+          <div style={{ background: theme.input, border: `0.5px solid ${theme.cb}`, borderRadius: 10, padding: '10px 14px', marginBottom: 14 }}>
+            <label style={{ fontSize: 12, color: theme.sub, display: 'block', marginBottom: 6 }}>Despesa — para o LALUR</label>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+              {['Dedutível', 'Indedutível'].map(op => (
+                <button key={op} type="button" className={dedutAtual === op ? 'btn' : 'btn btn-ghost'} disabled={salvando}
+                  style={{ fontSize: 12.5, padding: '6px 12px', ...(op === 'Indedutível' && dedutAtual === op ? { background: theme.yellow, borderColor: theme.yellow } : {}) }}
+                  onClick={() => onDedut(op)}>{op}</button>
+              ))}
+              {dedutAtual && <button type="button" className="btn btn-ghost" style={{ fontSize: 12, padding: '6px 10px', color: theme.sub }} disabled={salvando} onClick={() => onDedut('')}>limpar</button>}
+            </div>
+            <p style={{ color: theme.sub, fontSize: 11.5, margin: '8px 0 0' }}><b style={{ color: theme.yellow }}>Indedutível</b> entra como <b>adição</b> no LALUR e no relatório de despesas indedutíveis.</p>
+          </div>
+        )}
 
         {modo === 'ver' ? (
           <>

@@ -968,11 +968,25 @@ function PaneLalur({ clienteId, competencia, regime, abrirGerar, planoMap, user 
       let balRows = []
       if (idsPeriodo.length) { const { data } = await supabase.from('balancete').select('conta, saldo_final').in('competencia_id', idsPeriodo); balRows = data || [] }
       const soma = lista => { const set = new Set((lista || []).map(x => String(x.cod))); if (!set.size) return 0; let s = 0; for (const b of balRows) if (set.has(String(b.conta))) s += Math.abs(Number(b.saldo_final) || 0); return r2(s) }
+      // Despesas marcadas INDEDUTÍVEIS no Comparativo (por lançamento) no período → adição.
+      // Ignora as que já estão em contas de adição cadastradas (para não contar em dobro).
+      let indedutivel = 0
+      if (idsPeriodo.length) {
+        const { data: deds } = await supabase.from('auditoria').select('razao_id')
+          .eq('modulo', 'Comparativo').eq('dedutibilidade', 'Indedutível').not('razao_id', 'is', null).in('competencia_id', idsPeriodo)
+        const ids = (deds || []).map(d => d.razao_id).filter(Boolean)
+        if (ids.length) {
+          const { data: rz } = await supabase.from('razao').select('id, conta, debito, credito').in('id', ids)
+          const contasAdic = new Set((config.adicao || []).map(x => String(x.cod)))
+          for (const r of (rz || [])) { if (contasAdic.has(String(r.conta))) continue; indedutivel += Math.abs((Number(r.debito) || 0) - (Number(r.credito) || 0)) }
+        }
+      }
       if (!vivo) return
       const a = {
         lucro, nMeses: mesesPeriodo.length,
-        adicao: soma(config.adicao), exclusao: soma(config.exclusao),
+        adicao: r2(soma(config.adicao) + indedutivel), exclusao: soma(config.exclusao),
         irrf: soma(config.irrf), irrfAplic: soma(config.irrfAplic),
+        indedutivel: r2(indedutivel),
         periodo: `${MESES_LALUR[inicioMes - 1]}–${MESES_LALUR[cm - 1]}/${ca}`,
       }
       setCfg(config); setAuto(a)
@@ -1030,7 +1044,7 @@ function PaneLalur({ clienteId, competencia, regime, abrirGerar, planoMap, user 
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 460, maxWidth: 620 }}>
             <tbody>
               <Lin label="Lucro do Balancete (acumulado)">{val(lucro)}</Lin>
-              <Lin label="( + ) Adições"><InputCel k="adicao" /></Lin>
+              <Lin label={`( + ) Adições${auto.indedutivel > 0 ? ` · inclui ${money(auto.indedutivel)} indedutíveis` : ''}`}><InputCel k="adicao" /></Lin>
               <Lin label="( − ) Exclusões"><InputCel k="exclusao" /></Lin>
               <Lin label="( = ) Lucro Fiscal" forte>{val(lucroFiscal)}</Lin>
               <Lin label="Prejuízo a compensar (saldo)"><InputCel k="prejuizo" /></Lin>
