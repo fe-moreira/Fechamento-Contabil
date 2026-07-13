@@ -978,6 +978,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   const [fNome, setFNome] = useState('')         // filtro por NOME da conta de contrapartida
   const [fNomeMode, setFNomeMode] = useState('contem') // 'contem' | 'naocontem'
   const [fSemData, setFSemData] = useState(false) // filtro: só linhas SEM data (ex.: linhas de total)
+  const [importPend, setImportPend] = useState(null) // { arr, nome, bancoFixo, perf, catByRow, qtd } — pergunta substituir/complementar
   const [lote, setLote] = useState('')           // conta para preencher em lote nas selecionadas
   const [sel, setSel] = useState(() => new Set())// linhas selecionadas (índice original)
   const [quebra, setQuebra] = useState(null)      // { i, linha } divisão de um lançamento
@@ -1146,30 +1147,41 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   }
 
   // Aplica o perfil já salvo a um extrato por banco e segue (marca o banco).
-  function aplicarEProsseguir(arr, nome, bancoFixo, perf, catByRow) {
+  function aplicarEProsseguir(arr, nome, bancoFixo, perf, catByRow, modoImp) {
     // A contrapartida NUNCA pode ser a própria conta do banco (o banco já é um lado da
     // partida). Se a memória/perfil devolver o próprio banco, limpa para classificar à mão.
     const norm = aplicarPerfil(arr, perf, memoria, catByRow, adiantContas, new Set([String(bancoFixo)]))
       .map(l => ({ ...l, banco: bancoFixo, contra: String(l.contra || '') === String(bancoFixo) ? '' : l.contra }))
-    // Reimport do mesmo arquivo: preserva as contrapartidas já preenchidas no
-    // rascunho (mesmo arquivo → mesma ordem), atualizando histórico/valor/data.
-    const prevBanco = (est?.bancos || {})[bancoFixo]
-    const prev = prevBanco?.draft
-    let mantidas = 0
-    if (Array.isArray(prev) && prev.length === norm.length) {
-      norm.forEach((l, i) => { if (prev[i]?.contra) { l.contra = prev[i].contra; l.contra_nivel = prev[i].contra_nivel || 'manual'; mantidas++ } })
+    // Já existe uma importação EM ANDAMENTO deste banco → pergunta: substituir ou complementar
+    // (subir um 2º arquivo somando ao que já está, para finalizar o fechamento).
+    if (!modoImp && linhas.length && raw?.banco === bancoFixo && !concluido) {
+      setImportPend({ arr, nome, bancoFixo, perf, catByRow, qtd: norm.length })
+      return
     }
+    const modo = modoImp || 'substituir'
+    // Reimport do mesmo arquivo (substituir): preserva as contrapartidas já preenchidas no
+    // rascunho (mesmo arquivo → mesma ordem), atualizando histórico/valor/data.
+    let mantidas = 0
+    if (modo === 'substituir') {
+      const prev = (est?.bancos || {})[bancoFixo]?.draft
+      if (Array.isArray(prev) && prev.length === norm.length) {
+        norm.forEach((l, i) => { if (prev[i]?.contra) { l.contra = prev[i].contra; l.contra_nivel = prev[i].contra_nivel || 'manual'; mantidas++ } })
+      }
+    }
+    // Complementar: adiciona os novos lançamentos aos que já estão na tela.
+    const finalLinhas = modo === 'complementar' ? [...linhas, ...norm] : norm
+    const prevBanco = (est?.bancos || {})[bancoFixo]
     if (prevBanco?.saldoExtrato) setSaldoExtrato(prevBanco.saldoExtrato)
     setCruza(prevBanco?.cruza || null); setCruzaOpen(false)
     setRaw({ nome, banco: bancoFixo, viaPerfil: true, arr, catByRow })
-    setLinhas(norm); setSel(new Set())
-    if (!norm.length) { setErro('O perfil de leitura não encontrou lançamentos. Clique em “Ajustar leitura” e revise o mapeamento.'); return }
-    const erroComp = validarCompetencia(norm, { data: (perf.colData != null && perf.colData >= 0) ? 0 : -1 }, competencia)
+    setLinhas(finalLinhas); setSel(new Set())
+    if (!finalLinhas.length) { setErro('O perfil de leitura não encontrou lançamentos. Clique em “Ajustar leitura” e revise o mapeamento.'); return }
+    const erroComp = validarCompetencia(finalLinhas, { data: (perf.colData != null && perf.colData >= 0) ? 0 : -1 }, competencia)
     if (erroComp) { setErro(erroComp); return }
-    const casadas = norm.filter(l => l.contra).length
-    setMsg(`${norm.length} linha(s) · ${casadas} classificada(s)${mantidas ? ` · ${mantidas} do rascunho preservada(s)` : ' pela memória'}. Rascunho salvo — conclua quando tudo estiver contabilizado.`)
+    const casadas = finalLinhas.filter(l => l.contra).length
+    setMsg(`${finalLinhas.length} linha(s) · ${casadas} classificada(s)${modo === 'complementar' ? ` · ${norm.length} complementada(s)` : mantidas ? ` · ${mantidas} do rascunho preservada(s)` : ' pela memória'}. Rascunho salvo — conclua quando tudo estiver contabilizado.`)
     // Salva como rascunho (em andamento); só vira "concluído" ao clicar Concluir.
-    salvarBancoDraft(bancoFixo, 'rascunho', nome, norm)
+    salvarBancoDraft(bancoFixo, 'rascunho', nome, finalLinhas)
   }
 
   // Salva o progresso atual (rascunho) sem concluir.
@@ -1946,6 +1958,26 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
           onCancelar={() => setCfg(null)}
           onSalvar={async (perf) => { await salvarPerfil(perf); setCfg(null); aplicarEProsseguir(cfg.arr, cfg.nome, cfg.banco, perf, cfg.catByRow) }}
         />
+      )}
+
+      {importPend && (
+        <div onClick={() => setImportPend(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 70 }}>
+          <div onClick={e => e.stopPropagation()} style={{ width: 'min(480px,96vw)', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
+            <h2 style={{ fontSize: 17, margin: '0 0 6px' }}>Já existe uma importação deste banco</h2>
+            <p style={{ color: theme.sub, fontSize: 13, margin: '0 0 4px' }}>Este banco já tem <b style={{ color: theme.text }}>{linhas.length}</b> lançamento(s) na tela. O novo arquivo tem <b style={{ color: theme.text }}>{importPend.qtd}</b>.</p>
+            <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 16px' }}><b style={{ color: theme.text }}>Complementar</b> soma os novos aos que já estão (ex.: 2º arquivo para fechar o mês). <b style={{ color: theme.text }}>Substituir</b> troca tudo pelos do novo arquivo.</p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap' }}>
+              <button className="btn btn-ghost" onClick={() => setImportPend(null)}>Cancelar</button>
+              <button className="btn btn-ghost" style={{ color: theme.red, borderColor: theme.red }}
+                onClick={() => { const p = importPend; setImportPend(null); aplicarEProsseguir(p.arr, p.nome, p.bancoFixo, p.perf, p.catByRow, 'substituir') }}>
+                <i className="ti ti-refresh" /> Substituir
+              </button>
+              <button className="btn" onClick={() => { const p = importPend; setImportPend(null); aplicarEProsseguir(p.arr, p.nome, p.bancoFixo, p.perf, p.catByRow, 'complementar') }}>
+                <i className="ti ti-plus" /> Complementar
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </>
   )
