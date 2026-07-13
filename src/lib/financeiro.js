@@ -275,7 +275,10 @@ export function aplicarPerfil(arr, perfil, memoria, catByRow, adiantContas, banc
     // Regra: se a linha tem nota/documento, não é adiantamento (adiantamento é
     // quando ainda não há nota). Evita "adiantamento a fornecedor/cliente" errado.
     if (doc && contra && temAdiant && adiantContas.has(String(contra))) { contra = ''; contra_nivel = '' }
-    out.push({ historico, credor, valor, entrada, data, contra, contra_nivel })
+    // Centro de custo: vem SEMPRE da planilha do mês (coluna colCC do perfil) — não entra
+    // na memória. Se a célula vier vazia, fica vazio para o usuário preencher à mão.
+    const centro_custo = p.colCC != null && p.colCC >= 0 ? String(r[p.colCC] ?? '').trim() : ''
+    out.push({ historico, credor, valor, entrada, data, contra, contra_nivel, centro_custo })
   }
   return out
 }
