@@ -956,6 +956,20 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
     setMsg(`Conectado com ${kind === 'juros' ? 'juros/multa' : 'desconto'} de ${money(dif)} — foi para Conciliados e o acerto para o Contabilizar.`)
   }
 
+  // Desvincula EM LOTE os nomes dos lançamentos selecionados (não unir com parecidos) —
+  // vale para todos os meses. Útil quando o sistema juntou vários nomes distintos por engano.
+  async function desvincularLote(lines) {
+    const nomes = [...new Set((lines || []).filter(l => !l.acerto && (l.leitura?.entidade || '').trim()).map(l => l.leitura.entidade.trim()))]
+    if (!nomes.length) { setMsg('Marque linhas com nome identificado para desvincular.'); return }
+    const iso = new Set(nomesIsolados)
+    for (const n of nomes) { const k = chaveNome(n); if (k) iso.add(k) }
+    setNomesIsolados(iso)
+    await salvarNomes(nomesConf, iso)
+    setSelLin(new Set())
+    setMsg(`${nomes.length} ${lab}(s) desvinculado(s) — não vou mais unir com nomes parecidos.`)
+    carregarLanc()
+  }
+
   // Corrige o FORNECEDOR/CLIENTE de vários lançamentos de uma vez (ajuste de leitura em
   // lote): útil quando o sistema leu o nome errado em várias linhas do mesmo fornecedor.
   async function aplicarFornecedorLote(lines, nome, aprender) {
@@ -1337,6 +1351,9 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
             <span style={{ color: theme.text, fontSize: 13 }}><b>{selLancs.length}</b> selecionado(s) · líquido <b style={{ color: zera ? theme.green : theme.yellow }}>{money(Math.abs(net))} {net < 0 ? 'C' : net > 0 ? 'D' : ''}</b> {zera ? '(zera)' : '(não zera)'}</span>
             <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={() => setLoteForn({ lines: selLancs })}>
               <i className="ti ti-user-edit" /> Corrigir {lab}
+            </button>
+            <button className="btn btn-ghost" style={{ fontSize: 12.5, color: theme.yellow, borderColor: theme.yellow }} title="Manter estes nomes separados (não unir com parecidos) — vale para todos os meses" onClick={() => desvincularLote(selLancs)}>
+              <i className="ti ti-arrows-split" /> Desvincular
             </button>
             <button className="btn" disabled={selLancs.length < 2} style={{ fontSize: 12.5, background: selLancs.length >= 2 ? theme.green : undefined, borderColor: selLancs.length >= 2 ? theme.green : undefined, opacity: selLancs.length >= 2 ? 1 : 0.5 }} onClick={conectarSelecionados}>
               <i className="ti ti-link" /> Conectar (baixar)
