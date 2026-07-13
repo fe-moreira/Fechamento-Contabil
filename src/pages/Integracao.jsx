@@ -5,6 +5,7 @@ import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { theme, money, moneyDC } from '../lib/theme'
 import CampoConta from '../components/CampoConta'
+import CampoCentroCusto from '../components/CampoCentroCusto'
 import { normHist, casarHistorico, casarHistoricoNivel, aprender, parseValor, dataISO, aplicarPerfil, extrairEntidade, ehEmpresa, catByRowDeMerges, expandirMerges } from '../lib/financeiro'
 import { gerarExcelTimbrado } from '../lib/excel'
 import { gerarDominioCSV } from '../lib/dominio'
@@ -957,6 +958,7 @@ function validarCompetencia(linhas, mapa, comp) {
 function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isAdmin, usaCC }) {
   const [contas, setContas] = useState([])       // [{ conta_contabil, agencia, conta }]
   const [memoria, setMemoria] = useState([])     // [{ termo, conta }]
+  const [centros, setCentros] = useState([])     // centros de custo do cliente: [{ cod, nome, resp }]
   const [memMeta, setMemMeta] = useState({ nomeArquivo: '', semCarga: false })
   const [carregReg, setCarregReg] = useState(true)
   const [novo, setNovo] = useState({ conta_contabil: '', agencia: '', conta: '' })
@@ -1025,7 +1027,11 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     Promise.all([
       supabase.from('cargas_cadastro').select('dados, obs').eq('cliente_id', empresaId).eq('tipo', 'contas_bancarias').order('created_at', { ascending: false }).limit(1).maybeSingle(),
       supabase.from('cargas_cadastro').select('dados, obs').eq('cliente_id', empresaId).eq('tipo', 'memoria_financeira').order('created_at', { ascending: false }).limit(1).maybeSingle(),
-    ]).then(([bc, mem]) => {
+      supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'centro_custo').order('created_at', { ascending: false }).limit(1).maybeSingle(),
+    ]).then(([bc, mem, cc]) => {
+      // Lista de centros de custo (código, nome, responsável) — para o F4 do campo C. Custo.
+      const kBy = (o, re) => { const k = Object.keys(o || {}).find(k => re.test(String(k).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, ''))); return k ? String(o[k] ?? '').trim() : '' }
+      setCentros((Array.isArray(cc.data?.dados) ? cc.data.dados : []).map(r => ({ cod: kBy(r, /cod/), nome: kBy(r, /nome|descri/), resp: kBy(r, /respons/) })).filter(c => c.cod || c.nome))
       setContas(Array.isArray(bc.data?.dados) ? bc.data.dados : [])
       let perf = null, perfMap = {}
       try {
@@ -1991,12 +1997,11 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
                           : <span style={{ color: theme.red }}><i className="ti ti-alert-triangle" /> conta não encontrada no plano</span>}
                     </td>
                     {usaCC && (
-                      <td style={{ ...ftd, minWidth: 100 }}>
-                        <input className="input" style={{ fontSize: 11.5, padding: '4px 7px', width: 90, borderColor: ccPendente(l) ? theme.red : undefined }}
-                          value={l.centro_custo || ''} disabled={concluido}
-                          placeholder={ehResultadoContra(l.contra) ? 'obrigatório' : '—'}
-                          title={ccPendente(l) ? 'Centro de custo obrigatório (conta de resultado)' : 'Centro de custo (da planilha ou manual)'}
-                          onChange={e => setLinha(i, { centro_custo: e.target.value })} />
+                      <td style={{ ...ftd, minWidth: 116 }}>
+                        <CampoCentroCusto value={l.centro_custo} centros={centros} disabled={concluido}
+                          placeholder={ehResultadoContra(l.contra) ? 'obrigatório (F4)' : 'C.Custo (F4)'}
+                          style={ccPendente(l) ? { outline: `1px solid ${theme.red}`, borderRadius: 6 } : undefined}
+                          onChange={v => setLinha(i, { centro_custo: v })} />
                       </td>
                     )}
                   </tr>
