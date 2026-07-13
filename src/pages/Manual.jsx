@@ -325,6 +325,7 @@ const HTML = `
   <h2 class="m-sec">12 · Integração Financeira</h2>
   <p>Pipeline <b>pré-razão</b>, separado do Contabilizar. Importa o extrato/planilha do cliente e separa em dois baldes: <b>contabilizado automaticamente</b> e <b>não identificado</b>. Usa o perfil de leitura e a memória do cliente para classificar e sugerir a partida. Ao final, gera o arquivo financeiro no layout do Domínio.</p>
   <div class="m-rule"><span class="k">Quando se aplica</span> Só para clientes marcados com <b>integração financeira = Excel</b>. O extrato Excel subido em massa já cai aqui como rascunho, com os lançamentos sugeridos.</div>
+  <div class="m-rule warn"><span class="k">Perfil de leitura — 1ª vez</span> Para cada banco, a <b>primeira</b> importação é feita <b>aqui na Integração</b>: o sistema mostra o mapeamento das colunas (Data · Valor · Histórico · D/C) — confira em <b>“Ajustar leitura”</b> e salve. Isso grava o <b>perfil</b>. A partir daí, subir o Excel (individual ou em massa) já classifica sozinho. Sem o perfil, o upload marca o documento como recebido mas <b>não</b> alimenta a Integração — e avisa que falta configurar o perfil.</div>
 </section>
 
 <section id="m-conciliacao">

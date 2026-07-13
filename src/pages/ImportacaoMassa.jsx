@@ -313,7 +313,9 @@ function RecebeArquivos({ competencias, competencia, recalcularPendencias }) {
           try { r = await alimentarIntegracaoFinanceira({ compId: comp.id, empresaId: cli.id, conta, file: row.file }) } catch (e) { r = { classificado: false, motivo: e.message } }
           resultado.push(r?.classificado
             ? { ...base, nivel: 'ok', msg: `Integração · conta ${conta} · ${r.classificadas}/${r.total} sugeridos` }
-            : { ...base, nivel: 'duvida', msg: `Integração · conta ${conta} · classifique lá (${r?.motivo || '—'})` })
+            : { ...base, nivel: 'duvida', msg: /perfil/i.test(r?.motivo || '')
+                ? `Integração · conta ${conta} · falta o PERFIL DE LEITURA — faça a 1ª importação na Integração`
+                : `Integração · conta ${conta} · ajuste a leitura (${r?.motivo || '—'})` })
         }
         const arr = marc.get(comp.id) || []; arr.push({ conta, tipo: row.destino, path, arquivo: row.nome }); marc.set(comp.id, arr)
         // Aprende: número da conta do extrato → conta contábil confirmada (para o próximo mês).
