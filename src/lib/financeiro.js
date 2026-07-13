@@ -214,6 +214,11 @@ export function aplicarPerfil(arr, perfil, memoria, catByRow, adiantContas, banc
       else { const v = String(r[p.colCategoria] ?? '').trim(); if (v && !/total\s*$/i.test(v)) catAtual = v; categoria = catAtual }
     }
     if (!r || !r.some(c => c !== '' && c != null)) continue
+    // Linha de SUBTOTAL/TOTAL do relatório (ex.: "1.90.01.0006 Irrf Retido Total"): tem
+    // valor mas não é lançamento — não sobe (era o que subia "sem data" no Sisloc). Só pula
+    // quando a categoria termina em "Total" E a linha não tem data (lançamento real tem data).
+    if (temCat && /total(\s+geral)?\s*$/i.test(String(r[p.colCategoria] ?? '').trim())
+      && !(p.colData != null && p.colData >= 0 && dataISO(r[p.colData]))) continue
     if (p.filtro?.pularVazio && p.filtro.col != null && p.filtro.col >= 0 && !String(r[p.filtro.col] ?? '').trim()) continue
     // "SALDO ANTERIOR/INICIAL" não é lançamento — é a abertura do extrato (só valida o saldo).
     const descr = colHist >= 0 ? String(r[colHist] ?? '') : histCols.length ? String(r[histCols[0]] ?? '') : ''

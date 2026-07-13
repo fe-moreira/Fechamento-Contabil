@@ -977,6 +977,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   const [fNivel, setFNivel] = useState('')       // filtro por nível de confiança ('' | alta | media | manual | sem)
   const [fNome, setFNome] = useState('')         // filtro por NOME da conta de contrapartida
   const [fNomeMode, setFNomeMode] = useState('contem') // 'contem' | 'naocontem'
+  const [fSemData, setFSemData] = useState(false) // filtro: só linhas SEM data (ex.: linhas de total)
   const [lote, setLote] = useState('')           // conta para preencher em lote nas selecionadas
   const [sel, setSel] = useState(() => new Set())// linhas selecionadas (índice original)
   const [quebra, setQuebra] = useState(null)      // { i, linha } divisão de um lançamento
@@ -1333,6 +1334,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
       const h = normTxt(l.historico), q = normTxt(fHist)
       if (fMode === 'exato' ? h !== q : !h.includes(q)) return false
     }
+    if (fSemData && l.data) return false
     if (fData && !dataBR(l.data).includes(fData.trim())) return false
     if (fES && (fES === 'entrada') !== !!l.entrada) return false
     if (fConta && String(l.contra || '').trim() !== String(fConta).trim()) return false
@@ -1425,6 +1427,17 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     // Volta ao estado original para a próxima aplicação: limpa filtro, seleção e conta.
     setSel(new Set()); setLote(''); setFSem(false); setFHist(''); setFData(''); setFES(''); setFConta('')
     setMsg(`Conta ${cod} aplicada em ${n} linha(s). Pronto para a próxima seleção.`)
+  }
+  // Exclui em lote os lançamentos selecionados desta importação (ex.: linhas que não
+  // devem ir para a contabilização). Some do rascunho; não afeta o extrato original.
+  function excluirLote() {
+    if (concluido) return
+    if (!sel.size) { setMsg('Selecione as linhas (caixas à esquerda) para excluir.'); return }
+    const n = sel.size
+    if (!window.confirm(`Excluir ${n} lançamento(s) selecionado(s) desta importação? Eles não vão para a contabilização.`)) return
+    setLinhas(ls => ls.filter((_, j) => !sel.has(j)))
+    setSel(new Set())
+    setMsg(`${n} lançamento(s) excluído(s) da importação.`)
   }
 
   // Aprende: guarda HISTÓRICO → contrapartida das linhas classificadas (o histórico já
@@ -1614,7 +1627,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   const difSaldo = Math.round((saldoFinal - parseValor(saldoExtrato)) * 100) / 100
   const visiveis = linhas.map((l, i) => ({ l, i })).filter(({ l }) => linhaVisivel(l))
   // Totalizador do que está filtrado (útil ao filtrar por dia): quanto de + e de −.
-  const filtroAtivo = fSem || !!fHist || !!fData || !!fES || !!fConta || !!fNivel || !!fNome.trim()
+  const filtroAtivo = fSem || fSemData || !!fHist || !!fData || !!fES || !!fConta || !!fNivel || !!fNome.trim()
   const totVisEnt = visiveis.filter(({ l }) => l.entrada).reduce((s, { l }) => s + (l.valor || 0), 0)
   const totVisSai = visiveis.filter(({ l }) => !l.entrada).reduce((s, { l }) => s + (l.valor || 0), 0)
   const visIdx = visiveis.map(v => v.i)
@@ -1781,6 +1794,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
               <option value="contem">Contém</option><option value="exato">Exato</option>
             </select>
             <input className="input" style={{ maxWidth: 130, fontSize: 12, padding: '6px 10px' }} placeholder="Data (dd/mm)" value={fData} onChange={e => setFData(e.target.value)} />
+            <button className={fSemData ? 'btn' : 'btn btn-ghost'} style={{ fontSize: 12, padding: '5px 10px', ...(fSemData ? { background: theme.yellow, borderColor: theme.yellow } : { color: theme.yellow, borderColor: theme.yellow }) }} onClick={() => setFSemData(v => !v)} title="Mostrar só as linhas sem data (ex.: linhas de total do relatório)"><i className="ti ti-calendar-off" /> Sem data</button>
             <select className="input" style={{ maxWidth: 120, fontSize: 12, padding: '6px 8px' }} value={fES} onChange={e => setFES(e.target.value)}>
               <option value="">Entrada/Saída</option><option value="entrada">Só entradas</option><option value="saida">Só saídas</option>
             </select>
@@ -1796,12 +1810,13 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
             <select className="input" style={{ maxWidth: 130, fontSize: 12, padding: '6px 8px' }} value={fNomeMode} onChange={e => setFNomeMode(e.target.value)} title="Contém / Não contém — pelo nome da conta">
               <option value="contem">Contém</option><option value="naocontem">Não contém</option>
             </select>
-            {filtroAtivo && <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', color: theme.sub }} onClick={() => { setFSem(false); setFHist(''); setFData(''); setFES(''); setFConta(''); setFNivel(''); setFNome('') }}>limpar filtros</button>}
+            {filtroAtivo && <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', color: theme.sub }} onClick={() => { setFSem(false); setFSemData(false); setFHist(''); setFData(''); setFES(''); setFConta(''); setFNivel(''); setFNome('') }}>limpar filtros</button>}
             <span style={{ flex: 1 }} />
             <span style={{ fontSize: 12, color: theme.sub }}>Aplicar às selecionadas:</span>
             <CampoConta value={lote} onChange={setLote} onEnter={aplicarLote} placeholder="Conta (F4)" style={{ width: 190 }} />
             {lote.trim() && <span style={{ fontSize: 11.5, maxWidth: 220, color: planoMap[String(lote).trim()]?.nome ? theme.green : theme.red }}>{planoMap[String(lote).trim()]?.nome || 'conta não encontrada'}</span>}
             <button className="btn" style={{ fontSize: 12, padding: '5px 10px' }} disabled={!sel.size || concluido} onClick={aplicarLote}><i className="ti ti-wand" /> Aplicar ({sel.size})</button>
+            <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', color: theme.red, borderColor: theme.red }} disabled={!sel.size || concluido} onClick={excluirLote} title="Excluir as linhas selecionadas desta importação (não vão para a contabilização)"><i className="ti ti-trash" /> Excluir ({sel.size})</button>
           </div>
 
           <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 12.5, margin: '0 0 6px' }}>
