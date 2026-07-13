@@ -966,7 +966,8 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   const [linhas, setLinhas] = useState([])       // classificação: [{ banco, historico, valor, entrada, contra, data }]
   const [erro, setErro] = useState('')
   const [msg, setMsg] = useState('')
-  const [perfil, setPerfil] = useState(null)     // perfil de leitura do extrato deste cliente
+  const [perfil, setPerfil] = useState(null)     // perfil de leitura LEGADO (um só por cliente) — retrocompatibilidade
+  const [perfis, setPerfis] = useState({})       // perfil de leitura POR BANCO: { [conta_contabil]: perfil }
   const [cfg, setCfg] = useState(null)           // { raw, banco, perfil } — painel de mapeamento aberto
   const [fSem, setFSem] = useState(false)        // filtro: só linhas sem contrapartida
   const [fHist, setFHist] = useState('')         // filtro por histórico
@@ -1021,9 +1022,15 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
       supabase.from('cargas_cadastro').select('dados, obs').eq('cliente_id', empresaId).eq('tipo', 'memoria_financeira').order('created_at', { ascending: false }).limit(1).maybeSingle(),
     ]).then(([bc, mem]) => {
       setContas(Array.isArray(bc.data?.dados) ? bc.data.dados : [])
-      let perf = null
-      try { const o = JSON.parse(bc.data?.obs || ''); if (o && typeof o === 'object' && o.perfil) perf = o.perfil } catch { /* obs antigo em texto */ }
-      setPerfil(perf); setCfg(null)
+      let perf = null, perfMap = {}
+      try {
+        const o = JSON.parse(bc.data?.obs || '')
+        if (o && typeof o === 'object') {
+          if (o.perfil) perf = o.perfil
+          if (o.perfis && typeof o.perfis === 'object') perfMap = o.perfis
+        }
+      } catch { /* obs antigo em texto */ }
+      setPerfil(perf); setPerfis(perfMap); setCfg(null)
       setMemoria(Array.isArray(mem.data?.dados) ? mem.data.dados : [])
       let meta = { nomeArquivo: '', semCarga: false }
       try { const m = JSON.parse(mem.data?.obs || ''); if (m && typeof m === 'object') meta = { nomeArquivo: m.nomeArquivo || '', semCarga: !!m.semCarga } } catch { /* obs antigo em texto */ }
@@ -1041,10 +1048,23 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     if (error) setErro('Não consegui gravar: ' + error.message)
     return error
   }
-  // O perfil de leitura do extrato vive no obs da carga de contas bancárias
-  // (uma vez por cliente, vale para todos os meses).
-  async function salvarContas(arr, perf = perfil) { setContas(arr); await salvarCarga('contas_bancarias', arr, JSON.stringify({ perfil: perf || null })) }
-  async function salvarPerfil(perf) { setPerfil(perf); await salvarCarga('contas_bancarias', contas, JSON.stringify({ perfil: perf || null })) }
+  // O perfil de leitura do extrato vive no obs da carga de contas bancárias.
+  // Cada BANCO (conta_contabil) tem seu próprio perfil — clientes com mais de um
+  // banco exportam layouts diferentes (ex.: Itaú/Sisloc × Bradesco). O campo `perfil`
+  // (legado, um só) é mantido só para retrocompatibilidade com cadastros antigos.
+  function obsContas(perfMap = perfis, legado = perfil) { return JSON.stringify({ perfil: legado || null, perfis: perfMap || {} }) }
+  // Resolve o perfil de um banco: primeiro o específico do banco, senão o legado.
+  function perfilDeBanco(banco) { return perfis[String(banco)] || perfil || null }
+  async function salvarContas(arr) { setContas(arr); await salvarCarga('contas_bancarias', arr, obsContas()) }
+  async function salvarPerfil(perf, banco) {
+    const chave = String(banco ?? '').trim()
+    const novoMap = chave ? { ...perfis, [chave]: perf || null } : perfis
+    // Perfil por banco → grava no mapa e preserva o legado (fallback dos demais bancos).
+    // Sem banco (fluxo antigo) → grava no legado.
+    const novoLegado = chave ? perfil : perf
+    setPerfis(novoMap); setPerfil(novoLegado)
+    await salvarCarga('contas_bancarias', contas, obsContas(novoMap, novoLegado))
+  }
   function addConta() {
     const cod = String(novo.conta_contabil || '').trim()
     if (!cod) return
@@ -1258,7 +1278,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
         // SEMPRE abre a tela de configuração para o usuário CONFERIR se o sistema entendeu
         // as colunas (parte do perfil salvo, quando houver — é só conferir e confirmar).
         // Ao confirmar, importa (aplicarEProsseguir no onSalvar da tela).
-        setCfg({ arr, catByRow, nome: file.name, banco: bancoFixo, perfil: perfil || perfilPadrao(arr) })
+        setCfg({ arr, catByRow, nome: file.name, banco: bancoFixo, perfil: perfilDeBanco(bancoFixo) || perfilPadrao(arr) })
         return
       }
       const header = arr[0] || []
@@ -1784,7 +1804,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', margin: '14px 0 6px' }}>
               <span style={{ fontSize: 12, color: theme.sub }}><i className="ti ti-adjustments" style={{ color: theme.accent }} /> Extrato normalizado pelo perfil de leitura deste cliente.</span>
               {Array.isArray(raw.arr)
-                ? <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => setCfg({ arr: raw.arr, catByRow: raw.catByRow, nome: raw.nome, banco: raw.banco, perfil: perfil || perfilPadrao(raw.arr) })}><i className="ti ti-adjustments" /> Ajustar leitura</button>
+                ? <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => setCfg({ arr: raw.arr, catByRow: raw.catByRow, nome: raw.nome, banco: raw.banco, perfil: perfilDeBanco(raw.banco) || perfilPadrao(raw.arr) })}><i className="ti ti-adjustments" /> Ajustar leitura</button>
                 : <label className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', cursor: 'pointer' }} title="Rascunho aberto sem o arquivo — reimporte o extrato para ajustar a leitura">
                     <i className="ti ti-adjustments" /> Ajustar leitura (reimportar)
                     <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={e => raw.banco && importar(e.target.files?.[0], raw.banco)} />
@@ -1968,7 +1988,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
         <PerfilExtratoCfg
           arr={cfg.arr} catByRow={cfg.catByRow} adiantContas={adiantContas} nome={cfg.nome} bancoNome={nomeBanco(cfg.banco)} bancoCod={cfg.banco} perfilInicial={cfg.perfil} memoria={memoria}
           onCancelar={() => setCfg(null)}
-          onSalvar={async (perf) => { await salvarPerfil(perf); setCfg(null); aplicarEProsseguir(cfg.arr, cfg.nome, cfg.banco, perf, cfg.catByRow) }}
+          onSalvar={async (perf) => { await salvarPerfil(perf, cfg.banco); setCfg(null); aplicarEProsseguir(cfg.arr, cfg.nome, cfg.banco, perf, cfg.catByRow) }}
         />
       )}
 
