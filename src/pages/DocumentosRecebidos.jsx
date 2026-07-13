@@ -135,8 +135,13 @@ export default function DocumentosRecebidos() {
     try {
       const r = await receberArquivo({ compId, empresaId, conta: (docs[i].conta || '').trim(), file })
       persistir(docs.map((d, j) => j === i ? { ...d, situacao: 'recebido', rec: true, date: hojeCurto(), arquivo_path: r.path, arquivo: file.name } : d))
+      const integMsg = r.integ?.classificado
+        ? ` · ${r.integ.classificadas}/${r.integ.total} lançamentos sugeridos`
+        : /perfil/i.test(r.integ?.motivo || '')
+          ? ' · a Integração ainda não tem o PERFIL DE LEITURA deste banco — faça a 1ª importação na tela Integração para o sistema aprender o layout; depois os próximos meses entram automáticos'
+          : ` · ajuste a leitura na Integração${r.integ?.motivo ? ` (${r.integ.motivo})` : ''}`
       const extra = r.destino === 'conciliacao' ? (r.saldoLido != null ? ` · saldo lido ${money(r.saldoLido)}` : ' · informe o saldo na conciliação')
-        : r.destino === 'integracao' ? (r.integ?.classificado ? ` · ${r.integ.classificadas}/${r.integ.total} lançamentos sugeridos` : ' · classifique na Integração')
+        : r.destino === 'integracao' ? integMsg
         : ''
       setMsg(`“${docs[i].name}” recebido${extra}.`)
     } catch (e) { setMsg('Erro ao subir: ' + e.message) } finally { setSubindo(null) }
