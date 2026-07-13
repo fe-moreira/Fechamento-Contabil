@@ -530,6 +530,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
   const [verConferidos, setVerConferidos] = useState(false) // mostra a seção "Conferidos" (p/ reabrir)
   const [buscaNome, setBuscaNome] = useState('') // busca por nome na composição de clientes/fornecedores
   const [selLin, setSelLin] = useState(() => new Set()) // linhas marcadas p/ conectar (baixa manual)
+  const [loteForn, setLoteForn] = useState(null) // { lines } — corrigir fornecedor em lote
   const [nomesConf, setNomesConf] = useState(new Set())   // nomes CONFIÁVEIS do cliente (não pede revisão)
   const [nomesIsolados, setNomesIsolados] = useState(new Set()) // nomes a NÃO unir com parecidos (desvincular)
 
@@ -909,6 +910,22 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
     carregarTratados()
   }
 
+  // Corrige o FORNECEDOR/CLIENTE de vários lançamentos de uma vez (ajuste de leitura em
+  // lote): útil quando o sistema leu o nome errado em várias linhas do mesmo fornecedor.
+  async function aplicarFornecedorLote(lines, nome, aprender) {
+    const nm = String(nome || '').trim()
+    const alvo = (lines || []).filter(l => !l._abertura && !l.acerto && l.id) // ajuste_leitura precisa do razao_id
+    if (!nm || !alvo.length) { setLoteForn(null); return }
+    const id = await getCompetenciaId()
+    const rows = alvo.map(l => ({ competencia_id: id, razao_id: l.id, entidade: nm, usuario }))
+    const { error } = await supabase.from('ajuste_leitura').upsert(rows, { onConflict: 'razao_id' })
+    if (error) { setMsg('Não consegui corrigir em lote: ' + error.message); return }
+    if (aprender) await marcarConfiavel(nm)
+    setSelLin(new Set()); setLoteForn(null)
+    setMsg(`Fornecedor "${nm}" aplicado a ${alvo.length} lançamento(s)${aprender ? ' e aprendido' : ''}.`)
+    carregarLanc()
+  }
+
   // Confirma DE UMA VEZ todas as entidades zeradas/identificadas (uma pergunta só).
   async function confirmarTodos(grupos) {
     const items = []
@@ -1264,6 +1281,9 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
         return (
           <div style={{ position: 'fixed', left: '50%', bottom: 20, transform: 'translateX(-50%)', zIndex: 60, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '10px 16px', background: theme.card, border: `1px solid ${theme.accent}`, borderRadius: 12, boxShadow: '0 8px 30px rgba(0,0,0,0.4)' }}>
             <span style={{ color: theme.text, fontSize: 13 }}><b>{selLancs.length}</b> selecionado(s) · líquido <b style={{ color: zera ? theme.green : theme.yellow }}>{money(Math.abs(net))} {net < 0 ? 'C' : net > 0 ? 'D' : ''}</b> {zera ? '(zera)' : '(não zera)'}</span>
+            <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={() => setLoteForn({ lines: selLancs })}>
+              <i className="ti ti-user-edit" /> Corrigir {lab}
+            </button>
             <button className="btn" disabled={selLancs.length < 2} style={{ fontSize: 12.5, background: selLancs.length >= 2 ? theme.green : undefined, borderColor: selLancs.length >= 2 ? theme.green : undefined, opacity: selLancs.length >= 2 ? 1 : 0.5 }} onClick={conectarSelecionados}>
               <i className="ti ti-link" /> Conectar (baixar)
             </button>
@@ -1271,6 +1291,10 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
           </div>
         )
       })()}
+
+      {loteForn && (
+        <ModalLoteForn lines={loteForn.lines} lab={lab} onClose={() => setLoteForn(null)} onAplicar={aplicarFornecedorLote} />
+      )}
 
       {acao && (
         <ModalLancamento lanc={acao} conta={conta} lab={lab} plano={plano} natCredito={natCredito}
@@ -1853,6 +1877,36 @@ function RelatoriosComposicao({ conta, emAberto, zerados, contraDe }) {
 
 // Menu de ação de um lançamento: Justificar (texto) ou Corrigir (já informa a partida
 // contábil de acerto, que vai para o painel Contabilizar gerar o arquivo do Domínio).
+// Corrigir o fornecedor/cliente de vários lançamentos de uma vez.
+function ModalLoteForn({ lines, lab, onClose, onAplicar }) {
+  const razaoLines = (lines || []).filter(l => !l._abertura && !l.acerto && l.id)
+  const puladas = (lines || []).length - razaoLines.length
+  // Prefill: o nome mais frequente entre os selecionados.
+  const cont = {}
+  for (const l of razaoLines) { const n = (l.leitura?.entidade || '').trim(); if (n) cont[n] = (cont[n] || 0) + 1 }
+  const sugestao = Object.entries(cont).sort((a, b) => b[1] - a[1])[0]?.[0] || ''
+  const [nome, setNome] = useState(sugestao)
+  const [aprender, setAprender] = useState(true)
+  const [busy, setBusy] = useState(false)
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 95 }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 'min(480px,96vw)', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 14, padding: 20 }}>
+        <h3 style={{ fontSize: 15, margin: '0 0 8px' }}><i className="ti ti-user-edit" style={{ color: theme.accent, marginRight: 6 }} />Corrigir {lab} em lote</h3>
+        <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 12px' }}>Aplica o nome a <b style={{ color: theme.text }}>{razaoLines.length}</b> lançamento(s) selecionado(s){puladas > 0 ? ` (${puladas} de saldo inicial/acerto foram ignorados)` : ''}.</p>
+        <label style={{ fontSize: 12, color: theme.sub }}>Nome correto do {lab}</label>
+        <input className="input" autoFocus value={nome} onChange={e => setNome(e.target.value)} placeholder={`Nome correto do ${lab}`} style={{ marginBottom: 12 }} />
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: theme.sub, cursor: 'pointer', marginBottom: 16 }}>
+          <input type="checkbox" checked={aprender} onChange={e => setAprender(e.target.checked)} /> Aprender — não pedir revisão desse {lab} nos próximos meses
+        </label>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+          <button className="btn" disabled={!nome.trim() || !razaoLines.length || busy} onClick={async () => { setBusy(true); await onAplicar(razaoLines, nome, aprender) }}><i className="ti ti-check" /> Aplicar</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function ModalLancamento({ lanc, conta, lab, plano, natCredito, residuo = 0, onClose, onRegistrar, onDesvincular }) {
   const [tipo, setTipo] = useState(null) // 'Justificativa' | 'Correção'
   const [txt, setTxt] = useState('')
