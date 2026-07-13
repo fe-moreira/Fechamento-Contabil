@@ -513,7 +513,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
   const [msg, setMsg] = useState('')
   const [verComposic, setVerComposic] = useState(null) // { titulo, itens } — composição de um saldo
   const [tratados, setTratados] = useState(new Set()) // razao_ids já corrigidos/estornados/justificados
-  const [soConfirmaveis, setSoConfirmaveis] = useState(false) // filtro: só entidades zeradas p/ confirmar em lote
+  const [filtroSit, setFiltroSit] = useState('') // filtro por situação: ''|devedor|semtitulo|unificados|incerta|confirmaveis
   const [selEnt, setSelEnt] = useState(() => new Set()) // entidades marcadas p/ baixa em lote (por nome)
 
   async function carregarTratados() {
@@ -672,6 +672,28 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
   const pendentesEnt = g => g.lancs.filter(l => l.id && !l.acerto && !tratados.has(l.id))
   const podeConfirmarEnt = g => Math.abs(g.total) < 0.005 && g.total >= -0.005 && !g.unk && baixaSemTitulo(g).size === 0 && pendentesEnt(g).length > 0
   const confirmaveis = lista.filter(podeConfirmarEnt)
+  // Filtro por situação — mesma definição de cada faixa de aviso. Só filtra a lista
+  // (não confirma nada); a única situação que também baixa em lote é "confirmaveis".
+  const sitPred = {
+    devedor: g => g.total < -0.005,
+    semtitulo: g => baixaSemTitulo(g).size > 0,
+    unificados: g => g.unido,
+    incerta: g => g.lancs.some(l => Math.abs(ov(l)) >= 0.005 && l.leitura.conf !== 'alta'),
+    confirmaveis: podeConfirmarEnt,
+  }
+  const listaVis = (filtroSit && sitPred[filtroSit]) ? lista.filter(sitPred[filtroSit]) : lista
+  // Props para transformar uma faixa de aviso em FILTRO clicável (mostra só as entidades
+  // daquela situação). Não baixa nada — só filtra a lista.
+  const faixaFiltro = key => ({
+    onClick: () => setFiltroSit(f => f === key ? '' : key),
+    title: filtroSit === key ? 'Filtrando por esta situação — clique para limpar' : 'Clique para ver só os desta situação',
+  })
+  const estiloFiltro = key => ({ cursor: 'pointer', boxShadow: filtroSit === key ? `0 0 0 2px ${theme.accent} inset` : 'none' })
+  const chipFiltro = key => (
+    <span style={{ marginLeft: 'auto', flexShrink: 0, fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap', color: filtroSit === key ? theme.text : theme.sub, border: `1px solid ${theme.cb}`, borderRadius: 20, padding: '2px 9px' }}>
+      <i className={`ti ${filtroSit === key ? 'ti-filter-check' : 'ti-filter'}`} /> {filtroSit === key ? 'Filtrando' : 'Filtrar'}
+    </span>
+  )
 
   async function registrar(tipo, payload) {
     const id = await getCompetenciaId()
@@ -762,7 +784,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
     }
     setTratados(prev => { const s = new Set(prev); items.forEach(({ l }) => s.add(l.id)); return s })
     setSelEnt(prev => { const s = new Set(prev); grupos.forEach(g => s.delete(g.nome)); return s })
-    setSoConfirmaveis(false)
+    setFiltroSit('')
     setMsg(`${items.length} lançamento(s) de ${grupos.length} ${lab}(s) confirmado(s).`)
     carregarTratados()
   }
@@ -846,18 +868,20 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
       </p>
 
       {anomalos.length > 0 && (
-        <div style={{ background: 'rgba(229,72,77,0.10)', border: `1px solid ${theme.red}`, borderRadius: 12, display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px', marginBottom: 12 }}>
-          <i className="ti ti-alert-octagon" style={{ color: theme.red, fontSize: 18, marginTop: 1 }} />
+        <div {...faixaFiltro('devedor')} style={{ background: 'rgba(229,72,77,0.10)', border: `1px solid ${theme.red}`, borderRadius: 12, display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', marginBottom: 12, ...estiloFiltro('devedor') }}>
+          <i className="ti ti-alert-octagon" style={{ color: theme.red, fontSize: 18, flexShrink: 0 }} />
           <span style={{ color: theme.text, fontSize: 13 }}>
             {anomalos.length} {lab}(s) com saldo <b>{natAnom}</b> (natureza invertida) — verifique{anomalos.length <= 4 ? `: ${anomalos.join(', ')}` : ''}.
           </span>
+          {chipFiltro('devedor')}
         </div>
       )}
 
       {totalSemTitulo > 0 && (
-        <div style={{ background: 'rgba(229,72,77,0.10)', border: `1px solid ${theme.red}`, borderRadius: 12, display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px', marginBottom: 12 }}>
-          <i className="ti ti-receipt-off" style={{ color: theme.red, fontSize: 18, marginTop: 1 }} />
+        <div {...faixaFiltro('semtitulo')} style={{ background: 'rgba(229,72,77,0.10)', border: `1px solid ${theme.red}`, borderRadius: 12, display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', marginBottom: 12, ...estiloFiltro('semtitulo') }}>
+          <i className="ti ti-receipt-off" style={{ color: theme.red, fontSize: 18, flexShrink: 0 }} />
           <span style={{ color: theme.text, fontSize: 13 }}>{totalSemTitulo} baixa(s) com NF que não confere com nenhum título deste {lab} — para o saldo zerar, a NF do recebimento tem que ser a mesma do faturamento.</span>
+          {chipFiltro('semtitulo')}
         </div>
       )}
 
@@ -869,16 +893,18 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
       )}
 
       {unificados > 0 && (
-        <div style={{ background: 'rgba(74,124,255,0.10)', border: `1px solid ${theme.accent}`, borderRadius: 12, display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px', marginBottom: 12 }}>
-          <i className="ti ti-arrows-join" style={{ color: theme.accent, fontSize: 18, marginTop: 1 }} />
+        <div {...faixaFiltro('unificados')} style={{ background: 'rgba(74,124,255,0.10)', border: `1px solid ${theme.accent}`, borderRadius: 12, display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', marginBottom: 12, ...estiloFiltro('unificados') }}>
+          <i className="ti ti-arrows-join" style={{ color: theme.accent, fontSize: 18, flexShrink: 0 }} />
           <span style={{ color: theme.text, fontSize: 13 }}>{unificados} {lab}(s) com nomes parecidos foram <b>unificados</b> — confira se é mesmo o mesmo {lab} (veja “nomes unidos” em cada card).</span>
+          {chipFiltro('unificados')}
         </div>
       )}
 
       {revs > 0 && (
-        <div style={{ background: 'rgba(245,166,35,0.10)', border: `1px solid ${theme.yellow}`, borderRadius: 12, display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', marginBottom: 12 }}>
-          <i className="ti ti-alert-triangle" style={{ color: theme.yellow, fontSize: 18 }} />
+        <div {...faixaFiltro('incerta')} style={{ background: 'rgba(245,166,35,0.10)', border: `1px solid ${theme.yellow}`, borderRadius: 12, display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', marginBottom: 12, ...estiloFiltro('incerta') }}>
+          <i className="ti ti-alert-triangle" style={{ color: theme.yellow, fontSize: 18, flexShrink: 0 }} />
           <span style={{ color: theme.text, fontSize: 13 }}>{revs} lançamento(s) com leitura incerta — corrija o {lab} para o sistema aprender.</span>
+          {chipFiltro('incerta')}
         </div>
       )}
 
@@ -904,7 +930,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
               onChange={e => setSelEnt(e.target.checked ? new Set(confirmaveis.map(g => g.nome)) : new Set())} /> Selecionar todos
           </label>
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: theme.sub, cursor: 'pointer' }}>
-            <input type="checkbox" checked={soConfirmaveis} onChange={e => setSoConfirmaveis(e.target.checked)} /> Mostrar só esses
+            <input type="checkbox" checked={filtroSit === 'confirmaveis'} onChange={e => setFiltroSit(e.target.checked ? 'confirmaveis' : '')} /> Mostrar só esses
           </label>
           <button className="btn" disabled={!selConf.length} style={{ fontSize: 12.5, background: selConf.length ? theme.green : undefined, borderColor: selConf.length ? theme.green : undefined, opacity: selConf.length ? 1 : 0.5 }}
             onClick={() => confirmarTodos(selConf)}>
@@ -913,7 +939,14 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
         </div>
         )
       })()}
-      {(soConfirmaveis ? confirmaveis : lista).map((g, gi) => {
+      {filtroSit && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '8px 12px', marginBottom: 12, background: theme.input, borderRadius: 10, fontSize: 12.5, color: theme.sub }}>
+          <i className="ti ti-filter" style={{ color: theme.accent }} />
+          <span>Filtrando por <b style={{ color: theme.text }}>{({ devedor: 'saldo em natureza invertida', semtitulo: 'baixa com NF sem título', unificados: 'nomes unificados', incerta: 'leitura incerta', confirmaveis: 'identificado e zerado sem NF' })[filtroSit] || filtroSit}</b> · mostrando <b style={{ color: theme.text }}>{listaVis.length}</b> de {lista.length} {lab}(s).</span>
+          <button className="btn btn-ghost" style={{ fontSize: 12, padding: '3px 10px', marginLeft: 'auto' }} onClick={() => setFiltroSit('')}><i className="ti ti-x" /> Limpar filtro</button>
+        </div>
+      )}
+      {listaVis.map((g, gi) => {
         const grp = g.lancs
         const gt = g.total
         const unk = g.unk
