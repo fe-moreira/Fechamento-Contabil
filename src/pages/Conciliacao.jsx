@@ -529,6 +529,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
   const [confirmados, setConfirmados] = useState(new Set()) // linhas confirmadas EM LOTE — saem do em aberto (Conciliados)
   const [verConferidos, setVerConferidos] = useState(false) // mostra a seção "Conferidos" (p/ reabrir)
   const [buscaNome, setBuscaNome] = useState('') // busca por nome na composição de clientes/fornecedores
+  const [selLin, setSelLin] = useState(() => new Set()) // linhas marcadas p/ conectar (baixa manual)
   const [nomesConf, setNomesConf] = useState(new Set())   // nomes CONFIÁVEIS do cliente (não pede revisão)
   const [nomesIsolados, setNomesIsolados] = useState(new Set()) // nomes a NÃO unir com parecidos (desvincular)
 
@@ -881,6 +882,33 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
     carregarTratados(); carregarLanc()
   }
 
+  // Conecta (baixa manual) os lançamentos SELECIONADOS — nota + pagamento que o sistema
+  // não casou sozinho (NF diferente, sem NF, ou nomes separados). Vão para Conciliados.
+  const toggleSelLin = l => setSelLin(prev => { const s = new Set(prev); s.has(l.id) ? s.delete(l.id) : s.add(l.id); return s })
+  async function conectarSelecionados() {
+    const alvo = lanc.filter(l => selLin.has(l.id) && !l.acerto && l.id && !jaTratada(l))
+    if (alvo.length < 2) { setMsg('Selecione ao menos 2 lançamentos (a nota e o pagamento) para conectar.'); return }
+    const net = alvo.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
+    const msgNet = Math.abs(net) < 0.005
+      ? `Conectar ${alvo.length} lançamento(s)? Eles zeram entre si e vão para Conciliados.`
+      : `Atenção: os selecionados NÃO zeram (diferença ${money(net)}). Conectar mesmo assim? Vão para Conciliados com essa diferença.`
+    if (!window.confirm(msgNet)) return
+    const id = await getCompetenciaId()
+    const rows = alvo.map(l => ({
+      competencia_id: id, modulo: 'Conciliação',
+      item: l._abertura ? chaveAbertura(l) : `${conta.conta} · ${l.data || ''} · NF ${l.leitura?.nf || '—'}`,
+      tipo: 'Justificativa',
+      detalhe: `Confirmado em lote — conexão manual (nota + pagamento) de ${alvo.length} lançamento(s).`,
+      razao_id: l._abertura ? null : l.id, usuario,
+    }))
+    const { error } = await supabase.from('auditoria').insert(rows)
+    if (error) { setMsg('Não consegui conectar: ' + error.message); return }
+    marcarTratadas(alvo)
+    setSelLin(new Set())
+    setMsg(`${alvo.length} lançamento(s) conectado(s) — foram para Conciliados.`)
+    carregarTratados()
+  }
+
   // Confirma DE UMA VEZ todas as entidades zeradas/identificadas (uma pergunta só).
   async function confirmarTodos(grupos) {
     const items = []
@@ -1136,6 +1164,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
             <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }}>
               <thead>
                 <tr style={{ borderTop: `1px solid ${theme.border}` }}>
+                  <th style={{ ...th, width: 26 }} title="Marcar para conectar (baixa manual)"></th>
                   <th style={th}>Data</th><th style={th}>NF</th><th style={th}>Histórico</th><th style={th}>Contrapartida</th>
                   <th style={thR}>Débito</th><th style={thR}>Crédito</th><th style={{ ...th, textAlign: 'center' }}>Conf.</th>
                 </tr>
@@ -1149,6 +1178,9 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
                     <tr key={i} onClick={() => abrirLinha(l)}
                       style={{ borderTop: `1px solid ${theme.border}`, cursor: 'pointer', opacity: (l.acerto || jaTratada(l)) ? 0.7 : 1, background: (l.acerto || jaTratada(l)) ? 'rgba(48,164,108,0.08)' : semNF ? 'rgba(229,72,77,0.08)' : 'transparent' }}
                       title={l.acerto ? `${tagAcertoLanc(l).titulo} — clique para ver ou desfazer` : jaTratada(l) ? 'Já conferido — clique para ver ou desfazer' : semNF ? 'Baixa com NF que não confere com o título — justifique ou corrija' : 'Justificar ou corrigir este lançamento'}>
+                      <td style={{ ...td, textAlign: 'center' }} onClick={e => e.stopPropagation()}>
+                        {!l.acerto && !jaTratada(l) && <input type="checkbox" title="Conectar com outro (baixa manual)" checked={selLin.has(l.id)} onChange={() => toggleSelLin(l)} style={{ cursor: 'pointer', width: 15, height: 15 }} />}
+                      </td>
                       <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{l.data || '—'}</td>
                       <td style={{ ...td, color: semNF ? theme.red : theme.sub, fontWeight: 600 }}>NF {l.leitura.nf || '—'}</td>
                       <td style={{ ...td, color: theme.sub, fontFamily: 'monospace', fontSize: 11, maxWidth: 280 }}>{l.historico}</td>
@@ -1223,6 +1255,22 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
       ) : (
         <ListaLancamentos lanc={emAbertoTodos} carregando={carregando} contraDe={contraDe} planoMap={planoMap} tratados={tratados} onTratar={abrirLinha} />
       )}
+
+      {(() => {
+        const selLancs = lanc.filter(l => selLin.has(l.id) && !l.acerto && !jaTratada(l))
+        if (!selLancs.length) return null
+        const net = selLancs.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
+        const zera = Math.abs(net) < 0.005
+        return (
+          <div style={{ position: 'fixed', left: '50%', bottom: 20, transform: 'translateX(-50%)', zIndex: 60, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '10px 16px', background: theme.card, border: `1px solid ${theme.accent}`, borderRadius: 12, boxShadow: '0 8px 30px rgba(0,0,0,0.4)' }}>
+            <span style={{ color: theme.text, fontSize: 13 }}><b>{selLancs.length}</b> selecionado(s) · líquido <b style={{ color: zera ? theme.green : theme.yellow }}>{money(Math.abs(net))} {net < 0 ? 'C' : net > 0 ? 'D' : ''}</b> {zera ? '(zera)' : '(não zera)'}</span>
+            <button className="btn" disabled={selLancs.length < 2} style={{ fontSize: 12.5, background: selLancs.length >= 2 ? theme.green : undefined, borderColor: selLancs.length >= 2 ? theme.green : undefined, opacity: selLancs.length >= 2 ? 1 : 0.5 }} onClick={conectarSelecionados}>
+              <i className="ti ti-link" /> Conectar (baixar)
+            </button>
+            <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={() => setSelLin(new Set())}><i className="ti ti-x" /> Limpar</button>
+          </div>
+        )
+      })()}
 
       {acao && (
         <ModalLancamento lanc={acao} conta={conta} lab={lab} plano={plano} natCredito={natCredito}
