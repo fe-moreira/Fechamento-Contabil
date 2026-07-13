@@ -1780,10 +1780,18 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
                     <p style={{ fontSize: 12, color: cor, margin: '0 0 10px', fontWeight: 500 }}><i className={`ti ${icon}`} /> {txt}</p>
                     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                       {s?.draft && <button className="btn" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => continuarRascunho(c.conta_contabil)}><i className="ti ti-player-play" /> Continuar</button>}
-                      <label className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', cursor: 'pointer' }}>
-                        <i className="ti ti-cloud-upload" /> {(s?.estado === 'validado' || s?.estado === 'rascunho') ? 'Reimportar' : 'Importar extrato'}
-                        <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={e => importar(e.target.files?.[0], c.conta_contabil)} />
+                      {(() => { const temLanc = (s?.draft?.length || 0) > 0 || s?.estado === 'validado'; return (
+                      <label className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', cursor: 'pointer' }} title={temLanc ? 'Trocar por outro extrato (substitui os lançamentos atuais)' : 'Importar o extrato deste banco'}>
+                        <i className="ti ti-cloud-upload" /> {temLanc ? 'Substituir arquivo' : 'Importar extrato'}
+                        <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) importar(f, c.conta_contabil, temLanc ? 'substituir' : null) }} />
                       </label>
+                      ) })()}
+                      {(s?.draft?.length || 0) > 0 && !done && (
+                        <label className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', cursor: 'pointer', color: theme.green, borderColor: theme.green }} title="Somar os lançamentos de OUTRO arquivo aos que já estão neste banco (ex.: 2º extrato do mês). Não apaga nada.">
+                          <i className="ti ti-plus" /> Importar complemento
+                          <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) importar(f, c.conta_contabil, 'complementar') }} />
+                        </label>
+                      )}
                       <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => marcarBanco(c.conta_contabil, 'sem_movimento')}><i className="ti ti-circle-minus" /> Sem movimento</button>
                       {s?.estado && <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', color: theme.sub }} onClick={() => marcarBanco(c.conta_contabil, null)}>limpar</button>}
                       {isAdmin && <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', color: theme.red, borderColor: theme.red }} onClick={() => excluirBanco(c)}><i className="ti ti-trash" /> Excluir banco</button>}
