@@ -514,6 +514,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
   const [verComposic, setVerComposic] = useState(null) // { titulo, itens } — composição de um saldo
   const [tratados, setTratados] = useState(new Set()) // razao_ids já corrigidos/estornados/justificados
   const [soConfirmaveis, setSoConfirmaveis] = useState(false) // filtro: só entidades zeradas p/ confirmar em lote
+  const [selEnt, setSelEnt] = useState(() => new Set()) // entidades marcadas p/ baixa em lote (por nome)
 
   async function carregarTratados() {
     const { data } = await supabase.from('auditoria').select('razao_id')
@@ -760,6 +761,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
       if (error) { setMsg('Não consegui confirmar em lote: ' + error.message); return }
     }
     setTratados(prev => { const s = new Set(prev); items.forEach(({ l }) => s.add(l.id)); return s })
+    setSelEnt(prev => { const s = new Set(prev); grupos.forEach(g => s.delete(g.nome)); return s })
     setSoConfirmaveis(false)
     setMsg(`${items.length} lançamento(s) de ${grupos.length} ${lab}(s) confirmado(s).`)
     carregarTratados()
@@ -890,18 +892,27 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
           <p style={{ fontSize: 13.5, color: theme.text, margin: 0 }}>Nada em aberto — débitos e créditos se conciliaram por NF (saldo zerado). Anexe o relatório de {natCredito ? 'contas a pagar' : 'contas a receber'} ou justifique no card acima.</p>
         </div>
       ) : (<>
-      {confirmaveis.length > 0 && (
+      {confirmaveis.length > 0 && (() => {
+        const selConf = confirmaveis.filter(g => selEnt.has(g.nome))
+        const todosSel = selConf.length === confirmaveis.length && confirmaveis.length > 0
+        return (
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '10px 14px', marginBottom: 12, background: 'rgba(48,164,108,0.10)', border: `1px solid ${theme.green}`, borderRadius: 12 }}>
           <i className="ti ti-checks" style={{ color: theme.green, fontSize: 18 }} />
-          <span style={{ color: theme.text, fontSize: 13, flex: 1, minWidth: 200 }}><b>{confirmaveis.length}</b> {lab}(s) identificado(s) e <b>zerado(s) sem NF</b> — dá para confirmar todos de uma vez.</span>
+          <span style={{ color: theme.text, fontSize: 13, flex: 1, minWidth: 200 }}><b>{confirmaveis.length}</b> {lab}(s) identificado(s) e <b>zerado(s) sem NF</b> — marque quais quer baixar em lote.</span>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: theme.sub, cursor: 'pointer' }}>
+            <input type="checkbox" checked={todosSel} ref={el => { if (el) el.indeterminate = selConf.length > 0 && !todosSel }}
+              onChange={e => setSelEnt(e.target.checked ? new Set(confirmaveis.map(g => g.nome)) : new Set())} /> Selecionar todos
+          </label>
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: theme.sub, cursor: 'pointer' }}>
             <input type="checkbox" checked={soConfirmaveis} onChange={e => setSoConfirmaveis(e.target.checked)} /> Mostrar só esses
           </label>
-          <button className="btn" style={{ fontSize: 12.5, background: theme.green, borderColor: theme.green }} onClick={() => confirmarTodos(confirmaveis)}>
-            <i className="ti ti-checks" /> Confirmar todos ({confirmaveis.length})
+          <button className="btn" disabled={!selConf.length} style={{ fontSize: 12.5, background: selConf.length ? theme.green : undefined, borderColor: selConf.length ? theme.green : undefined, opacity: selConf.length ? 1 : 0.5 }}
+            onClick={() => confirmarTodos(selConf)}>
+            <i className="ti ti-checks" /> Confirmar selecionados ({selConf.length})
           </button>
         </div>
-      )}
+        )
+      })()}
       {(soConfirmaveis ? confirmaveis : lista).map((g, gi) => {
         const grp = g.lancs
         const gt = g.total
@@ -917,6 +928,12 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
           <div key={gi} style={{ background: theme.card, border: `1px solid ${borda}`, borderRadius: 12, overflow: 'hidden', marginBottom: 12 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '13px 16px', background: theme.input, flexWrap: 'wrap', gap: 8 }}>
               <span style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                {podeConfirmar && (
+                  <input type="checkbox" title="Marcar para baixar em lote" checked={selEnt.has(g.nome)}
+                    onClick={e => e.stopPropagation()}
+                    onChange={e => setSelEnt(prev => { const s = new Set(prev); e.target.checked ? s.add(g.nome) : s.delete(g.nome); return s })}
+                    style={{ cursor: 'pointer', width: 16, height: 16 }} />
+                )}
                 <span style={{ color: unk ? theme.yellow : theme.text, fontSize: 14, fontWeight: 600, fontStyle: unk ? 'italic' : 'normal' }}>{g.nome}</span>
                 {g.unido && <span title={`Nomes unidos: ${g.variacoes.join(' · ')}`} style={{ background: 'rgba(74,124,255,0.18)', color: theme.accent, fontSize: 10.5, fontWeight: 700, padding: '2px 8px', borderRadius: 20, textTransform: 'uppercase', letterSpacing: .3, cursor: 'help' }}><i className="ti ti-arrows-join" /> {g.variacoes.length} nomes unidos</span>}
                 {anom && <span style={{ background: 'rgba(229,72,77,0.18)', color: theme.red, fontSize: 10.5, fontWeight: 700, padding: '2px 8px', borderRadius: 20, textTransform: 'uppercase', letterSpacing: .3 }}><i className="ti ti-alert-octagon" /> saldo {natAnom}</span>}
