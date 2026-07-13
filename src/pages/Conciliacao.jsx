@@ -713,6 +713,28 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
     else if (ajustouLeitura) carregarLanc()
   }
 
+  // Confirma EM LOTE uma entidade (cliente/fornecedor) cuja composição já está ZERADA:
+  // registra uma justificativa por linha (com usuário e data) e marca as linhas como
+  // conferidas — evita abrir uma a uma quando o nome está identificado e falta só a NF.
+  async function confirmarEntidade(grupo, nome) {
+    const alvo = (grupo || []).filter(l => l.id && !l.acerto && !tratados.has(l.id))
+    if (!alvo.length) return
+    if (!window.confirm(`Confirmar ${alvo.length} lançamento(s) de "${nome}" como conferidos? A composição já está zerada (título e baixa se compensam) — isso marca as linhas como revisadas com justificativa, sem abrir uma a uma.`)) return
+    const id = await getCompetenciaId()
+    const rows = alvo.map(l => ({
+      competencia_id: id, modulo: 'Conciliação',
+      item: `${conta.conta} · ${l.data || ''} · NF ${l.leitura.nf || '—'}`,
+      tipo: 'Justificativa',
+      detalhe: `Confirmado em lote — ${nome}: composição identificada e zerada no mês (título e baixa se compensam), sem NF.`,
+      razao_id: l.id, usuario,
+    }))
+    const { error } = await supabase.from('auditoria').insert(rows)
+    if (error) { setMsg('Não consegui confirmar em lote: ' + error.message); return }
+    setTratados(prev => { const s = new Set(prev); alvo.forEach(l => s.add(l.id)); return s })
+    setMsg(`${alvo.length} lançamento(s) de "${nome}" confirmado(s).`)
+    carregarTratados()
+  }
+
   // Desfazer uma correção/estorno: remove o lançamento de acerto e o registro de
   // auditoria daquela linha; a linha volta a ficar pendente e o saldo se reverte.
   async function desfazerCorrecao(razaoId) {
@@ -845,6 +867,10 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
         const hasRev = grp.some(l => l.leitura.conf !== 'alta')
         const anom = gt < -0.005 // natureza invertida (cliente credor / fornecedor devedor)
         const borda = (anom || semTit.size > 0) ? theme.red : hasRev ? theme.yellow : theme.cb
+        // Confirmar em lote: só quando a composição já ZEROU, o nome está identificado e não
+        // há erro de NF/natureza — e ainda restam linhas pendentes (não tratadas).
+        const pendentesEnt = grp.filter(l => l.id && !l.acerto && !tratados.has(l.id))
+        const podeConfirmar = Math.abs(gt) < 0.005 && !anom && !unk && semTit.size === 0 && pendentesEnt.length > 0
         return (
           <div key={gi} style={{ background: theme.card, border: `1px solid ${borda}`, borderRadius: 12, overflow: 'hidden', marginBottom: 12 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '13px 16px', background: theme.input, flexWrap: 'wrap', gap: 8 }}>
@@ -853,7 +879,16 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, ajuste = nul
                 {g.unido && <span title={`Nomes unidos: ${g.variacoes.join(' · ')}`} style={{ background: 'rgba(74,124,255,0.18)', color: theme.accent, fontSize: 10.5, fontWeight: 700, padding: '2px 8px', borderRadius: 20, textTransform: 'uppercase', letterSpacing: .3, cursor: 'help' }}><i className="ti ti-arrows-join" /> {g.variacoes.length} nomes unidos</span>}
                 {anom && <span style={{ background: 'rgba(229,72,77,0.18)', color: theme.red, fontSize: 10.5, fontWeight: 700, padding: '2px 8px', borderRadius: 20, textTransform: 'uppercase', letterSpacing: .3 }}><i className="ti ti-alert-octagon" /> saldo {natAnom}</span>}
               </span>
-              <span style={{ color: anom ? theme.red : theme.text, fontSize: 14, fontWeight: 600 }}>{money(gt)}</span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                {podeConfirmar && (
+                  <button className="btn" style={{ fontSize: 12, padding: '5px 11px', background: theme.green, borderColor: theme.green }}
+                    title="A composição já zerou — confirma todas as linhas de uma vez (justificativa de compensação sem NF), sem abrir uma a uma."
+                    onClick={e => { e.stopPropagation(); confirmarEntidade(grp, g.nome) }}>
+                    <i className="ti ti-checks" /> Confirmar ({pendentesEnt.length})
+                  </button>
+                )}
+                <span style={{ color: anom ? theme.red : theme.text, fontSize: 14, fontWeight: 600 }}>{money(gt)}</span>
+              </span>
             </div>
             {g.unido && (
               <div style={{ padding: '8px 16px', borderTop: `1px solid ${theme.border}`, background: 'rgba(74,124,255,0.05)', fontSize: 11.5, color: theme.sub }}>
