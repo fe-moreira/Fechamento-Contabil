@@ -103,8 +103,11 @@ export async function somaDestaquesPdf(file) {
     for (const it of content.items) {
       if (!it.str) continue
       const x = it.transform?.[4] ?? 0, y = it.transform?.[5] ?? 0, w = it.width || 0
-      const cx = x + w / 2
-      if (!quads.some(qd => cx >= qd.minX - 3 && cx <= qd.maxX + 3 && y >= qd.minY - 3 && y <= qd.maxY + 6)) continue
+      // Conta o número quando a caixa dele SE SOBREPÕE ao grifo (não exige o centro dentro):
+      // grifos estreitos/parciais, que cobrem só parte do valor, também valem. Basta haver
+      // sobreposição horizontal com o grifo e estar na mesma linha (faixa Y do grifo).
+      const dentro = quads.some(qd => x <= qd.maxX + 3 && (x + w) >= qd.minX - 3 && y >= qd.minY - 3 && y <= qd.maxY + 6)
+      if (!dentro) continue
       for (const m of (it.str.match(/-?\d{1,3}(?:\.\d{3})*,\d{2}/g) || [])) { const n = parse(m); valores.push(n); soma += n }
     }
   }
