@@ -2338,21 +2338,25 @@ function ModalCruzaSaldo({ cruza, linhas, planoMap, titulo, onClose, onVerDia, o
                         </div>
                       )
                     }
-                    // pareamento: 1º exato; o que sobra ordena por valor e alinha lado a lado.
-                    const pool = extDia.map(x => ({ v: r2(x.valor), x, used: false }))
-                    const pares = []
-                    for (const imp of impItems) {
-                      const j = pool.findIndex(e => !e.used && Math.abs(e.v - imp.v) < 0.005)
-                      if (j >= 0) { pool[j].used = true; pares.push({ imp, ext: pool[j], bate: true }) }
-                      else pares.push({ imp, ext: null, bate: false })
-                    }
-                    const soImp = pares.filter(p => !p.bate)
-                    const soExt = pool.filter(e => !e.used).sort((a, b) => a.v - b.v)
-                    soImp.sort((a, b) => a.imp.v - b.imp.v)
-                    const naoBate = []
-                    for (let k = 0; k < Math.max(soImp.length, soExt.length); k++) naoBate.push({ imp: soImp[k]?.imp || null, ext: soExt[k] || null, bate: false })
-                    const linhasPar = (modo === 'estrela' ? naoBate : [...pares.filter(p => p.bate), ...naoBate])
-                    const cImp = v => v == null ? '' : (v >= 0 ? theme.green : theme.red)
+                    // Pareamento inteligente Importado × Extrato:
+                    //  (1) exato 1:1; (2) SOMA (vários de um lado = 1 do outro, ex.: 2 lançamentos
+                    //  = 1 movimento do extrato); (3) QUASE-igual (diferença de centavos/reais).
+                    //  O que sobrar de cada lado fica vermelho (é a diferença real).
+                    const I = impItems.map((x, k) => ({ v: x.v, l: x.l, _k: 'i' + k, used: false }))
+                    const E = extDia.map((x, k) => ({ v: r2(x.valor), saldo: x.saldo, _k: 'e' + k, used: false }))
+                    const eqv = (a, b) => Math.abs(a - b) < 0.005
+                    const grupos = []
+                    for (const i of I) { if (i.used) continue; const e = E.find(e => !e.used && eqv(e.v, i.v)); if (e) { i.used = e.used = true; grupos.push({ imp: [i], ext: [e], dif: 0, tipo: 'exato' }) } }
+                    const subset = (pool, alvo) => { const livres = pool.filter(x => !x.used); let achou = null; const dfs = (st, sm, esc) => { if (achou) return; if (esc.length >= 2 && Math.abs(sm - alvo) < 0.005) { achou = esc.slice(); return } if (esc.length >= 4) return; for (let j = st; j < livres.length; j++) { esc.push(livres[j]); dfs(j + 1, sm + livres[j].v, esc); esc.pop(); if (achou) return } }; dfs(0, 0, []); return achou }
+                    for (const e of E) { if (e.used) continue; const s = subset(I, e.v); if (s) { e.used = true; s.forEach(x => x.used = true); grupos.push({ imp: s, ext: [e], dif: 0, tipo: 'soma' }) } }
+                    for (const i of I) { if (i.used) continue; const s = subset(E, i.v); if (s) { i.used = true; s.forEach(x => x.used = true); grupos.push({ imp: [i], ext: s, dif: 0, tipo: 'soma' }) } }
+                    for (const i of I) { if (i.used) continue; const c = E.filter(e => !e.used && Math.sign(e.v) === Math.sign(i.v)).map(e => ({ e, d: Math.abs(e.v - i.v) })).sort((a, b) => a.d - b.d)[0]; if (c && c.d <= 2) { i.used = c.e.used = true; grupos.push({ imp: [i], ext: [c.e], dif: r2(i.v - c.e.v), tipo: 'quase' }) } }
+                    for (const i of I) if (!i.used) grupos.push({ imp: [i], ext: [], dif: i.v, tipo: 'sobra' })
+                    for (const e of E) if (!e.used) grupos.push({ imp: [], ext: [e], dif: -e.v, tipo: 'sobra' })
+                    const gruposVis = modo === 'estrela' ? grupos.filter(g => g.tipo === 'sobra' || g.tipo === 'quase') : grupos
+                    const tintG = t => t === 'sobra' ? 'rgba(229,72,77,0.10)' : t === 'quase' ? 'rgba(245,166,35,0.12)' : 'rgba(48,164,108,0.09)'
+                    const vlr = v => `${v >= 0 ? '+' : '−'}${money(Math.abs(v))}`
+                    const corV = v => v >= 0 ? theme.green : theme.red
                     return (
                       <div style={{ borderTop: `0.5px solid rgba(229,72,77,0.25)`, background: theme.card }}>
                         {/* Totais do dia */}
@@ -2366,18 +2370,26 @@ function ModalCruzaSaldo({ cruza, linhas, planoMap, titulo, onClose, onVerDia, o
                             <th style={{ ...ftd, fontSize: 10, color: theme.accent, textTransform: 'uppercase', letterSpacing: .4, fontWeight: 700 }}>Importado</th>
                             <th style={{ ...ftd, fontSize: 10, textAlign: 'right', color: theme.accent }} />
                             <th style={{ ...ftd, fontSize: 10, color: theme.green, textTransform: 'uppercase', letterSpacing: .4, fontWeight: 700, borderLeft: `1px solid ${theme.border}` }}>Extrato</th>
-                            <th style={{ ...ftd, width: 34, textAlign: 'center' }} />
+                            <th style={{ ...ftd, width: 42, textAlign: 'center' }} />
                           </tr></thead>
                           <tbody>
-                            {linhasPar.map((p, pi) => (
-                              <tr key={pi} style={{ borderTop: `1px solid ${theme.border}`, background: p.bate ? 'rgba(48,164,108,0.08)' : 'rgba(229,72,77,0.09)' }}>
-                                <td style={{ ...ftd, fontSize: 11, color: p.imp ? theme.text : theme.sub, maxWidth: 230, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={p.imp ? `${p.imp.l.historico} · ${contaNome(p.imp.l.contra)}` : ''}>{p.imp ? p.imp.l.historico : '—'}</td>
-                                <td style={{ ...ftd, fontSize: 11, textAlign: 'right', whiteSpace: 'nowrap', color: cImp(p.imp?.v) }}>{p.imp ? `${p.imp.v >= 0 ? '+' : '−'}${money(Math.abs(p.imp.v))}` : ''}</td>
-                                <td style={{ ...ftd, fontSize: 11, textAlign: 'right', whiteSpace: 'nowrap', color: p.ext ? (p.ext.v >= 0 ? theme.green : theme.red) : theme.sub, borderLeft: `1px solid ${theme.border}` }}>{p.ext ? `${p.ext.v >= 0 ? '+' : '−'}${money(Math.abs(p.ext.v))}` : '—'}</td>
-                                <td style={{ ...ftd, textAlign: 'center' }}>{p.bate ? <i className="ti ti-check" style={{ color: theme.green }} title="Bate" /> : <i className="ti ti-alert-triangle" style={{ color: theme.red }} title="Sem par — compõe a diferença" />}</td>
-                              </tr>
-                            ))}
-                            {!linhasPar.length && <tr><td colSpan={4} style={{ ...ftd, fontSize: 11.5, color: theme.sub }}>Nada para confrontar neste dia.</td></tr>}
+                            {gruposVis.map((g, gi) => {
+                              const n = Math.max(g.imp.length, g.ext.length, 1)
+                              return Array.from({ length: n }).map((_, k) => (
+                                <tr key={gi + '-' + k} style={{ borderTop: k === 0 ? `1px solid ${theme.border}` : 'none', background: tintG(g.tipo) }}>
+                                  <td style={{ ...ftd, fontSize: 11, color: g.imp[k] ? theme.text : theme.sub, maxWidth: 210, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={g.imp[k] ? `${g.imp[k].l.historico} · ${contaNome(g.imp[k].l.contra)}` : ''}>{g.imp[k] ? g.imp[k].l.historico : ''}</td>
+                                  <td style={{ ...ftd, fontSize: 11, textAlign: 'right', whiteSpace: 'nowrap', color: g.imp[k] ? corV(g.imp[k].v) : theme.sub }}>{g.imp[k] ? vlr(g.imp[k].v) : ''}</td>
+                                  <td style={{ ...ftd, fontSize: 11, textAlign: 'right', whiteSpace: 'nowrap', color: g.ext[k] ? corV(g.ext[k].v) : theme.sub, borderLeft: `1px solid ${theme.border}` }}>{g.ext[k] ? vlr(g.ext[k].v) : ''}</td>
+                                  {k === 0 && <td rowSpan={n} style={{ ...ftd, textAlign: 'center', verticalAlign: 'middle', borderLeft: `1px solid ${theme.border}` }} title={g.tipo === 'soma' ? 'A soma dos lançamentos bate com o movimento do extrato' : g.tipo === 'quase' ? `Diferença de ${money(Math.abs(g.dif))}` : g.tipo === 'sobra' ? 'Sem par — compõe a diferença' : 'Bate'}>
+                                    {g.tipo === 'sobra' ? <i className="ti ti-alert-triangle" style={{ color: theme.red }} />
+                                      : g.tipo === 'quase' ? <span style={{ color: theme.yellow, fontSize: 9.5, fontWeight: 700 }}>dif<br />{money(Math.abs(g.dif))}</span>
+                                        : g.tipo === 'soma' ? <span style={{ color: theme.green, fontSize: 9.5, fontWeight: 700 }}><i className="ti ti-check" /> soma</span>
+                                          : <i className="ti ti-check" style={{ color: theme.green }} />}
+                                  </td>}
+                                </tr>
+                              ))
+                            })}
+                            {!gruposVis.length && <tr><td colSpan={4} style={{ ...ftd, fontSize: 11.5, color: theme.sub }}>Nada para confrontar neste dia.</td></tr>}
                           </tbody>
                         </table>
                       </div>
