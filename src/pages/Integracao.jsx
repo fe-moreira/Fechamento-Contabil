@@ -1467,16 +1467,22 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   // Guarda também as linhas do extrato por dia (extRowsDia) para o confronto por lançamento.
   function computarCruza(arr, mapa) {
     const rows = arr.slice(mapa.linhaInicio).filter(r => r.some(c => c !== '' && c != null))
-    const temValor = mapa.colValor != null && mapa.colValor >= 0
+    const temCol = mapa.colValor != null && mapa.colValor >= 0
     const extratoDia = new Map(), extMovDia = {}, extRowsDia = {}
+    // Sem coluna de Valor, o movimento de cada linha é DERIVADO da variação do saldo
+    // (saldo desta linha − saldo da anterior). Assim o confronto por lançamento funciona
+    // mesmo em extratos que só têm a coluna de Saldo.
+    let prevSaldo = saldoAnterior != null ? saldoAnterior : null, algumValor = false
     for (const r of rows) {
       const d = dataISO(r[mapa.colData]); if (!d) continue
       const sld = parseValor(r[mapa.colSaldo])
       extratoDia.set(d, sld) // saldo de fim de dia = último por data
-      const val = temValor ? parseValor(r[mapa.colValor]) : null
-      if (val != null) extMovDia[d] = (extMovDia[d] || 0) + val
+      const val = temCol ? parseValor(r[mapa.colValor]) : (prevSaldo != null ? Math.round((sld - prevSaldo) * 100) / 100 : null)
+      prevSaldo = sld
+      if (val != null) { algumValor = true; extMovDia[d] = (extMovDia[d] || 0) + val }
       ;(extRowsDia[d] = extRowsDia[d] || []).push({ saldo: sld, valor: val })
     }
+    const temValor = temCol || algumValor
     // movimento por dia a partir da classificação (o que foi importado)
     const movDia = {}
     for (const l of linhas) { if (!l.data) continue; movDia[l.data] = (movDia[l.data] || 0) + (l.entrada ? l.valor : -l.valor) }
@@ -2320,10 +2326,12 @@ function ModalCruzaSaldo({ cruza, linhas, planoMap, titulo, onClose, onVerDia, o
                     const totExt = r2(extDia.reduce((s, x) => s + x.valor, 0))
                     const difTot = r2(totImp - totExt)
                     const contaNome = c => c ? `${c}${planoMap[String(c)]?.nome ? ' · ' + planoMap[String(c)].nome : ''}` : 'sem contrapartida'
-                    // se o extrato não tem coluna de valor, cai no modo antigo (só Importado)
+                    // Cruzamento calculado numa versão antiga (sem os dados do extrato por
+                    // linha) → orienta a recruzar para ver o confronto Importado × Extrato.
                     if (!cruza.temValor) {
                       return (
                         <div style={{ borderTop: `0.5px solid rgba(229,72,77,0.25)`, background: theme.card }}>
+                          {!cruza.extRowsDia && <p style={{ color: theme.yellow, fontSize: 11.5, margin: 0, padding: '8px 11px', display: 'flex', gap: 6, alignItems: 'center' }}><i className="ti ti-refresh" /> Este cruzamento é de uma versão anterior. Clique em <b>Trocar extrato</b> e suba o extrato de novo para ver o confronto <b>Importado × Extrato</b> lado a lado.</p>}
                           {doDia.length === 0
                             ? <p style={{ color: theme.sub, fontSize: 11.5, margin: 0, padding: '8px 11px' }}>Nenhum lançamento classificado neste dia — provável lançamento faltando de {money(Math.abs(d.delta))}.</p>
                             : <table style={{ width: '100%', borderCollapse: 'collapse' }}><tbody>{mostra.map(linhaLanc)}</tbody></table>}
