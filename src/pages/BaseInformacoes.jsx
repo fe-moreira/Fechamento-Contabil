@@ -427,6 +427,7 @@ export default function BaseInformacoes() {
                     <p style={{ margin: '2px 0 0', color: theme.sub, fontSize: 11.5 }}>vigência {c.vigencia || '—'} · {c.usuario || '—'} · {dataHora(c.created_at)}</p>
                   </div>
                   <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => setModal({ tipo: 'verCargaInicial', carga: c })}>ver</button>
+                  <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => setModal({ tipo: 'cargaInicial', vigencia: c.vigencia })}>editar</button>
                   <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => excluirCargaInicial(c)}>excluir</button>
                 </div>
               ))}
@@ -967,11 +968,63 @@ function ModalPeriodo({ valorInicial, cargaSaldos, cargaFeita, onClose, onSalvar
   )
 }
 
+// Editor manual de um bloco da carga inicial: uma linha por item, com as mesmas colunas
+// do modelo. Serve para DIGITAR do zero (implantar sem arquivo) ou ALTERAR à mão o que
+// veio de uma planilha. Ao informar o código, puxa o nome do plano de contas.
+function GradeManual({ cols, linhas, onChange, planoNomes }) {
+  const vazia = () => Object.fromEntries(cols.map(c => [c, '']))
+  const rows = (linhas && linhas.length) ? linhas : [vazia()]
+  const colCod = cols.find(c => /(c[oó]digo|conta)/i.test(c) && !/classific/i.test(c))
+  const colNome = cols.find(c => /nome/i.test(c))
+  const larga = c => /valor|saldo|nome|cliente|forn|hist|descri/i.test(c)
+  function setCel(i, col, v) {
+    onChange(rows.map((l, j) => {
+      if (j !== i) return l
+      const nl = { ...l, [col]: v }
+      if (col === colCod && colNome && planoNomes && !String(nl[colNome] || '').trim()) {
+        const nm = planoNomes.red?.[chaveConta(v)] || planoNomes.cls?.[chaveConta(v)]
+        if (nm) nl[colNome] = nm
+      }
+      return nl
+    }))
+  }
+  function delLinha(i) { const n = rows.filter((_, j) => j !== i); onChange(n.length ? n : [vazia()]) }
+  return (
+    <div>
+      <div style={{ border: `1px solid ${theme.border}`, borderRadius: 8, overflow: 'auto' }}>
+        <table style={{ borderCollapse: 'collapse', fontSize: 12 }}>
+          <thead><tr style={{ background: theme.card }}>
+            {cols.map(c => <th key={c} style={{ textAlign: 'left', padding: '6px 8px', color: theme.sub, whiteSpace: 'nowrap' }}>{c}</th>)}
+            <th style={{ width: 30 }} />
+          </tr></thead>
+          <tbody>
+            {rows.map((l, i) => (
+              <tr key={i} style={{ borderTop: `1px solid ${theme.border}` }}>
+                {cols.map(c => (
+                  <td key={c} style={{ padding: '3px 4px' }}>
+                    <input value={l[c] ?? ''} onChange={e => setCel(i, c, e.target.value)}
+                      style={{ width: larga(c) ? 150 : 84, background: theme.input, border: `1px solid ${theme.border}`, borderRadius: 5, color: theme.text, padding: '4px 6px', fontSize: 12 }} />
+                  </td>
+                ))}
+                <td style={{ textAlign: 'center' }}>
+                  <i className="ti ti-trash" title="Excluir esta linha" onClick={() => delLinha(i)} style={{ color: theme.sub, cursor: 'pointer', fontSize: 14 }} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <button className="btn btn-ghost" style={{ fontSize: 12, marginTop: 8 }} onClick={() => onChange([...rows, vazia()])}><i className="ti ti-plus" /> Adicionar linha</button>
+    </div>
+  )
+}
+
 function ModalCargaInicial({ vigencia, empresaId, onClose, onConcluir }) {
   const [saldos, setSaldos] = useState(null)        // { nome, dados:[...] } — só saldo
   const [comp, setComp] = useState(null)            // clientes e fornecedores (com NF)
   const [outras, setOutras] = useState(null)        // outras contas com composição (sem NF)
   const [pendCarga, setPendCarga] = useState(null)  // { setter, atual, dados, nome } — pergunta substituir/complementar
+  const [modoBloco, setModoBloco] = useState({})    // { saldos:'manual'|'arquivo', ... } por bloco
   const [erro, setErro] = useState('')
   const [salvando, setSalvando] = useState(false)
   const [planoNomes, setPlanoNomes] = useState({ red: {}, cls: {} })  // nome p/ conferência
@@ -1087,33 +1140,53 @@ function ModalCargaInicial({ vigencia, empresaId, onClose, onConcluir }) {
   const temAlgo = (saldos?.dados?.length || 0) + (comp?.dados?.length || 0) + (outras?.dados?.length || 0) > 0
   const temDivergencia = conferencia.some(c => !c.ok)
 
+  // Tira linhas em branco (a grade manual deixa uma linha vazia no fim para digitar).
+  const semVazias = arr => (arr || []).filter(r => Object.values(r).some(v => String(v ?? '').trim()))
+
   async function concluir() {
     setSalvando(true)
     const obsArq = [...new Set([saldos?.nome, comp?.nome, outras?.nome].filter(Boolean))].join(' + ') || 'manual'
     // Clientes/fornecedores + outras composições vão juntos em `composicoes` (mesma conferência).
-    const composicoes = [...(comp?.dados || []), ...(outras?.dados || [])]
-    try { await onConcluir(vigencia, { saldos: saldos?.dados || [], composicoes }, obsArq) }
+    const composicoes = [...semVazias(comp?.dados), ...semVazias(outras?.dados)]
+    try { await onConcluir(vigencia, { saldos: semVazias(saldos?.dados), composicoes }, obsArq) }
     finally { setSalvando(false) }
   }
 
-  const Bloco = ({ icon, titulo, dica, modelo, arquivo, estado, setter }) => (
-    <div style={{ background: theme.input, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: 16, marginBottom: 14 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10, marginBottom: 10 }}>
-        <div style={{ flex: 1 }}>
-          <p style={{ color: theme.text, fontSize: 14, fontWeight: 600, margin: 0 }}><i className={`ti ${icon}`} style={{ color: theme.accent, marginRight: 6 }} />{titulo}</p>
-          <p style={{ color: theme.sub, fontSize: 12, margin: '4px 0 0', lineHeight: 1.5 }}>{dica}</p>
+  const Bloco = ({ id, icon, titulo, dica, modelo, arquivo, estado, setter }) => {
+    const modo = modoBloco[id] || 'arquivo'
+    const setModo = m => setModoBloco(s => ({ ...s, [id]: m }))
+    const segBtn = (m, ic, txt) => (
+      <button className="btn btn-ghost" onClick={() => setModo(m)}
+        style={{ fontSize: 12, padding: '5px 12px', color: modo === m ? theme.accent : theme.sub, borderColor: modo === m ? theme.accent : theme.cb, background: modo === m ? 'rgba(74,124,255,0.10)' : 'transparent' }}>
+        <i className={`ti ${ic}`} /> {txt}
+      </button>
+    )
+    return (
+      <div style={{ background: theme.input, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: 16, marginBottom: 14 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10, marginBottom: 10 }}>
+          <div style={{ flex: 1 }}>
+            <p style={{ color: theme.text, fontSize: 14, fontWeight: 600, margin: 0 }}><i className={`ti ${icon}`} style={{ color: theme.accent, marginRight: 6 }} />{titulo}</p>
+            <p style={{ color: theme.sub, fontSize: 12, margin: '4px 0 0', lineHeight: 1.5 }}>{dica}</p>
+          </div>
+          <button className="btn btn-ghost" style={{ fontSize: 12, whiteSpace: 'nowrap' }} onClick={() => baixarModelo(modelo, arquivo)}><i className="ti ti-download" /> Modelo</button>
         </div>
-        <button className="btn btn-ghost" style={{ fontSize: 12, whiteSpace: 'nowrap' }} onClick={() => baixarModelo(modelo, arquivo)}><i className="ti ti-download" /> Modelo</button>
+        <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
+          {segBtn('arquivo', 'ti-file-spreadsheet', 'Arquivo')}
+          {segBtn('manual', 'ti-keyboard', 'Digitar / editar')}
+        </div>
+        {modo === 'arquivo'
+          ? <DropZone onArquivo={f => lerArquivo(f, setter, estado)} hint="Arraste ou clique · .xlsx, .xls ou .csv" />
+          : <GradeManual cols={modelo.cols} linhas={estado?.dados || []} planoNomes={planoNomes}
+              onChange={novo => setter({ nome: (estado?.nome && !estado?.salvo) ? estado.nome : 'Digitado manualmente', dados: novo })} />}
+        {estado && (
+          <p style={{ color: estado.salvo ? theme.sub : theme.green, fontSize: 12.5, marginTop: 8 }}>
+            <i className={`ti ${estado.salvo ? 'ti-database' : 'ti-circle-check'}`} /> {estado.salvo ? 'Já salvo (carga anterior)' : estado.nome} — {estado.dados.length} linha(s){estado.salvo ? ' · será mantido se você não reenviar' : ''}
+            <i className="ti ti-trash" title="Excluir este arquivo/bloco" onClick={() => setter(null)} style={{ color: theme.sub, cursor: 'pointer', marginLeft: 8 }} />
+          </p>
+        )}
       </div>
-      <DropZone onArquivo={f => lerArquivo(f, setter, estado)} hint="Arraste ou clique · .xlsx, .xls ou .csv" />
-      {estado && (
-        <p style={{ color: estado.salvo ? theme.sub : theme.green, fontSize: 12.5, marginTop: 8 }}>
-          <i className={`ti ${estado.salvo ? 'ti-database' : 'ti-circle-check'}`} /> {estado.salvo ? 'Já salvo (carga anterior)' : estado.nome} — {estado.dados.length} linha(s){estado.salvo ? ' · será mantido se você não reenviar' : ''}
-          <i className="ti ti-x" title="Remover" onClick={() => setter(null)} style={{ color: theme.sub, cursor: 'pointer', marginLeft: 8 }} />
-        </p>
-      )}
-    </div>
-  )
+    )
+  }
 
   return (
     <Modal titulo="Carga inicial de saldos" sub={`Saldo de abertura — vigência ${vigencia}`} onClose={onClose} largura={640}>
@@ -1122,6 +1195,7 @@ function ModalCargaInicial({ vigencia, empresaId, onClose, onConcluir }) {
         <b style={{ color: theme.text }}> clientes e fornecedores</b> (títulos em aberto com nota fiscal) e
         <b style={{ color: theme.text }}> outras contas com composição</b> (sem NF — pelo histórico da conta).
         Nas contas de composição, o <b style={{ color: theme.text }}>saldo é a própria soma dos itens</b> (por código, débito − crédito) — não precisa informá-lo à parte. Se você informar um saldo, o sistema confere se bate.
+        <br />Cada bloco aceita <b style={{ color: theme.text }}>Arquivo</b> (subir planilha) ou <b style={{ color: theme.text }}>Digitar / editar</b> (implantar à mão ou corrigir linha a linha o que já subiu).
       </p>
       {(saldos?.salvo || comp?.salvo || outras?.salvo) && (
         <p style={{ color: theme.sub, fontSize: 12, marginBottom: 12, padding: '8px 11px', background: theme.input, borderRadius: 8, lineHeight: 1.5 }}>
@@ -1129,13 +1203,13 @@ function ModalCargaInicial({ vigencia, empresaId, onClose, onConcluir }) {
         </p>
       )}
 
-      {Bloco({ icon: 'ti-scale', titulo: '1. Saldos de abertura', dica: MODELO_SALDOS.dica,
+      {Bloco({ id: 'saldos', icon: 'ti-scale', titulo: '1. Saldos de abertura', dica: MODELO_SALDOS.dica,
         modelo: MODELO_SALDOS, arquivo: 'modelo_saldos_abertura.xlsx', estado: saldos, setter: setSaldos })}
 
-      {Bloco({ icon: 'ti-users', titulo: '2. Clientes e fornecedores', dica: MODELO_CLIFOR.dica,
+      {Bloco({ id: 'comp', icon: 'ti-users', titulo: '2. Clientes e fornecedores', dica: MODELO_CLIFOR.dica,
         modelo: MODELO_CLIFOR, arquivo: 'modelo_clientes_fornecedores.xlsx', estado: comp, setter: setComp })}
 
-      {Bloco({ icon: 'ti-list-details', titulo: '3. Outras contas com composição', dica: MODELO_OUTRAS.dica,
+      {Bloco({ id: 'outras', icon: 'ti-list-details', titulo: '3. Outras contas com composição', dica: MODELO_OUTRAS.dica,
         modelo: MODELO_OUTRAS, arquivo: 'modelo_outras_composicoes.xlsx', estado: outras, setter: setOutras })}
 
       {/* Conferência composição × saldo */}

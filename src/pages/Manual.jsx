@@ -248,6 +248,8 @@ const HTML = `
   </ul>
   <div class="m-rule warn"><span class="k">Regra de vigência</span> Toda carga de cadastro <b>preserva o histórico</b>. Ao atualizar, cria-se uma nova vigência — o passado continua íntegro para reprocessar meses anteriores.</div>
   <div class="m-rule"><span class="k">Carga inicial — vários arquivos por bloco</span> Na <b>Carga inicial de saldos</b>, se você subir um 2º arquivo num bloco que já tem dados (ex.: fornecedores em duas planilhas), o sistema pergunta <b>Complementar</b> (soma ao que já está) ou <b>Substituir</b> (troca tudo).</div>
+  <div class="m-rule"><span class="k">Carga inicial — digitar / editar à mão</span> Cada um dos três blocos (saldos, clientes/fornecedores, outras contas) tem os botões <b>Arquivo</b> (subir planilha) e <b>Digitar / editar</b>. No modo digitar você <b>implanta o saldo inicial à mão</b> (uma linha por item, com <b>Adicionar linha</b> e a lixeira para <b>excluir cada linha</b>) — ou <b>corrige o que veio de um arquivo</b>: suba a planilha, mude para <b>Digitar / editar</b> e ajuste linha a linha. Ao informar o código, o <b>nome</b> vem do plano de contas.</div>
+  <div class="m-rule"><span class="k">Carga inicial — excluir arquivo / editar depois</span> Na lista <b>Carga inicial de saldos</b> (base do cliente) cada carga tem <b>ver</b>, <b>editar</b> (reabre para ajustar à mão ou trocar um arquivo) e <b>excluir</b>. Dentro do modal, a <b>lixeira</b> ao lado de cada bloco remove aquele <b>arquivo/bloco</b> — dá para trocar <b>um de cada vez</b> e concluir de novo; os blocos que você não mexer são mantidos.</div>
 </section>
 
 <section id="m-massa">
