@@ -414,22 +414,27 @@ export default function Conciliacao() {
   // A SINTÉTICA é a soma das ANALÍTICAS: as correções/estornos pendentes ficam nas
   // analíticas (acertos por conta), então acumulamos o ajuste nas sintéticas ancestrais
   // (classificação que é prefixo) para o total refletir os estornos feitos embaixo.
-  const ajSintMap = (() => {
+  // Débito E crédito das correções pendentes acumulados nas sintéticas ancestrais (por
+  // prefixo de classificação) — para a MOVIMENTAÇÃO (não só o saldo) refletir os estornos.
+  const ajSintDC = (() => {
     const map = {}
     const sints = contas.filter(c => c.sintetica)
     for (const a of contas) {
       if (a.sintetica) continue
-      const aj = ajNet(a)
-      if (Math.abs(aj) < 0.005) continue
+      const acc = acertos[a.conta]
+      if (!acc || (Math.abs(acc.deb) < 0.005 && Math.abs(acc.cred) < 0.005)) continue
       const ar = String(a.classifRaw || a.classif)
       for (const s of sints) {
         const sr = String(s.classifRaw || s.classif)
-        if (ar !== sr && ar.startsWith(sr)) map[sr] = (map[sr] || 0) + aj
+        if (ar !== sr && ar.startsWith(sr)) { const e = map[sr] || (map[sr] = { deb: 0, cred: 0 }); e.deb += acc.deb; e.cred += acc.cred }
       }
     }
     return map
   })()
-  const ajTotal = c => c.sintetica ? (ajSintMap[String(c.classifRaw || c.classif)] || 0) : ajNet(c)
+  // Débito/crédito pendentes de uma conta (analítica = acertos dela; sintética = soma das filhas).
+  const ajDebOf = c => c.sintetica ? (ajSintDC[String(c.classifRaw || c.classif)]?.deb || 0) : (acertos[c.conta]?.deb || 0)
+  const ajCredOf = c => c.sintetica ? (ajSintDC[String(c.classifRaw || c.classif)]?.cred || 0) : (acertos[c.conta]?.cred || 0)
+  const ajTotal = c => ajDebOf(c) - ajCredOf(c)
   const saldoEfAll = c => (Number(c.saldo_final) || 0) + ajTotal(c)
 
   // Contadores por farol (só analíticas — as sintéticas não têm status).
@@ -497,8 +502,14 @@ export default function Conciliacao() {
                       {LABEL_TIPO[t]} <i className="ti ti-switch-horizontal" style={{ fontSize: 12 }} />
                     </span>)}</td>
                   <td style={{ ...tdR, fontWeight: peso }}>{moneyDC(c.saldo_inicial)}</td>
-                  <td style={{ ...tdR, fontWeight: peso }}>{money(c.debito)}</td>
-                  <td style={{ ...tdR, fontWeight: peso }}>{money(c.credito)}</td>
+                  <td style={{ ...tdR, fontWeight: peso }} title={Math.abs(ajDebOf(c)) > 0.005 ? `Balancete ${money(c.debito)} + correções pendentes ${money(ajDebOf(c))}` : undefined}>
+                    {money((Number(c.debito) || 0) + ajDebOf(c))}
+                    {Math.abs(ajDebOf(c)) > 0.005 && <span title="Inclui correções pendentes de contabilização" style={{ marginLeft: 5, color: theme.accent, fontSize: 10, fontWeight: 700 }}>±</span>}
+                  </td>
+                  <td style={{ ...tdR, fontWeight: peso }} title={Math.abs(ajCredOf(c)) > 0.005 ? `Balancete ${money(c.credito)} + correções pendentes ${money(ajCredOf(c))}` : undefined}>
+                    {money((Number(c.credito) || 0) + ajCredOf(c))}
+                    {Math.abs(ajCredOf(c)) > 0.005 && <span title="Inclui correções pendentes de contabilização" style={{ marginLeft: 5, color: theme.accent, fontSize: 10, fontWeight: 700 }}>±</span>}
+                  </td>
                   <td style={{ ...tdR, fontWeight: peso, color: inv ? theme.red : undefined }} title={Math.abs(ajTotal(c)) > 0.005 ? `Saldo do balancete ${moneyDC(c.saldo_final)} + correções pendentes ${moneyDC(ajTotal(c))}` : undefined}>
                     {moneyDC(saldoEfAll(c))}
                     {Math.abs(ajTotal(c)) > 0.005 && <span title="Inclui correções pendentes de contabilização" style={{ marginLeft: 6, color: theme.accent, fontSize: 10, fontWeight: 700 }}>±</span>}
