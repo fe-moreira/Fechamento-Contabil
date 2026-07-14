@@ -2370,7 +2370,7 @@ function ModalCruzaSaldo({ cruza, linhas, planoMap, titulo, onClose, onVerDia, o
                             <th style={{ ...ftd, fontSize: 10, color: theme.accent, textTransform: 'uppercase', letterSpacing: .4, fontWeight: 700 }}>Importado</th>
                             <th style={{ ...ftd, fontSize: 10, textAlign: 'right', color: theme.accent }} />
                             <th style={{ ...ftd, fontSize: 10, color: theme.green, textTransform: 'uppercase', letterSpacing: .4, fontWeight: 700, borderLeft: `1px solid ${theme.border}` }}>Extrato</th>
-                            <th style={{ ...ftd, width: 42, textAlign: 'center' }} />
+                            <th style={{ ...ftd, width: 92, textAlign: 'right', fontSize: 10, textTransform: 'uppercase', letterSpacing: .4, fontWeight: 700, color: theme.sub, borderLeft: `1px solid ${theme.border}` }}>Diferença</th>
                           </tr></thead>
                           <tbody>
                             {gruposVis.map((g, gi) => {
@@ -2380,11 +2380,10 @@ function ModalCruzaSaldo({ cruza, linhas, planoMap, titulo, onClose, onVerDia, o
                                   <td style={{ ...ftd, fontSize: 11, color: g.imp[k] ? theme.text : theme.sub, maxWidth: 210, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={g.imp[k] ? `${g.imp[k].l.historico} · ${contaNome(g.imp[k].l.contra)}` : ''}>{g.imp[k] ? g.imp[k].l.historico : ''}</td>
                                   <td style={{ ...ftd, fontSize: 11, textAlign: 'right', whiteSpace: 'nowrap', color: g.imp[k] ? corV(g.imp[k].v) : theme.sub }}>{g.imp[k] ? vlr(g.imp[k].v) : ''}</td>
                                   <td style={{ ...ftd, fontSize: 11, textAlign: 'right', whiteSpace: 'nowrap', color: g.ext[k] ? corV(g.ext[k].v) : theme.sub, borderLeft: `1px solid ${theme.border}` }}>{g.ext[k] ? vlr(g.ext[k].v) : ''}</td>
-                                  {k === 0 && <td rowSpan={n} style={{ ...ftd, textAlign: 'center', verticalAlign: 'middle', borderLeft: `1px solid ${theme.border}` }} title={g.tipo === 'soma' ? 'A soma dos lançamentos bate com o movimento do extrato' : g.tipo === 'quase' ? `Diferença de ${money(Math.abs(g.dif))}` : g.tipo === 'sobra' ? 'Sem par — compõe a diferença' : 'Bate'}>
-                                    {g.tipo === 'sobra' ? <i className="ti ti-alert-triangle" style={{ color: theme.red }} />
-                                      : g.tipo === 'quase' ? <span style={{ color: theme.yellow, fontSize: 9.5, fontWeight: 700 }}>dif<br />{money(Math.abs(g.dif))}</span>
-                                        : g.tipo === 'soma' ? <span style={{ color: theme.green, fontSize: 9.5, fontWeight: 700 }}><i className="ti ti-check" /> soma</span>
-                                          : <i className="ti ti-check" style={{ color: theme.green }} />}
+                                  {k === 0 && <td rowSpan={n} style={{ ...ftd, textAlign: 'right', verticalAlign: 'middle', whiteSpace: 'nowrap', borderLeft: `1px solid ${theme.border}`, color: g.tipo === 'sobra' ? theme.red : g.tipo === 'quase' ? theme.yellow : theme.green, fontWeight: 700 }} title={g.tipo === 'soma' ? 'A soma dos lançamentos bate com o movimento do extrato' : g.tipo === 'quase' ? `Diferença de ${money(Math.abs(g.dif))}` : g.tipo === 'sobra' ? 'Sem par — este valor compõe a diferença' : 'Bate exatamente'}>
+                                    {Math.abs(g.dif) < 0.005
+                                      ? <><i className="ti ti-check" />{g.tipo === 'soma' ? <span style={{ fontSize: 9.5 }}> soma</span> : ''}</>
+                                      : <>{g.tipo === 'sobra' ? <i className="ti ti-alert-triangle" style={{ marginRight: 3 }} /> : null}{money(Math.abs(g.dif))}</>}
                                   </td>}
                                 </tr>
                               ))
