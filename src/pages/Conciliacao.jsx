@@ -532,6 +532,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const [selLin, setSelLin] = useState(() => new Set()) // linhas marcadas p/ conectar (baixa manual)
   const [loteForn, setLoteForn] = useState(null) // { lines } — corrigir fornecedor em lote
   const [conectarDif, setConectarDif] = useState(null) // { alvo, net } — apontar desconto/juros da diferença
+  const [novoLanc, setNovoLanc] = useState(false)       // abre o modal de novo lançamento manual nesta conta
   const [nomesConf, setNomesConf] = useState(new Set())   // nomes CONFIÁVEIS do cliente (não pede revisão)
   const [nomesIsolados, setNomesIsolados] = useState(new Set()) // nomes a NÃO unir com parecidos (desvincular)
   const [nomesAlias, setNomesAlias] = useState({}) // APELIDOS: nomeAntigoKey -> nome correto (renomeia em todo lugar)
@@ -988,6 +989,29 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     setMsg(`Conectado com ${kind === 'juros' ? 'juros/multa' : 'desconto'} de ${money(dif)} — foi para Conciliados e o acerto para o Contabilizar.`)
   }
 
+  // Cria um lançamento novo DENTRO desta conta (ex.: uma tarifa/ajuste que faltou no razão).
+  // Uma das pernas já vem preenchida com a conta atual. Entra em Lançamentos (Status → Domínio),
+  // aparece na composição como acerto e atualiza o saldo. Fica na tela para lançar outro.
+  async function criarLancamento(form) {
+    const deb = String(form.conta_debito || '').trim(), cred = String(form.conta_credito || '').trim()
+    if (!deb || !cred) { setMsg('Informe a conta de débito e a de crédito.'); return }
+    if (deb === cred) { setMsg('Débito e crédito precisam ser contas diferentes.'); return }
+    const val = Number(form.valor) || 0
+    if (!(val > 0)) { setMsg('Informe um valor maior que zero.'); return }
+    const eSint = erroContaSintetica(plano, deb, cred)
+    if (eSint) { setMsg(eSint); return }
+    const id = await getCompetenciaId()
+    if (!id) { setMsg('Abra um fechamento para esta competência.'); return }
+    const { error } = await supabase.from('lancamentos').insert({
+      competencia_id: id, data: form.data || null, conta_debito: deb, conta_credito: cred,
+      valor: val, historico: form.historico || null, origem: 'manual', razao_id: null, usuario,
+    })
+    if (error) { setMsg('Não consegui gerar o lançamento: ' + error.message); return }
+    setNovoLanc(false)
+    setMsg(`Lançamento de ${money(val)} gerado nesta conta — entrou no Contabilizar e atualizou o saldo.`)
+    carregarLanc()
+  }
+
   // Desvincula EM LOTE os nomes dos lançamentos selecionados (não unir com parecidos) —
   // vale para todos os meses. Útil quando o sistema juntou vários nomes distintos por engano.
   async function desvincularLote(lines) {
@@ -1098,7 +1122,13 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
           <span style={{ color: theme.sub }}>/</span>
           <span style={{ fontSize: 13, fontWeight: 600 }}>{conta.conta} · {conta.nome}</span>
         </div>
-        <span style={{ color: theme.sub, fontSize: 12 }}><i className="ti ti-click" /> Clique num lançamento para justificar ou corrigir.</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <span style={{ color: theme.sub, fontSize: 12 }}><i className="ti ti-click" /> Clique num lançamento para justificar ou corrigir.</span>
+          <button className="btn" style={{ fontSize: 12.5, padding: '6px 12px' }} onClick={() => setNovoLanc(true)}
+            title="Incluir um lançamento novo nesta conta (ex.: tarifa/ajuste que faltou no razão)">
+            <i className="ti ti-file-plus" /> Novo lançamento
+          </button>
+        </div>
       </div>
 
       {msg && <p style={{ color: theme.green, fontSize: 13, marginBottom: 12 }}><i className="ti ti-circle-check" /> {msg}</p>}
@@ -1394,6 +1424,10 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
           </div>
         )
       })()}
+
+      {novoLanc && (
+        <ModalNovoLancamento conta={conta} competencia={competencia} plano={plano} onClose={() => setNovoLanc(false)} onCriar={criarLancamento} />
+      )}
 
       {loteForn && (
         <ModalLoteForn lines={loteForn.lines} lab={lab} onClose={() => setLoteForn(null)} onAplicar={aplicarFornecedorLote} />
@@ -1986,6 +2020,42 @@ function RelatoriosComposicao({ conta, emAberto, zerados, contraDe }) {
 // Menu de ação de um lançamento: Justificar (texto) ou Corrigir (já informa a partida
 // contábil de acerto, que vai para o painel Contabilizar gerar o arquivo do Domínio).
 // Ao conectar com diferença: apontar se é DESCONTO ou JUROS/MULTA e a conta. Obrigatório.
+// Novo lançamento manual DENTRO de uma conta da conciliação. A conta atual já vem em um
+// dos lados (D por padrão) — dá para trocar. Ao criar, entra no Contabilizar e atualiza o saldo.
+function ModalNovoLancamento({ conta, competencia, plano, onClose, onCriar }) {
+  const dataPadrao = (() => {
+    const [m, a] = String(competencia || '').split('/').map(Number)
+    if (!m || !a) return ''
+    const d = new Date(a, m, 0).getDate()
+    return `${a}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+  })()
+  const [f, setF] = useState({ data: dataPadrao, conta_debito: String(conta.conta || ''), conta_credito: '', valor: '', historico: '' })
+  const [busy, setBusy] = useState(false)
+  const set = (k, v) => setF(x => ({ ...x, [k]: v }))
+  const estaNesta = f.conta_debito === String(conta.conta) ? 'D' : f.conta_credito === String(conta.conta) ? 'C' : ''
+  const trocarLado = () => setF(x => ({ ...x, conta_debito: x.conta_credito, conta_credito: x.conta_debito }))
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 95 }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 'min(560px,96vw)', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 14, padding: 20 }}>
+        <h3 style={{ fontSize: 15, margin: '0 0 4px' }}><i className="ti ti-file-plus" style={{ color: theme.accent, marginRight: 6 }} />Novo lançamento — {conta.conta} · {conta.nome}</h3>
+        <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 14px' }}>Inclua um lançamento nesta conta (ex.: tarifa, IOF ou ajuste que faltou no razão). Entra no <b style={{ color: theme.text }}>Contabilizar</b> e atualiza o saldo. A conta atual já vem preenchida{estaNesta ? ` no ${estaNesta === 'D' ? 'débito' : 'crédito'}` : ''}.</p>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <div><label style={{ fontSize: 12, color: theme.sub }}>Data</label><input className="input" type="date" value={f.data} onChange={e => set('data', e.target.value)} /></div>
+          <div><label style={{ fontSize: 12, color: theme.sub }}>Valor</label><input className="input" type="number" step="0.01" value={f.valor} onChange={e => set('valor', e.target.value)} placeholder="0,00" /></div>
+          <div><label style={{ fontSize: 12, color: theme.sub }}>Conta débito (F4)</label><CampoConta value={f.conta_debito} onChange={v => set('conta_debito', v)} plano={plano} /></div>
+          <div><label style={{ fontSize: 12, color: theme.sub }}>Conta crédito (F4)</label><CampoConta value={f.conta_credito} onChange={v => set('conta_credito', v)} plano={plano} /></div>
+          <div style={{ gridColumn: 'span 2' }}><label style={{ fontSize: 12, color: theme.sub }}>Histórico</label><input className="input" value={f.historico} onChange={e => set('historico', e.target.value)} placeholder="Descrição do lançamento" /></div>
+        </div>
+        <button type="button" onClick={trocarLado} style={{ background: 'none', border: 'none', color: theme.accent, fontSize: 12, cursor: 'pointer', padding: '8px 0 0' }}><i className="ti ti-arrows-exchange" /> Trocar débito ↔ crédito</button>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
+          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+          <button className="btn" disabled={busy} onClick={async () => { setBusy(true); await onCriar(f); setBusy(false) }}><i className="ti ti-check" /> Gerar lançamento</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function ModalConectarDif({ net, plano, onClose, onAplicar }) {
   const baixa = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
   const achaConta = re => (plano || []).find(p => re.test(baixa(p.nome)))?.cod || ''
