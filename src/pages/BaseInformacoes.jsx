@@ -1012,14 +1012,19 @@ function GradeManual({ cols, linhas, onChange, planoNomes }) {
       return nl
     }))
   }
-  function delLinha(i) { const n = rows.filter((_, j) => j !== i); onChange(n.length ? n : [vazia()]) }
+  const temDados = l => Object.entries(l).some(([k, v]) => !k.startsWith('__') && String(v ?? '').trim())
+  function delLinha(i) {
+    // Confirma só quando a linha tem algo preenchido (evita apagar um lançamento por engano).
+    if (temDados(rows[i]) && !window.confirm('Excluir este lançamento da carga inicial?')) return
+    const n = rows.filter((_, j) => j !== i); onChange(n.length ? n : [vazia()])
+  }
   return (
     <div>
       <div style={{ border: `1px solid ${theme.border}`, borderRadius: 8, overflow: 'auto' }}>
         <table style={{ borderCollapse: 'collapse', fontSize: 12 }}>
           <thead><tr style={{ background: theme.card }}>
             {cols.map(c => <th key={c} style={{ textAlign: 'left', padding: '6px 8px', color: theme.sub, whiteSpace: 'nowrap' }}>{c}</th>)}
-            <th style={{ width: 30 }} />
+            <th style={{ padding: '6px 8px', color: theme.sub, textAlign: 'center' }}>Excluir</th>
           </tr></thead>
           <tbody>
             {rows.map((l, i) => (
@@ -1030,8 +1035,11 @@ function GradeManual({ cols, linhas, onChange, planoNomes }) {
                       style={{ width: larga(c) ? 150 : 84, background: theme.input, border: `1px solid ${theme.border}`, borderRadius: 5, color: theme.text, padding: '4px 6px', fontSize: 12 }} />
                   </td>
                 ))}
-                <td style={{ textAlign: 'center' }}>
-                  <i className="ti ti-trash" title="Excluir esta linha" onClick={() => delLinha(i)} style={{ color: theme.sub, cursor: 'pointer', fontSize: 14 }} />
+                <td style={{ textAlign: 'center', padding: '3px 6px' }}>
+                  <button type="button" onClick={() => delLinha(i)} title="Excluir esta linha"
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: 'rgba(229,72,77,0.10)', border: `1px solid rgba(229,72,77,0.35)`, color: theme.red, borderRadius: 6, padding: '3px 8px', fontSize: 11.5, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                    <i className="ti ti-trash" /> Excluir
+                  </button>
                 </td>
               </tr>
             ))}
