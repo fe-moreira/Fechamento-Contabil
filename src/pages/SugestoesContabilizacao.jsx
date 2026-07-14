@@ -5,6 +5,7 @@ import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { gerarLancamento } from '../lib/outras'
 import { decodePartida } from '../lib/sugestoesRazao'
+import CampoConta from '../components/CampoConta'
 
 function hexA(hex, a) { const n = parseInt(hex.slice(1), 16); return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})` }
 // Aceita "1.234,56" (BR) e "1234.56" (ponto decimal, vindo do input number/partida).
@@ -112,8 +113,8 @@ function PartidaModal({ cfg, onClose, onConfirm, competencia }) {
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
           <div><label>Data</label><input className="input" type="date" value={f.data} onChange={on('data')} /></div>
           <div><label>Valor</label><input className="input" type="number" step="0.01" value={f.valor} onChange={on('valor')} /></div>
-          <div><label>Conta débito</label><input className="input" value={f.conta_debito} onChange={on('conta_debito')} /></div>
-          <div><label>Conta crédito</label><input className="input" value={f.conta_credito} onChange={on('conta_credito')} /></div>
+          <div><label>Conta débito</label><CampoConta value={f.conta_debito} onChange={v => setF(x => ({ ...x, conta_debito: v }))} /></div>
+          <div><label>Conta crédito</label><CampoConta value={f.conta_credito} onChange={v => setF(x => ({ ...x, conta_credito: v }))} /></div>
           <div style={{ gridColumn: '1 / -1' }}><label>Histórico</label><input className="input" value={f.historico} onChange={on('historico')} /></div>
         </div>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 18 }}>

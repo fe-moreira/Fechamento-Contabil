@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { theme, money } from '../lib/theme'
 import { competenciaIdDe, detectarObservacoes, carregarResolucoes, resolverObservacao, reabrirObservacao } from '../lib/observacoes'
 import { gerarLancamento } from '../lib/outras'
+import CampoConta from './CampoConta'
 
 function hexA(hex, a) { const n = parseInt(hex.slice(1), 16); return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})` }
 const num = v => Number(String(v).replace(/\./g, '').replace(',', '.')) || 0
@@ -106,8 +107,8 @@ function ObsModal({ cfg, competencia, onClose, onJustificar, onCorrigir }) {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <div><label>Data</label><input className="input" type="date" value={f.data} onChange={on('data')} /></div>
             <div><label>Valor</label><input className="input" value={f.valor} onChange={on('valor')} placeholder="0,00" /></div>
-            <div><label>Conta débito</label><input className="input" value={f.conta_debito} onChange={on('conta_debito')} /></div>
-            <div><label>Conta crédito</label><input className="input" value={f.conta_credito} onChange={on('conta_credito')} /></div>
+            <div><label>Conta débito</label><CampoConta value={f.conta_debito} onChange={v => setF(x => ({ ...x, conta_debito: v }))} /></div>
+            <div><label>Conta crédito</label><CampoConta value={f.conta_credito} onChange={v => setF(x => ({ ...x, conta_credito: v }))} /></div>
             <div style={{ gridColumn: '1 / -1' }}><label>Histórico</label><input className="input" value={f.historico} onChange={on('historico')} /></div>
           </div>
         )}

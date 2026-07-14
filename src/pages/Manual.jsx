@@ -209,6 +209,7 @@ const HTML = `
   <div class="m-rule"><span class="k">Por que importa</span> A correção <b>nunca</b> altera o razão importado direto; ela vive como lançamento e é sobreposta ao razão. Assim Cockpit, Conciliação e Comparativo mostram sempre o mesmo número, e nada é contado em dobro.</div>
   <h3><span class="m-dot db"></span> Domínio</h3>
   <p>O sistema de escrituração (Thomson Reuters) de onde vêm os dados e para onde a plataforma gera os arquivos de importação de lançamentos. O objetivo de cada competência é entregar o fechamento pronto e o arquivo para subir no Domínio.</p>
+  <div class="m-rule"><span class="k">Campos de conta e centro de custo (F4 + nome)</span> Em <b>todo</b> campo de conta contábil ou centro de custo — carga inicial (digitação manual), Outras Contabilizações, Conciliação (novo lançamento e correções), Sugestões, Contabilizar, Integração — aperte <b>F4</b> (ou clique na lupa) para buscar no plano/lista por código ou nome. Ao escolher, o <b>nome</b> da conta/centro aparece logo abaixo do campo, para conferir se está certo na hora.</div>
 </section>
 
 <section id="m-fluxo">
