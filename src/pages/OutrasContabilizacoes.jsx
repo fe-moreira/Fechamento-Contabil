@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { theme, money } from '../lib/theme'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { apurarVariacoes } from '../lib/variacoes'
-import { listar, inserir, remover, atualizar, gerarLancamento, enviarSaldoInicialContrato, anexarArquivoContrato, urlArquivoContrato, removerArquivoContrato, competenciaInicioCliente, apropriacoesDoMes } from '../lib/outras'
+import { listar, inserir, remover, atualizar, gerarLancamento, enviarSaldoInicialContrato, anexarArquivoContrato, urlArquivoContrato, removerArquivoContrato, competenciaInicioCliente, apropriacoesDoMes, listarLancamentos, excluirLancamento } from '../lib/outras'
 import { gerarExcelTimbrado } from '../lib/excel'
 import { abrePdfTimbrado } from '../lib/pdf'
 import { erroContaSintetica } from '../lib/balancete'
@@ -1201,22 +1201,71 @@ function PaneReceitasDiferidas({ clienteId, user, competencia, abrirGerar }) {
 }
 
 // ================= OUTROS LANÇAMENTOS =================
-function PaneOutros({ competencia, abrirGerar }) {
-  const [f, on] = useForm({ data: dataComp(competencia), conta_debito: '', conta_credito: '', valor: '', historico: '' })
+// Rótulo amigável da origem do lançamento (de onde ele foi gerado).
+const ORIGEM_LABEL = { manual: 'Avulso', outras: 'Avulso', correcao: 'Correção', sugestao: 'Sugestão', seguro: 'Seguro', despesa: 'Despesa a apropriar', receita_diferida: 'Receita diferida', importacao: 'Importação', emprestimo: 'Empréstimo', parcelamento: 'Parcelamento', equivalencia: 'Equiv. patrimonial', perdcomp: 'PER/DCOMP', jcp: 'JSCP', lalur: 'LALUR' }
+
+function PaneOutros({ clienteId, competencia, abrirGerar, versao, planoMap = {} }) {
+  const [f, on, , setF] = useForm({ data: dataComp(competencia), conta_debito: '', conta_credito: '', valor: '', historico: '' })
+  const [rows, setRows] = useState([])
+  const [loading, setLoading] = useState(true)
+  const primeira = useRef(true)
+  async function recarregar() {
+    setLoading(true)
+    try { setRows(await listarLancamentos(clienteId, competencia)) } finally { setLoading(false) }
+  }
+  useEffect(() => { recarregar() }, [clienteId, competencia]) // eslint-disable-line
+  // Após GERAR um lançamento (versao muda), recarrega a lista e LIMPA o formulário
+  // (mantendo a data) — para lançar outro na hora, sem sair da tela.
+  useEffect(() => {
+    if (primeira.current) { primeira.current = false; return }
+    recarregar()
+    setF(x => ({ data: x.data, conta_debito: '', conta_credito: '', valor: '', historico: '' }))
+  }, [versao]) // eslint-disable-line
+  async function excluir(l) {
+    if (!confirm('Excluir este lançamento? Ele sai do Status → Domínio e da conciliação.')) return
+    try { await excluirLancamento(l.id); recarregar() } catch (e) { alert(e.message) }
+  }
+  const nomeConta = c => { if (!c) return '—'; const n = planoMap[String(c)]?.nome; return n ? `${c} · ${n}` : String(c) }
   return (
-    <FormCard titulo={<><i className="ti ti-pencil-plus" style={{ color: ACC.outros }} /> Lançamento avulso</>}>
-      <SecSub>Escreva a partida. Ao gerar, entra em Lançamentos e alimenta o Status → Domínio.</SecSub>
-      <div style={{ display: 'grid', gridTemplateColumns: '130px 1fr 1fr 130px', gap: 10 }}>
-        <Field label="Data"><input className="input" type="date" value={f.data} onChange={on('data')} /></Field>
-        <Field label="Conta débito"><input className="input" value={f.conta_debito} onChange={on('conta_debito')} /></Field>
-        <Field label="Conta crédito"><input className="input" value={f.conta_credito} onChange={on('conta_credito')} /></Field>
-        <Field label="Valor"><input className="input" value={f.valor} onChange={on('valor')} placeholder="0,00" /></Field>
-        <Field label="Histórico" col={4}><input className="input" value={f.historico} onChange={on('historico')} /></Field>
-      </div>
-      <div style={{ marginTop: 14 }}>
-        <button className="btn" onClick={() => abrirGerar({ data: f.data, conta_debito: f.conta_debito, conta_credito: f.conta_credito, valor: num(f.valor), historico: f.historico, origem: 'manual', documento: '' }, 'Lançamento avulso')}><i className="ti ti-file-plus" /> Gerar lançamento</button>
-      </div>
-    </FormCard>
+    <div style={{ display: 'grid', gap: 14 }}>
+      <FormCard titulo={<><i className="ti ti-pencil-plus" style={{ color: ACC.outros }} /> Lançamento avulso</>}>
+        <SecSub>Escreva a partida. Ao gerar, entra em Lançamentos, alimenta o Status → Domínio e aparece na lista abaixo. O formulário limpa sozinho para você lançar o próximo.</SecSub>
+        <div style={{ display: 'grid', gridTemplateColumns: '130px 1fr 1fr 130px', gap: 10 }}>
+          <Field label="Data"><input className="input" type="date" value={f.data} onChange={on('data')} /></Field>
+          <Field label="Conta débito"><input className="input" value={f.conta_debito} onChange={on('conta_debito')} /></Field>
+          <Field label="Conta crédito"><input className="input" value={f.conta_credito} onChange={on('conta_credito')} /></Field>
+          <Field label="Valor"><input className="input" value={f.valor} onChange={on('valor')} placeholder="0,00" /></Field>
+          <Field label="Histórico" col={4}><input className="input" value={f.historico} onChange={on('historico')} /></Field>
+        </div>
+        <div style={{ marginTop: 14 }}>
+          <button className="btn" onClick={() => abrirGerar({ data: f.data, conta_debito: f.conta_debito, conta_credito: f.conta_credito, valor: num(f.valor), historico: f.historico, origem: 'manual', documento: '' }, 'Lançamento avulso')}><i className="ti ti-file-plus" /> Gerar lançamento</button>
+        </div>
+      </FormCard>
+      <Card>
+        <SecTitle><i className="ti ti-list-details" style={{ color: ACC.outros }} /> Lançamentos gerados nesta competência ({rows.length})</SecTitle>
+        <SecSub>Tudo que foi contabilizado neste fechamento (de todas as abas). Dá para excluir o que estiver errado.</SecSub>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }}>
+            <thead><tr>{['Data', 'Débito', 'Crédito', 'Valor', 'Histórico', 'Origem', ''].map((h, i) => <th key={i} style={{ ...th, textAlign: i === 3 ? 'right' : 'left' }}>{h}</th>)}</tr></thead>
+            <tbody>
+              {loading ? <Vazio colSpan={7} texto="Carregando…" />
+                : rows.length === 0 ? <Vazio colSpan={7} texto="Nenhum lançamento gerado ainda nesta competência." />
+                : rows.map(l => (
+                  <tr key={l.id}>
+                    <td style={{ ...td, whiteSpace: 'nowrap' }}>{brData(l.data)}</td>
+                    <td style={{ ...td, fontSize: 12 }}>{nomeConta(l.conta_debito)}</td>
+                    <td style={{ ...td, fontSize: 12 }}>{nomeConta(l.conta_credito)}</td>
+                    <td style={{ ...td, textAlign: 'right', whiteSpace: 'nowrap' }}>{money(l.valor)}</td>
+                    <td style={{ ...td, fontSize: 12, color: theme.sub }}>{l.historico || '—'}</td>
+                    <td style={{ ...td }}><span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 20, background: theme.input, color: theme.sub, whiteSpace: 'nowrap' }}>{ORIGEM_LABEL[l.origem] || l.origem || '—'}</span></td>
+                    <td style={{ ...td, textAlign: 'right' }}><DelBtn onClick={() => excluir(l)} /></td>
+                  </tr>
+                ))}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+    </div>
   )
 }
 

@@ -151,6 +151,25 @@ export async function apropriacoesDoMes(clienteId, competencia, origem) {
   return (data || []).filter(l => /apropria/i.test(l.historico || ''))
 }
 
+// Lista os lançamentos gerados na competência (para ver/excluir em Outras Contabilizações).
+export async function listarLancamentos(clienteId, competencia) {
+  const [m, a] = String(competencia || '').split('/').map(Number)
+  if (!m || !a) return []
+  const { data: comp } = await supabase.from('competencias').select('id')
+    .eq('cliente_id', clienteId).eq('ano', a).eq('mes', m).maybeSingle()
+  if (!comp) return []
+  const { data } = await supabase.from('lancamentos')
+    .select('id, data, conta_debito, conta_credito, valor, historico, origem, documento, usuario')
+    .eq('competencia_id', comp.id).order('data', { ascending: true }).order('id', { ascending: true })
+  return data || []
+}
+
+// Exclui um lançamento gerado (desfaz a contabilização).
+export async function excluirLancamento(id) {
+  const { error } = await supabase.from('lancamentos').delete().eq('id', id)
+  if (error) throw error
+}
+
 // Gera um lançamento real na fila que alimenta o Status / arquivo do Domínio.
 export async function gerarLancamento(l) {
   const { error } = await supabase.from('lancamentos').insert({
