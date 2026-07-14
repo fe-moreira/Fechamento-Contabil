@@ -372,7 +372,7 @@ export default function OutrasContabilizacoes() {
 
 // ---- Modal: confirmar/editar a partida antes de gerar o lançamento ----
 function GerarModal({ cfg, competencia, onClose, onConfirm }) {
-  const [f, on] = useForm({ data: cfg.data || '', conta_debito: cfg.conta_debito || '', conta_credito: cfg.conta_credito || '', valor: cfg.valor || '', historico: cfg.historico || '', origem: cfg.origem, documento: cfg.documento })
+  const [f, on, , setF] = useForm({ data: cfg.data || '', conta_debito: cfg.conta_debito || '', conta_credito: cfg.conta_credito || '', valor: cfg.valor || '', historico: cfg.historico || '', origem: cfg.origem, documento: cfg.documento })
   const dataOk = dataNaCompetencia(f.data, competencia)
   return (
     <div onClick={e => { if (e.target === e.currentTarget) onClose() }} style={{ position: 'fixed', inset: 0, background: 'rgba(8,11,18,0.64)', zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
@@ -382,8 +382,8 @@ function GerarModal({ cfg, competencia, onClose, onConfirm }) {
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
           <Field label="Data"><input className="input" type="date" value={f.data} onChange={on('data')} style={!dataOk ? { borderColor: theme.red } : undefined} /></Field>
           <Field label="Valor"><input className="input" type="number" step="0.01" value={f.valor} onChange={on('valor')} /></Field>
-          <Field label="Conta débito"><input className="input" value={f.conta_debito} onChange={on('conta_debito')} /></Field>
-          <Field label="Conta crédito"><input className="input" value={f.conta_credito} onChange={on('conta_credito')} /></Field>
+          <Field label="Conta débito"><CampoContaForm valor={f.conta_debito} set={v => setF(x => ({ ...x, conta_debito: v }))} /></Field>
+          <Field label="Conta crédito"><CampoContaForm valor={f.conta_credito} set={v => setF(x => ({ ...x, conta_credito: v }))} /></Field>
           <Field label="Histórico" col={2}><input className="input" value={f.historico} onChange={on('historico')} /></Field>
         </div>
         {!dataOk && <p style={{ color: theme.red, fontSize: 12.5, marginTop: 12, fontWeight: 600 }}>
@@ -1232,8 +1232,8 @@ function PaneOutros({ clienteId, competencia, abrirGerar, versao, planoMap = {} 
         <SecSub>Escreva a partida. Ao gerar, entra em Lançamentos, alimenta o Status → Domínio e aparece na lista abaixo. O formulário limpa sozinho para você lançar o próximo.</SecSub>
         <div style={{ display: 'grid', gridTemplateColumns: '130px 1fr 1fr 130px', gap: 10 }}>
           <Field label="Data"><input className="input" type="date" value={f.data} onChange={on('data')} /></Field>
-          <Field label="Conta débito"><input className="input" value={f.conta_debito} onChange={on('conta_debito')} /></Field>
-          <Field label="Conta crédito"><input className="input" value={f.conta_credito} onChange={on('conta_credito')} /></Field>
+          <Field label="Conta débito"><CampoContaForm valor={f.conta_debito} set={v => setF(x => ({ ...x, conta_debito: v }))} /></Field>
+          <Field label="Conta crédito"><CampoContaForm valor={f.conta_credito} set={v => setF(x => ({ ...x, conta_credito: v }))} /></Field>
           <Field label="Valor"><input className="input" value={f.valor} onChange={on('valor')} placeholder="0,00" /></Field>
           <Field label="Histórico" col={4}><input className="input" value={f.historico} onChange={on('historico')} /></Field>
         </div>

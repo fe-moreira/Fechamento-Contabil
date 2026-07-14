@@ -1030,9 +1030,11 @@ function GradeManual({ cols, linhas, onChange, planoNomes }) {
             {rows.map((l, i) => (
               <tr key={i} style={{ borderTop: `1px solid ${theme.border}` }}>
                 {cols.map(c => (
-                  <td key={c} style={{ padding: '3px 4px' }}>
-                    <input value={l[c] ?? ''} onChange={e => setCel(i, c, e.target.value)}
-                      style={{ width: larga(c) ? 150 : 84, background: theme.input, border: `1px solid ${theme.border}`, borderRadius: 5, color: theme.text, padding: '4px 6px', fontSize: 12 }} />
+                  <td key={c} style={{ padding: '3px 4px', verticalAlign: 'top' }}>
+                    {c === colCod
+                      ? <CampoConta value={l[c] ?? ''} onChange={v => setCel(i, c, v)} placeholder="Cód (F4)" style={{ width: 150 }} />
+                      : <input value={l[c] ?? ''} onChange={e => setCel(i, c, e.target.value)}
+                          style={{ width: larga(c) ? 150 : 84, background: theme.input, border: `1px solid ${theme.border}`, borderRadius: 5, color: theme.text, padding: '4px 6px', fontSize: 12 }} />}
                   </td>
                 ))}
                 <td style={{ textAlign: 'center', padding: '3px 6px' }}>

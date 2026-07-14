@@ -6,22 +6,28 @@ const baixa = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-�
 
 // Campo de conta com seletor do plano de contas. Aperte F4 (ou clique na lupa) para
 // abrir o plano e escolher a conta. value = código; onChange(cod); onPick(conta) opcional.
-export default function CampoConta({ value, onChange, onPick, placeholder = 'Código (F4 = plano)', autoFocus, style, onEnter, onBlur, inputRef, plano: planoProp }) {
+export default function CampoConta({ value, onChange, onPick, placeholder = 'Código (F4 = plano)', autoFocus, style, onEnter, onBlur, inputRef, plano: planoProp, mostrarNome = true }) {
   const { plano: planoCtx } = useAppData()
   const plano = planoProp || planoCtx
   const [aberto, setAberto] = useState(false)
+  // Nome da conta correspondente ao código digitado — mostra "· nome" para conferir na hora.
+  const val = String(value ?? '').trim()
+  const achado = val ? (plano || []).find(p => String(p.cod) === val) : null
   return (
     <div style={{ position: 'relative', ...style }}>
-      <input
-        className="input" value={value || ''} autoFocus={autoFocus} ref={inputRef}
-        onChange={e => onChange(e.target.value)}
-        onKeyDown={e => { if (e.key === 'F4') { e.preventDefault(); setAberto(true) } else if (e.key === 'Enter' && onEnter) { e.preventDefault(); onEnter() } }}
-        onBlur={() => onBlur && onBlur()}
-        placeholder={placeholder}
-        style={{ paddingRight: 30 }}
-      />
-      <i className="ti ti-table" title="Abrir plano de contas (F4)" onClick={() => setAberto(true)}
-        style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', color: theme.sub, cursor: 'pointer', fontSize: 16 }} />
+      <div style={{ position: 'relative' }}>
+        <input
+          className="input" value={value || ''} autoFocus={autoFocus} ref={inputRef}
+          onChange={e => onChange(e.target.value)}
+          onKeyDown={e => { if (e.key === 'F4') { e.preventDefault(); setAberto(true) } else if (e.key === 'Enter' && onEnter) { e.preventDefault(); onEnter() } }}
+          onBlur={() => onBlur && onBlur()}
+          placeholder={placeholder}
+          style={{ paddingRight: 30, width: '100%' }}
+        />
+        <i className="ti ti-table" title="Abrir plano de contas (F4)" onClick={() => setAberto(true)}
+          style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', color: theme.sub, cursor: 'pointer', fontSize: 16 }} />
+      </div>
+      {mostrarNome && achado && <div title={achado.nome} style={{ fontSize: 10.5, color: theme.green, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>· {achado.nome}</div>}
       {aberto && (
         <PlanoPicker plano={plano} onClose={() => setAberto(false)}
           onSelecionar={p => { onChange(p.cod); onPick && onPick(p); setAberto(false) }} />
