@@ -2312,32 +2312,67 @@ function ModalCruzaSaldo({ cruza, linhas, planoMap, titulo, onClose, onVerDia, o
                     </div>
                   </div>
                   {modo && (() => {
+                    // Confronto lançamento a lançamento: pareia Importado × Extrato pelo VALOR.
+                    // O que casa fica verde (bateu); o que sobra de cada lado fica vermelho (a diferença).
                     const extDia = (cruza.extRowsDia?.[d.data] || []).filter(x => x.valor != null && Math.abs(x.valor) >= 0.005)
+                    const impItems = doDia.map(l => ({ v: r2(l.entrada ? l.valor : -l.valor), l }))
+                    const totImp = r2(impItems.reduce((s, i) => s + i.v, 0))
+                    const totExt = r2(extDia.reduce((s, x) => s + x.valor, 0))
+                    const difTot = r2(totImp - totExt)
+                    const contaNome = c => c ? `${c}${planoMap[String(c)]?.nome ? ' · ' + planoMap[String(c)].nome : ''}` : 'sem contrapartida'
+                    // se o extrato não tem coluna de valor, cai no modo antigo (só Importado)
+                    if (!cruza.temValor) {
+                      return (
+                        <div style={{ borderTop: `0.5px solid rgba(229,72,77,0.25)`, background: theme.card }}>
+                          {doDia.length === 0
+                            ? <p style={{ color: theme.sub, fontSize: 11.5, margin: 0, padding: '8px 11px' }}>Nenhum lançamento classificado neste dia — provável lançamento faltando de {money(Math.abs(d.delta))}.</p>
+                            : <table style={{ width: '100%', borderCollapse: 'collapse' }}><tbody>{mostra.map(linhaLanc)}</tbody></table>}
+                        </div>
+                      )
+                    }
+                    // pareamento: 1º exato; o que sobra ordena por valor e alinha lado a lado.
+                    const pool = extDia.map(x => ({ v: r2(x.valor), x, used: false }))
+                    const pares = []
+                    for (const imp of impItems) {
+                      const j = pool.findIndex(e => !e.used && Math.abs(e.v - imp.v) < 0.005)
+                      if (j >= 0) { pool[j].used = true; pares.push({ imp, ext: pool[j], bate: true }) }
+                      else pares.push({ imp, ext: null, bate: false })
+                    }
+                    const soImp = pares.filter(p => !p.bate)
+                    const soExt = pool.filter(e => !e.used).sort((a, b) => a.v - b.v)
+                    soImp.sort((a, b) => a.imp.v - b.imp.v)
+                    const naoBate = []
+                    for (let k = 0; k < Math.max(soImp.length, soExt.length); k++) naoBate.push({ imp: soImp[k]?.imp || null, ext: soExt[k] || null, bate: false })
+                    const linhasPar = (modo === 'estrela' ? naoBate : [...pares.filter(p => p.bate), ...naoBate])
+                    const cImp = v => v == null ? '' : (v >= 0 ? theme.green : theme.red)
                     return (
-                    <div style={{ borderTop: `0.5px solid rgba(229,72,77,0.25)`, background: theme.card }}>
-                      {/* IMPORTADO deste dia */}
-                      <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: .5, textTransform: 'uppercase', color: theme.accent, padding: '7px 11px 3px' }}><i className="ti ti-file-import" /> Importado ({doDia.length})</div>
-                      {modo === 'estrela' && !temSuspeito
-                        ? <p style={{ color: theme.sub, fontSize: 11.5, margin: 0, padding: '2px 11px 8px' }}><i className="ti ti-help-circle" style={{ marginRight: 4 }} />Não identifiquei um lançamento específico para esta diferença — confira o dia manualmente.</p>
-                        : doDia.length === 0
-                          ? <p style={{ color: theme.sub, fontSize: 11.5, margin: 0, padding: '2px 11px 8px' }}>Nenhum lançamento classificado neste dia — provável lançamento faltando de {money(Math.abs(d.delta))}.</p>
-                          : <table style={{ width: '100%', borderCollapse: 'collapse' }}><tbody>{mostra.map(linhaLanc)}</tbody></table>}
-                      {/* EXTRATO deste dia (quando o extrato tem coluna de Valor) */}
-                      {cruza.temValor && (
-                        <>
-                          <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: .5, textTransform: 'uppercase', color: theme.green, padding: '9px 11px 3px', borderTop: `1px solid ${theme.border}` }}><i className="ti ti-file-dollar" /> Extrato ({extDia.length})</div>
-                          {extDia.length === 0
-                            ? <p style={{ color: theme.sub, fontSize: 11.5, margin: 0, padding: '2px 11px 8px' }}>Sem movimento no extrato neste dia.</p>
-                            : <table style={{ width: '100%', borderCollapse: 'collapse' }}><tbody>{extDia.map((x, xi) => (
-                                <tr key={xi} style={{ borderTop: `1px solid ${theme.border}` }}>
-                                  <td style={{ ...ftd, fontSize: 11, color: theme.sub }}>Movimento do extrato</td>
-                                  <td style={{ ...ftd, fontSize: 11, textAlign: 'right', whiteSpace: 'nowrap', color: x.valor >= 0 ? theme.green : theme.red }}>{x.valor >= 0 ? '+' : '−'}{money(Math.abs(x.valor))}</td>
-                                  <td style={{ ...ftd, fontSize: 11, textAlign: 'right', whiteSpace: 'nowrap', color: theme.sub }}>saldo {money(x.saldo)}</td>
-                                </tr>
-                              ))}</tbody></table>}
-                        </>
-                      )}
-                    </div>
+                      <div style={{ borderTop: `0.5px solid rgba(229,72,77,0.25)`, background: theme.card }}>
+                        {/* Totais do dia */}
+                        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center', padding: '8px 11px', fontSize: 11.5, borderBottom: `1px solid ${theme.border}`, background: theme.input }}>
+                          <span style={{ color: theme.sub }}><i className="ti ti-file-import" style={{ color: theme.accent }} /> Importado <b style={{ color: theme.text }}>{money(totImp)}</b> ({impItems.length})</span>
+                          <span style={{ color: theme.sub }}><i className="ti ti-file-dollar" style={{ color: theme.green }} /> Extrato <b style={{ color: theme.text }}>{money(totExt)}</b> ({extDia.length})</span>
+                          <span style={{ marginLeft: 'auto', color: Math.abs(difTot) >= 0.005 ? theme.red : theme.green, fontWeight: 700 }}>{Math.abs(difTot) >= 0.005 ? <><i className="ti ti-alert-triangle" /> Diferença {money(difTot)}</> : <><i className="ti ti-circle-check" /> Bate</>}</span>
+                        </div>
+                        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                          <thead><tr style={{ background: theme.card }}>
+                            <th style={{ ...ftd, fontSize: 10, color: theme.accent, textTransform: 'uppercase', letterSpacing: .4, fontWeight: 700 }}>Importado</th>
+                            <th style={{ ...ftd, fontSize: 10, textAlign: 'right', color: theme.accent }} />
+                            <th style={{ ...ftd, fontSize: 10, color: theme.green, textTransform: 'uppercase', letterSpacing: .4, fontWeight: 700, borderLeft: `1px solid ${theme.border}` }}>Extrato</th>
+                            <th style={{ ...ftd, width: 34, textAlign: 'center' }} />
+                          </tr></thead>
+                          <tbody>
+                            {linhasPar.map((p, pi) => (
+                              <tr key={pi} style={{ borderTop: `1px solid ${theme.border}`, background: p.bate ? 'rgba(48,164,108,0.08)' : 'rgba(229,72,77,0.09)' }}>
+                                <td style={{ ...ftd, fontSize: 11, color: p.imp ? theme.text : theme.sub, maxWidth: 230, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={p.imp ? `${p.imp.l.historico} · ${contaNome(p.imp.l.contra)}` : ''}>{p.imp ? p.imp.l.historico : '—'}</td>
+                                <td style={{ ...ftd, fontSize: 11, textAlign: 'right', whiteSpace: 'nowrap', color: cImp(p.imp?.v) }}>{p.imp ? `${p.imp.v >= 0 ? '+' : '−'}${money(Math.abs(p.imp.v))}` : ''}</td>
+                                <td style={{ ...ftd, fontSize: 11, textAlign: 'right', whiteSpace: 'nowrap', color: p.ext ? (p.ext.v >= 0 ? theme.green : theme.red) : theme.sub, borderLeft: `1px solid ${theme.border}` }}>{p.ext ? `${p.ext.v >= 0 ? '+' : '−'}${money(Math.abs(p.ext.v))}` : '—'}</td>
+                                <td style={{ ...ftd, textAlign: 'center' }}>{p.bate ? <i className="ti ti-check" style={{ color: theme.green }} title="Bate" /> : <i className="ti ti-alert-triangle" style={{ color: theme.red }} title="Sem par — compõe a diferença" />}</td>
+                              </tr>
+                            ))}
+                            {!linhasPar.length && <tr><td colSpan={4} style={{ ...ftd, fontSize: 11.5, color: theme.sub }}>Nada para confrontar neste dia.</td></tr>}
+                          </tbody>
+                        </table>
+                      </div>
                     )
                   })()}
                 </div>
