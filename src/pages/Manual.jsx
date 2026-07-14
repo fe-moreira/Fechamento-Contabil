@@ -297,6 +297,7 @@ const HTML = `
   <h3><span class="m-dot db"></span> Tipo do documento (mesma conta, dois arquivos)</h3>
   <p>Uma conta bancária costuma ter <b>dois</b> documentos na mesma conta contábil: o <b>extrato do banco (PDF)</b> → Conciliação e a <b>planilha do sistema (Excel)</b> → Integração. O <b>tipo</b> distingue os dois para um não marcar o outro. Deixe em <b>Auto</b> que o sistema deduz pelo formato (“(PDF)”/“(Excel)”), ou fixe manualmente.</p>
   <div class="m-rule"><span class="k">Ver / excluir arquivo</span> Todo arquivo recebido pode ser aberto (“ver arquivo”) e, se subiu na conta errada, excluído — o documento volta a pendente e a conciliação é limpa.</div>
+  <div class="m-rule"><span class="k">Saldo do extrato: amarelo × automático</span> Ao subir um <b>extrato PDF</b>, o sistema lê o saldo e avisa <b>como</b> leu: se você <b>pintou de amarelo</b> os saldos (destaque), ele mostra “saldo = <b>SOMA</b> de N valores destacados” — use isso quando o saldo é a <b>soma de vários</b> (ex.: extrato de investimento com vários CDBs). Se não achar amarelo, lê <b>automaticamente</b> e avisa “saldo lido AUTOMATICAMENTE — confira”: nesse caso ele pega <b>um</b> saldo (o mais provável), então, se precisava somar vários, <b>pinte-os de amarelo e suba de novo</b>. Importante: o amarelo precisa ser um <b>destaque de verdade</b> (anotação Highlight) sobre o texto — PDF “achatado”/impresso ou escaneado não tem o destaque legível e cai no automático.</div>
 </section>
 
 <section id="m-razao">

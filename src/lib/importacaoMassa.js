@@ -124,24 +124,26 @@ export async function lembrarContaBancaria(empresaId, { conta_contabil, agencia,
 }
 
 // Lê o saldo de um extrato PDF (destaque amarelo → texto → OCR), como na Conciliação.
+// Devolve { saldo, via, n }: via = 'amarelo' (soma de n destaques), 'texto' ou 'ocr'
+// (palpite automático), ou null quando não achou — para o upload avisar COMO leu.
 async function lerSaldoPdf(file) {
   const { extrairTextoPdf, palpiteSaldo, ocrPdf, somaDestaquesPdf } = await import('./pdfText')
   try {
     const destaque = await somaDestaquesPdf(file).catch(() => null)
-    if (destaque && destaque.valores?.length) return destaque.soma
+    if (destaque && destaque.valores?.length) return { saldo: destaque.soma, via: 'amarelo', n: destaque.valores.length }
     const texto = await extrairTextoPdf(file)
     let s = palpiteSaldo(texto, null)
     if (s == null && texto.replace(/\s/g, '').length < 20) {
-      try { s = palpiteSaldo(await ocrPdf(file, () => {}), null) } catch { /* imagem sem OCR */ }
+      try { s = palpiteSaldo(await ocrPdf(file, () => {}), null); if (s != null) return { saldo: s, via: 'ocr', n: 0 } } catch { /* imagem sem OCR */ }
     }
-    return s
-  } catch { return null }
+    return { saldo: s, via: s != null ? 'texto' : null, n: 0 }
+  } catch { return { saldo: null, via: null, n: 0 } }
 }
 
 // Anexa o extrato PDF na conta (Storage + conciliacao_conta), lendo o saldo. Espelha
 // exatamente o que a tela de Conciliação faz ao subir o documento.
 export async function anexarExtratoPdf({ compId, conta, file }) {
-  const saldo = await lerSaldoPdf(file)
+  const { saldo, via, n } = await lerSaldoPdf(file)
   const ext = (file.name.match(/\.[a-z0-9]+$/i) || [''])[0].toLowerCase()
   const path = `${sanit(compId + '/' + conta)}/extrato${ext}`
   const { error: eUp } = await supabase.storage.from('extratos').upload(path, file, { upsert: true, contentType: file.type || undefined })
@@ -154,7 +156,7 @@ export async function anexarExtratoPdf({ compId, conta, file }) {
     ? await supabase.from('conciliacao_conta').update(campos).eq('id', ex[0].id)
     : await supabase.from('conciliacao_conta').insert(campos)
   if (eConc) throw new Error('anexo salvo, mas falhou ao ligar na conciliação: ' + eConc.message)
-  return { saldoLido: saldo, path }
+  return { saldoLido: saldo, via, n, path }
 }
 
 // Abre (link assinado) um arquivo guardado no bucket 'extratos'.
@@ -192,8 +194,8 @@ export async function anexarDocumentoAvulso({ compId, chave, file }) {
 export async function receberArquivo({ compId, empresaId, conta, file }) {
   const ext = (file.name.match(/\.([a-z0-9]+)$/i)?.[1] || '').toLowerCase()
   if (conta && ext === 'pdf') {
-    const { saldoLido, path } = await anexarExtratoPdf({ compId, conta, file })
-    return { path, destino: 'conciliacao', saldoLido }
+    const { saldoLido, via, n, path } = await anexarExtratoPdf({ compId, conta, file })
+    return { path, destino: 'conciliacao', saldoLido, via, n }
   }
   if (conta && ['xlsx', 'xls', 'csv'].includes(ext)) {
     const { path } = await anexarExtratoExcel({ compId, conta, file })

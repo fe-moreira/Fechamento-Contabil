@@ -141,7 +141,12 @@ export default function DocumentosRecebidos() {
         : /perfil/i.test(r.integ?.motivo || '')
           ? ' · a Integração ainda não tem o PERFIL DE LEITURA deste banco — faça a 1ª importação na tela Integração para o sistema aprender o layout; depois os próximos meses entram automáticos'
           : ` · ajuste a leitura na Integração${r.integ?.motivo ? ` (${r.integ.motivo})` : ''}`
-      const extra = r.destino === 'conciliacao' ? (r.saldoLido != null ? ` · saldo lido ${money(r.saldoLido)}` : ' · informe o saldo na conciliação')
+      const extra = r.destino === 'conciliacao'
+        ? (r.saldoLido != null
+            ? (r.via === 'amarelo'
+                ? ` · saldo = SOMA de ${r.n} valor(es) destacado(s) em amarelo = ${money(r.saldoLido)}`
+                : ` · saldo lido AUTOMATICAMENTE = ${money(r.saldoLido)} — confira; se precisar somar vários saldos, pinte-os de amarelo (destaque) e suba de novo`)
+            : ' · não identifiquei o saldo — informe na conciliação (ou pinte de amarelo)')
         : r.destino === 'integracao' ? integMsg
         : ''
       setMsg(`“${docs[i].name}” recebido${extra}.`)
