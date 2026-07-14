@@ -1,6 +1,7 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './components/AuthProvider'
 import Layout from './components/Layout'
+import AvisoNovaVersao from './components/AvisoNovaVersao'
 import { AppDataProvider } from './lib/appData'
 import { theme } from './lib/theme'
 
@@ -77,6 +78,7 @@ export default function App() {
   return (
     <AuthProvider>
       <Rotas />
+      <AvisoNovaVersao />
     </AuthProvider>
   )
 }
