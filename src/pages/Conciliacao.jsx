@@ -486,7 +486,7 @@ export default function Conciliacao() {
               const sint = c.sintetica
               const peso = sint ? 700 : 400 // só as sintéticas em negrito
               const t = tipoEf(c)
-              const inv = sint ? null : saldoInvertido(c.classifRaw, c.nome, c.saldo_final, herdaRedutora(c))
+              const inv = sint ? null : saldoInvertido(c.classifRaw, c.nome, saldoEfAll(c), herdaRedutora(c))
               return (
                 <tr key={i} onClick={() => !sint && setSel(c)}
                   style={{ borderTop: `1px solid ${theme.border}`, cursor: sint ? 'default' : 'pointer', background: inv ? 'rgba(229,72,77,0.08)' : sint ? theme.input : 'transparent', fontWeight: peso }}>
@@ -786,7 +786,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const natOk = natCredito ? 'credora' : 'devedora'   // natureza esperada da conta
   const anomalos = lista.filter(x => x.total < -0.005).map(x => x.nome)
   const unificados = lista.filter(x => x.unido).length
-  const contaInvertida = Number(conta.saldo_final) * (natCredito ? -1 : 1) < -0.005
+  const contaInvertida = ((Number(conta.saldo_final) || 0) + ajNet) * (natCredito ? -1 : 1) < -0.005
 
   // Casamento por NF: o título nasce de um lado (cliente=débito; fornecedor=crédito) e
   // a baixa vem do outro. Para o saldo zerar, a NF da baixa tem que ser a mesma do título.
@@ -1148,7 +1148,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
 
       {/* Natureza do saldo: Ativo credor / Passivo devedor (sem ser redutora) */}
       {(() => {
-        const inv = saldoInvertido(conta.classifRaw, conta.nome, conta.saldo_final, herdaRedutoraConta(conta))
+        const inv = saldoInvertido(conta.classifRaw, conta.nome, (Number(conta.saldo_final) || 0) + ajNet, herdaRedutoraConta(conta))
         if (!inv) return null
         const classe = inv === 'credor' ? 'Ativo' : 'Passivo'
         return (
