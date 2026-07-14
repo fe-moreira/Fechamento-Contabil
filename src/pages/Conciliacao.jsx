@@ -807,18 +807,6 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const listaVis = termoBusca
     ? listaBase.filter(g => baixaTxt(g.nome).includes(termoBusca) || (g.variacoes || []).some(v => baixaTxt(v).includes(termoBusca)) || g.lancs.some(l => baixaTxt(l.historico).includes(termoBusca)))
     : listaBase
-  // Props para transformar uma faixa de aviso em FILTRO clicável (mostra só as entidades
-  // daquela situação). Não baixa nada — só filtra a lista.
-  const faixaFiltro = key => ({
-    onClick: () => setFiltroSit(f => f === key ? '' : key),
-    title: filtroSit === key ? 'Filtrando por esta situação — clique para limpar' : 'Clique para ver só os desta situação',
-  })
-  const estiloFiltro = key => ({ cursor: 'pointer', boxShadow: filtroSit === key ? `0 0 0 2px ${theme.accent} inset` : 'none' })
-  const chipFiltro = key => (
-    <span style={{ marginLeft: 'auto', flexShrink: 0, fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap', color: filtroSit === key ? theme.text : theme.sub, border: `1px solid ${theme.cb}`, borderRadius: 20, padding: '2px 9px' }}>
-      <i className={`ti ${filtroSit === key ? 'ti-filter-check' : 'ti-filter'}`} /> {filtroSit === key ? 'Filtrando' : 'Filtrar'}
-    </span>
-  )
 
   async function registrar(tipo, payload) {
     const id = await getCompetenciaId()
@@ -1186,46 +1174,67 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       </div>
       {termoBusca && <p style={{ color: theme.sub, fontSize: 12, margin: '0 0 10px' }}><i className="ti ti-filter" style={{ color: theme.accent }} /> {listaVis.length} {lab}(s) com “{buscaNome}”. <span onClick={() => setBuscaNome('')} style={{ color: theme.accent, cursor: 'pointer' }}>limpar</span></p>}
 
-      {anomalos.length > 0 && (
-        <div {...faixaFiltro('devedor')} style={{ background: 'rgba(229,72,77,0.10)', border: `1px solid ${theme.red}`, borderRadius: 12, display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', marginBottom: 12, ...estiloFiltro('devedor') }}>
-          <i className="ti ti-alert-octagon" style={{ color: theme.red, fontSize: 18, flexShrink: 0 }} />
-          <span style={{ color: theme.text, fontSize: 13 }}>
-            {anomalos.length} {lab}(s) com saldo <b>{natAnom}</b> (natureza invertida) — verifique{anomalos.length <= 4 ? `: ${anomalos.join(', ')}` : ''}.
-          </span>
-          {chipFiltro('devedor')}
-        </div>
-      )}
-
-      {totalSemTitulo > 0 && (
-        <div {...faixaFiltro('semtitulo')} style={{ background: 'rgba(229,72,77,0.10)', border: `1px solid ${theme.red}`, borderRadius: 12, display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', marginBottom: 12, ...estiloFiltro('semtitulo') }}>
-          <i className="ti ti-receipt-off" style={{ color: theme.red, fontSize: 18, flexShrink: 0 }} />
-          <span style={{ color: theme.text, fontSize: 13 }}>{totalSemTitulo} baixa(s) com NF que não confere com nenhum título deste {lab} — para o saldo zerar, a NF do recebimento tem que ser a mesma do faturamento.</span>
-          {chipFiltro('semtitulo')}
-        </div>
-      )}
-
-      {aproximadas.length > 0 && (
-        <div style={{ background: 'rgba(74,124,255,0.10)', border: `1px solid ${theme.accent}`, borderRadius: 12, display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px', marginBottom: 12 }}>
-          <i className="ti ti-discount-check" style={{ color: theme.accent, fontSize: 18, marginTop: 1 }} />
-          <span style={{ color: theme.text, fontSize: 13 }}>{aproximadas.length} baixa(s) conciliada(s) por <b>NF aproximada</b> (mesmo número ignorando zeros à esquerda) — confirme: {aproximadas.slice(0, 4).join('; ')}. Veja no relatório “Conciliados”.</span>
-        </div>
-      )}
-
-      {unificados > 0 && (
-        <div {...faixaFiltro('unificados')} style={{ background: 'rgba(74,124,255,0.10)', border: `1px solid ${theme.accent}`, borderRadius: 12, display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', marginBottom: 12, ...estiloFiltro('unificados') }}>
-          <i className="ti ti-arrows-join" style={{ color: theme.accent, fontSize: 18, flexShrink: 0 }} />
-          <span style={{ color: theme.text, fontSize: 13 }}>{unificados} {lab}(s) com nomes parecidos foram <b>unificados</b> — confira se é mesmo o mesmo {lab} (veja “nomes unidos” em cada card).</span>
-          {chipFiltro('unificados')}
-        </div>
-      )}
-
-      {revs > 0 && (
-        <div {...faixaFiltro('incerta')} style={{ background: 'rgba(245,166,35,0.10)', border: `1px solid ${theme.yellow}`, borderRadius: 12, display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', marginBottom: 12, ...estiloFiltro('incerta') }}>
-          <i className="ti ti-alert-triangle" style={{ color: theme.yellow, fontSize: 18, flexShrink: 0 }} />
-          <span style={{ color: theme.text, fontSize: 13 }}>{revs} lançamento(s) com leitura incerta — corrija o {lab} para o sistema aprender.</span>
-          {chipFiltro('incerta')}
-        </div>
-      )}
+      {/* Avisos da composição em CHIPS compactos (uma linha), agrupados por prioridade.
+          Clicar num chip mostra o detalhe e filtra a lista (aproximada é só informativa). */}
+      {(() => {
+        const avisos = [
+          anomalos.length > 0 && { key: 'devedor', sev: 'red', grupo: 'acao', n: anomalos.length, rot: `Saldo ${natAnom}`, filtra: true,
+            full: <>{anomalos.length} {lab}(s) com saldo <b>{natAnom}</b> (natureza invertida) — verifique{anomalos.length <= 4 ? `: ${anomalos.join(', ')}` : ''}.</> },
+          totalSemTitulo > 0 && { key: 'semtitulo', sev: 'red', grupo: 'acao', n: totalSemTitulo, rot: 'NF não confere', filtra: true,
+            full: <>{totalSemTitulo} baixa(s) com NF que não confere com nenhum título deste {lab} — para o saldo zerar, a NF do recebimento tem que ser a mesma do faturamento.</> },
+          revs > 0 && { key: 'incerta', sev: 'yellow', grupo: 'acao', n: revs, rot: 'Leitura incerta', filtra: true,
+            full: <>{revs} lançamento(s) com leitura incerta — corrija o {lab} para o sistema aprender.</> },
+          aproximadas.length > 0 && { key: 'aproximadas', sev: 'blue', grupo: 'conferir', n: aproximadas.length, rot: 'NF aproximada', filtra: false,
+            full: <>{aproximadas.length} baixa(s) conciliada(s) por <b>NF aproximada</b> (mesmo número ignorando zeros à esquerda) — confirme: {aproximadas.slice(0, 4).join('; ')}. Veja no relatório “Conciliados”.</> },
+          unificados > 0 && { key: 'unificados', sev: 'blue', grupo: 'conferir', n: unificados, rot: 'Nomes unificados', filtra: true,
+            full: <>{unificados} {lab}(s) com nomes parecidos foram <b>unificados</b> — confira se é mesmo o mesmo {lab} (veja “nomes unidos” em cada card).</> },
+        ].filter(Boolean)
+        if (!avisos.length) return null
+        const cor = { red: theme.red, yellow: theme.yellow, blue: theme.accent }
+        const bgA = { red: 'rgba(229,72,77,0.13)', yellow: 'rgba(245,166,35,0.14)', blue: 'rgba(74,124,255,0.14)' }
+        const grupos = [{ g: 'acao', label: 'Precisa de ação' }, { g: 'conferir', label: 'Conferir' }]
+        const ativoAviso = avisos.find(a => a.key === filtroSit)
+        const chip = a => {
+          const on = filtroSit === a.key
+          return (
+            <button key={a.key} onClick={() => setFiltroSit(f => f === a.key ? '' : a.key)}
+              title={on ? 'Clique para limpar' : 'Ver detalhe e filtrar'}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '6px 12px 6px 10px', borderRadius: 22, border: `1px solid ${on ? cor[a.sev] : theme.cb}`, background: on ? bgA[a.sev] : theme.input, color: theme.text, cursor: 'pointer', fontSize: 12.5, whiteSpace: 'nowrap', boxShadow: on ? `0 0 0 1px ${cor[a.sev]} inset` : 'none' }}>
+              <span style={{ width: 8, height: 8, borderRadius: '50%', background: cor[a.sev], flexShrink: 0 }} />
+              <b style={{ color: cor[a.sev], fontVariantNumeric: 'tabular-nums' }}>{a.n}</b> {a.rot}
+            </button>
+          )
+        }
+        return (
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+              {grupos.map((grp, gi) => {
+                const items = avisos.filter(a => a.grupo === grp.g)
+                if (!items.length) return null
+                return (
+                  <div key={grp.g} style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+                    {gi > 0 && <div style={{ width: 1, alignSelf: 'stretch', background: theme.border, marginTop: 4 }} />}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: .6, textTransform: 'uppercase', color: theme.sub, paddingLeft: 2 }}>{grp.label}</span>
+                      <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>{items.map(chip)}</div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+            {ativoAviso && (
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9, marginTop: 12, padding: '10px 13px', background: theme.input, borderRadius: 10, borderLeft: `3px solid ${cor[ativoAviso.sev]}` }}>
+                <i className="ti ti-info-circle" style={{ color: cor[ativoAviso.sev], fontSize: 16, marginTop: 1, flexShrink: 0 }} />
+                <span style={{ color: theme.text, fontSize: 12.5, flex: 1 }}>
+                  {ativoAviso.full}
+                  {ativoAviso.filtra && <span style={{ color: theme.sub }}> · mostrando <b>{listaVis.length}</b> de {lista.length} {lab}(s).</span>}
+                </span>
+                <button className="btn btn-ghost" style={{ fontSize: 12, padding: '3px 10px', flexShrink: 0 }} onClick={() => setFiltroSit('')}><i className="ti ti-x" /> limpar</button>
+              </div>
+            )}
+          </div>
+        )
+      })()}
 
       {carregando ? (
         <p style={{ color: theme.sub, fontSize: 13 }}>Carregando…</p>
@@ -1258,10 +1267,10 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         </div>
         )
       })()}
-      {filtroSit && (
+      {filtroSit === 'confirmaveis' && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '8px 12px', marginBottom: 12, background: theme.input, borderRadius: 10, fontSize: 12.5, color: theme.sub }}>
           <i className="ti ti-filter" style={{ color: theme.accent }} />
-          <span>Filtrando por <b style={{ color: theme.text }}>{({ devedor: 'saldo em natureza invertida', semtitulo: 'baixa com NF sem título', unificados: 'nomes unificados', incerta: 'leitura incerta', confirmaveis: 'identificado e zerado sem NF' })[filtroSit] || filtroSit}</b> · mostrando <b style={{ color: theme.text }}>{listaVis.length}</b> de {lista.length} {lab}(s).</span>
+          <span>Filtrando por <b style={{ color: theme.text }}>identificado e zerado sem NF</b> · mostrando <b style={{ color: theme.text }}>{listaVis.length}</b> de {lista.length} {lab}(s).</span>
           <button className="btn btn-ghost" style={{ fontSize: 12, padding: '3px 10px', marginLeft: 'auto' }} onClick={() => setFiltroSit('')}><i className="ti ti-x" /> Limpar filtro</button>
         </div>
       )}
