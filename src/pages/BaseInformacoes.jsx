@@ -324,6 +324,29 @@ export default function BaseInformacoes() {
     if (!resta.length) { await supabase.from('clientes').update({ carga_inicial_feita: false }).eq('id', empresaId); setCargaFeita(false) }
     carregarCargas(); recalcularPendencias?.()
   }
+  // Arquivos de uma carga inicial: agrupa as linhas (saldos + composições) pela marca de
+  // origem __arq. Cargas antigas (sem marca) aparecem como um arquivo só (o nome do obs).
+  function arquivosDaCarga(c) {
+    const fallback = String(c.obs || '').replace(/^Carga inicial · /, '') || '(sem arquivo)'
+    const g = new Map()
+    for (const r of [...(c.dados?.saldos || []), ...(c.dados?.composicoes || [])]) {
+      const k = r.__arq || fallback; g.set(k, (g.get(k) || 0) + 1)
+    }
+    return g.size ? [...g.entries()].map(([label, n]) => ({ label, n })) : [{ label: fallback, n: 0 }]
+  }
+  // Exclui UM arquivo da carga (só as linhas dele). Se for o único, exclui a carga toda.
+  async function excluirArquivoCarga(c, label) {
+    const arqs = arquivosDaCarga(c)
+    if (arqs.length <= 1) return excluirCargaInicial(c)
+    if (!confirm(`Excluir o arquivo "${label}" da carga inicial? Só as linhas dele saem do saldo inicial.`)) return
+    const fallback = String(c.obs || '').replace(/^Carga inicial · /, '') || '(sem arquivo)'
+    const keep = r => (r.__arq || fallback) !== label
+    const saldos = (c.dados?.saldos || []).filter(keep)
+    const composicoes = (c.dados?.composicoes || []).filter(keep)
+    const labels = [...new Set([...saldos, ...composicoes].map(r => r.__arq).filter(Boolean))]
+    await supabase.from('cargas_cadastro').update({ dados: { saldos, composicoes }, obs: 'Carga inicial · ' + (labels.join(' + ') || 'manual') }).eq('id', c.id)
+    carregarCargas(); recalcularPendencias?.()
+  }
   async function salvarDist(cfg) {
     if (dist) await supabase.from('dist_lucros_config').update(cfg).eq('id', dist.id)
     else await supabase.from('dist_lucros_config').insert({ cliente_id: empresaId, usuario: user?.email, ...cfg })
@@ -411,24 +434,25 @@ export default function BaseInformacoes() {
           onClick={() => setModal({ tipo: 'carga', carga: CARGAS[5] })} />
       </div>
 
-      {/* Carga inicial de saldos — arquivos importados (ver / excluir) */}
+      {/* Carga inicial de saldos — cada ARQUIVO importado, individualmente (ver / editar / excluir) */}
       {(() => {
         const cis = (cargas.financeiro || []).filter(c => String(c.obs || '').startsWith('Carga inicial'))
         if (!cis.length) return null
+        const linhasArq = cis.flatMap(c => arquivosDaCarga(c).map(a => ({ c, a })))
         return (
           <div style={{ marginTop: 24 }}>
             <p style={{ color: theme.sub, fontSize: 13, fontWeight: 600, textTransform: 'uppercase', letterSpacing: .8, margin: '4px 0 12px' }}>Carga inicial de saldos</p>
             <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'hidden' }}>
-              {cis.map((c, i) => (
-                <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderTop: i ? `1px solid ${theme.border}` : 'none', fontSize: 13 }}>
+              {linhasArq.map(({ c, a }, i) => (
+                <div key={c.id + '·' + a.label} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderTop: i ? `1px solid ${theme.border}` : 'none', fontSize: 13 }}>
                   <i className="ti ti-file-invoice" style={{ color: theme.accent, fontSize: 18, flexShrink: 0 }} />
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <p style={{ margin: 0, color: theme.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{String(c.obs || '').replace(/^Carga inicial · /, '') || '(sem arquivo)'}</p>
+                    <p style={{ margin: 0, color: theme.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.label} <span style={{ color: theme.sub, fontSize: 11.5 }}>· {a.n} linha(s)</span></p>
                     <p style={{ margin: '2px 0 0', color: theme.sub, fontSize: 11.5 }}>vigência {c.vigencia || '—'} · {c.usuario || '—'} · {dataHora(c.created_at)}</p>
                   </div>
                   <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => setModal({ tipo: 'verCargaInicial', carga: c })}>ver</button>
                   <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => setModal({ tipo: 'cargaInicial', vigencia: c.vigencia })}>editar</button>
-                  <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => excluirCargaInicial(c)}>excluir</button>
+                  <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', color: theme.red, borderColor: 'rgba(229,72,77,0.4)' }} onClick={() => excluirArquivoCarga(c, a.label)}>excluir</button>
                 </div>
               ))}
             </div>
@@ -482,7 +506,7 @@ function dataHora(iso) {
 
 // Preview das linhas importadas (objetos → tabela; chaves como colunas).
 function TabelaDados({ titulo, linhas }) {
-  const cols = linhas.length ? Object.keys(linhas[0]) : []
+  const cols = linhas.length ? Object.keys(linhas[0]).filter(k => !k.startsWith('__')) : []
   return (
     <div style={{ marginBottom: 16 }}>
       <p style={{ fontSize: 13, fontWeight: 600, margin: '0 0 8px' }}>{titulo} <span style={{ color: theme.sub, fontWeight: 400 }}>· {linhas.length} linha(s)</span></p>
@@ -1066,26 +1090,36 @@ function ModalCargaInicial({ vigencia, empresaId, onClose, onConcluir }) {
       })
   }, [empresaId])
 
+  // Rótulo único do arquivo dentro do bloco (não fundir arquivos: cada linha guarda de
+  // qual arquivo veio em `__arq`, para poder excluir um arquivo por vez).
+  function rotuloUnico(nome, atual) {
+    const usados = new Set((atual?.dados || []).map(r => r.__arq).filter(Boolean))
+    if (!usados.has(nome)) return nome
+    let i = 2; while (usados.has(`${nome} (${i})`)) i++
+    return `${nome} (${i})`
+  }
   async function lerArquivo(file, setter, atual) {
     if (!file) return
     setErro('')
     try {
       const XLSX = await import('xlsx')
       const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' })
-      const dados = lerPlanilha(XLSX, wb.Sheets[wb.SheetNames[0]])
-      if (!dados.length) { setErro('Planilha vazia.'); return }
-      // Já há um arquivo neste bloco → pergunta se é para SUBSTITUIR ou COMPLEMENTAR
-      // (subir um 2º arquivo somando ao que já está, ex.: fornecedores em duas planilhas).
-      if (atual && (atual.dados || []).length) { setPendCarga({ setter, atual, dados, nome: file.name }); return }
-      setter({ nome: file.name, dados })
+      const brutos = lerPlanilha(XLSX, wb.Sheets[wb.SheetNames[0]])
+      if (!brutos.length) { setErro('Planilha vazia.'); return }
+      const label = rotuloUnico(file.name, atual)
+      const dados = brutos.map(r => ({ ...r, __arq: label }))  // marca a origem de cada linha
+      // Já há arquivo neste bloco → pergunta SUBSTITUIR (troca tudo) ou COMPLEMENTAR
+      // (adiciona SEM fundir — cada arquivo continua identificável e removível sozinho).
+      if (atual && (atual.dados || []).length) { setPendCarga({ setter, atual, dados, nome: label }); return }
+      setter({ nome: label, dados })
     } catch (err) { setErro('Não consegui ler: ' + err.message) }
   }
   // Resolve a pergunta substituir/complementar da carga inicial.
   function resolverPendCarga(modo) {
     const p = pendCarga; if (!p) return
     if (modo === 'complementar') {
-      const nome = `${p.atual.nome} + ${p.nome}`
-      p.setter({ nome: nome.length > 60 ? p.nome + ' (+arquivos)' : nome, dados: [...(p.atual.dados || []), ...p.dados] })
+      // Adiciona sem fundir: as linhas novas já vêm marcadas com o próprio arquivo (__arq).
+      p.setter({ nome: p.nome, dados: [...(p.atual.dados || []), ...p.dados] })
     } else {
       p.setter({ nome: p.nome, dados: p.dados })
     }
@@ -1141,14 +1175,17 @@ function ModalCargaInicial({ vigencia, empresaId, onClose, onConcluir }) {
   const temDivergencia = conferencia.some(c => !c.ok)
 
   // Tira linhas em branco (a grade manual deixa uma linha vazia no fim para digitar).
-  const semVazias = arr => (arr || []).filter(r => Object.values(r).some(v => String(v ?? '').trim()))
+  // Ignora chaves internas (__arq) — uma linha só com a marca de origem é vazia.
+  const semVazias = arr => (arr || []).filter(r => Object.entries(r).some(([k, v]) => !k.startsWith('__') && String(v ?? '').trim()))
 
   async function concluir() {
     setSalvando(true)
-    const obsArq = [...new Set([saldos?.nome, comp?.nome, outras?.nome].filter(Boolean))].join(' + ') || 'manual'
-    // Clientes/fornecedores + outras composições vão juntos em `composicoes` (mesma conferência).
     const composicoes = [...semVazias(comp?.dados), ...semVazias(outras?.dados)]
-    try { await onConcluir(vigencia, { saldos: semVazias(saldos?.dados), composicoes }, obsArq) }
+    const saldosF = semVazias(saldos?.dados)
+    // obs = lista dos arquivos que compõem a carga (derivada das marcas __arq).
+    const arqs = [...new Set([...saldosF, ...composicoes].map(r => r.__arq).filter(Boolean))]
+    const obsArq = arqs.join(' + ') || 'manual'
+    try { await onConcluir(vigencia, { saldos: saldosF, composicoes }, obsArq) }
     finally { setSalvando(false) }
   }
 
@@ -1161,6 +1198,19 @@ function ModalCargaInicial({ vigencia, empresaId, onClose, onConcluir }) {
         <i className={`ti ${ic}`} /> {txt}
       </button>
     )
+    // Arquivos deste bloco (agrupa as linhas pela marca de origem __arq) — cada um removível.
+    const lotes = (() => {
+      const g = new Map()
+      for (const r of (estado?.dados || [])) {
+        const k = r.__arq || (estado?.nome || 'sem arquivo')
+        g.set(k, (g.get(k) || 0) + 1)
+      }
+      return [...g.entries()].map(([label, n]) => ({ label, n }))
+    })()
+    const removerArq = label => {
+      const resto = (estado?.dados || []).filter(r => (r.__arq || estado?.nome) !== label)
+      setter(resto.length ? { ...estado, dados: resto, salvo: false } : null)
+    }
     return (
       <div style={{ background: theme.input, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: 16, marginBottom: 14 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10, marginBottom: 10 }}>
@@ -1175,14 +1225,20 @@ function ModalCargaInicial({ vigencia, empresaId, onClose, onConcluir }) {
           {segBtn('manual', 'ti-keyboard', 'Digitar / editar')}
         </div>
         {modo === 'arquivo'
-          ? <DropZone onArquivo={f => lerArquivo(f, setter, estado)} hint="Arraste ou clique · .xlsx, .xls ou .csv" />
+          ? <DropZone onArquivo={f => lerArquivo(f, setter, estado)} hint="Arraste ou clique · .xlsx, .xls ou .csv · pode subir vários (não funde)" />
           : <GradeManual cols={modelo.cols} linhas={estado?.dados || []} planoNomes={planoNomes}
-              onChange={novo => setter({ nome: (estado?.nome && !estado?.salvo) ? estado.nome : 'Digitado manualmente', dados: novo })} />}
-        {estado && (
-          <p style={{ color: estado.salvo ? theme.sub : theme.green, fontSize: 12.5, marginTop: 8 }}>
-            <i className={`ti ${estado.salvo ? 'ti-database' : 'ti-circle-check'}`} /> {estado.salvo ? 'Já salvo (carga anterior)' : estado.nome} — {estado.dados.length} linha(s){estado.salvo ? ' · será mantido se você não reenviar' : ''}
-            <i className="ti ti-trash" title="Excluir este arquivo/bloco" onClick={() => setter(null)} style={{ color: theme.sub, cursor: 'pointer', marginLeft: 8 }} />
-          </p>
+              onChange={novo => setter({ nome: 'Digitado manualmente', dados: novo.map(r => r.__arq ? r : { ...r, __arq: 'Digitado manualmente' }) })} />}
+        {lotes.length > 0 && (
+          <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {lotes.map(l => (
+              <div key={l.label} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: estado?.salvo ? theme.sub : theme.green }}>
+                <i className={`ti ${estado?.salvo ? 'ti-database' : 'ti-file-check'}`} />
+                <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.label} — {l.n} linha(s)</span>
+                <i className="ti ti-trash" title="Excluir este arquivo (só as linhas dele)" onClick={() => removerArq(l.label)} style={{ color: theme.sub, cursor: 'pointer', flexShrink: 0 }} />
+              </div>
+            ))}
+            {estado?.salvo && <span style={{ color: theme.sub, fontSize: 11.5 }}>Será mantido se você não reenviar.</span>}
+          </div>
         )}
       </div>
     )
@@ -1247,7 +1303,7 @@ function ModalCargaInicial({ vigencia, empresaId, onClose, onConcluir }) {
           <div onClick={e => e.stopPropagation()} style={{ width: 'min(460px,96vw)', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 14, padding: 20 }}>
             <h3 style={{ fontSize: 15, margin: '0 0 8px' }}><i className="ti ti-files" style={{ color: theme.accent, marginRight: 6 }} />Este bloco já tem arquivo</h3>
             <p style={{ color: theme.sub, fontSize: 13, margin: '0 0 4px' }}>Já há <b style={{ color: theme.text }}>{(pendCarga.atual.dados || []).length}</b> linha(s). O novo arquivo tem <b style={{ color: theme.text }}>{pendCarga.dados.length}</b>.</p>
-            <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 16px' }}><b style={{ color: theme.text }}>Complementar</b> soma os novos aos que já estão (ex.: fornecedores em duas planilhas). <b style={{ color: theme.text }}>Substituir</b> troca tudo pelo novo arquivo.</p>
+            <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 16px' }}><b style={{ color: theme.text }}>Complementar</b> adiciona o novo arquivo <b style={{ color: theme.text }}>sem fundir</b> — cada arquivo continua separado e pode ser excluído sozinho depois (ex.: fornecedores em duas planilhas). <b style={{ color: theme.text }}>Substituir</b> troca tudo pelo novo arquivo.</p>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
               <button className="btn btn-ghost" onClick={() => setPendCarga(null)}>Cancelar</button>
               <button className="btn btn-ghost" style={{ color: theme.yellow, borderColor: theme.yellow }} onClick={() => resolverPendCarga('substituir')}><i className="ti ti-refresh" /> Substituir</button>
