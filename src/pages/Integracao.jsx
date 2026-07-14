@@ -748,6 +748,27 @@ function achaColuna(header, re) {
   return (header || []).findIndex(h => re.test(norm(h)))
 }
 
+// Auto-detecta as colunas do EXTRATO (para o cruzamento por dia): Data + Saldo obrigatórias,
+// Valor/movimento opcional. Retorna { linhaInicio, colData, colSaldo, colValor } ou null.
+function autoMapaExtrato(arr) {
+  for (let i = 0; i < Math.min((arr || []).length, 40); i++) {
+    const hd = arr[i] || []
+    const d = achaColuna(hd, /^data|\bdata\b|dt\b/)
+    const s = achaColuna(hd, /saldo|balance/)
+    if (d >= 0 && s >= 0) {
+      const v = achaColuna(hd, /valor|movimento|d[eé]bito|cr[eé]dito|entrada|sa[ií]da|lan[çc]/)
+      return { linhaInicio: i + 1, colData: d, colSaldo: s, colValor: (v >= 0 && v !== d && v !== s) ? v : null }
+    }
+  }
+  return null
+}
+// O mapa de colunas do extrato ainda cabe neste arquivo?
+function mapaExtratoValido(m, arr) {
+  if (!m || !Array.isArray(arr) || !arr.length) return false
+  const nc = arr.reduce((mx, r) => Math.max(mx, (r || []).length), 0)
+  return m.linhaInicio != null && m.linhaInicio <= arr.length && m.colData >= 0 && m.colData < nc && m.colSaldo >= 0 && m.colSaldo < nc
+}
+
 // Integração FOLHA: importa a folha mensal e o adiantamento, unifica por rubrica e cruza
 // com o razão pelo padrão "VALOR REF. <código> - <nome>". Resumo por rubrica com total → zero.
 // Rubricas informativas (ex.: "INF - SEGURO DE VIDA") que não são contabilizadas podem ser
@@ -989,6 +1010,8 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   const [saldoExtrato, setSaldoExtrato] = useState('')     // saldo do extrato informado pelo usuário
   const [cruza, setCruza] = useState(null)                 // resultado do cruzamento por dia com o extrato
   const [cruzaOpen, setCruzaOpen] = useState(false)        // modal do cruzamento aberto (dá p/ reabrir)
+  const [colPicker, setColPicker] = useState(null)         // { arr } — "Ajustar colunas" do extrato
+  const [cruzaArr, setCruzaArr] = useState(null)           // linhas cruas do último extrato cruzado (p/ reajustar colunas)
   const [novoLanc, setNovoLanc] = useState(false)          // modal de incluir lançamento manual
   const [sugAprend, setSugAprend] = useState(null)         // { itens } sugestões após aprender
   const [editLanc, setEditLanc] = useState(null)           // { i, linha } editar lançamento inteiro
@@ -1232,7 +1255,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     const finalLinhas = modo === 'complementar' ? [...baseAtual, ...norm] : norm
     const prevBanco = (est?.bancos || {})[bancoFixo]
     if (prevBanco?.saldoExtrato) setSaldoExtrato(prevBanco.saldoExtrato)
-    setCruza(prevBanco?.cruza || null); setCruzaOpen(false)
+    setCruza(prevBanco?.cruza || null); setCruzaOpen(false); setColPicker(null); setCruzaArr(null)
     setRaw({ nome, banco: bancoFixo, viaPerfil: true, arr, catByRow })
     setLinhas(finalLinhas); setSel(new Set())
     if (!finalLinhas.length) { setErro('O perfil de leitura não encontrou lançamentos. Clique em “Ajustar leitura” e revise o mapeamento.'); return }
@@ -1287,7 +1310,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     if (!s?.draft) return
     // Recupera o arquivo bruto salvo (se houver) para permitir "Ajustar leitura" sem reimportar.
     setRaw({ nome: s.doc || 'Rascunho', banco: conta, viaPerfil: true, resumo: true, arr: Array.isArray(s.arr) ? s.arr : undefined, catByRow: s.catByRow ?? null })
-    setLinhas(s.draft); setSel(new Set()); setErro(''); setSaldoExtrato(s.saldoExtrato || ''); setCruza(s.cruza || null); setCruzaOpen(false)
+    setLinhas(s.draft); setSel(new Set()); setErro(''); setSaldoExtrato(s.saldoExtrato || ''); setCruza(s.cruza || null); setCruzaOpen(false); setColPicker(null); setCruzaArr(null)
     setMsg(`Rascunho carregado — ${s.draft.length} linha(s). Continue de onde parou.`)
   }
 
@@ -1435,12 +1458,48 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     const l = (linhas || []).find(x => String(x.reduzido) === String(banco))
     setSaldoAnterior(l ? Number(l.saldo_inicial) : null)
   }
-  useEffect(() => { if (raw?.banco) carregarSaldoAnterior(raw.banco); else { setSaldoAnterior(null); setSaldoExtrato(''); setCruza(null); setCruzaOpen(false) } }, [raw?.banco, competencia]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setColPicker(null); setCruzaArr(null); if (raw?.banco) carregarSaldoAnterior(raw.banco); else { setSaldoAnterior(null); setSaldoExtrato(''); setCruza(null); setCruzaOpen(false) } }, [raw?.banco, competencia]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Cruza os lançamentos classificados com o extrato do banco (saldos diários) para
   // achar o dia onde começa a diferença. O sinal é a MUDANÇA da diferença de um dia
   // para o outro (independe do saldo de abertura estar alinhado).
-  async function cruzarSaldos(file) {
+  // Monta o cruzamento por dia a partir das linhas cruas do extrato + o mapa de colunas.
+  // Guarda também as linhas do extrato por dia (extRowsDia) para o confronto por lançamento.
+  function computarCruza(arr, mapa) {
+    const rows = arr.slice(mapa.linhaInicio).filter(r => r.some(c => c !== '' && c != null))
+    const temValor = mapa.colValor != null && mapa.colValor >= 0
+    const extratoDia = new Map(), extMovDia = {}, extRowsDia = {}
+    for (const r of rows) {
+      const d = dataISO(r[mapa.colData]); if (!d) continue
+      const sld = parseValor(r[mapa.colSaldo])
+      extratoDia.set(d, sld) // saldo de fim de dia = último por data
+      const val = temValor ? parseValor(r[mapa.colValor]) : null
+      if (val != null) extMovDia[d] = (extMovDia[d] || 0) + val
+      ;(extRowsDia[d] = extRowsDia[d] || []).push({ saldo: sld, valor: val })
+    }
+    // movimento por dia a partir da classificação (o que foi importado)
+    const movDia = {}
+    for (const l of linhas) { if (!l.data) continue; movDia[l.data] = (movDia[l.data] || 0) + (l.entrada ? l.valor : -l.valor) }
+    const dias = [...new Set([...extratoDia.keys(), ...Object.keys(movDia)])].sort()
+    let corrente = saldoAnterior || 0, prevDif = null, primeiroDiv = null
+    const out = []
+    for (const d of dias) {
+      corrente += (movDia[d] || 0)
+      const ext = extratoDia.has(d) ? extratoDia.get(d) : null
+      const extMov = temValor && (d in extMovDia) ? extMovDia[d] : null
+      const dif = ext == null ? null : Math.round((corrente - ext) * 100) / 100
+      const delta = (dif == null || prevDif == null) ? null : Math.round((dif - prevDif) * 100) / 100
+      if (delta != null && Math.abs(delta) >= 0.005 && !primeiroDiv) primeiroDiv = d
+      out.push({ data: d, mov: movDia[d] || 0, calc: corrente, ext, extMov, dif, delta })
+      if (dif != null) prevDif = dif
+    }
+    const difTotal = out.filter(d => d.dif != null).slice(-1)[0]?.dif ?? null
+    return { dias: out, primeiroDiv, difTotal, temValor, extRowsDia }
+  }
+
+  // Sobe o extrato: resolve as colunas (mapa salvo do banco → auto → "Ajustar colunas") e
+  // cruza. `mapaForcado` vem do modal de ajuste de colunas.
+  async function cruzarSaldos(file, mapaForcado) {
     if (!file) return
     setErro('')
     try {
@@ -1448,44 +1507,21 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
       const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true })
       const ws = wb.Sheets[wb.SheetNames[0]]
       const arr = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
-      // Acha a linha de cabeçalho (a que tem Data e Saldo) — extratos costumam ter
-      // várias linhas de topo (nome, agência, período) antes da tabela.
-      let hIdx = 0, iData = -1, iSaldo = -1
-      for (let i = 0; i < Math.min(arr.length, 40); i++) {
-        const hd = arr[i] || []
-        const d = achaColuna(hd, /^data|\bdata\b|dt\b/)
-        const s = achaColuna(hd, /saldo|balance/)
-        if (d >= 0 && s >= 0) { hIdx = i; iData = d; iSaldo = s; break }
-      }
-      const rows = arr.slice(hIdx + 1).filter(r => r.some(c => c !== '' && c != null))
-      if (iData < 0) iData = achaColuna(arr[hIdx] || [], /^data|\bdata\b|dt\b/)
-      if (iSaldo < 0) { // fallback: última coluna com números na maioria das linhas
-        for (let j = ((arr[hIdx] || []).length || (rows[0]?.length || 0)) - 1; j >= 0; j--) {
-          if (rows.filter(r => typeof r[j] === 'number' || parseValor(r[j])).length > rows.length / 2) { iSaldo = j; break }
-        }
-      }
-      if (iData < 0 || iSaldo < 0) { setErro('Não identifiquei as colunas de Data e Saldo no extrato. Confira se há uma coluna Data e uma Saldo.'); return }
-      // extrato: saldo de fim de dia (último por data, assumindo ordem cronológica)
-      const extratoDia = new Map()
-      for (const r of rows) { const d = dataISO(r[iData]); if (d) extratoDia.set(d, parseValor(r[iSaldo])) }
-      // movimento por dia a partir da classificação
-      const movDia = {}
-      for (const l of linhas) { if (!l.data) continue; movDia[l.data] = (movDia[l.data] || 0) + (l.entrada ? l.valor : -l.valor) }
-      const dias = [...new Set([...extratoDia.keys(), ...Object.keys(movDia)])].sort()
-      let corrente = saldoAnterior || 0, prevDif = null, primeiroDiv = null
-      const out = []
-      for (const d of dias) {
-        corrente += (movDia[d] || 0)
-        const ext = extratoDia.has(d) ? extratoDia.get(d) : null
-        const dif = ext == null ? null : Math.round((corrente - ext) * 100) / 100
-        const delta = (dif == null || prevDif == null) ? null : Math.round((dif - prevDif) * 100) / 100
-        if (delta != null && Math.abs(delta) >= 0.005 && !primeiroDiv) primeiroDiv = d
-        out.push({ data: d, mov: movDia[d] || 0, calc: corrente, ext, dif, delta })
-        if (dif != null) prevDif = dif
-      }
-      const difTotal = out.filter(d => d.dif != null).slice(-1)[0]?.dif ?? null
-      setCruza({ dias: out, primeiroDiv, difTotal }); setCruzaOpen(true)
+      setCruzaArr(arr)
+      const saved = perfilDeBanco(raw?.banco)?.cruza
+      const mapa = mapaForcado || (mapaExtratoValido(saved, arr) ? saved : null) || autoMapaExtrato(arr)
+      if (!mapa) { setColPicker({ arr }); return } // não achou Data/Saldo → deixa o usuário mapear
+      setCruza(computarCruza(arr, mapa)); setCruzaOpen(true); setColPicker(null)
+      // aprende o mapa de colunas do extrato no perfil do banco → mês que vem lê sozinho
+      if (raw?.banco) { const p = perfilDeBanco(raw.banco) || {}; salvarPerfil({ ...p, cruza: mapa }, raw.banco) }
     } catch (e) { setErro('Não consegui ler o extrato: ' + e.message) }
+  }
+  // Aplica o mapa escolhido no "Ajustar colunas" (sem reler o arquivo — usa o arr já lido).
+  function aplicarColunasExtrato(mapa) {
+    const arr = cruzaArr || colPicker?.arr
+    if (!arr) { setColPicker(null); return }
+    setCruza(computarCruza(arr, mapa)); setCruzaOpen(true); setColPicker(null)
+    if (raw?.banco) { const p = perfilDeBanco(raw.banco) || {}; salvarPerfil({ ...p, cruza: mapa }, raw.banco) }
   }
   // Divide um lançamento em vários (ex.: 1 DARF → 3 lançamentos contábeis).
   function confirmarQuebra(i, partes) {
@@ -1945,6 +1981,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
               <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={e => cruzarSaldos(e.target.files?.[0])} />
             </label>
             {cruza && <button className="btn btn-ghost" style={{ fontSize: 11.5, padding: '4px 9px' }} onClick={() => setCruzaOpen(true)} title="Reabrir o cruzamento por dia"><i className="ti ti-eye" /> Ver cruzamento{cruza.primeiroDiv ? ' ⚠' : ''}</button>}
+            {cruzaArr && <button className="btn btn-ghost" style={{ fontSize: 11.5, padding: '4px 9px' }} onClick={() => setColPicker({ arr: cruzaArr })} title="Escolher manualmente quais colunas do extrato são Data, Saldo e Valor"><i className="ti ti-columns" /> Ajustar colunas</button>}
           </div>
           {saldoAnterior == null && <p style={{ color: theme.yellow, fontSize: 11.5, margin: '-4px 0 10px' }}>Saldo anterior indisponível (balancete da competência não importado) — o saldo final considera abertura zero.</p>}
 
@@ -2046,7 +2083,11 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
       )}
 
       {cruzaOpen && cruza && <ModalCruzaSaldo cruza={cruza} linhas={linhas} planoMap={planoMap} titulo={raw?.banco ? `${raw.banco} ${nomeBanco(raw.banco)}` : ''} onClose={() => setCruzaOpen(false)}
+        onAjustarColunas={cruzaArr ? () => { setCruzaOpen(false); setColPicker({ arr: cruzaArr }) } : null}
         onVerDia={iso => { const p = String(iso).split('-'); setFData(`${p[2]}/${p[1]}`); setCruzaOpen(false) }} />}
+
+      {colPicker && <ModalColunasExtrato arr={colPicker.arr} inicial={perfilDeBanco(raw?.banco)?.cruza || autoMapaExtrato(colPicker.arr)}
+        onClose={() => setColPicker(null)} onAplicar={aplicarColunasExtrato} />}
 
       {novoLanc && <ModalNovoLancamento banco={raw?.banco} nomeBanco={nomeBanco} competencia={competencia} planoMap={planoMap}
         onClose={() => setNovoLanc(false)} onConfirmar={adicionarLinha} />}
@@ -2092,7 +2133,75 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
 // Além de apontar os dias que não bateram, tenta ser ASSERTIVO sobre o erro:
 // casa a diferença do dia com um lançamento (valor exato ou E/S trocada) e
 // detecta lançamento com data trocada (dois dias com diferença oposta e igual).
-function ModalCruzaSaldo({ cruza, linhas, planoMap, titulo, onClose, onVerDia }) {
+// "Ajustar colunas" do extrato do cruzamento: o usuário escolhe qual coluna é Data,
+// Saldo e (opcional) Valor/movimento. Fica salvo por banco (perfil.cruza).
+function ModalColunasExtrato({ arr, inicial, onAplicar, onClose }) {
+  const nc = (arr || []).reduce((m, r) => Math.max(m, (r || []).length), 0)
+  const [linhaInicio, setLinhaInicio] = useState(inicial?.linhaInicio ?? 1)
+  const [colData, setColData] = useState(inicial?.colData ?? -1)
+  const [colSaldo, setColSaldo] = useState(inicial?.colSaldo ?? -1)
+  const [colValor, setColValor] = useState(inicial?.colValor ?? -1)
+  const letra = i => { let s = '', n = Number(i); while (n >= 0) { s = String.fromCharCode(65 + (n % 26)) + s; n = Math.floor(n / 26) - 1 } return s }
+  const header = arr[Math.max(0, linhaInicio - 1)] || []
+  const amostra = c => { for (let i = linhaInicio; i < Math.min(arr.length, linhaInicio + 8); i++) { const v = arr[i]?.[c]; if (v !== '' && v != null) return String(v).slice(0, 20) } return '' }
+  const opts = Array.from({ length: nc }, (_, i) => i)
+  const rotulo = i => `${letra(i)}${header[i] ? ' · ' + String(header[i]).slice(0, 18) : ''}${amostra(i) ? '  (' + amostra(i) + ')' : ''}`
+  const pode = colData >= 0 && colSaldo >= 0 && colData !== colSaldo
+  const corCol = i => i === colData ? 'rgba(74,124,255,0.20)' : i === colSaldo ? 'rgba(48,164,108,0.18)' : i === colValor ? 'rgba(245,166,35,0.18)' : 'transparent'
+  const preview = arr.slice(Math.max(0, linhaInicio - 1), linhaInicio + 6)
+  const sel = (label, val, set, cor, comVazio) => (
+    <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: theme.sub, flex: 1, minWidth: 150 }}>
+      <span><span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 2, background: cor, marginRight: 5 }} />{label}</span>
+      <select className="input" style={{ fontSize: 12, padding: '6px 8px' }} value={val} onChange={e => set(Number(e.target.value))}>
+        <option value={-1}>{comVazio ? '— nenhuma —' : '— escolher —'}</option>
+        {opts.map(i => <option key={i} value={i}>{rotulo(i)}</option>)}
+      </select>
+    </label>
+  )
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 16, zIndex: 70 }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 'min(760px,96vw)', maxHeight: '90vh', overflow: 'auto', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 22 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+          <h2 style={{ fontSize: 16, margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}><i className="ti ti-columns" style={{ color: theme.accent }} /> Ajustar colunas do extrato</h2>
+          <span onClick={onClose} style={{ cursor: 'pointer', color: theme.sub, fontSize: 20 }}><i className="ti ti-x" /></span>
+        </div>
+        <p style={{ fontSize: 12.5, color: theme.sub, margin: '0 0 14px' }}>Escolha qual coluna do extrato é a <b style={{ color: theme.text }}>Data</b>, o <b style={{ color: theme.text }}>Saldo</b> e (opcional) o <b style={{ color: theme.text }}>Valor/movimento</b>. Fica salvo por banco — no próximo mês já lê sozinho.</p>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 14 }}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: theme.sub, width: 120 }}>
+            <span>Dados começam na linha</span>
+            <input className="input" type="number" min={1} style={{ fontSize: 12, padding: '6px 8px' }} value={linhaInicio} onChange={e => setLinhaInicio(Math.max(1, Number(e.target.value) || 1))} />
+          </label>
+          {sel('Data', colData, setColData, theme.accent, false)}
+          {sel('Saldo', colSaldo, setColSaldo, theme.green, false)}
+          {sel('Valor / movimento (opcional)', colValor, setColValor, theme.yellow, true)}
+        </div>
+        <div style={{ border: `0.5px solid ${theme.cb}`, borderRadius: 10, overflow: 'auto' }}>
+          <table style={{ borderCollapse: 'collapse', fontSize: 11.5 }}>
+            <tbody>
+              {preview.map((r, ri) => (
+                <tr key={ri} style={{ borderTop: ri ? `1px solid ${theme.border}` : 'none' }}>
+                  <td style={{ padding: '5px 8px', color: theme.sub, background: theme.input, position: 'sticky', left: 0, whiteSpace: 'nowrap' }}>{ri === 0 ? 'cabeçalho' : `linha ${linhaInicio + ri}`}</td>
+                  {opts.map(ci => (
+                    <td key={ci} style={{ padding: '5px 9px', whiteSpace: 'nowrap', background: corCol(ci), color: ri === 0 ? theme.text : theme.sub, fontWeight: ri === 0 ? 600 : 400, borderLeft: `1px solid ${theme.border}` }}>
+                      {String(r[ci] ?? '').slice(0, 22) || '—'}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {!pode && <p style={{ color: theme.yellow, fontSize: 12, margin: '10px 0 0' }}><i className="ti ti-alert-triangle" /> Escolha as colunas de <b>Data</b> e <b>Saldo</b> (precisam ser diferentes) para continuar.</p>}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
+          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+          <button className="btn" disabled={!pode} onClick={() => onAplicar({ linhaInicio, colData, colSaldo, colValor: colValor >= 0 ? colValor : null })}><i className="ti ti-check" /> Aplicar e cruzar</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ModalCruzaSaldo({ cruza, linhas, planoMap, titulo, onClose, onVerDia, onAjustarColunas }) {
   const brd = iso => iso ? iso.split('-').reverse().join('/') : '—'
   const eps = v => Math.abs(v) < 0.005
   const r2 = v => Math.round((v || 0) * 100) / 100
@@ -2159,9 +2268,12 @@ function ModalCruzaSaldo({ cruza, linhas, planoMap, titulo, onClose, onVerDia })
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 16, zIndex: 60 }}>
       <div onClick={e => e.stopPropagation()} style={{ width: 'min(720px,96vw)', maxHeight: '90vh', overflow: 'auto', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 22 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-          <h2 style={{ fontSize: 16, margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}><i className="ti ti-file-search" style={{ color: theme.accent }} /> Diferença por dia (extrato × classificado)</h2>
-          <span onClick={onClose} style={{ cursor: 'pointer', color: theme.sub, fontSize: 20 }}><i className="ti ti-x" /></span>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 10 }}>
+          <h2 style={{ fontSize: 16, margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}><i className="ti ti-file-search" style={{ color: theme.accent }} /> Importado × Extrato — por dia</h2>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+            {onAjustarColunas && <button className="btn btn-ghost" style={{ fontSize: 11.5, padding: '4px 9px' }} onClick={onAjustarColunas} title="Escolher quais colunas do extrato são Data, Saldo e Valor"><i className="ti ti-columns" /> Ajustar colunas</button>}
+            <span onClick={onClose} style={{ cursor: 'pointer', color: theme.sub, fontSize: 20 }}><i className="ti ti-x" /></span>
+          </div>
         </div>
         <p style={{ fontSize: 13, margin: '0 0 12px', color: divergentes.length ? theme.red : theme.green }}>
           {divergentes.length
@@ -2199,15 +2311,35 @@ function ModalCruzaSaldo({ cruza, linhas, planoMap, titulo, onClose, onVerDia })
                       {onVerDia && <button className="btn btn-ghost" style={{ fontSize: 11, padding: '3px 8px', whiteSpace: 'nowrap' }} onClick={() => onVerDia(d.data)} title="Filtrar a tabela por este dia"><i className="ti ti-filter" /> na tabela</button>}
                     </div>
                   </div>
-                  {modo && (
+                  {modo && (() => {
+                    const extDia = (cruza.extRowsDia?.[d.data] || []).filter(x => x.valor != null && Math.abs(x.valor) >= 0.005)
+                    return (
                     <div style={{ borderTop: `0.5px solid rgba(229,72,77,0.25)`, background: theme.card }}>
+                      {/* IMPORTADO deste dia */}
+                      <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: .5, textTransform: 'uppercase', color: theme.accent, padding: '7px 11px 3px' }}><i className="ti ti-file-import" /> Importado ({doDia.length})</div>
                       {modo === 'estrela' && !temSuspeito
-                        ? <p style={{ color: theme.sub, fontSize: 11.5, margin: 0, padding: '8px 11px' }}><i className="ti ti-help-circle" style={{ marginRight: 4 }} />Não identifiquei um lançamento específico para esta diferença — confira o dia manualmente (botão "{doDia.length} lançto(s)").</p>
+                        ? <p style={{ color: theme.sub, fontSize: 11.5, margin: 0, padding: '2px 11px 8px' }}><i className="ti ti-help-circle" style={{ marginRight: 4 }} />Não identifiquei um lançamento específico para esta diferença — confira o dia manualmente.</p>
                         : doDia.length === 0
-                          ? <p style={{ color: theme.sub, fontSize: 11.5, margin: 0, padding: '8px 11px' }}>Nenhum lançamento classificado neste dia — provável lançamento faltando de {money(Math.abs(d.delta))}.</p>
+                          ? <p style={{ color: theme.sub, fontSize: 11.5, margin: 0, padding: '2px 11px 8px' }}>Nenhum lançamento classificado neste dia — provável lançamento faltando de {money(Math.abs(d.delta))}.</p>
                           : <table style={{ width: '100%', borderCollapse: 'collapse' }}><tbody>{mostra.map(linhaLanc)}</tbody></table>}
+                      {/* EXTRATO deste dia (quando o extrato tem coluna de Valor) */}
+                      {cruza.temValor && (
+                        <>
+                          <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: .5, textTransform: 'uppercase', color: theme.green, padding: '9px 11px 3px', borderTop: `1px solid ${theme.border}` }}><i className="ti ti-file-dollar" /> Extrato ({extDia.length})</div>
+                          {extDia.length === 0
+                            ? <p style={{ color: theme.sub, fontSize: 11.5, margin: 0, padding: '2px 11px 8px' }}>Sem movimento no extrato neste dia.</p>
+                            : <table style={{ width: '100%', borderCollapse: 'collapse' }}><tbody>{extDia.map((x, xi) => (
+                                <tr key={xi} style={{ borderTop: `1px solid ${theme.border}` }}>
+                                  <td style={{ ...ftd, fontSize: 11, color: theme.sub }}>Movimento do extrato</td>
+                                  <td style={{ ...ftd, fontSize: 11, textAlign: 'right', whiteSpace: 'nowrap', color: x.valor >= 0 ? theme.green : theme.red }}>{x.valor >= 0 ? '+' : '−'}{money(Math.abs(x.valor))}</td>
+                                  <td style={{ ...ftd, fontSize: 11, textAlign: 'right', whiteSpace: 'nowrap', color: theme.sub }}>saldo {money(x.saldo)}</td>
+                                </tr>
+                              ))}</tbody></table>}
+                        </>
+                      )}
                     </div>
-                  )}
+                    )
+                  })()}
                 </div>
               )
             })}
@@ -2220,26 +2352,43 @@ function ModalCruzaSaldo({ cruza, linhas, planoMap, titulo, onClose, onVerDia })
           </label>
         </div>
         <div style={{ border: `0.5px solid ${theme.cb}`, borderRadius: 10, overflow: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 560 }}>
-            <thead><tr style={{ background: theme.input }}><th style={fth}>Data</th><th style={{ ...fth, textAlign: 'right' }}>Movimento</th><th style={{ ...fth, textAlign: 'right' }}>Saldo calc.</th><th style={{ ...fth, textAlign: 'right' }}>Saldo extrato</th><th style={{ ...fth, textAlign: 'right' }}>Dif. do dia</th></tr></thead>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: cruza.temValor ? 640 : 560 }}>
+            <thead>
+              <tr style={{ background: theme.input }}>
+                <th style={fth}></th>
+                <th style={{ ...fth, textAlign: 'center', color: theme.accent, borderLeft: `1px solid ${theme.border}` }} colSpan={cruza.temValor ? 2 : 1}><i className="ti ti-file-import" /> Importado</th>
+                <th style={{ ...fth, textAlign: 'center', color: theme.green, borderLeft: `1px solid ${theme.border}` }} colSpan={cruza.temValor ? 2 : 1}><i className="ti ti-file-dollar" /> Extrato</th>
+                <th style={{ ...fth, textAlign: 'right', borderLeft: `1px solid ${theme.border}` }}></th>
+              </tr>
+              <tr style={{ background: theme.input }}>
+                <th style={fth}>Data</th>
+                {cruza.temValor && <th style={{ ...fth, textAlign: 'right', borderLeft: `1px solid ${theme.border}` }}>Movimento</th>}
+                <th style={{ ...fth, textAlign: 'right', borderLeft: cruza.temValor ? 'none' : `1px solid ${theme.border}` }}>Saldo</th>
+                {cruza.temValor && <th style={{ ...fth, textAlign: 'right', borderLeft: `1px solid ${theme.border}` }}>Movimento</th>}
+                <th style={{ ...fth, textAlign: 'right', borderLeft: cruza.temValor ? 'none' : `1px solid ${theme.border}` }}>Saldo</th>
+                <th style={{ ...fth, textAlign: 'right', borderLeft: `1px solid ${theme.border}` }}>Diferença</th>
+              </tr>
+            </thead>
             <tbody>
               {linhasTabela.map((d, i) => {
                 const marca = d.delta != null && Math.abs(d.delta) >= 0.005
+                const difMov = (cruza.temValor && d.extMov != null) ? r2(d.mov - d.extMov) : null
                 return (
                   <tr key={i} onClick={() => onVerDia && onVerDia(d.data)} style={{ borderTop: `1px solid ${theme.border}`, background: marca ? 'rgba(229,72,77,0.10)' : 'transparent', cursor: onVerDia ? 'pointer' : 'default' }} title={onVerDia ? 'Filtrar os lançamentos deste dia' : ''}>
                     <td style={{ ...ftd, fontSize: 11.5, whiteSpace: 'nowrap' }}>{brd(d.data)}</td>
-                    <td style={{ ...ftd, textAlign: 'right', fontSize: 11.5, whiteSpace: 'nowrap', color: theme.sub }}>{money(d.mov)}</td>
-                    <td style={{ ...ftd, textAlign: 'right', whiteSpace: 'nowrap' }}>{money(d.calc)}</td>
-                    <td style={{ ...ftd, textAlign: 'right', whiteSpace: 'nowrap' }}>{d.ext == null ? '—' : money(d.ext)}</td>
-                    <td style={{ ...ftd, textAlign: 'right', whiteSpace: 'nowrap', color: marca ? theme.red : theme.sub }}>{d.delta == null ? '—' : money(d.delta)}</td>
+                    {cruza.temValor && <td style={{ ...ftd, textAlign: 'right', fontSize: 11.5, whiteSpace: 'nowrap', color: theme.sub, borderLeft: `1px solid ${theme.border}` }}>{money(d.mov)}</td>}
+                    <td style={{ ...ftd, textAlign: 'right', whiteSpace: 'nowrap', borderLeft: cruza.temValor ? 'none' : `1px solid ${theme.border}` }}>{money(d.calc)}</td>
+                    {cruza.temValor && <td style={{ ...ftd, textAlign: 'right', fontSize: 11.5, whiteSpace: 'nowrap', color: difMov != null && Math.abs(difMov) >= 0.005 ? theme.red : theme.sub, borderLeft: `1px solid ${theme.border}` }}>{d.extMov == null ? '—' : money(d.extMov)}</td>}
+                    <td style={{ ...ftd, textAlign: 'right', whiteSpace: 'nowrap', borderLeft: cruza.temValor ? 'none' : `1px solid ${theme.border}` }}>{d.ext == null ? '—' : money(d.ext)}</td>
+                    <td style={{ ...ftd, textAlign: 'right', whiteSpace: 'nowrap', fontWeight: marca ? 700 : 400, color: marca ? theme.red : theme.sub, borderLeft: `1px solid ${theme.border}` }}>{d.delta == null ? '—' : money(d.delta)}</td>
                   </tr>
                 )
               })}
-              {!linhasTabela.length && <tr><td colSpan={5} style={{ ...ftd, color: theme.sub, fontSize: 12 }}>Sem dias para mostrar.</td></tr>}
+              {!linhasTabela.length && <tr><td colSpan={cruza.temValor ? 6 : 4} style={{ ...ftd, color: theme.sub, fontSize: 12 }}>Sem dias para mostrar.</td></tr>}
             </tbody>
           </table>
         </div>
-        <p style={{ color: theme.sub, fontSize: 11, margin: '10px 0 0' }}>"Dif. do dia" é a mudança da diferença de um dia para o outro. A estrela ⭐ marca o lançamento que provavelmente causa a diferença. Clique num dia para filtrar os lançamentos na tabela.</p>
+        <p style={{ color: theme.sub, fontSize: 11, margin: '10px 0 0' }}>Colunas <b style={{ color: theme.accent }}>Importado</b> (o que você classificou) × <b style={{ color: theme.green }}>Extrato</b> (o arquivo do banco). "Diferença" é a mudança do dia — o valor que sobra/falta ali. Abra um dia para confrontar <b>lançamento a lançamento</b> (a estrela ⭐ marca o provável culpado). Se o extrato não tiver coluna de movimento, use <b>Ajustar colunas</b>. Clique num dia para filtrar a tabela.</p>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginTop: 14 }}>
           <button className="btn btn-ghost" onClick={exportar}><i className="ti ti-file-spreadsheet" /> Exportar apontamentos (Excel)</button>
           <button className="btn" onClick={onClose}>Fechar</button>
