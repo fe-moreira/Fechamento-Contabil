@@ -1011,7 +1011,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // não casou sozinho (NF diferente, sem NF, ou nomes separados). Vão para Conciliados.
   const toggleSelLin = l => setSelLin(prev => { const s = new Set(prev); s.has(l.id) ? s.delete(l.id) : s.add(l.id); return s })
   async function conectarSelecionados() {
-    const alvo = lanc.filter(l => selLin.has(l.id) && !l.acerto && l.id)
+    const alvo = lanc.filter(l => selLin.has(l.id) && l.id != null)
     if (alvo.length < 2) { setMsg('Selecione ao menos 2 lançamentos (a nota e o pagamento) para conectar.'); return }
     const net = alvo.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
     // Se NÃO zera, é obrigatório apontar se a diferença é DESCONTO ou JUROS/MULTA (com a
@@ -1030,7 +1030,8 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       item: l._abertura ? chaveAbertura(l) : `${conta.conta} · ${l.data || ''} · NF ${l.leitura?.nf || '—'}`,
       tipo: 'Justificativa',
       detalhe: `Confirmado em lote — conexão manual (nota + pagamento).`,
-      razao_id: l._abertura ? null : l.id, usuario,
+      // Acerto (estorno/lançamento) é identificado pelo uuid do próprio lançamento (sem "ac_").
+      razao_id: l._abertura ? null : (l.acerto ? String(l.id).replace(/^ac_/, '') : l.id), usuario,
     }))
     if (extraRazaoId) rows.push({ competencia_id: id, modulo: 'Conciliação', item: `${conta.conta} · acerto`, tipo: 'Justificativa', detalhe: 'Confirmado em lote — conexão manual (diferença).', razao_id: extraRazaoId, usuario })
     const { error } = await supabase.from('auditoria').insert(rows)
@@ -1428,7 +1429,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
                       style={{ borderTop: `1px solid ${theme.border}`, cursor: 'pointer', opacity: (l.acerto || jaTratada(l)) ? 0.7 : 1, background: (l.acerto || jaTratada(l)) ? 'rgba(48,164,108,0.08)' : semNF ? 'rgba(229,72,77,0.08)' : 'transparent' }}
                       title={l.acerto ? `${tagAcertoLanc(l).titulo} — clique para ver ou desfazer` : jaTratada(l) ? 'Já conferido — clique para ver ou desfazer' : semNF ? 'Baixa com NF que não confere com o título — justifique ou corrija' : 'Justificar ou corrigir este lançamento'}>
                       <td style={{ ...td, textAlign: 'center' }} onClick={e => e.stopPropagation()}>
-                        {!l.acerto && <input type="checkbox" title="Conectar com outro (baixa manual)" checked={selLin.has(l.id)} onChange={() => toggleSelLin(l)} style={{ cursor: 'pointer', width: 15, height: 15 }} />}
+                        <input type="checkbox" title="Conectar com outro (baixa manual)" checked={selLin.has(l.id)} onChange={() => toggleSelLin(l)} style={{ cursor: 'pointer', width: 15, height: 15 }} />
                       </td>
                       <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{l.data || '—'}</td>
                       <td style={{ ...td, color: semNF ? theme.red : theme.sub, fontWeight: 600 }}>NF {l.leitura.nf || '—'}</td>
@@ -1545,7 +1546,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       )}
 
       {(() => {
-        const selLancs = lanc.filter(l => selLin.has(l.id) && !l.acerto)
+        const selLancs = lanc.filter(l => selLin.has(l.id) && l.id != null)
         if (!selLancs.length) return null
         const net = selLancs.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
         const zera = Math.abs(net) < 0.005
@@ -1684,7 +1685,7 @@ function ListaLancamentos({ lanc, carregando, contraDe, planoMap, tratados = new
                 <tr key={i} onClick={() => onTratar(l)} style={{ borderTop: `1px solid ${theme.border}`, cursor: 'pointer', opacity: (l.acerto || tratados.has(l.id)) ? 0.7 : 1, background: (l.acerto || tratados.has(l.id)) ? 'rgba(48,164,108,0.08)' : 'transparent' }} title={l.acerto ? `${tagAcertoLanc(l).titulo} — clique para ver ou desfazer` : tratados.has(l.id) ? 'Já tratado — clique para ver ou desfazer' : 'Justificar ou corrigir este lançamento'}>
                   {selectable && (
                     <td style={{ ...td, textAlign: 'center' }} onClick={e => e.stopPropagation()}>
-                      {!l.acerto && !l._abertura && l.id && <input type="checkbox" title="Conectar com outro (baixa manual)" checked={selLin?.has(l.id)} onChange={() => onToggleSel(l)} style={{ cursor: 'pointer', width: 15, height: 15 }} />}
+                      {l.id != null && <input type="checkbox" title="Conectar com outro (baixa manual)" checked={selLin?.has(l.id)} onChange={() => onToggleSel(l)} style={{ cursor: 'pointer', width: 15, height: 15 }} />}
                     </td>
                   )}
                   <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{l.data || '—'}</td>

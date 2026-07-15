@@ -242,37 +242,57 @@ export default function Integracao() {
   const sistema = (cliente?.sistema_financeiro || '').trim()
   const planoMap = Object.fromEntries((plano || []).map(p => [String(p.cod), p]))
 
-  // Persiste o estado da integração financeira (por banco) na competência.
-  async function salvarFinanceira(novoFin) {
+  // MESCLA no `integracoes` da competência SEMPRE a partir do valor ATUAL do banco de
+  // dados (não da cópia em memória), para um salvamento nunca apagar o que outra aba/
+  // sessão gravou. `mut(atual)` deve devolver um NOVO objeto (sem mutar `atual`).
+  async function salvarMerge(id, mut) {
+    const { data } = await supabase.from('competencias').select('integracoes').eq('id', id).maybeSingle()
+    const atual = (data?.integracoes && typeof data.integracoes === 'object') ? data.integracoes : {}
+    const novo = mut(atual)
+    const { error } = await supabase.from('competencias').update({ integracoes: novo }).eq('id', id)
+    if (error) throw error
+    setEstado(novo)
+    return novo
+  }
+  // Persiste o estado da integração financeira (por banco) na competência. Mescla banco a
+  // banco sobre o valor ATUAL do BD: concluir um banco nunca apaga os outros (nem o que
+  // outra aba salvou). `bancoAlterado` = a conta bancária que mudou (quando aplicável).
+  async function salvarFinanceira(novoFin, bancoAlterado) {
     const id = await getCompetenciaId()
     if (!id) return
-    const novo = { ...estado, financeira: novoFin }
-    await supabase.from('competencias').update({ integracoes: novo }).eq('id', id)
-    setEstado(novo)
+    await salvarMerge(id, cur => {
+      const curFin = (cur.financeira && typeof cur.financeira === 'object') ? cur.financeira : {}
+      const curBancos = (curFin.bancos && typeof curFin.bancos === 'object') ? curFin.bancos : {}
+      let bancos
+      if (bancoAlterado) {
+        // Só o banco alterado é escrito sobre o que está no BD; os demais ficam intactos.
+        bancos = { ...curBancos }
+        if (novoFin?.bancos && Object.prototype.hasOwnProperty.call(novoFin.bancos, bancoAlterado)) bancos[bancoAlterado] = novoFin.bancos[bancoAlterado]
+        else delete bancos[bancoAlterado] // banco excluído
+      } else {
+        // Sem banco específico (ex.: recomputo do estado): preserva os do BD e sobrepõe os conhecidos.
+        bancos = { ...curBancos, ...((novoFin?.bancos && typeof novoFin.bancos === 'object') ? novoFin.bancos : {}) }
+      }
+      return { ...cur, financeira: { ...curFin, ...novoFin, bancos } }
+    })
   }
   // Persiste o estado da integração fiscal (3 tipos + cruzamento) na competência.
   async function salvarFiscal(novoFis) {
     const id = await getCompetenciaId()
     if (!id) return
-    const novo = { ...estado, fiscal: novoFis }
-    await supabase.from('competencias').update({ integracoes: novo }).eq('id', id)
-    setEstado(novo)
+    await salvarMerge(id, cur => ({ ...cur, fiscal: novoFis }))
   }
   // Persiste o estado da integração da folha (2 arquivos + cruzamento por rubrica).
   async function salvarFolha(novoFolha) {
     const id = await getCompetenciaId()
     if (!id) return
-    const novo = { ...estado, folha: novoFolha }
-    await supabase.from('competencias').update({ integracoes: novo }).eq('id', id)
-    setEstado(novo)
+    await salvarMerge(id, cur => ({ ...cur, folha: novoFolha }))
   }
   // Persiste o estado da integração de patrimônio (conta sintética + depreciação).
   async function salvarPatrimonio(novoPat) {
     const id = await getCompetenciaId()
     if (!id) return
-    const novo = { ...estado, patrimonio: novoPat }
-    await supabase.from('competencias').update({ integracoes: novo }).eq('id', id)
-    setEstado(novo)
+    await salvarMerge(id, cur => ({ ...cur, patrimonio: novoPat }))
   }
   // Ao vir do painel ("Continuar" um rascunho), já abre na aba indicada.
   const location = useLocation()
@@ -294,9 +314,7 @@ export default function Integracao() {
   async function marcarSemMov(key) {
     const id = await getCompetenciaId()
     if (!id) return
-    const novo = { ...estado, [key]: { estado: 'sem_movimento', usuario: user?.email || null } }
-    await supabase.from('competencias').update({ integracoes: novo }).eq('id', id)
-    setEstado(novo)
+    await salvarMerge(id, cur => ({ ...cur, [key]: { estado: 'sem_movimento', usuario: user?.email || null } }))
   }
   // Uma integração está OK (verde) quando validada ou marcada sem movimento.
   function integracaoOk(key) {
@@ -327,9 +345,7 @@ export default function Integracao() {
           path = `integracao/${id}/${alvo}${ext}`
           await supabase.storage.from('extratos').upload(path, file, { upsert: true, contentType: file.type || undefined })
         } catch { path = '' }
-        const novo = { ...estado, [alvo]: { estado: 'validado', doc: file.name, path, usuario: user?.email || null } }
-        await supabase.from('competencias').update({ integracoes: novo }).eq('id', id)
-        setEstado(novo)
+        await salvarMerge(id, cur => ({ ...cur, [alvo]: { estado: 'validado', doc: file.name, path, usuario: user?.email || null } }))
       }
     } catch (err) { setErro('Não consegui ler: ' + err.message) }
   }
@@ -1250,7 +1266,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     const bancos = { ...(est?.bancos || {}) }
     if (estadoB) bancos[conta] = { estado: estadoB, doc: doc || null, usuario: user?.email || null }
     else delete bancos[conta]
-    onEstado({ ...est, bancos })
+    onEstado({ ...est, bancos }, conta)
   }
   // Salva o banco com o rascunho da classificação (linhas), para continuar depois.
   // estado 'rascunho' = em andamento (ainda pendente no Status); 'validado' = concluído.
@@ -1264,7 +1280,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     // `concluido` (trava de edição) é um flag PRÓPRIO — não se confunde com `estado`
     // ('validado' também é setado no import). Só o botão Concluir liga; Reabrir desliga.
     bancos[conta] = { estado: estadoB, doc: doc || null, usuario: user?.email || null, draft: draftLinhas || null, saldoExtrato: saldoExtrato || null, cruza: cruzaOverride !== undefined ? cruzaOverride : (cruza || null), concluido: concluidoFlag ?? prev.concluido ?? false, arr: temRaw ? raw.arr : (prev.arr ?? null), catByRow: temRaw ? (raw.catByRow ?? null) : (prev.catByRow ?? null) }
-    onEstado({ ...est, bancos })
+    onEstado({ ...est, bancos }, conta)
   }
   function marcarCombinado(doc) { onEstado({ ...est, combinado: { estado: 'validado', doc, usuario: user?.email || null } }) }
 
