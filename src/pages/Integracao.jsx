@@ -1071,8 +1071,10 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   const [fNome, setFNome] = useState('')         // filtro por NOME da conta de contrapartida
   const [fNomeMode, setFNomeMode] = useState('contem') // 'contem' | 'naocontem'
   const [fSemData, setFSemData] = useState(false) // filtro: só linhas SEM data (ex.: linhas de total)
+  const [fValor, setFValor] = useState('')       // filtro por valor (ex.: 1.200,00 ou 1200)
   const [importPend, setImportPend] = useState(null) // { arr, nome, bancoFixo, perf, catByRow, qtd } — pergunta substituir/complementar
   const [lote, setLote] = useState('')           // conta para preencher em lote nas selecionadas
+  const [loteData, setLoteData] = useState('')   // data (ISO) para preencher em lote nas selecionadas
   const [sel, setSel] = useState(() => new Set())// linhas selecionadas (índice original)
   const [quebra, setQuebra] = useState(null)      // { i, linha } divisão de um lançamento
   const [saldoAnterior, setSaldoAnterior] = useState(null) // saldo do banco no balancete (abertura)
@@ -1269,12 +1271,16 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   // Reconstroi a classificação a partir do arquivo cru + mapa de colunas + memória.
   function classificar(rawX, mapX, memX, bancoFixo) {
     const codigos = new Set(contas.map(c => String(c.conta_contabil).trim()))
+    // A data costuma vir só na 1ª linha do dia; as seguintes vêm em branco. Herda a última
+    // data lida (arrasta para baixo) para os lançamentos sem data preenchida.
+    let ultimaData = ''
     return rawX.linhasRaw.map(cells => {
       let banco = bancoFixo || ''
       if (modo === 'combinado') { banco = ''; for (const c of cells) { const v = String(c ?? '').trim(); if (codigos.has(v)) { banco = v; break } } }
       const historico = mapX.hist >= 0 ? String(cells[mapX.hist] ?? '').trim() : ''
       const valor = mapX.valor >= 0 ? parseValor(cells[mapX.valor]) : 0
-      const data = mapX.data >= 0 ? dataISO(cells[mapX.data]) : ''
+      let data = mapX.data >= 0 ? dataISO(cells[mapX.data]) : ''
+      if (mapX.data >= 0) { if (data) ultimaData = data; else data = ultimaData }
       const cas = casarHistoricoNivel(historico, memX, banco ? new Set([String(banco)]) : null)
       return { banco, historico, valor: Math.abs(valor), entrada: valor >= 0, contra: cas.conta, contra_nivel: cas.nivel, data }
     // "SALDO ANTERIOR/INICIAL" não é lançamento (só valida o saldo) — fora da lista.
@@ -1575,6 +1581,12 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     }
     if (fSemData && l.data) return false
     if (fData && !dataBR(l.data).includes(fData.trim())) return false
+    if (fValor.trim()) {
+      const q = fValor.trim(), m = money(l.valor)
+      const qd = q.replace(/[^\d]/g, ''), md = m.replace(/[^\d]/g, '')
+      const p = parseValor(q), bateNum = p && Math.abs(Math.abs(p) - (l.valor || 0)) < 0.005
+      if (!(m.includes(q) || (qd && md.includes(qd)) || bateNum)) return false
+    }
     if (fES && (fES === 'entrada') !== !!l.entrada) return false
     if (fConta && String(l.contra || '').trim() !== String(fConta).trim()) return false
     if (fNome.trim()) {
@@ -1685,6 +1697,18 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     // Volta ao estado original para a próxima aplicação: limpa filtro, seleção e conta.
     setSel(new Set()); setLote(''); setFSem(false); setFHist(''); setFData(''); setFES(''); setFConta('')
     setMsg(`Conta ${cod} aplicada em ${n} linha(s). Pronto para a próxima seleção.`)
+  }
+  // Preenche/altera a DATA em lote nas linhas selecionadas (ex.: lançamentos que subiram
+  // sem data). Recruza na hora, porque a data muda o confronto com o extrato.
+  function aplicarLoteData() {
+    if (concluido) return
+    if (!loteData) { setMsg('Escolha a data para aplicar em lote.'); return }
+    if (!sel.size) { setMsg('Selecione as linhas (caixas à esquerda) para aplicar a data.'); return }
+    const n = sel.size
+    const novas = linhas.map((l, j) => sel.has(j) ? { ...l, data: loteData } : l)
+    setLinhas(novas); persistirLinhas(novas)
+    setSel(new Set()); setLoteData('')
+    setMsg(`Data ${dataBR(loteData)} aplicada em ${n} linha(s).`)
   }
   // Exclui em lote os lançamentos selecionados desta importação (ex.: linhas que não
   // devem ir para a contabilização). Some do rascunho; não afeta o extrato original.
@@ -1895,7 +1919,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   const difSaldo = Math.round((saldoFinal - parseValor(saldoExtrato)) * 100) / 100
   const visiveis = linhas.map((l, i) => ({ l, i })).filter(({ l }) => linhaVisivel(l))
   // Totalizador do que está filtrado (útil ao filtrar por dia): quanto de + e de −.
-  const filtroAtivo = fSem || fSemData || !!fHist || !!fData || !!fES || !!fConta || !!fNivel || !!fNome.trim()
+  const filtroAtivo = fSem || fSemData || !!fHist || !!fData || !!fES || !!fConta || !!fNivel || !!fNome.trim() || !!fValor.trim()
   const totVisEnt = visiveis.filter(({ l }) => l.entrada).reduce((s, { l }) => s + (l.valor || 0), 0)
   const totVisSai = visiveis.filter(({ l }) => !l.entrada).reduce((s, { l }) => s + (l.valor || 0), 0)
   const visIdx = visiveis.map(v => v.i)
@@ -2070,6 +2094,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
               <option value="contem">Contém</option><option value="exato">Exato</option>
             </select>
             <input className="input" style={{ maxWidth: 130, fontSize: 12, padding: '6px 10px' }} placeholder="Data (dd/mm)" value={fData} onChange={e => setFData(e.target.value)} />
+            <input className="input" style={{ maxWidth: 120, fontSize: 12, padding: '6px 10px' }} placeholder="Valor (ex.: 1.200)" value={fValor} onChange={e => setFValor(e.target.value)} title="Filtra pelo valor do lançamento (aceita 1.200,00 ou 1200)" />
             <button className={fSemData ? 'btn' : 'btn btn-ghost'} style={{ fontSize: 12, padding: '5px 10px', ...(fSemData ? { background: theme.yellow, borderColor: theme.yellow } : { color: theme.yellow, borderColor: theme.yellow }) }} onClick={() => setFSemData(v => !v)} title="Mostrar só as linhas sem data (ex.: linhas de total do relatório)"><i className="ti ti-calendar-off" /> Sem data</button>
             <select className="input" style={{ maxWidth: 120, fontSize: 12, padding: '6px 8px' }} value={fES} onChange={e => setFES(e.target.value)}>
               <option value="">Entrada/Saída</option><option value="entrada">Só entradas</option><option value="saida">Só saídas</option>
@@ -2086,12 +2111,14 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
             <select className="input" style={{ maxWidth: 130, fontSize: 12, padding: '6px 8px' }} value={fNomeMode} onChange={e => setFNomeMode(e.target.value)} title="Contém / Não contém — pelo nome da conta">
               <option value="contem">Contém</option><option value="naocontem">Não contém</option>
             </select>
-            {filtroAtivo && <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', color: theme.sub }} onClick={() => { setFSem(false); setFSemData(false); setFHist(''); setFData(''); setFES(''); setFConta(''); setFNivel(''); setFNome('') }}>limpar filtros</button>}
+            {filtroAtivo && <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', color: theme.sub }} onClick={() => { setFSem(false); setFSemData(false); setFHist(''); setFData(''); setFValor(''); setFES(''); setFConta(''); setFNivel(''); setFNome('') }}>limpar filtros</button>}
             <span style={{ flex: 1 }} />
             <span style={{ fontSize: 12, color: theme.sub }}>Aplicar às selecionadas:</span>
+            <input type="date" className="input" style={{ width: 150, fontSize: 12, padding: '5px 8px' }} value={loteData} onChange={e => setLoteData(e.target.value)} title="Data para aplicar nas linhas selecionadas (ex.: lançamentos sem data)" />
+            <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} disabled={!sel.size || !loteData || concluido} onClick={aplicarLoteData} title="Preencher/alterar a data das linhas selecionadas"><i className="ti ti-calendar-plus" /> Data ({sel.size})</button>
             <CampoConta value={lote} onChange={setLote} onEnter={aplicarLote} placeholder="Conta (F4)" style={{ width: 190 }} />
             {lote.trim() && <span style={{ fontSize: 11.5, maxWidth: 220, color: planoMap[String(lote).trim()]?.nome ? theme.green : theme.red }}>{planoMap[String(lote).trim()]?.nome || 'conta não encontrada'}</span>}
-            <button className="btn" style={{ fontSize: 12, padding: '5px 10px' }} disabled={!sel.size || concluido} onClick={aplicarLote}><i className="ti ti-wand" /> Aplicar ({sel.size})</button>
+            <button className="btn" style={{ fontSize: 12, padding: '5px 10px' }} disabled={!sel.size || concluido} onClick={aplicarLote}><i className="ti ti-wand" /> Conta ({sel.size})</button>
             <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', color: theme.red, borderColor: theme.red }} disabled={!sel.size || concluido} onClick={excluirLote} title="Excluir as linhas selecionadas desta importação (não vão para a contabilização)"><i className="ti ti-trash" /> Excluir ({sel.size})</button>
           </div>
 
