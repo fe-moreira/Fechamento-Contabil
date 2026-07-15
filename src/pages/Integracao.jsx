@@ -1710,6 +1710,21 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     setSel(new Set()); setLoteData('')
     setMsg(`Data ${dataBR(loteData)} aplicada em ${n} linha(s).`)
   }
+  // Preenche as datas EM BRANCO a partir da última data anterior (arrasta para baixo),
+  // na ordem da tabela — conserta os lançamentos que subiram sem data (célula mesclada no
+  // Excel) sem precisar reimportar. Recruza na hora.
+  function arrastarDatas() {
+    if (concluido) return
+    let ultima = '', mudou = 0
+    const novas = linhas.map(l => {
+      if (l.data) { ultima = l.data; return l }
+      if (ultima) { mudou++; return { ...l, data: ultima } }
+      return l
+    })
+    if (!mudou) { setMsg('Nenhuma data em branco para arrastar (ou não há data anterior).'); return }
+    setLinhas(novas); persistirLinhas(novas)
+    setMsg(`${mudou} lançamento(s) sem data receberam a data anterior (arrasto).`)
+  }
   // Exclui em lote os lançamentos selecionados desta importação (ex.: linhas que não
   // devem ir para a contabilização). Some do rascunho; não afeta o extrato original.
   function excluirLote() {
@@ -2131,6 +2146,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
             {filtroAtivo && <span style={{ color: theme.sub }}>{fData ? `dia ${fData}: ` : 'filtro: '}<b style={{ color: theme.green }}>+{money(totVisEnt)}</b> · <b style={{ color: theme.red }}>−{money(totVisSai)}</b> · líquido <b style={{ color: theme.text }}>{money(totVisEnt - totVisSai)}</b></span>}
             {sel.size > 0 && <button className="btn btn-ghost" style={{ fontSize: 11.5, padding: '3px 8px', color: theme.sub }} onClick={() => setSel(new Set())}>limpar seleção</button>}
             <span style={{ flex: 1 }} />
+            {linhas.some(l => !l.data) && <button className="btn btn-ghost" style={{ fontSize: 11.5, padding: '3px 9px', color: theme.yellow, borderColor: theme.yellow }} disabled={concluido} onClick={arrastarDatas} title="Preencher as datas em branco com a última data anterior (arrasta para baixo)"><i className="ti ti-calendar-down" /> Arrastar datas</button>}
             <button className="btn btn-ghost" style={{ fontSize: 11.5, padding: '3px 9px' }} disabled={concluido} onClick={() => setNovoLanc(true)}><i className="ti ti-plus" /> Incluir lançamento</button>
           </div>
           <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center', fontSize: 12.5, margin: '0 0 10px', padding: '10px 12px', background: theme.input, borderRadius: 8 }}>

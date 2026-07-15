@@ -242,6 +242,11 @@ export function aplicarPerfil(arr, perfil, memoria, catByRow, adiantContas, banc
   const temCat = p.colCategoria != null && p.colCategoria >= 0
   const rows = arr || []
   let catAtual = ''
+  // A data costuma vir só na 1ª linha do dia (às vezes numa célula mesclada); as linhas
+  // seguintes vêm em branco. Guarda a última data lida e ARRASTA para baixo nos lançamentos
+  // reais sem data. A detecção de linha de TOTAL continua usando a data CRUA (não o arrasto),
+  // para não transformar um total em lançamento.
+  let ultimaData = ''
   const out = []
   for (let idx = ini; idx < rows.length; idx++) {
     const r = rows[idx] || []
@@ -253,11 +258,12 @@ export function aplicarPerfil(arr, perfil, memoria, catByRow, adiantContas, banc
       else { const v = String(r[p.colCategoria] ?? '').trim(); if (v && !/total\s*$/i.test(v)) catAtual = v; categoria = catAtual }
     }
     if (!r || !r.some(c => c !== '' && c != null)) continue
+    // Data CRUA da linha (sem arrasto) — usada na detecção de total abaixo.
+    const dataRaw = p.colData != null && p.colData >= 0 ? dataISO(r[p.colData]) : ''
     // Linha de SUBTOTAL/TOTAL do relatório (ex.: "1.90.01.0006 Irrf Retido Total"): tem
     // valor mas não é lançamento — não sobe (era o que subia "sem data" no Sisloc). Só pula
     // quando a categoria termina em "Total" E a linha não tem data (lançamento real tem data).
-    if (temCat && /total(\s+geral)?\s*$/i.test(String(r[p.colCategoria] ?? '').trim())
-      && !(p.colData != null && p.colData >= 0 && dataISO(r[p.colData]))) continue
+    if (temCat && /total(\s+geral)?\s*$/i.test(String(r[p.colCategoria] ?? '').trim()) && !dataRaw) continue
     if (p.filtro?.pularVazio && p.filtro.col != null && p.filtro.col >= 0 && !String(r[p.filtro.col] ?? '').trim()) continue
     // "SALDO ANTERIOR/INICIAL" não é lançamento — é a abertura do extrato (só valida o saldo).
     const descr = colHist >= 0 ? String(r[colHist] ?? '') : histCols.length ? String(r[histCols[0]] ?? '') : ''
@@ -281,7 +287,9 @@ export function aplicarPerfil(arr, perfil, memoria, catByRow, adiantContas, banc
     const historico = montarHistorico(entrada, partes)
     const valor = Math.abs(parseValor(r[p.colValor]))
     if (!valor) continue
-    const data = p.colData != null && p.colData >= 0 ? dataISO(r[p.colData]) : ''
+    // Lançamento real: usa a data da linha ou, se vier vazia, arrasta a última data lida.
+    const data = dataRaw || ultimaData
+    if (data) ultimaData = data
     // Sempre casa pelo HISTÓRICO (que já traz a descrição/entidade via colHist). Antes
     // usava `credor || historico`, e um credor mal mapeado (ex.: a coluna C/D = "D")
     // fazia casar por "D" e não achar nada.
