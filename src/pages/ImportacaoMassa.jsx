@@ -4,6 +4,7 @@ import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { fechaSozinho } from '../lib/clientes'
 import { folhaPorEmpresa, novoRotuloArq, marcarEventos, arquivosDoSlot } from '../lib/folha'
+import { periodoDistribuicao, montarDistribuicao, pdfDistribuicao, nomeArquivoDistribuicao } from '../lib/distribuicaoRelatorio'
 
 const TIPOKEY_LABEL = { folha: 'Folha mensal', adiant: 'Adiantamento', decimo_adiant: '13º Adiantamento', complementar: 'Folha Complementar', plr: 'Participação de Lucros' }
 import { parsePlano } from '../lib/balancete'
@@ -135,6 +136,9 @@ export default function ImportacaoMassa() {
 
         {/* Folha em massa (um arquivo do Domínio com várias empresas → quebra por empresa) */}
         <MassaFolha competencias={competencias} competencia={competencia} recalcularPendencias={recalcularPendencias} />
+
+        {/* Relatório de Distribuição de Lucros / JCP de todas as empresas (zip com 1 PDF por empresa) */}
+        <MassaDistribuicao competencia={competencia} />
       </div>
 
       {/* Confirmação da importação */}
@@ -170,6 +174,77 @@ export default function ImportacaoMassa() {
         </div>
       )}
     </div>
+  )
+}
+
+// ---- Card: Distribuição de Lucros / JCP em massa (um zip com 1 PDF por empresa) ----
+const PERIODOS = [['mensal', 'Mensal'], ['trimestral', 'Trimestral'], ['semestral', 'Semestral'], ['anual', 'Anual']]
+function MassaDistribuicao({ competencia }) {
+  const anoBase = Number((competencia || '').split('/')[1]) || 2026
+  const mesBase = Number((competencia || '').split('/')[0]) || 1
+  const [tipo, setTipo] = useState('trimestral')
+  const [ano, setAno] = useState(anoBase)
+  const [n, setN] = useState(Math.ceil(mesBase / 3))   // trimestre/semestre/mês corrente
+  const [gerando, setGerando] = useState(false)
+  const [msg, setMsg] = useState('')
+  const [erro, setErro] = useState('')
+
+  const per = periodoDistribuicao(tipo, ano, n)
+  const opcoesN = tipo === 'mensal' ? Array.from({ length: 12 }, (_, i) => [i + 1, `${String(i + 1).padStart(2, '0')} (mês)`])
+    : tipo === 'trimestral' ? [[1, '1º Trim.'], [2, '2º Trim.'], [3, '3º Trim.'], [4, '4º Trim.']]
+      : tipo === 'semestral' ? [[1, '1º Sem.'], [2, '2º Sem.']] : null
+
+  async function gerar() {
+    setGerando(true); setMsg(''); setErro('')
+    try {
+      const [{ data: clientes }, { data: cfgs }] = await Promise.all([
+        supabase.from('clientes').select('id, codigo_dominio, razao_social, cnpj').order('codigo_dominio'),
+        supabase.from('dist_lucros_config').select('cliente_id, ata, contas, created_at').order('created_at', { ascending: false }),
+      ])
+      const cfgByCli = new Map()
+      for (const c of (cfgs || [])) if (!cfgByCli.has(c.cliente_id)) cfgByCli.set(c.cliente_id, c)
+      const JSZip = (await import('jszip')).default
+      const zip = new JSZip()
+      let nEmp = 0
+      for (const cli of (clientes || [])) {
+        const cfg = cfgByCli.get(cli.id); if (!cfg) continue
+        const nomeMap = Object.fromEntries((cfg.contas || []).map(c => [String(c.cod || '').trim(), c.nome]))
+        const dados = montarDistribuicao(cfg, nomeMap, per.ini, per.fim)
+        if (!dados.secoes.length) continue
+        const blob = pdfDistribuicao({ empresaCod: cli.codigo_dominio, empresaNome: cli.razao_social, cnpj: cli.cnpj, periodoTitulo: per.titulo, dados })
+        zip.file(nomeArquivoDistribuicao(cli.codigo_dominio, cli.razao_social, per.label), blob)
+        nEmp++
+      }
+      if (!nEmp) { setErro('Nenhuma empresa com distribuição de lucros paga no período selecionado.'); setGerando(false); return }
+      const out = await zip.generateAsync({ type: 'blob' })
+      const a = document.createElement('a'); a.href = URL.createObjectURL(out); a.download = `distribuicao-lucros-${per.label}.zip`
+      document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href)
+      setMsg(`Gerado: distribuicao-lucros-${per.label}.zip — ${nEmp} empresa(s).`)
+    } catch (err) { setErro('Erro ao gerar: ' + err.message) } finally { setGerando(false) }
+  }
+
+  return (
+    <Bloco icon="ti-file-invoice" titulo="Distribuição de Lucros / JCP" desc="Gera o relatório de Distribuição de Lucros / JCP de TODAS as empresas de uma vez — um PDF por empresa (sócios separados por conta contábil, filtrados pela data do pagamento). Baixa tudo num único zip.">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 12.5, color: theme.sub }}>Período:</span>
+        <select className="input" style={{ width: 'auto', padding: '6px 10px', fontSize: 13 }} value={tipo} onChange={e => { setTipo(e.target.value); setN(1) }}>
+          {PERIODOS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+        </select>
+        {opcoesN && (
+          <select className="input" style={{ width: 'auto', padding: '6px 10px', fontSize: 13 }} value={n} onChange={e => setN(Number(e.target.value))}>
+            {opcoesN.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          </select>
+        )}
+        <input className="input" type="number" style={{ width: 90, padding: '6px 10px', fontSize: 13 }} value={ano} onChange={e => setAno(Number(e.target.value))} />
+        <span style={{ fontSize: 12, color: theme.accent, fontWeight: 600 }}>→ {per.label}</span>
+      </div>
+      <button className="btn" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13 }} onClick={gerar} disabled={gerando}>
+        <i className="ti ti-file-zip" /> {gerando ? 'Gerando…' : 'Gerar PDF (zip)'}
+      </button>
+      <p style={{ fontSize: 11.5, color: theme.sub, margin: '10px 0 0' }}>Cada arquivo: <b style={{ color: theme.text }}>Código - Nome - {per.label} - Distribuição de Lucros_JCP.pdf</b></p>
+      {erro && <p style={{ color: theme.red, fontSize: 12.5, margin: '8px 0 0' }}>{erro}</p>}
+      {msg && <p style={{ color: theme.green, fontSize: 12.5, margin: '8px 0 0' }}><i className="ti ti-info-circle" /> {msg}</p>}
+    </Bloco>
   )
 }
 

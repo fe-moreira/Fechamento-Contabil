@@ -12,6 +12,8 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",
     "exceljs": "^4.4.0",
+    "jspdf": "^2.5.2",
+    "jspdf-autotable": "^3.8.4",
     "jszip": "^3.10.1",
     "pdfjs-dist": "^4.10.38",
     "react": "^18.3.1",

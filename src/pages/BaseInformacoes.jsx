@@ -1379,7 +1379,7 @@ function ModalDist({ inicial, empresaId, competencia, empresaNome, planoMap = {}
   async function salvar() {
     setSalvando(true)
     const ataLimpa = ata.houve
-      ? { houve: true, arquivo: ata.arquivo || '', documento: ata.documento || '', socios: (ata.socios || []).filter(s => s.nome || s.valor).map(s => ({ nome: s.nome, valor: Number(s.valor) || 0, conta: String(s.conta || '').trim(), pagamentos: (s.pagamentos || []).filter(p => p.data || p.valor).map(p => ({ data: p.data || '', valor: Number(p.valor) || 0 })) })) }
+      ? { houve: true, arquivo: ata.arquivo || '', documento: ata.documento || '', socios: (ata.socios || []).filter(s => s.nome || s.valor).map(s => ({ nome: s.nome, cpf: String(s.cpf || '').trim(), valor: Number(s.valor) || 0, conta: String(s.conta || '').trim(), pagamentos: (s.pagamentos || []).filter(p => p.data || p.valor).map(p => ({ data: p.data || '', valor: Number(p.valor) || 0 })) })) }
       : { houve: false, arquivo: '', documento: '', socios: [] }
     await onSalvar({
       limite: Number(limite) || 0, aliquota: Number(aliquota) || 0,
@@ -1445,6 +1445,7 @@ function ModalDist({ inicial, empresaId, competencia, empresaNome, planoMap = {}
             <div key={i} style={{ border: `0.5px solid ${theme.cb}`, borderRadius: 10, padding: 12, marginBottom: 10 }}>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                 <input className="input" style={{ flex: 1, minWidth: 150 }} placeholder="Nome do sócio" value={s.nome} onChange={updAtaSocio(i, 'nome')} />
+                <input className="input" style={{ width: 150 }} placeholder="CPF" value={s.cpf || ''} onChange={updAtaSocio(i, 'cpf')} />
                 <input className="input" style={{ width: 140 }} type="number" step="0.01" placeholder="Distribuído (R$)" value={s.valor} onChange={updAtaSocio(i, 'valor')} />
                 <div style={{ width: 150 }}><CampoConta value={s.conta || ''} onChange={cod => setAtaContaSocio(i, cod)} onPick={p => setAtaContaSocio(i, p.cod)} placeholder="Conta (F4)" /></div>
                 <i className="ti ti-trash" onClick={() => setAta(a => ({ ...a, socios: a.socios.filter((_, j) => j !== i) }))} style={{ color: theme.sub, cursor: 'pointer' }} />
