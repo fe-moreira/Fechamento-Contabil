@@ -2375,6 +2375,11 @@ function ModalCruzaSaldo({ cruza, linhas, planoMap, titulo, onClose, onVerDia, o
             ? <><i className="ti ti-alert-triangle" /> Diferença total <b>{cruza.difTotal == null ? '—' : money(cruza.difTotal)}</b> em <b>{divergentes.length}</b> dia(s). Os dias que bateram não aparecem — foque nos de baixo.</>
             : <><i className="ti ti-circle-check" /> Nenhuma divergência de movimento entre os dias. Se ainda há diferença, é no saldo de abertura.</>}
         </p>
+        {divergentes.length > 0 && (
+          (onEditar || onExcluir)
+            ? <p style={{ fontSize: 11.5, margin: '-4px 0 12px', color: theme.sub, display: 'flex', alignItems: 'center', gap: 6 }}><i className="ti ti-info-circle" style={{ color: theme.accent }} /> Abra um dia em <b>confronto</b> e use os botões <i className="ti ti-pencil" style={{ color: theme.accent }} /> <b>editar</b> / <i className="ti ti-trash" style={{ color: theme.red }} /> <b>excluir</b> na coluna <b>Importado</b> para corrigir o lançamento na hora.</p>
+            : <p style={{ fontSize: 11.5, margin: '-4px 0 12px', color: theme.yellow, display: 'flex', alignItems: 'center', gap: 6 }}><i className="ti ti-lock" /> Banco <b>concluído</b> — para editar ou excluir lançamentos aqui, feche e clique em <b>Reabrir banco</b> antes.</p>
+        )}
 
         {/* Possível DATA TROCADA: o valor está no extrato num dia e foi classificado noutro.
             Oferece corrigir a data do lançamento para o dia em que o banco registrou. */}
@@ -2404,15 +2409,25 @@ function ModalCruzaSaldo({ cruza, linhas, planoMap, titulo, onClose, onVerDia, o
               const modo = aberto[d.data]
               const contaNome = c => c ? `${c}${planoMap[String(c)]?.nome ? ' · ' + planoMap[String(c)].nome : ''}` : 'sem contrapartida'
               // Botões por lançamento na tela de revisão: editar (data/valor/E-S…) ou excluir.
+              // Ficam num "chip" com borda para serem visíveis (antes eram ícones soltos que o
+              // texto longo do histórico escondia).
               const acoesLanc = l => (onEditar || onExcluir) ? (
-                <span style={{ display: 'inline-flex', gap: 6, marginLeft: 6, verticalAlign: 'middle' }}>
-                  {onEditar && <i className="ti ti-pencil" title="Editar o lançamento (data, valor, E/S…)" onClick={() => onEditar(l)} style={{ color: theme.accent, cursor: 'pointer', fontSize: 13.5 }} />}
-                  {onExcluir && <i className="ti ti-trash" title="Excluir este lançamento" onClick={() => onExcluir(l)} style={{ color: theme.red, cursor: 'pointer', fontSize: 13.5 }} />}
+                <span style={{ display: 'inline-flex', gap: 2, flexShrink: 0 }} onClick={e => e.stopPropagation()}>
+                  {onEditar && <button type="button" title="Editar o lançamento (data, valor, E/S, histórico…)" onClick={() => onEditar(l)} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, borderRadius: 6, border: `1px solid ${theme.border}`, background: theme.input, color: theme.accent, cursor: 'pointer', fontSize: 14, padding: 0 }}><i className="ti ti-pencil" /></button>}
+                  {onExcluir && <button type="button" title="Excluir este lançamento" onClick={() => onExcluir(l)} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, borderRadius: 6, border: `1px solid ${theme.border}`, background: theme.input, color: theme.red, cursor: 'pointer', fontSize: 14, padding: 0 }}><i className="ti ti-trash" /></button>}
                 </span>
               ) : null
+              // Célula "Importado" com o histórico truncado à esquerda e os botões SEMPRE
+              // visíveis à direita (fora do trecho que corta o texto).
+              const celImportado = l => (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.historico}</span>
+                  {acoesLanc(l)}
+                </div>
+              )
               const linhaLanc = l => (
                 <tr key={l.historico + l.valor + l.entrada} style={{ borderTop: `1px solid ${theme.border}` }}>
-                  <td style={{ ...ftd, fontSize: 11 }}>{l.historico}{acoesLanc(l)}</td>
+                  <td style={{ ...ftd, fontSize: 11 }}>{celImportado(l)}</td>
                   <td style={{ ...ftd, fontSize: 11, textAlign: 'right', whiteSpace: 'nowrap', color: l.entrada ? theme.green : theme.red }}>{l.entrada ? '+' : '−'}{money(l.valor)}</td>
                   <td style={{ ...ftd, fontSize: 11, whiteSpace: 'nowrap', color: theme.sub }}>{contaNome(l.contra)}</td>
                 </tr>
@@ -2476,7 +2491,7 @@ function ModalCruzaSaldo({ cruza, linhas, planoMap, titulo, onClose, onVerDia, o
                               const n = Math.max(g.imp.length, g.ext.length, 1)
                               return Array.from({ length: n }).map((_, k) => (
                                 <tr key={gi + '-' + k} style={{ borderTop: k === 0 ? `1px solid ${theme.border}` : 'none', background: tintG(g.tipo) }}>
-                                  <td style={{ ...ftd, fontSize: 11, color: g.imp[k] ? theme.text : theme.sub, maxWidth: 210, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={g.imp[k] ? `${g.imp[k].l.historico} · ${contaNome(g.imp[k].l.contra)}` : ''}>{g.imp[k] ? <>{g.imp[k].l.historico}{acoesLanc(g.imp[k].l)}</> : ''}</td>
+                                  <td style={{ ...ftd, fontSize: 11, color: g.imp[k] ? theme.text : theme.sub, maxWidth: 260 }} title={g.imp[k] ? `${g.imp[k].l.historico} · ${contaNome(g.imp[k].l.contra)}` : ''}>{g.imp[k] ? celImportado(g.imp[k].l) : ''}</td>
                                   <td style={{ ...ftd, fontSize: 11, textAlign: 'right', whiteSpace: 'nowrap', color: g.imp[k] ? corV(g.imp[k].v) : theme.sub }}>{g.imp[k] ? vlr(g.imp[k].v) : ''}</td>
                                   <td style={{ ...ftd, fontSize: 11, textAlign: 'right', whiteSpace: 'nowrap', color: g.ext[k] ? corV(g.ext[k].v) : theme.sub, borderLeft: `1px solid ${theme.border}` }}>{g.ext[k] ? vlr(g.ext[k].v) : ''}</td>
                                   {k === 0 && <td rowSpan={n} style={{ ...ftd, textAlign: 'right', verticalAlign: 'middle', whiteSpace: 'nowrap', borderLeft: `1px solid ${theme.border}`, color: g.tipo === 'sobra' ? theme.red : g.tipo === 'quase' ? theme.yellow : theme.green, fontWeight: 700 }} title={g.tipo === 'soma' ? 'A soma dos lançamentos bate com o movimento do extrato' : g.tipo === 'quase' ? `Diferença de ${money(Math.abs(g.dif))}` : g.tipo === 'sobra' ? 'Sem par — este valor compõe a diferença' : 'Bate exatamente'}>
