@@ -778,6 +778,20 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const ehEntidadeConta = ehPorEntidade(conta.nome) && tipoCta !== 'saldo'
   const { baixados, aproximadas } = ehEntidadeConta ? baixadosPorNF(lanc) : { baixados: new Set(), aproximadas: [] }
 
+  // Correção que se ANULA com a origem: o lançamento de acerto (estorno/reclassificação)
+  // aponta para a linha original que corrige (razaoRef → id). Quando os dois se anulam
+  // NESTA conta, o par é conciliado AUTOMATICAMENTE — ambos saem do "em aberto" e vão para
+  // os Conciliados (sem baixa manual, sem virar uma linha nova de cliente/fornecedor).
+  const porIdLanc = {}; for (const l of lanc) if (l.id != null) porIdLanc[l.id] = l
+  const autoConc = new Set()
+  for (const l of lanc) {
+    if (!l.acerto || !l.razaoRef) continue
+    const orig = porIdLanc[l.razaoRef]
+    if (!orig || autoConc.has(l)) continue
+    const soma = ((Number(l.debito) || 0) - (Number(l.credito) || 0)) + ((Number(orig.debito) || 0) - (Number(orig.credito) || 0))
+    if (Math.abs(soma) < 0.005) { autoConc.add(l); autoConc.add(orig) }
+  }
+
   // Reconhece "cartão de crédito" pela expressão no histórico OU no nome da contrapartida —
   // para juntar esses lançamentos num grupo só (em vez de espalhados no "não identificado").
   const semAcento = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
@@ -788,7 +802,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // Agrupa só o que está EM ABERTO (não baixado) por nome; incerto cai em "(não identificado)".
   const grupos = {}, nomes = []
   for (const l of lanc) {
-    if (baixados.has(l) || foiConfirmado(l)) continue // baixado por NF ou confirmado em lote → saiu
+    if (baixados.has(l) || foiConfirmado(l) || autoConc.has(l)) continue // baixado por NF, confirmado em lote ou correção que anulou a origem → saiu
     if (Math.abs(ov(l)) < 0.005) continue
     const key = l.leitura.ident && l.leitura.entidade ? l.leitura.entidade
       : ehCartaoCredito(l) ? 'Cartão de crédito' : '(não identificado)'
@@ -823,19 +837,20 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
 
   // Para os relatórios: o que está em aberto (compõe o saldo) e o que zerou (baixa/confirmação/resolvida).
   const ehEntidade = ehEntidadeConta
-  const emAbertoTodos = ehEntidade ? lista.flatMap(g => g.lancs) : lanc.filter(l => Math.abs(ov(l)) >= 0.005)
+  const emAbertoTodos = ehEntidade ? lista.flatMap(g => g.lancs) : lanc.filter(l => Math.abs(ov(l)) >= 0.005 && !autoConc.has(l))
   // Conciliados (saíram do em aberto): confirmados em lote + entidades que zeraram e foram
-  // tratadas. Ficam numa seção colapsável para reabrir.
+  // tratadas + pares de correção que se anularam com a origem. Ficam numa seção colapsável.
   const confirmadosLancs = lanc.filter(l => foiConfirmado(l) && Math.abs(ov(l)) >= 0.005)
-  const conferidosLancs = [...confirmadosLancs, ...resolvidasEnt.flatMap(g => g.lancs).filter(l => Math.abs(ov(l)) >= 0.005)]
+  const autoConcLancs = lanc.filter(l => autoConc.has(l) && Math.abs(ov(l)) >= 0.005)
+  const conferidosLancs = [...new Set([...confirmadosLancs, ...resolvidasEnt.flatMap(g => g.lancs).filter(l => Math.abs(ov(l)) >= 0.005), ...autoConcLancs])]
   const zerados = [...baixados, ...conferidosLancs]
   const conferidosPorNome = {}
-  for (const l of conferidosLancs) { const k = l.leitura?.entidade || '(sem nome)'; (conferidosPorNome[k] = conferidosPorNome[k] || []).push(l) }
+  for (const l of conferidosLancs) { const k = autoConc.has(l) ? 'Correções conciliadas (estorno ↔ origem)' : (l.leitura?.entidade || '(sem nome)'); (conferidosPorNome[k] = conferidosPorNome[k] || []).push(l) }
   const conferidosGrupos = Object.entries(conferidosPorNome).map(([nome, lancs]) => ({ nome, lancs }))
   const algoEmAberto = lista.length > 0 || conferidosGrupos.length > 0
 
   // Leitura incerta = ainda PENDENTE (não conferida/confirmada). O que já foi tratado sai da conta.
-  const leituraIncerta = l => Math.abs(ov(l)) >= 0.005 && l.leitura.conf !== 'alta' && !jaTratada(l) && !foiConfirmado(l)
+  const leituraIncerta = l => Math.abs(ov(l)) >= 0.005 && l.leitura.conf !== 'alta' && !jaTratada(l) && !foiConfirmado(l) && !autoConc.has(l)
   const revs = lanc.filter(leituraIncerta).length
 
   // Anomalia de natureza: conta de cliente (Ativo) deve ficar devedora; fornecedor (Passivo) credora.
@@ -1131,13 +1146,22 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     if (!lancs?.length) return
     if (!window.confirm(`Reabrir ${lancs.length} lançamento(s)? Eles voltam para "em aberto" para você revisar/corrigir de novo.`)) return
     for (const l of lancs) {
+      // Par de correção auto-conciliado (estorno ↔ origem): reabrir = DESFAZER a correção —
+      // remove o lançamento de acerto, a auditoria e o ajuste de leitura (pela origem).
+      if (autoConc.has(l)) {
+        const rid = l.acerto ? (l.razaoRef || String(l.id).replace(/^ac_/, '')) : l.id
+        await supabase.from('lancamentos').delete().eq('competencia_id', compId).eq('razao_id', rid)
+        await supabase.from('auditoria').delete().eq('competencia_id', compId).eq('modulo', 'Conciliação').eq('razao_id', rid)
+        await supabase.from('ajuste_leitura').delete().eq('competencia_id', compId).eq('razao_id', rid)
+        continue
+      }
       // Remove o registro que fez a linha sair (confirmação em lote OU conferência individual).
       let q = supabase.from('auditoria').delete().eq('competencia_id', compId).eq('modulo', 'Conciliação')
       q = l._abertura ? q.eq('item', chaveAbertura(l)) : (l.acerto ? q.eq('razao_id', String(l.id).replace(/^ac_/, '')) : q.eq('razao_id', l.id))
       await q
     }
     setMsg(`${lancs.length} lançamento(s) reaberto(s) — voltaram para o em aberto.`)
-    carregarTratados(); carregarLanc()
+    carregarTratados(); carregarLanc(); onMudou && onMudou()
   }
 
   // Desfazer uma correção/estorno: remove o lançamento de acerto e o registro de
@@ -1485,8 +1509,39 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       )}
       </>
       ) : (
+        <>
         <ListaLancamentos lanc={emAbertoTodos} carregando={carregando} contraDe={contraDe} planoMap={planoMap} tratados={tratados} onTratar={abrirLinha}
           selLin={selLin} onToggleSel={toggleSelLin} onExcluirAbertura={excluirAbertura} podeExcluirAbertura={abertura.inicial} aberturaFechada={abertura.fechada} />
+        {conferidosGrupos.length > 0 && (
+          <div style={{ marginTop: 6 }}>
+            <button onClick={() => setVerConferidos(v => !v)} style={{ background: 'none', border: 'none', color: theme.sub, cursor: 'pointer', fontSize: 12.5, padding: '6px 2px', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <i className={`ti ${verConferidos ? 'ti-chevron-down' : 'ti-chevron-right'}`} /> <i className="ti ti-circle-check" style={{ color: theme.green }} /> Conferidos neste mês ({conferidosLancs.length}) — {verConferidos ? 'clique para ocultar' : 'clique para ver e reabrir'}
+            </button>
+            {verConferidos && conferidosGrupos.map((g, gi) => (
+              <div key={gi} style={{ background: theme.card, border: `1px solid ${theme.cb}`, borderRadius: 12, overflow: 'hidden', marginBottom: 10, opacity: 0.9 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', background: theme.input, gap: 8 }}>
+                  <span style={{ color: theme.text, fontSize: 13, fontWeight: 600 }}><i className="ti ti-circle-check" style={{ color: theme.green, marginRight: 6 }} />{g.nome}</span>
+                  <button className="btn btn-ghost" style={{ fontSize: 12, padding: '4px 10px', color: theme.yellow, borderColor: theme.yellow }} onClick={() => reabrirConferidos(g.lancs)}><i className="ti ti-rotate-2" /> Reabrir ({g.lancs.length})</button>
+                </div>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 640 }}>
+                    <tbody>
+                      {g.lancs.map((l, i) => (
+                        <tr key={i} style={{ borderTop: `1px solid ${theme.border}`, fontSize: 12 }}>
+                          <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{l.data || '—'}</td>
+                          <td style={{ ...td, color: theme.sub, fontFamily: 'monospace', fontSize: 11, maxWidth: 320 }}>{l.historico}</td>
+                          <td style={{ ...tdR, color: theme.green }}>{Number(l.debito) ? money(l.debito) : '—'}</td>
+                          <td style={{ ...tdR, color: theme.red }}>{Number(l.credito) ? money(l.credito) : '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        </>
       )}
 
       {(() => {
