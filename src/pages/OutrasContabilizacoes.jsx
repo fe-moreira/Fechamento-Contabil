@@ -7,6 +7,7 @@ import { apurarVariacoes } from '../lib/variacoes'
 import { listar, inserir, remover, atualizar, gerarLancamento, enviarSaldoInicialContrato, anexarArquivoContrato, urlArquivoContrato, removerArquivoContrato, competenciaInicioCliente, apropriacoesDoMes, listarLancamentos, excluirLancamento } from '../lib/outras'
 import { gerarExcelTimbrado } from '../lib/excel'
 import { abrePdfTimbrado } from '../lib/pdf'
+import { carregarCartoes, salvarCartoes, carregarMemoriaCartao, salvarMemoriaCartao, aprender, carregarDraftCartao, salvarDraftCartao, autoMapaFatura, lerFaturaArr, classificarFatura } from '../lib/cartao'
 import { erroContaSintetica } from '../lib/balancete'
 import ObservacoesConciliacao from '../components/ObservacoesConciliacao'
 import LeitorIA from '../components/LeitorIA'
@@ -18,10 +19,11 @@ function CampoContaForm({ valor, set }) {
   return <CampoConta value={valor} onChange={set} onPick={p => set(p.cod)} placeholder="Código (F4)" />
 }
 
-const ACC = { seguro: '#4A7CFF', despesa: '#33B4C6', receita_diferida: '#2FA8A0', importacao: '#2FB6A8', emprestimo: '#9A7CF0', parcelamento: '#E8923B', equivalencia: '#E06C9F', perdcomp: '#3FA66A', jcp: '#C9A227', lalur: '#D46A6A', outros: '#7C89A6' }
+const ACC = { seguro: '#4A7CFF', cartao: '#E0567A', despesa: '#33B4C6', receita_diferida: '#2FA8A0', importacao: '#2FB6A8', emprestimo: '#9A7CF0', parcelamento: '#E8923B', equivalencia: '#E06C9F', perdcomp: '#3FA66A', jcp: '#C9A227', lalur: '#D46A6A', outros: '#7C89A6' }
 const BLOCO_LALUR = { key: 'lalur', label: 'LALUR', icon: 'ti-report-money', sub: 'IRPJ e CSLL (Lucro Real)' }
 const BLOCOS = [
   { key: 'seguro', label: 'Seguro', icon: 'ti-shield-half', sub: 'Apólices & apropriação' },
+  { key: 'cartao', label: 'Cartão de Crédito', icon: 'ti-credit-card', sub: 'Fatura (Excel) → lançamentos' },
   { key: 'despesa', label: 'Despesa a Apropriar', icon: 'ti-calendar-repeat', sub: 'IPVA, IPTU, etc.' },
   { key: 'receita_diferida', label: 'Receitas Diferidas', icon: 'ti-calendar-dollar', sub: 'Reconhecer + impostos (baixa manual)' },
   { key: 'importacao', label: 'Importação', icon: 'ti-ship', sub: 'Processos de mercadoria' },
@@ -338,9 +340,12 @@ export default function OutrasContabilizacoes() {
 
   if (!empresaId) return <Aviso texto="Selecione uma empresa no menu lateral." />
 
-  const props = { clienteId: empresaId, user, competencia, abrirGerar, enviarSaldoInicial, compInicio, empresaNome, planoMap, versao, regime }
-  const blocos = ehLucroReal ? [...BLOCOS, BLOCO_LALUR] : BLOCOS
-  const paneMap = { seguro: PaneSeguro, despesa: PaneDespesaApropriar, receita_diferida: PaneReceitasDiferidas, importacao: PaneImportacao, emprestimo: PaneEmprestimo, parcelamento: PaneParcelamento, equivalencia: PaneEquivalencia, perdcomp: PanePerdcomp, jcp: PaneJcp, lalur: PaneLalur, outros: PaneOutros }
+  const props = { clienteId: empresaId, user, competencia, getCompetenciaId, abrirGerar, enviarSaldoInicial, compInicio, empresaNome, planoMap, versao, regime }
+  // "Outros Lançamentos" fica SEMPRE por último (o LALUR, quando Lucro Real, entra antes dele).
+  const semOutros = BLOCOS.filter(b => b.key !== 'outros')
+  const blocoOutros = BLOCOS.find(b => b.key === 'outros')
+  const blocos = [...semOutros, ...(ehLucroReal ? [BLOCO_LALUR] : []), ...(blocoOutros ? [blocoOutros] : [])]
+  const paneMap = { seguro: PaneSeguro, cartao: PaneCartao, despesa: PaneDespesaApropriar, receita_diferida: PaneReceitasDiferidas, importacao: PaneImportacao, emprestimo: PaneEmprestimo, parcelamento: PaneParcelamento, equivalencia: PaneEquivalencia, perdcomp: PanePerdcomp, jcp: PaneJcp, lalur: PaneLalur, outros: PaneOutros }
   const Pane = paneMap[tab] || PaneSeguro
 
   return (
@@ -495,6 +500,249 @@ function ModalCronograma({ contrato, origem, compInicio, onClose }) {
         <p style={{ color: theme.sub, fontSize: 11.5, margin: '10px 0 0' }}>{porDia ? 'Por dia: o valor de cada mês é proporcional aos dias da vigência naquele mês (oscila um pouco). ' : ''}As parcelas de meses anteriores à abertura ({compInicio || 'defina a competência de início'}) formam o <b style={{ color: theme.text }}>saldo inicial</b> do ativo "a apropriar". As demais viram apropriação mês a mês.</p>
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14 }}><button className="btn" onClick={onClose}>Fechar</button></div>
       </div>
+    </div>
+  )
+}
+
+// ================= CARTÃO DE CRÉDITO =================
+// Funciona como a integração financeira: importa a fatura (Excel), classifica cada gasto
+// pela memória (estabelecimento → conta de despesa), você confere/ajusta e, ao CONCLUIR,
+// aprende a memória e gera os lançamentos (D despesa / C cartão a pagar) na fila do Status.
+function PaneCartao({ clienteId, user, competencia, getCompetenciaId, planoMap }) {
+  const [cartoes, setCartoes] = useState([])
+  const [perfis, setPerfis] = useState({})
+  const [sel, setSel] = useState('')          // id do cartão selecionado
+  const [memoria, setMemoria] = useState([])
+  const [ctx, setCtx] = useState({ compId: null, status: null, integracoes: {}, porCartao: {} })
+  const [linhas, setLinhas] = useState([])
+  const [estado, setEstado] = useState('rascunho')
+  const [novo, setNovo] = useState({ nome: '', conta: '' })
+  const [marc, setMarc] = useState(() => new Set())
+  const [lote, setLote] = useState('')
+  const [fSem, setFSem] = useState(false)
+  const [fHist, setFHist] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState(''); const [erro, setErro] = useState('')
+
+  const cartaoAtual = cartoes.find(c => c.id === sel) || null
+  const contaCartao = String(cartaoAtual?.conta || '').trim()
+  const concluido = estado === 'concluido'
+  const nomeConta = c => planoMap[String(c || '').trim()]?.nome || ''
+
+  useEffect(() => {
+    let ativo = true
+    ;(async () => {
+      const [cc, mem, dr] = await Promise.all([carregarCartoes(clienteId), carregarMemoriaCartao(clienteId), carregarDraftCartao(clienteId, competencia)])
+      if (!ativo) return
+      setCartoes(cc.cartoes); setPerfis(cc.perfis); setMemoria(mem)
+      setCtx(dr)
+      const primeiro = cc.cartoes[0]?.id || ''
+      setSel(primeiro)
+      const d = dr.porCartao[primeiro]
+      setLinhas(d?.linhas || []); setEstado(d?.estado || 'rascunho')
+    })()
+    return () => { ativo = false }
+  }, [clienteId, competencia])
+
+  function trocarCartao(id) {
+    setSel(id); setMarc(new Set()); setErro(''); setMsg('')
+    const d = ctx.porCartao[id]
+    setLinhas(d?.linhas || []); setEstado(d?.estado || 'rascunho')
+  }
+
+  const saveTimer = useRef(null)
+  // Grava o rascunho no banco (só isto escreve no Supabase).
+  async function salvarDb(novas, novoEstado) {
+    if (!sel) return
+    try {
+      const { compId, integracoes } = await salvarDraftCartao(clienteId, competencia, getCompetenciaId, ctx.integracoes, sel, { estado: novoEstado, linhas: novas, conta: contaCartao, doc: cartaoAtual?.nome || '' })
+      setCtx(c => ({ ...c, compId, integracoes, porCartao: { ...c.porCartao, [sel]: { estado: novoEstado, linhas: novas } } }))
+    } catch (e) { setErro(e.message) }
+  }
+  // Mudança ESTRUTURAL (importar/incluir/excluir/lote/concluir): salva na hora.
+  function persistir(novas, novoEstado = estado) {
+    setLinhas(novas); if (novoEstado !== estado) setEstado(novoEstado)
+    if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null }
+    salvarDb(novas, novoEstado)
+  }
+  // Edição de célula (digitação): atualiza na tela e agenda o salvamento (debounce).
+  function editar(novas) {
+    setLinhas(novas)
+    if (saveTimer.current) clearTimeout(saveTimer.current)
+    saveTimer.current = setTimeout(() => salvarDb(novas, estado), 700)
+  }
+
+  async function addCartao() {
+    const nome = novo.nome.trim(), conta = String(novo.conta).trim()
+    if (!nome || !conta) { setErro('Informe o nome do cartão e a conta a pagar.'); return }
+    const id = (crypto.randomUUID && crypto.randomUUID()) || String(Date.now())
+    const lista = [...cartoes, { id, nome, conta }]
+    try { await salvarCartoes(clienteId, lista, perfis, user?.email); setCartoes(lista); setNovo({ nome: '', conta: '' }); if (!sel) setSel(id); setErro('') }
+    catch (e) { setErro('Não consegui salvar o cartão: ' + e.message) }
+  }
+  async function excluirCartao(id) {
+    if (!window.confirm('Excluir este cartão do cadastro? (não apaga lançamentos já gerados)')) return
+    const lista = cartoes.filter(c => c.id !== id); const np = { ...perfis }; delete np[id]
+    await salvarCartoes(clienteId, lista, np, user?.email); setCartoes(lista); setPerfis(np)
+    if (sel === id) { const p = lista[0]?.id || ''; setSel(p); const d = ctx.porCartao[p]; setLinhas(d?.linhas || []); setEstado(d?.estado || 'rascunho') }
+  }
+
+  async function importar(file) {
+    if (!file || !sel || concluido) return
+    setBusy(true); setErro(''); setMsg('')
+    try {
+      const XLSX = await import('xlsx')
+      const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true })
+      const arr = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' })
+      const mapa = perfis[sel] && perfis[sel].colValor >= 0 ? perfis[sel] : autoMapaFatura(arr)
+      const lidas = classificarFatura(lerFaturaArr(arr, mapa), memoria)
+      if (!lidas.length) { setErro('Não achei lançamentos na fatura (colunas Data · Estabelecimento · Valor). Confira o arquivo.'); setBusy(false); return }
+      const np = { ...perfis, [sel]: mapa }; setPerfis(np); salvarCartoes(clienteId, cartoes, np, user?.email).catch(() => {})
+      const novas = [...linhas, ...lidas]
+      await persistir(novas)
+      setMsg(`${lidas.length} lançamento(s) lidos da fatura.`)
+    } catch (e) { setErro('Não consegui ler a fatura: ' + e.message) }
+    setBusy(false)
+  }
+
+  function addManual() { if (concluido) return; persistir([...linhas, { data: '', historico: '', valor: 0, contra: '', contra_nivel: '' }]) }
+  const setLinha = (i, patch) => { if (concluido) return; const novas = linhas.map((l, j) => j === i ? { ...l, ...patch, ...('contra' in patch ? { contra_nivel: patch.contra ? 'manual' : '' } : {}) } : l); editar(novas) }
+  function excluirLinha(i) { if (concluido) return; persistir(linhas.filter((_, j) => j !== i)); setMarc(new Set()) }
+  function aplicarLote() {
+    if (concluido) return
+    const cod = String(lote).trim(); if (!cod) { setMsg('Informe a conta.'); return }
+    if (!marc.size) { setMsg('Selecione as linhas.'); return }
+    persistir(linhas.map((l, j) => marc.has(j) ? { ...l, contra: cod, contra_nivel: 'manual' } : l))
+    setMarc(new Set()); setLote(''); setFSem(false); setFHist('')
+  }
+
+  async function concluir() {
+    if (!sel) return
+    if (!contaCartao) { setErro('Este cartão está sem a conta a pagar no cadastro.'); return }
+    const semData = linhas.filter(l => !l.data).length
+    const semConta = linhas.filter(l => !String(l.contra || '').trim()).length
+    const semValor = linhas.filter(l => !(Number(l.valor) > 0)).length
+    if (!linhas.length) { setErro('Nenhum lançamento para gerar.'); return }
+    if (semConta || semData || semValor) { setErro(`Antes de concluir: ${[semConta && `${semConta} sem conta`, semData && `${semData} sem data`, semValor && `${semValor} sem valor`].filter(Boolean).join(' · ')}.`); return }
+    if (!window.confirm(`Concluir e gerar ${linhas.length} lançamento(s) do cartão? Eles vão para o Status/Domínio.`)) return
+    setBusy(true); setErro('')
+    try {
+      const compId = ctx.compId || (getCompetenciaId ? await getCompetenciaId() : null)
+      if (!compId) { setErro('Abra o fechamento desta competência.'); setBusy(false); return }
+      // Regera do zero: apaga os lançamentos anteriores deste cartão nesta competência.
+      await supabase.from('lancamentos').delete().eq('competencia_id', compId).eq('origem', 'cartao').eq('documento', sel)
+      for (const l of linhas) {
+        await gerarLancamento({ competencia_id: compId, data: l.data, conta_debito: String(l.contra).trim(), conta_credito: contaCartao, valor: Number(l.valor) || 0, historico: `${l.historico}${cartaoAtual?.nome ? ' · ' + cartaoAtual.nome : ''}`, origem: 'cartao', documento: sel, usuario: user?.email })
+      }
+      // Aprende a memória: estabelecimento → conta.
+      const novas = linhas.filter(l => l.contra && l.historico).map(l => ({ historico: l.historico, conta: l.contra }))
+      if (novas.length) { try { const mem = aprender(memoria, novas); await salvarMemoriaCartao(clienteId, mem, user?.email); setMemoria(mem) } catch { /* não bloqueia */ } }
+      await persistir(linhas, 'concluido')
+      setMsg(`Cartão concluído — ${linhas.length} lançamento(s) gerados para o Status/Domínio.`)
+    } catch (e) { setErro('Erro ao concluir: ' + e.message) }
+    setBusy(false)
+  }
+  async function reabrir() {
+    if (!window.confirm('Reabrir este cartão para editar? Ao concluir de novo, os lançamentos são regerados.')) return
+    await persistir(linhas, 'rascunho')
+  }
+
+  const norm = s => String(s ?? '').toLowerCase()
+  const visiveis = linhas.map((l, i) => ({ l, i })).filter(({ l }) => (!fSem || !String(l.contra || '').trim()) && (!fHist || norm(l.historico).includes(norm(fHist))))
+  const total = linhas.reduce((s, l) => s + (Number(l.valor) || 0), 0)
+  const semConta = linhas.filter(l => !String(l.contra || '').trim()).length
+  const nivelCor = n => n === 'alta' ? theme.green : n === 'media' ? theme.yellow : n === 'manual' ? theme.accent : theme.sub
+
+  return (
+    <div>
+      {/* Cadastro/seleção de cartões */}
+      <FormCard titulo={<><i className="ti ti-credit-card" style={{ color: ACC.cartao }} /> Cartões do cliente</>}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <div style={{ flex: 1, minWidth: 180 }}><label>Nome do cartão</label><input className="input" value={novo.nome} onChange={e => setNovo(n => ({ ...n, nome: e.target.value }))} placeholder="Ex.: Santander Visa final 1234" /></div>
+          <div style={{ width: 200 }}><label>Conta a pagar (cartão)</label><CampoContaForm valor={novo.conta} set={v => setNovo(n => ({ ...n, conta: v }))} /></div>
+          <button className="btn" onClick={addCartao}><i className="ti ti-plus" /> Adicionar cartão</button>
+        </div>
+        {cartoes.length > 0 && (
+          <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {cartoes.map(c => (
+              <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, background: theme.card, border: `1px solid ${theme.border}`, borderRadius: 8, padding: '6px 10px' }}>
+                <b>{c.nome}</b><span style={{ color: theme.sub }}>· conta {c.conta}{nomeConta(c.conta) ? ` · ${nomeConta(c.conta)}` : ''}</span>
+                <span style={{ flex: 1 }} /><i className="ti ti-trash" onClick={() => excluirCartao(c.id)} style={{ color: theme.red, cursor: 'pointer' }} title="Excluir cartão do cadastro" />
+              </div>
+            ))}
+          </div>
+        )}
+      </FormCard>
+
+      {!cartoes.length ? <Card style={{ marginTop: 14 }}><p style={{ color: theme.sub, fontSize: 13, margin: 0 }}>Cadastre um cartão acima (nome + conta a pagar) para começar.</p></Card> : (
+        <Card style={{ marginTop: 14 }}>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 12 }}>
+            <span style={{ fontSize: 12.5, color: theme.sub }}>Cartão:</span>
+            <select className="input" style={{ width: 'auto' }} value={sel} onChange={e => trocarCartao(e.target.value)}>
+              {cartoes.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
+            </select>
+            {concluido
+              ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: theme.green, fontSize: 12.5, fontWeight: 600 }}><i className="ti ti-circle-check" /> Concluído</span>
+              : <span style={{ color: theme.sub, fontSize: 12 }}>rascunho — salva sozinho</span>}
+            <span style={{ flex: 1 }} />
+            {!concluido && <>
+              <label className="btn btn-ghost" style={{ cursor: 'pointer', fontSize: 12.5 }}><i className="ti ti-cloud-upload" /> Importar fatura (Excel)<input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={e => importar(e.target.files?.[0])} /></label>
+              <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={addManual}><i className="ti ti-plus" /> Lançar manual</button>
+            </>}
+            {busy && <span style={{ color: theme.sub, fontSize: 12 }}><i className="ti ti-loader" /> …</span>}
+          </div>
+
+          {erro && <p style={{ color: theme.red, fontSize: 12.5, margin: '0 0 10px' }}>{erro}</p>}
+          {msg && <p style={{ color: theme.green, fontSize: 12.5, margin: '0 0 10px' }}><i className="ti ti-info-circle" /> {msg}</p>}
+
+          {linhas.length > 0 && (
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 8 }}>
+              <button className={fSem ? 'btn' : 'btn btn-ghost'} style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => setFSem(v => !v)}><i className="ti ti-filter" /> Só sem conta</button>
+              <input className="input" style={{ maxWidth: 220, fontSize: 12, padding: '6px 10px' }} placeholder="Filtrar estabelecimento…" value={fHist} onChange={e => setFHist(e.target.value)} />
+              <span style={{ flex: 1 }} />
+              {!concluido && <><span style={{ fontSize: 12, color: theme.sub }}>Aplicar às selecionadas:</span>
+                <div style={{ width: 180 }}><CampoConta value={lote} onChange={setLote} placeholder="Conta (F4)" /></div>
+                <button className="btn" style={{ fontSize: 12, padding: '5px 10px' }} disabled={!marc.size} onClick={aplicarLote}><i className="ti ti-wand" /> Aplicar ({marc.size})</button></>}
+            </div>
+          )}
+
+          <div style={{ border: `1px solid ${theme.border}`, borderRadius: 10, overflow: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }}>
+              <thead><tr>
+                <th style={{ ...th, width: 30 }}></th><th style={th}>Data</th><th style={th}>Estabelecimento</th><th style={{ ...th, textAlign: 'right' }}>Valor</th><th style={th}>Conta de despesa (D)</th><th style={{ ...th, width: 60 }}></th>
+              </tr></thead>
+              <tbody>
+                {visiveis.map(({ l, i }) => (
+                  <tr key={i} style={{ borderTop: `1px solid ${theme.border}` }}>
+                    <td style={{ ...td, textAlign: 'center' }}><input type="checkbox" checked={marc.has(i)} disabled={concluido} onChange={() => setMarc(p => { const n = new Set(p); n.has(i) ? n.delete(i) : n.add(i); return n })} /></td>
+                    <td style={{ ...td, whiteSpace: 'nowrap' }}><input className="input" type="date" style={{ fontSize: 12, padding: '4px 6px' }} value={l.data || ''} disabled={concluido} onChange={e => setLinha(i, { data: e.target.value })} /></td>
+                    <td style={{ ...td, minWidth: 240 }}><input className="input" style={{ fontSize: 12.5, padding: '4px 7px', width: '100%' }} value={l.historico || ''} disabled={concluido} onChange={e => setLinha(i, { historico: e.target.value })} /></td>
+                    <td style={{ ...td, textAlign: 'right', whiteSpace: 'nowrap' }}><input className="input" type="number" step="0.01" style={{ fontSize: 12.5, padding: '4px 7px', width: 110, textAlign: 'right' }} value={l.valor || ''} disabled={concluido} onChange={e => setLinha(i, { valor: e.target.value })} /></td>
+                    <td style={{ ...td, minWidth: 180 }}>
+                      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                        {l.contra && <span title={l.contra_nivel} style={{ width: 8, height: 8, borderRadius: '50%', background: nivelCor(l.contra_nivel), flexShrink: 0 }} />}
+                        <div style={{ flex: 1 }}><CampoConta value={l.contra || ''} disabled={concluido} onChange={v => setLinha(i, { contra: v })} onPick={p => setLinha(i, { contra: p.cod })} mostrarNome /></div>
+                      </div>
+                    </td>
+                    <td style={{ ...td, textAlign: 'center' }}>{!concluido && <i className="ti ti-trash" onClick={() => excluirLinha(i)} style={{ color: theme.red, cursor: 'pointer' }} title="Excluir" />}</td>
+                  </tr>
+                ))}
+                {!visiveis.length && <tr><td colSpan={6} style={{ ...td, color: theme.sub }}>Nenhum lançamento{linhas.length ? ' com esse filtro' : ' — importe a fatura ou lance manual'}.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+
+          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center', marginTop: 12 }}>
+            <span style={{ fontSize: 13 }}><b>{linhas.length}</b> lançamento(s) · total <b>{money(total)}</b></span>
+            {semConta > 0 && <span style={{ color: theme.yellow, fontSize: 12.5 }}>{semConta} sem conta</span>}
+            <span style={{ fontSize: 12, color: theme.sub }}>Contabiliza <b style={{ color: theme.text }}>D</b> conta de despesa · <b style={{ color: theme.text }}>C</b> {contaCartao || '—'} (cartão a pagar)</span>
+            <span style={{ flex: 1 }} />
+            {concluido
+              ? <button className="btn btn-ghost" style={{ color: theme.yellow, borderColor: theme.yellow }} onClick={reabrir}><i className="ti ti-lock-open" /> Reabrir</button>
+              : <button className="btn" style={{ background: theme.green }} disabled={busy || !linhas.length} onClick={concluir}><i className="ti ti-circle-check" /> Concluir e gerar lançamentos</button>}
+          </div>
+        </Card>
+      )}
     </div>
   )
 }
