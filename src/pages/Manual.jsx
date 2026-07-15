@@ -171,7 +171,7 @@ const HTML = `
       <li><a href="#m-fluxo"><span class="n">02</span> Fluxo do fechamento</a></li>
       <li><a href="#m-clientes"><span class="n">03</span> Clientes</a></li>
       <li><a href="#m-base"><span class="n">04</span> Base de Informações</a></li>
-      <li><a href="#m-massa"><span class="n">05</span> Importação em massa</a></li>
+      <li><a href="#m-massa"><span class="n">05</span> Ações em Massa</a></li>
       <li><a href="#m-relmassa"><span class="n">06</span> Relatórios em massa</a></li>
       <li><a href="#m-fechamentos"><span class="n">07</span> Fechamentos</a></li>
       <li><a href="#m-documentos"><span class="n">08</span> Documentos Recebidos</a></li>
@@ -255,7 +255,7 @@ const HTML = `
 </section>
 
 <section id="m-massa">
-  <h2 class="m-sec">05 · Importação em massa</h2>
+  <h2 class="m-sec">05 · Ações em Massa</h2>
   <p>Sobe informação de vários clientes de uma vez, amarrando pelo CNPJ. Dois usos:</p>
   <h3><span class="m-dot db"></span> Relação de documentos</h3>
   <p>Uma planilha (CNPJ · Cliente · Documento) define a lista de documentos esperados de cada cliente na competência — e propaga para os fechamentos abertos dali em diante.</p>

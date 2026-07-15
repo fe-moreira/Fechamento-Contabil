@@ -105,7 +105,7 @@ export default function ImportacaoMassa() {
 
   return (
     <div>
-      <h1 style={{ fontSize: 22, fontWeight: 500, marginBottom: 4 }}>Importação em massa</h1>
+      <h1 style={{ fontSize: 22, fontWeight: 500, marginBottom: 4 }}>Ações em Massa</h1>
       <p style={{ color: theme.sub, fontSize: 13, marginBottom: 20, maxWidth: 760 }}>
         Suba informações de vários clientes de uma vez, amarrando pelo <b style={{ color: theme.text }}>CNPJ</b>. Cada bloco tem o seu modelo de arquivo.
       </p>
