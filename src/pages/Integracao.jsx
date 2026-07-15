@@ -793,10 +793,28 @@ function Folha({ competencia, empresaId, user, est, onEstado, onSemMov }) {
   const totDif = Math.round(resumo.filter(r => !r.just).reduce((s, r) => s + r.dif, 0) * 100) / 100
   const pendentes = resumo.filter(r => !r.ok).length
 
-  // Grava um estado de arquivos recalculando o "done" (só a folha mensal com eventos valida).
-  async function gravarArquivos(novoArq) {
-    const done = !!(novoArq.folha?.eventos?.length)
-    await onEstado({ ...est, arquivos: novoArq, justif, estado: done ? 'validado' : null, doc: done ? 'Folha · rubricas cruzadas' : null, usuario: user?.email || null })
+  // A Folha só fica VERDE (validada) quando o razão está cruzado E batendo — ou seja, toda
+  // rubrica bate com a contabilidade ou foi justificada. Só ter subido o arquivo não valida.
+  function estadoReconciliado(novoArq, novoJustif) {
+    const evs = unificarFolha(novoArq.folha?.eventos, novoArq.adiant?.eventos, novoArq.decimo_adiant?.eventos, novoArq.complementar?.eventos, novoArq.plr?.eventos)
+    if (!evs.length || !idx) return null
+    const pend = cruzarFolha(evs, idx, novoJustif || {}).filter(r => !r.ok).length
+    return pend === 0 ? 'validado' : null
+  }
+  // Mantém o estado em dia quando o RAZÃO muda (carrega/lança) — sem depender de reimportar.
+  useEffect(() => {
+    if (carregando || !idx || semMov) return
+    const querido = estadoReconciliado(arquivos, justif)
+    if ((est?.estado || null) !== querido && est?.estado !== 'sem_movimento') {
+      onEstado({ ...est, estado: querido, doc: querido ? 'Folha · rubricas cruzadas' : null, usuario: user?.email || null })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [carregando, idx, semMov, pendentes, eventos.length])
+
+  // Grava um estado de arquivos recalculando o estado (verde só quando cruzado e batendo).
+  async function gravarArquivos(novoArq, novoJustif = justif) {
+    const estado = estadoReconciliado(novoArq, novoJustif)
+    await onEstado({ ...est, arquivos: novoArq, justif: novoJustif, estado, doc: estado ? 'Folha · rubricas cruzadas' : null, usuario: user?.email || null })
   }
 
   async function importar(alvo, file) {
@@ -862,14 +880,12 @@ function Folha({ competencia, empresaId, user, est, onEstado, onSemMov }) {
   }
   // Marca um arquivo (ex.: adiantamento) como sem movimento no mês — pode não ter havido.
   async function semMovArquivo(alvo) {
-    const novoArq = { ...arquivos, [alvo]: { semMovimento: true } }
-    const done = !!novoArq.folha
-    await onEstado({ ...est, arquivos: novoArq, justif, estado: done ? 'validado' : null, doc: done ? 'Folha · rubricas cruzadas' : null, usuario: user?.email || null })
+    await gravarArquivos({ ...arquivos, [alvo]: { semMovimento: true } })
   }
   async function salvarJustificativa(cod, texto) {
     const novo = { ...justif }
     if (texto && texto.trim()) novo[cod] = texto.trim(); else delete novo[cod]
-    await onEstado({ ...est, arquivos, justif: novo, estado: est.estado, doc: est.doc, usuario: user?.email || null })
+    await gravarArquivos(arquivos, novo)
     setJustAberto(null); setJustTxt('')
   }
 

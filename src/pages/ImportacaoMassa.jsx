@@ -216,6 +216,7 @@ function MassaFolha({ competencias, competencia, recalcularPendencias }) {
   const [dados, setDados] = useState(null)   // { file, empresas } lido do arquivo
   const [prev, setPrev] = useState(null)     // conferência montada
   const [modo, setModo] = useState('complementar') // como gravar quando já existe
+  const [marcarVazios, setMarcarVazios] = useState(true) // tipos opcionais sem arquivo → sem movimento
   const [aplicando, setAplicando] = useState(false)
   const [envios, setEnvios] = useState(null) // lista de envios da competência (para excluir)
   const [carregEnv, setCarregEnv] = useState(false)
@@ -302,8 +303,14 @@ function MassaFolha({ competencias, competencia, recalcularPendencias }) {
           slot = { doc: rotulo.doc, path, eventos: eventosTag, files: [fileMeta] }
         }
         const arquivos = { ...(folha.arquivos || {}), [tipo]: slot }
-        const done = !!(arquivos.folha?.eventos?.length)
-        const novaFolha = { ...folha, arquivos, justif: folha.justif || {}, estado: done ? 'validado' : (folha.estado || null), doc: done ? 'Folha · rubricas cruzadas' : (folha.doc || null), usuario: user?.email || null }
+        // Se marcado: os tipos OPCIONAIS que não têm arquivo (nem estão marcados) viram "sem
+        // movimento" — assim, subindo só a folha, o resto já fica resolvido. A folha mensal
+        // (obrigatória) nunca é marcada automaticamente. Um upload posterior daquele tipo
+        // sobrescreve o "sem movimento".
+        if (marcarVazios) for (const [k] of TIPOS_FOLHA) { if (k !== 'folha' && k !== tipo && !arquivos[k]) arquivos[k] = { semMovimento: true } }
+        // Verde só quando o razão cruzar e bater (feito na tela da Folha por cliente). Aqui o
+        // arquivo entra, mas a integração fica PENDENTE até conferir com a contabilidade.
+        const novaFolha = { ...folha, arquivos, justif: folha.justif || {}, estado: null, doc: null, usuario: user?.email || null }
         await supabase.from('competencias').update({ integracoes: { ...integ, folha: novaFolha } }).eq('id', compId)
         gravados++
       }
@@ -427,11 +434,15 @@ function MassaFolha({ competencias, competencia, recalcularPendencias }) {
             )}
             {prev.matrizAusente.length > 0 && <p style={{ color: theme.sub, fontSize: 12, margin: '0 0 8px' }}><b style={{ color: theme.yellow }}>Sem matriz:</b> {prev.matrizAusente.join(', ')}</p>}
             {prev.naoEncontrados.length > 0 && <p style={{ color: theme.sub, fontSize: 12, margin: '0 0 12px' }}><b style={{ color: theme.red }}>Sem cadastro:</b> {prev.naoEncontrados.join(', ')}</p>}
-            <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginBottom: 14, fontSize: 12.5 }}>
+            <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10, fontSize: 12.5 }}>
               <span style={{ color: theme.sub }}>Se a empresa já tiver folha deste tipo:</span>
               <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}><input type="radio" checked={modo === 'complementar'} onChange={() => setModo('complementar')} /> Complementar (soma)</label>
               <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}><input type="radio" checked={modo === 'substituir'} onChange={() => setModo('substituir')} /> Substituir</label>
             </div>
+            <label style={{ display: 'flex', alignItems: 'flex-start', gap: 7, cursor: 'pointer', fontSize: 12.5, color: theme.sub, marginBottom: 14 }}>
+              <input type="checkbox" checked={marcarVazios} onChange={e => setMarcarVazios(e.target.checked)} style={{ marginTop: 2 }} />
+              <span>Marcar os <b style={{ color: theme.text }}>outros tipos opcionais</b> (adiantamento, 13º, complementar, PLR) que ficarem <b>sem arquivo</b> como <b>"sem movimento"</b> nas empresas deste envio. A folha mensal nunca é marcada; se você subir aquele tipo depois, ele substitui o "sem movimento".</span>
+            </label>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
               <button className="btn btn-ghost" onClick={() => { setPrev(null); setDados(null) }} disabled={aplicando}>Cancelar</button>
               <button className="btn" onClick={aplicar} disabled={aplicando || !prev.destinos.length}>{aplicando ? 'Gravando…' : 'Gravar folha'}</button>
