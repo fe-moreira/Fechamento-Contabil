@@ -1395,10 +1395,22 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   // Ao definir a contrapartida na mão, o nível vira 'manual' (100% do usuário).
   const setLinha = (i, patch) => { if (concluido) return; setLinhas(ls => ls.map((l, j) => j === i ? { ...l, ...patch, ...('contra' in patch ? { contra_nivel: patch.contra ? 'manual' : '' } : {}) } : l)) }
 
-  // Salva as linhas no rascunho do banco (mantém estado/doc atuais).
+  // Se há um cruzamento aberto, recalcula com as linhas novas — assim editar/excluir um
+  // lançamento atualiza o confronto Importado × Extrato na hora.
+  function recruzarSe(novas) {
+    if (!cruza || !cruzaArr) return
+    const mapa = perfilDeBanco(raw?.banco)?.cruza
+    if (mapa) setCruza(computarCruza(cruzaArr, mapa, novas))
+  }
+  // Salva as linhas no rascunho do banco (mantém estado/doc atuais) e ressincroniza o cruzamento.
   function persistirLinhas(novas) {
     if (raw?.banco) salvarBancoDraft(raw.banco, bancosEst[raw.banco]?.estado || 'rascunho', raw.nome, novas)
+    recruzarSe(novas)
   }
+  // Ações do cruzamento por REFERÊNCIA da linha (o modal tem o objeto, não o índice).
+  function excluirLinhaRef(l) { const i = linhas.indexOf(l); if (i >= 0) excluirLinha(i) }
+  function editarLinhaRef(l) { const i = linhas.indexOf(l); if (i >= 0) setEditLanc({ i, linha: l }) }
+  function corrigirDataRef(l, data) { if (concluido) return; const i = linhas.indexOf(l); if (i < 0) return; const novas = linhas.map((x, j) => j === i ? { ...x, data } : x); setLinhas(novas); persistirLinhas(novas); setMsg('Data do lançamento corrigida.') }
   // Exclui um lançamento (com confirmação) — para corrigir direto antes de gerar.
   function excluirLinha(i) {
     if (concluido) return
@@ -1465,7 +1477,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   // para o outro (independe do saldo de abertura estar alinhado).
   // Monta o cruzamento por dia a partir das linhas cruas do extrato + o mapa de colunas.
   // Guarda também as linhas do extrato por dia (extRowsDia) para o confronto por lançamento.
-  function computarCruza(arr, mapa) {
+  function computarCruza(arr, mapa, linhasArg = linhas) {
     const rows = arr.slice(mapa.linhaInicio).filter(r => r.some(c => c !== '' && c != null))
     const temCol = mapa.colValor != null && mapa.colValor >= 0
     const extratoDia = new Map(), extMovDia = {}, extRowsDia = {}
@@ -1485,7 +1497,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     const temValor = temCol || algumValor
     // movimento por dia a partir da classificação (o que foi importado)
     const movDia = {}
-    for (const l of linhas) { if (!l.data) continue; movDia[l.data] = (movDia[l.data] || 0) + (l.entrada ? l.valor : -l.valor) }
+    for (const l of linhasArg) { if (!l.data) continue; movDia[l.data] = (movDia[l.data] || 0) + (l.entrada ? l.valor : -l.valor) }
     const dias = [...new Set([...extratoDia.keys(), ...Object.keys(movDia)])].sort()
     let corrente = saldoAnterior || 0, prevDif = null, primeiroDiv = null
     const out = []
