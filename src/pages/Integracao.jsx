@@ -1183,7 +1183,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   }
   // Salva o banco com o rascunho da classificação (linhas), para continuar depois.
   // estado 'rascunho' = em andamento (ainda pendente no Status); 'validado' = concluído.
-  function salvarBancoDraft(conta, estadoB, doc, draftLinhas, concluidoFlag) {
+  function salvarBancoDraft(conta, estadoB, doc, draftLinhas, concluidoFlag, cruzaOverride) {
     const bancos = { ...(est?.bancos || {}) }
     const prev = bancos[conta] || {}
     // Guarda o ARQUIVO BRUTO (arr + mesclas) junto do rascunho: assim dá para "Ajustar
@@ -1192,7 +1192,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     const temRaw = raw?.banco === conta && Array.isArray(raw?.arr)
     // `concluido` (trava de edição) é um flag PRÓPRIO — não se confunde com `estado`
     // ('validado' também é setado no import). Só o botão Concluir liga; Reabrir desliga.
-    bancos[conta] = { estado: estadoB, doc: doc || null, usuario: user?.email || null, draft: draftLinhas || null, saldoExtrato: saldoExtrato || null, cruza: cruza || null, concluido: concluidoFlag ?? prev.concluido ?? false, arr: temRaw ? raw.arr : (prev.arr ?? null), catByRow: temRaw ? (raw.catByRow ?? null) : (prev.catByRow ?? null) }
+    bancos[conta] = { estado: estadoB, doc: doc || null, usuario: user?.email || null, draft: draftLinhas || null, saldoExtrato: saldoExtrato || null, cruza: cruzaOverride !== undefined ? cruzaOverride : (cruza || null), concluido: concluidoFlag ?? prev.concluido ?? false, arr: temRaw ? raw.arr : (prev.arr ?? null), catByRow: temRaw ? (raw.catByRow ?? null) : (prev.catByRow ?? null) }
     onEstado({ ...est, bancos })
   }
   function marcarCombinado(doc) { onEstado({ ...est, combinado: { estado: 'validado', doc, usuario: user?.email || null } }) }
@@ -1426,17 +1426,42 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   // Ao definir a contrapartida na mão, o nível vira 'manual' (100% do usuário).
   const setLinha = (i, patch) => { if (concluido) return; setLinhas(ls => ls.map((l, j) => j === i ? { ...l, ...patch, ...('contra' in patch ? { contra_nivel: patch.contra ? 'manual' : '' } : {}) } : l)) }
 
-  // Se há um cruzamento aberto, recalcula com as linhas novas — assim editar/excluir um
-  // lançamento atualiza o confronto Importado × Extrato na hora.
-  function recruzarSe(novas) {
-    if (!cruza || !cruzaArr) return
-    const mapa = perfilDeBanco(raw?.banco)?.cruza
-    if (mapa) setCruza(computarCruza(cruzaArr, mapa, novas))
+  // Recalcula o cruzamento SÓ pelo lado importado (as linhas): o lado do extrato — saldos e
+  // movimentos por dia — não muda quando você edita/exclui um lançamento. Por isso reaproveita
+  // o `cruza` que já está na tela (não precisa do extrato cru), e funciona mesmo depois de
+  // reabrir o banco (quando o arquivo cru do extrato não está mais carregado).
+  function recomputarComLinhas(c, novas) {
+    const extratoDia = new Map(), extMovDia = {}
+    for (const d of c.dias) {
+      if (d.ext != null) extratoDia.set(d.data, d.ext)
+      if (d.extMov != null) extMovDia[d.data] = d.extMov
+    }
+    const movDia = {}
+    for (const l of novas) { if (!l.data) continue; movDia[l.data] = (movDia[l.data] || 0) + (l.entrada ? l.valor : -l.valor) }
+    const dias = [...new Set([...extratoDia.keys(), ...Object.keys(movDia)])].sort()
+    let corrente = saldoAnterior || 0, prevDif = null, primeiroDiv = null
+    const out = []
+    for (const d of dias) {
+      corrente += (movDia[d] || 0)
+      const ext = extratoDia.has(d) ? extratoDia.get(d) : null
+      const extMov = (d in extMovDia) ? extMovDia[d] : null
+      const dif = ext == null ? null : Math.round((corrente - ext) * 100) / 100
+      const delta = (dif == null || prevDif == null) ? null : Math.round((dif - prevDif) * 100) / 100
+      if (delta != null && Math.abs(delta) >= 0.005 && !primeiroDiv) primeiroDiv = d
+      out.push({ data: d, mov: movDia[d] || 0, calc: corrente, ext, extMov, dif, delta })
+      if (dif != null) prevDif = dif
+    }
+    const difTotal = out.filter(d => d.dif != null).slice(-1)[0]?.dif ?? null
+    return { dias: out, primeiroDiv, difTotal, temValor: c.temValor, extRowsDia: c.extRowsDia }
   }
-  // Salva as linhas no rascunho do banco (mantém estado/doc atuais) e ressincroniza o cruzamento.
+  // Se há um cruzamento na tela, recalcula com as linhas novas — assim editar/excluir/corrigir
+  // um lançamento atualiza o confronto Importado × Extrato na hora e o dia some quando zera.
+  // Salva as linhas no rascunho do banco (mantém estado/doc atuais) e ressincroniza o
+  // cruzamento — atualiza a tela E o rascunho salvo (para reabrir já consistente).
   function persistirLinhas(novas) {
-    if (raw?.banco) salvarBancoDraft(raw.banco, bancosEst[raw.banco]?.estado || 'rascunho', raw.nome, novas)
-    recruzarSe(novas)
+    const novaCruza = cruza ? recomputarComLinhas(cruza, novas) : (cruza || null)
+    if (novaCruza !== cruza) setCruza(novaCruza)
+    if (raw?.banco) salvarBancoDraft(raw.banco, bancosEst[raw.banco]?.estado || 'rascunho', raw.nome, novas, undefined, novaCruza)
   }
   // Ações do cruzamento por REFERÊNCIA da linha (o modal tem o objeto, não o índice).
   function excluirLinhaRef(l) { const i = linhas.indexOf(l); if (i >= 0) excluirLinha(i) }
