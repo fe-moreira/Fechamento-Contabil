@@ -2156,7 +2156,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
           onClose={() => setQuebra(null)} onConfirmar={partes => confirmarQuebra(quebra.i, partes)} />
       )}
 
-      {cruzaOpen && cruza && <ModalCruzaSaldo cruza={cruza} linhas={linhas} planoMap={planoMap} titulo={raw?.banco ? `${raw.banco} ${nomeBanco(raw.banco)}` : ''} onClose={() => setCruzaOpen(false)}
+      {cruzaOpen && cruza && <ModalCruzaSaldo cruza={cruza} linhas={linhas} planoMap={planoMap} competencia={competencia} titulo={raw?.banco ? `${raw.banco} ${nomeBanco(raw.banco)}` : ''} onClose={() => setCruzaOpen(false)}
         onAjustarColunas={cruzaArr ? () => { setCruzaOpen(false); setColPicker({ arr: cruzaArr }) } : null}
         onCorrigirData={concluido ? null : corrigirDataRef} onExcluir={concluido ? null : excluirLinhaRef} onEditar={concluido ? null : editarLinhaRef}
         onVerDia={iso => { const p = String(iso).split('-'); setFData(`${p[2]}/${p[1]}`); setCruzaOpen(false) }} />}
@@ -2297,7 +2297,7 @@ function pareardia(imps, exts) {
   return grupos
 }
 
-function ModalCruzaSaldo({ cruza, linhas, planoMap, titulo, onClose, onVerDia, onAjustarColunas, onCorrigirData, onExcluir, onEditar }) {
+function ModalCruzaSaldo({ cruza, linhas, planoMap, competencia, titulo, onClose, onVerDia, onAjustarColunas, onCorrigirData, onExcluir, onEditar }) {
   const brd = iso => iso ? iso.split('-').reverse().join('/') : '—'
   const eps = v => Math.abs(v) < 0.005
   const r2 = v => Math.round((v || 0) * 100) / 100
@@ -2360,28 +2360,73 @@ function ModalCruzaSaldo({ cruza, linhas, planoMap, titulo, onClose, onVerDia, o
     return { doDia, cand, dica }
   }
 
-  // Exporta os apontamentos (resumo por dia + lançamentos dos dias com diferença)
-  // para Excel, para procurar/filtrar a diferença fora da tela.
+  // Exporta o cruzamento para um Excel APRESENTÁVEL (papel timbrado), no mesmo formato
+  // da tela: Importado × Extrato lado a lado, com a coluna Diferença e a situação de cada
+  // par. Uma seção por dia com diferença (+ possíveis datas trocadas), pronto para enviar
+  // ao cliente.
   async function exportar() {
-    const XLSX = await import('xlsx')
-    const resumo = [['Data', 'Movimento classificado', 'Saldo calculado', 'Saldo extrato', 'Diferença acumulada', 'Diferença do dia', 'Situação', 'Provável causa']]
-    for (const d of cruza.dias) {
-      const div = d.delta != null && Math.abs(d.delta) >= 0.005
-      resumo.push([brd(d.data), r2(d.mov), r2(d.calc), d.ext == null ? '' : r2(d.ext), d.dif == null ? '' : r2(d.dif), d.delta == null ? '' : r2(d.delta), div ? 'NÃO BATEU' : 'ok', div ? analisarDia(d).dica : ''])
-    }
-    const lanc = [['Data', 'Histórico', 'Valor', 'Tipo', 'Contrapartida', 'Conta (nome)', 'Provável causa?']]
+    const situacao = g => g.tipo === 'exato' ? 'Bate' : g.tipo === 'soma' ? 'Soma bate' : g.tipo === 'quase' ? `Diferença de ${money(Math.abs(g.dif))} (centavos)` : g.tipo === 'anula' ? 'Anulado (lançamento + estorno, efeito zero)' : g.imp.length ? 'SEM PAR no extrato' : 'SEM PAR no importado'
+    const contaNome = c => c ? `${c}${planoMap[String(c)]?.nome ? ' · ' + planoMap[String(c)].nome : ''}` : ''
+    const secoes = []
+
+    // Uma seção por dia com diferença: confronto Importado × Extrato como na tela.
     for (const d of divergentes) {
-      const a = analisarDia(d)
-      if (!a.doDia.length) lanc.push([brd(d.data), '(nenhum lançamento neste dia)', '', '', '', '', 'possível lançamento faltando'])
-      for (const l of a.doDia) lanc.push([brd(d.data), l.historico, r2(l.valor), l.entrada ? 'Entrada' : 'Saída', l.contra || '', planoMap[String(l.contra)]?.nome || '', a.cand.some(c => c.l === l) ? 'SIM' : ''])
+      const pd = analise.porDia[d.data] || {}
+      const linhasSec = []
+      linhasSec.push([`⚠ ${analisarDia(d).dica}`, '', '', '', ''])
+      if (pd.grupos) {
+        for (const g of pd.grupos) {
+          const n = Math.max(g.imp.length, g.ext.length, 1)
+          for (let k = 0; k < n; k++) {
+            linhasSec.push([
+              g.imp[k] ? g.imp[k].l.historico : '',
+              g.imp[k] ? contaNome(g.imp[k].l.contra) : '',
+              g.imp[k] ? r2(g.imp[k].v) : '',
+              g.ext[k] ? r2(g.ext[k].v) : '',
+              k === 0 ? (Math.abs(g.dif) < 0.005 ? situacao(g) : `${money(Math.abs(g.dif))} — ${situacao(g)}`) : '',
+            ])
+          }
+        }
+      } else {
+        // Cruzamento antigo (sem valores do extrato por linha) — lista só o importado.
+        for (const l of (pd.doDia || [])) linhasSec.push([l.historico, contaNome(l.contra), r2(l.entrada ? l.valor : -l.valor), '', ''])
+        if (!(pd.doDia || []).length) linhasSec.push(['(nenhum lançamento classificado neste dia)', '', '', '', ''])
+      }
+      const totImp = r2((pd.impItems || []).reduce((s, x) => s + x.v, 0))
+      const totExt = r2((pd.extItems || []).reduce((s, x) => s + x.v, 0))
+      secoes.push({
+        titulo: `${brd(d.data)}  —  diferença do dia ${money(d.delta)}`,
+        linhas: linhasSec,
+        totais: ['TOTAL DO DIA', '', totImp, totExt, `Diferença ${money(r2(totImp - totExt))}`],
+      })
     }
-    const wb = XLSX.utils.book_new()
-    const ws1 = XLSX.utils.aoa_to_sheet(resumo); ws1['!cols'] = [{ wch: 12 }, { wch: 20 }, { wch: 16 }, { wch: 16 }, { wch: 18 }, { wch: 16 }, { wch: 12 }, { wch: 70 }]
-    XLSX.utils.book_append_sheet(wb, ws1, 'Resumo por dia')
-    const ws2 = XLSX.utils.aoa_to_sheet(lanc); ws2['!cols'] = [{ wch: 12 }, { wch: 46 }, { wch: 14 }, { wch: 10 }, { wch: 14 }, { wch: 30 }, { wch: 16 }]
-    XLSX.utils.book_append_sheet(wb, ws2, 'Dias com diferença')
+
+    // Possíveis datas trocadas (o banco registrou noutro dia).
+    if (analise.trocas.length) {
+      secoes.push({
+        titulo: 'Possíveis datas trocadas (lançado num dia, no extrato noutro)',
+        linhas: analise.trocas.map(t => [t.l.historico, contaNome(t.l.contra), r2(t.v), '', `No extrato em ${brd(t.diaExtrato)} · lançado em ${brd(t.diaImportado)} → mover para ${brd(t.diaExtrato)}`]),
+      })
+    }
+
+    if (!secoes.length) secoes.push({ titulo: 'Sem diferenças de movimento', linhas: [['Todos os dias bateram com o extrato.', '', '', '', '']] })
+
+    const compBR = competencia ? String(competencia).split('-').reverse().join('/') : ''
     const slug = String(titulo || 'banco').replace(/[^\w]+/g, '_').replace(/^_|_$/g, '')
-    XLSX.writeFile(wb, `apontamentos_cruzamento_${slug}.xlsx`)
+    await gerarExcelTimbrado({
+      titulo: `Cruzamento Importado × Extrato — ${titulo || 'Banco'}`,
+      sub: `${compBR ? 'Competência ' + compBR + ' · ' : ''}Diferença total ${cruza.difTotal == null ? '—' : money(cruza.difTotal)} em ${divergentes.length} dia(s) · Importado = o que classificamos · Extrato = o arquivo do banco`,
+      colunas: [
+        { nome: 'Importado (histórico)', largura: 44, wrap: true },
+        { nome: 'Contrapartida', largura: 26, wrap: true },
+        { nome: 'Valor importado', alinhar: 'right', moeda: true, largura: 16 },
+        { nome: 'Valor extrato', alinhar: 'right', moeda: true, largura: 16 },
+        { nome: 'Diferença / situação', largura: 34, wrap: true },
+      ],
+      secoes,
+      arquivo: `cruzamento_${slug}${compBR ? '_' + compBR.replace(/\//g, '-') : ''}.xlsx`,
+      aba: 'Cruzamento',
+    })
   }
 
   const linhasTabela = soDif ? divergentes : cruza.dias
@@ -2589,7 +2634,7 @@ function ModalCruzaSaldo({ cruza, linhas, planoMap, titulo, onClose, onVerDia, o
         </div>
         <p style={{ color: theme.sub, fontSize: 11, margin: '10px 0 0' }}>Colunas <b style={{ color: theme.accent }}>Importado</b> (o que você classificou) × <b style={{ color: theme.green }}>Extrato</b> (o arquivo do banco). "Diferença" é a mudança do dia — o valor que sobra/falta ali. Abra um dia (<b>confronto</b>) para ver <b>lançamento a lançamento</b>; ali dá para <b><i className="ti ti-pencil" /> editar</b> ou <b><i className="ti ti-trash" /> excluir</b> um lançamento na hora. Se o extrato não tiver coluna de movimento, use <b>Ajustar colunas</b>. Clique num dia para filtrar a tabela.</p>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginTop: 14 }}>
-          <button className="btn btn-ghost" onClick={exportar}><i className="ti ti-file-spreadsheet" /> Exportar apontamentos (Excel)</button>
+          <button className="btn btn-ghost" onClick={exportar} title="Excel no papel timbrado, Importado × Extrato lado a lado — pronto para enviar ao cliente"><i className="ti ti-file-spreadsheet" /> Exportar cruzamento (Excel p/ cliente)</button>
           <button className="btn" onClick={onClose}>Fechar</button>
         </div>
       </div>
