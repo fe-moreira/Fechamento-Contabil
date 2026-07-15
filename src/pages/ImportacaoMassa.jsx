@@ -105,7 +105,7 @@ export default function ImportacaoMassa() {
 
   return (
     <div>
-      <h1 style={{ fontSize: 22, fontWeight: 500, marginBottom: 4 }}>Importação em massa</h1>
+      <h1 style={{ fontSize: 22, fontWeight: 500, marginBottom: 4 }}>Ações em Massa</h1>
       <p style={{ color: theme.sub, fontSize: 13, marginBottom: 20, maxWidth: 760 }}>
         Suba informações de vários clientes de uma vez, amarrando pelo <b style={{ color: theme.text }}>CNPJ</b>. Cada bloco tem o seu modelo de arquivo.
       </p>
@@ -217,6 +217,7 @@ function MassaFolha({ competencias, competencia, recalcularPendencias }) {
   const [prev, setPrev] = useState(null)     // conferência montada
   const [modo, setModo] = useState('complementar') // como gravar quando já existe
   const [marcarVazios, setMarcarVazios] = useState(true) // tipos opcionais sem arquivo → sem movimento
+  const [vaziosFeito, setVaziosFeito] = useState(false)  // já rodou o "marcar vazios" nesta competência
   const [aplicando, setAplicando] = useState(false)
   const [envios, setEnvios] = useState(null) // lista de envios da competência (para excluir)
   const [carregEnv, setCarregEnv] = useState(false)
@@ -315,7 +316,7 @@ function MassaFolha({ competencias, competencia, recalcularPendencias }) {
         gravados++
       }
       setMsg(`${tipoLabel}: ${gravados} empresa(s) gravada(s) em ${String(mes).padStart(2, '0')}/${ano} (${modo === 'complementar' ? 'complementado' : 'substituído'})${pulados ? ` · ${pulados} pulado(s) (fechado)` : ''}.`)
-      setPrev(null); setDados(null)
+      setPrev(null); setDados(null); setVaziosFeito(false)
       if (envios) carregarEnvios()
       recalcularPendencias?.()
     } catch (err) { setErro('Erro ao aplicar: ' + err.message) } finally { setAplicando(false) }
@@ -404,6 +405,7 @@ function MassaFolha({ competencias, competencia, recalcularPendencias }) {
         empresas++
       }
       setMsg(`"Sem movimento" aplicado em ${empresas} empresa(s) (${cards} card(s) vazio(s)).`)
+      setVaziosFeito(true)
       recalcularPendencias?.()
     } catch (err) { setErro('Erro ao finalizar: ' + err.message) } finally { setAplicando(false) }
   }
@@ -416,7 +418,7 @@ function MassaFolha({ competencias, competencia, recalcularPendencias }) {
           {TIPOS_FOLHA.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
         </select>
         <span style={{ fontSize: 12.5, color: theme.sub }}>Competência:</span>
-        <select className="input" style={{ width: 'auto', padding: '6px 10px', fontSize: 13 }} value={alvo} onChange={e => setAlvo(e.target.value)}>
+        <select className="input" style={{ width: 'auto', padding: '6px 10px', fontSize: 13 }} value={alvo} onChange={e => { setAlvo(e.target.value); setVaziosFeito(false); setEnvios(null) }}>
           {(competencias || [competencia]).map(c => <option key={c} value={c}>{c}</option>)}
         </select>
       </div>
@@ -425,8 +427,8 @@ function MassaFolha({ competencias, competencia, recalcularPendencias }) {
           <i className="ti ti-file-import" /> Subir arquivo ({tipoLabel})
           <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={analisar} />
         </label>
-        <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={finalizarVazios} disabled={aplicando} title="Nas empresas que já têm folha mensal, marca os tipos opcionais vazios como sem movimento">
-          <i className="ti ti-circle-minus" /> Marcar vazios sem movimento
+        <button className="btn btn-ghost" style={{ fontSize: 12.5, color: vaziosFeito ? theme.green : undefined, borderColor: vaziosFeito ? theme.green : undefined }} onClick={finalizarVazios} disabled={aplicando} title="Nas empresas que já têm folha mensal, marca os tipos opcionais vazios como sem movimento. Pode rodar de novo depois de subir mais arquivos.">
+          <i className={`ti ${vaziosFeito ? 'ti-check' : 'ti-circle-minus'}`} /> {vaziosFeito ? 'Vazios marcados' : 'Marcar vazios sem movimento'}
         </button>
       </div>
       {erro && <p style={{ color: theme.red, fontSize: 12.5, margin: '10px 0 0' }}>{erro}</p>}
