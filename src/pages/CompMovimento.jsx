@@ -679,6 +679,7 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
   const [tratada, setTratada] = useState(jaJustificada)
   const [msg, setMsg] = useState('')
   const [acaoLanc, setAcaoLanc] = useState(null) // { modo:'novo'|'ver', linha, corr }
+  const [verCorrigidos, setVerCorrigidos] = useState(false) // mostrar os já corrigidos (ficam ocultos)
 
   const mesDoLanc = l => todos ? (mesPorComp?.[l.competencia_id]) : mes
 
@@ -862,10 +863,18 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
     } catch (e) { setMsg('Erro ao desfazer correção: ' + (e.message || e)) } finally { setSalvando(false) }
   }
 
+  // Já CORRIGIDO some da tela: o lançamento original (que tem correção) e o próprio
+  // lançamento de ajuste (reclassificação) saem da lista — o par se anula na conta, então
+  // o Total continua batendo. Ficam ocultos até "mostrar corrigidos" (para ver/desfazer).
+  const ajusteOculto = new Set(Object.values(correcoes).map(c => `lanc-${c.id}`))
+  const estaCorrigido = l => !!correcoes[l.id] || (l.ehLancamento && ajusteOculto.has(l.id))
+  const nOcultos = linhas.filter(estaCorrigido).length
+  const linhasVis = verCorrigidos ? linhas : linhas.filter(l => !estaCorrigido(l))
+
   let saldo = 0
-  const totDeb = linhas.reduce((s, l) => s + (Number(l.debito) || 0), 0)
-  const totCred = linhas.reduce((s, l) => s + (Number(l.credito) || 0), 0)
-  const suspeitos = linhas.filter(l => l.suspeito)
+  const totDeb = linhasVis.reduce((s, l) => s + (Number(l.debito) || 0), 0)
+  const totCred = linhasVis.reduce((s, l) => s + (Number(l.credito) || 0), 0)
+  const suspeitos = linhasVis.filter(l => l.suspeito)
 
   return (
     <div
@@ -903,11 +912,22 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
           </div>
         )}
 
+        {!carregando && nOcultos > 0 && (
+          <div style={{ margin: '10px 22px 0', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', background: 'rgba(48,164,108,0.08)', border: '1px solid rgba(48,164,108,0.35)', borderRadius: 10, padding: '8px 14px' }}>
+            <span style={{ color: theme.green, fontSize: 12.5 }}>
+              <i className="ti ti-circle-check" /> {nOcultos} lançamento(s) já corrigido(s){verCorrigidos ? '' : ' — ocultos'}. O Total já reflete a correção.
+            </span>
+            <button className="btn btn-ghost" style={{ fontSize: 12, padding: '4px 10px' }} onClick={() => setVerCorrigidos(v => !v)}>
+              <i className={`ti ${verCorrigidos ? 'ti-eye-off' : 'ti-eye'}`} /> {verCorrigidos ? 'Ocultar corrigidos' : 'Mostrar corrigidos'}
+            </button>
+          </div>
+        )}
+
         <div style={{ overflow: 'auto', padding: '10px 0 4px' }}>
           {carregando ? (
             <p style={{ color: theme.sub, fontSize: 13, padding: '18px 22px' }}><i className="ti ti-loader" /> Carregando…</p>
-          ) : linhas.length === 0 ? (
-            <p style={{ color: theme.sub, fontSize: 13, padding: '18px 22px' }}>Nenhum lançamento de razão para esta conta.</p>
+          ) : linhasVis.length === 0 ? (
+            <p style={{ color: theme.sub, fontSize: 13, padding: '18px 22px' }}>{linhas.length === 0 ? 'Nenhum lançamento de razão para esta conta.' : 'Todos os lançamentos desta conta já foram corrigidos.'}</p>
           ) : (
             <table style={{ borderCollapse: 'collapse', width: '100%' }}>
               <thead>
@@ -921,7 +941,7 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
                 </tr>
               </thead>
               <tbody>
-                {linhas.map((l, i) => {
+                {linhasVis.map((l, i) => {
                   saldo += (Number(l.debito) || 0) - (Number(l.credito) || 0)
                   const corr = correcoes[l.id]
                   const ehLanc = l.ehLancamento
