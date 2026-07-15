@@ -16,7 +16,7 @@ export async function carregarCartoes(clienteId) {
 }
 export async function salvarCartoes(clienteId, cartoes, perfis, usuario) {
   await supabase.from('cargas_cadastro').delete().eq('cliente_id', clienteId).eq('tipo', 'cartoes')
-  const { error } = await supabase.from('cargas_cadastro').insert({ cliente_id: clienteId, tipo: 'cartoes', dados: cartoes, usuario, obs: JSON.stringify({ perfis: perfis || {} }) })
+  const { error } = await supabase.from('cargas_cadastro').insert({ cliente_id: clienteId, tipo: 'cartoes', vigencia: '00/0000', dados: cartoes, usuario, obs: JSON.stringify({ perfis: perfis || {} }) })
   if (error) throw error
 }
 
@@ -28,7 +28,7 @@ export async function carregarMemoriaCartao(clienteId) {
 }
 export async function salvarMemoriaCartao(clienteId, memoria, usuario) {
   await supabase.from('cargas_cadastro').delete().eq('cliente_id', clienteId).eq('tipo', 'memoria_cartao')
-  const { error } = await supabase.from('cargas_cadastro').insert({ cliente_id: clienteId, tipo: 'memoria_cartao', dados: memoria, usuario })
+  const { error } = await supabase.from('cargas_cadastro').insert({ cliente_id: clienteId, tipo: 'memoria_cartao', vigencia: '00/0000', dados: memoria, usuario })
   if (error) throw error
 }
 export { aprender }
