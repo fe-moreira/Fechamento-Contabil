@@ -24,6 +24,30 @@ export function eventosDeLinhas(linhas) {
   return out
 }
 
+// Rótulo único de um arquivo de folha: marca a origem de cada evento em `__arq`, para
+// COMPLEMENTAR (somar outro arquivo sem apagar o anterior) e EXCLUIR arquivo por arquivo —
+// mesma ideia da carga inicial de saldos. `data` é só para exibição.
+export function novoRotuloArq(nome) {
+  const d = new Date(); const p = n => String(n).padStart(2, '0')
+  const data = `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`
+  return { arq: `${nome}#${Math.random().toString(36).slice(2, 8)}`, doc: nome, data }
+}
+// Lista os arquivos que compõem um slot de folha (agrupa os eventos pela origem __arq).
+// Usa os metadados `files` quando houver; para dados antigos sem marca, mostra um arquivo só.
+export function arquivosDoSlot(a) {
+  if (!a) return []
+  const cont = {}
+  for (const e of (a.eventos || [])) { const k = e.__arq || '__legado'; cont[k] = (cont[k] || 0) + 1 }
+  if (a.files?.length) return a.files.map(f => ({ ...f, n: cont[f.arq] || 0 }))
+  const ks = Object.keys(cont)
+  if (!ks.length || (ks.length === 1 && ks[0] === '__legado')) return [{ arq: '__legado', doc: a.doc || 'Arquivo', data: '', n: cont['__legado'] || (a.eventos || []).length }]
+  return ks.map(k => ({ arq: k, doc: k === '__legado' ? (a.doc || 'Arquivo') : k.replace(/#[a-z0-9]+$/, ''), data: '', n: cont[k] }))
+}
+// Marca todos os eventos com a origem (arq) — para poder complementar/excluir por arquivo.
+export function marcarEventos(eventos, arq) {
+  return (eventos || []).map(e => ({ ...e, __arq: arq }))
+}
+
 // Quebra um export MULTI-EMPRESA por empresa (coluna A = código no Domínio). Cada empresa
 // vira { cod, nome, cnpj, linhas, eventos } — os eventos já lidos pela mesma regra acima.
 export function folhaPorEmpresa(linhas) {
