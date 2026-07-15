@@ -637,18 +637,33 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       .eq('competencia_id', compId).eq('modulo', 'Conciliação')
     const rz = new Set(), ab = new Set(), conf = new Set()
     for (const a of (data || [])) {
-      const chave = a.razao_id || (String(a.item || '').startsWith('AB·') ? a.item : null)
+      const abItem = String(a.item || '').startsWith('AB·') ? a.item : null
+      const chave = a.razao_id || abItem
       if (!chave) continue
       if (a.razao_id) rz.add(a.razao_id); else ab.add(a.item)
-      if (String(a.detalhe || '').startsWith('Confirmado em lote')) conf.add(chave)
+      // Chave ESTÁVEL (conta·data·NF, no campo `item`) além do razao_id: sobrevive à
+      // REIMPORTAÇÃO do razão (que gera novos uuid). Sem isso, baixas/conferências viram
+      // ÓRFÃS quando o razão é reimportado e o saldo do "Conciliados" desbalanceia (um lado
+      // do par — ex.: o pagamento — deixa de ser reconhecido como baixado).
+      if (a.item && !abItem) rz.add(a.item)
+      if (String(a.detalhe || '').startsWith('Confirmado em lote')) { conf.add(chave); if (a.item && !abItem) conf.add(a.item) }
     }
     setTratados(rz); setTratadosAb(ab); setConfirmados(conf)
   }
   // Chave estável de uma linha de abertura (saldo inicial) e testes de "já tratada"/"confirmada".
   const chaveAbertura = l => `AB·${conta.conta}·${nfKey(l.leitura?.nf)}·${baixaTxt(l.leitura?.entidade || '')}·${Math.round(((Number(l.debito) || 0) - (Number(l.credito) || 0)) * 100)}`
+  // Chave estável de uma linha de razão pelo `item` (conta·data·NF) — igual à gravada na
+  // auditoria por registrar()/baixarConexao(). Casa mesmo após reimportar o razão.
+  const itemConc = l => `${conta.conta} · ${l.data || ''} · NF ${l.leitura?.nf || '—'}`
+  // A chave `item` (conta·data·NF) só é usada quando é ÚNICA na conta — senão (ex.: vários
+  // pagamentos no mesmo dia com NF genérica 062026) casaria linhas demais. Só o razao_id
+  // (preciso) trata as ambíguas; a chave estável resgata as de NF específica após reimportar.
+  const itemCount = {}
+  for (const l of lanc) { if (!l._abertura && !l.acerto) { const k = itemConc(l); itemCount[k] = (itemCount[k] || 0) + 1 } }
+  const itemUnico = l => itemCount[itemConc(l)] === 1
   const chaveTrat = l => l.acerto ? String(l.id).replace(/^ac_/, '') : (l._abertura ? chaveAbertura(l) : l.id)
-  const jaTratada = l => l._abertura ? tratadosAb.has(chaveAbertura(l)) : tratados.has(l.id)
-  const foiConfirmado = l => confirmados.has(chaveTrat(l)) // saiu do em aberto (conciliado)
+  const jaTratada = l => l._abertura ? tratadosAb.has(chaveAbertura(l)) : (tratados.has(l.id) || (itemUnico(l) && tratados.has(itemConc(l))))
+  const foiConfirmado = l => confirmados.has(chaveTrat(l)) || (!l._abertura && !l.acerto && itemUnico(l) && confirmados.has(itemConc(l))) // saiu do em aberto (conciliado)
   useEffect(() => { carregarTratados() }, [compId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function carregarLanc() {
@@ -866,7 +881,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const confirmadosLancs = lanc.filter(l => foiConfirmado(l) && Math.abs(ov(l)) >= 0.005)
   const autoConcLancs = lanc.filter(l => autoConc.has(l) && Math.abs(ov(l)) >= 0.005)
   const conferidosLancs = [...new Set([...confirmadosLancs, ...resolvidasEnt.flatMap(g => g.lancs).filter(l => Math.abs(ov(l)) >= 0.005), ...autoConcLancs])]
-  const zerados = [...baixados, ...conferidosLancs]
+  const zerados = [...new Set([...baixados, ...conferidosLancs])] // sem repetir (uma linha pode ser baixada E confirmada)
   const conferidosPorNome = {}
   for (const l of conferidosLancs) { const k = autoConc.has(l) ? 'Correções conciliadas (estorno ↔ origem)' : (l.leitura?.entidade || '(sem nome)'); (conferidosPorNome[k] = conferidosPorNome[k] || []).push(l) }
   const conferidosGrupos = Object.entries(conferidosPorNome).map(([nome, lancs]) => ({ nome, lancs }))
