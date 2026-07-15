@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
@@ -2102,6 +2102,7 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
 
       {cruzaOpen && cruza && <ModalCruzaSaldo cruza={cruza} linhas={linhas} planoMap={planoMap} titulo={raw?.banco ? `${raw.banco} ${nomeBanco(raw.banco)}` : ''} onClose={() => setCruzaOpen(false)}
         onAjustarColunas={cruzaArr ? () => { setCruzaOpen(false); setColPicker({ arr: cruzaArr }) } : null}
+        onCorrigirData={concluido ? null : corrigirDataRef} onExcluir={concluido ? null : excluirLinhaRef} onEditar={concluido ? null : editarLinhaRef}
         onVerDia={iso => { const p = String(iso).split('-'); setFData(`${p[2]}/${p[1]}`); setCruzaOpen(false) }} />}
 
       {colPicker && <ModalColunasExtrato arr={colPicker.arr} inicial={perfilDeBanco(raw?.banco)?.cruza || autoMapaExtrato(colPicker.arr)}
@@ -2219,7 +2220,28 @@ function ModalColunasExtrato({ arr, inicial, onAplicar, onClose }) {
   )
 }
 
-function ModalCruzaSaldo({ cruza, linhas, planoMap, titulo, onClose, onVerDia, onAjustarColunas }) {
+// Pareia os movimentos de um dia: Importado (imps=[{v,l}]) × Extrato (exts=[{v,saldo}]).
+// exato 1:1 → soma (vários de um lado = 1 do outro) → quase-igual (centavos) → anula
+// (+X/−X internos, sem extrato) → sobra (o que resta = diferença real). Retorna os grupos.
+function pareardia(imps, exts) {
+  const r2 = v => Math.round((v || 0) * 100) / 100
+  const I = imps.map(x => ({ ...x, used: false }))
+  const E = exts.map(x => ({ ...x, used: false }))
+  const eqv = (a, b) => Math.abs(a - b) < 0.005
+  const grupos = []
+  for (const i of I) { if (i.used) continue; const e = E.find(e => !e.used && eqv(e.v, i.v)); if (e) { i.used = e.used = true; grupos.push({ imp: [i], ext: [e], dif: 0, tipo: 'exato' }) } }
+  const subset = (pool, alvo) => { const livres = pool.filter(x => !x.used); let achou = null; const dfs = (st, sm, esc) => { if (achou) return; if (esc.length >= 2 && Math.abs(sm - alvo) < 0.005) { achou = esc.slice(); return } if (esc.length >= 4) return; for (let j = st; j < livres.length; j++) { esc.push(livres[j]); dfs(j + 1, sm + livres[j].v, esc); esc.pop(); if (achou) return } }; dfs(0, 0, []); return achou }
+  for (const e of E) { if (e.used) continue; const s = subset(I, e.v); if (s) { e.used = true; s.forEach(x => x.used = true); grupos.push({ imp: s, ext: [e], dif: 0, tipo: 'soma' }) } }
+  for (const i of I) { if (i.used) continue; const s = subset(E, i.v); if (s) { i.used = true; s.forEach(x => x.used = true); grupos.push({ imp: [i], ext: s, dif: 0, tipo: 'soma' }) } }
+  for (const i of I) { if (i.used) continue; const c = E.filter(e => !e.used && Math.sign(e.v) === Math.sign(i.v)).map(e => ({ e, d: Math.abs(e.v - i.v) })).sort((a, b) => a.d - b.d)[0]; if (c && c.d <= 2) { i.used = c.e.used = true; grupos.push({ imp: [i], ext: [c.e], dif: r2(i.v - c.e.v), tipo: 'quase' }) } }
+  const anular = (arr, lado) => { for (const p of arr) { if (p.used || p.v <= 0) continue; const q = arr.find(n => !n.used && n.v < 0 && Math.abs(n.v + p.v) < 0.005); if (q) { p.used = q.used = true; grupos.push({ imp: lado === 'i' ? [p, q] : [], ext: lado === 'e' ? [p, q] : [], dif: 0, tipo: 'anula' }) } } }
+  anular(I, 'i'); anular(E, 'e')
+  for (const i of I) if (!i.used) grupos.push({ imp: [i], ext: [], dif: i.v, tipo: 'sobra' })
+  for (const e of E) if (!e.used) grupos.push({ imp: [], ext: [e], dif: -e.v, tipo: 'sobra' })
+  return grupos
+}
+
+function ModalCruzaSaldo({ cruza, linhas, planoMap, titulo, onClose, onVerDia, onAjustarColunas, onCorrigirData, onExcluir, onEditar }) {
   const brd = iso => iso ? iso.split('-').reverse().join('/') : '—'
   const eps = v => Math.abs(v) < 0.005
   const r2 = v => Math.round((v || 0) * 100) / 100
@@ -2228,6 +2250,30 @@ function ModalCruzaSaldo({ cruza, linhas, planoMap, titulo, onClose, onVerDia, o
   // Abertura por dia: null | 'todos' (todos os lançamentos) | 'estrela' (só o suspeito).
   const [aberto, setAberto] = useState(() => (divergentes.length === 1 ? { [divergentes[0].data]: 'todos' } : {}))
   const abrir = (data, modo) => setAberto(p => ({ ...p, [data]: p[data] === modo ? null : modo }))
+
+  // Pareamento Importado × Extrato por dia + detecção de DATA TROCADA entre dias: uma sobra
+  // do extrato no dia X e uma sobra do importado no dia Y (mesmo valor) → o lançamento
+  // provavelmente foi lançado na data errada (o banco registrou noutro dia).
+  const analise = useMemo(() => {
+    const porDia = {}, sobrasImp = [], sobrasExt = []
+    for (const d of cruza.dias) {
+      const doDia = linhas.filter(l => l.data === d.data)
+      const impItems = doDia.map(l => ({ v: r2(l.entrada ? l.valor : -l.valor), l }))
+      const extItems = (cruza.extRowsDia?.[d.data] || []).filter(x => x.valor != null && Math.abs(x.valor) >= 0.005).map(x => ({ v: r2(x.valor), saldo: x.saldo }))
+      const grupos = cruza.temValor ? pareardia(impItems, extItems) : null
+      porDia[d.data] = { grupos, impItems, extItems, doDia }
+      if (grupos) for (const g of grupos) if (g.tipo === 'sobra') {
+        if (g.imp.length) sobrasImp.push({ data: d.data, v: g.imp[0].v, l: g.imp[0].l })
+        if (g.ext.length) sobrasExt.push({ data: d.data, v: g.ext[0].v })
+      }
+    }
+    const trocas = [], usI = new Set()
+    for (const se of sobrasExt) {
+      const k = sobrasImp.findIndex((si, idx) => !usI.has(idx) && si.data !== se.data && Math.abs(si.v - se.v) < 0.005)
+      if (k >= 0) { usI.add(k); trocas.push({ v: se.v, diaExtrato: se.data, diaImportado: sobrasImp[k].data, l: sobrasImp[k].l }) }
+    }
+    return { porDia, trocas }
+  }, [cruza, linhas]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Possível troca de data: dois dias divergentes com deltas opostos e iguais.
   const trocaPar = {}
@@ -2299,20 +2345,45 @@ function ModalCruzaSaldo({ cruza, linhas, planoMap, titulo, onClose, onVerDia, o
             : <><i className="ti ti-circle-check" /> Nenhuma divergência de movimento entre os dias. Se ainda há diferença, é no saldo de abertura.</>}
         </p>
 
-        {/* Análise por dia que não bateu: sugestão + lançamentos do dia (expandível) */}
+        {/* Possível DATA TROCADA: o valor está no extrato num dia e foi classificado noutro.
+            Oferece corrigir a data do lançamento para o dia em que o banco registrou. */}
+        {analise.trocas.length > 0 && (
+          <div style={{ marginBottom: 12, borderRadius: 10, background: 'rgba(245,166,35,0.08)', border: `0.5px solid rgba(245,166,35,0.35)`, padding: '10px 12px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: theme.text, marginBottom: 6 }}>
+              <i className="ti ti-calendar-exclamation" style={{ color: theme.yellow }} /> <b>Provável data trocada</b> — o banco registrou noutro dia
+            </div>
+            {analise.trocas.map((t, ti) => (
+              <div key={ti} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 0', borderTop: ti ? `1px solid ${theme.border}` : 'none', flexWrap: 'wrap' }}>
+                <div style={{ flex: 1, fontSize: 12, color: theme.sub, minWidth: 200 }}>
+                  <b style={{ color: theme.text }}>{money(Math.abs(t.v))}</b> — no extrato em <b style={{ color: theme.green }}>{brd(t.diaExtrato)}</b>, mas o lançamento "{t.l.historico}" está em <b style={{ color: theme.red }}>{brd(t.diaImportado)}</b>.
+                </div>
+                {onCorrigirData && <button className="btn" style={{ fontSize: 11.5, padding: '4px 10px', whiteSpace: 'nowrap', flexShrink: 0 }} onClick={() => onCorrigirData(t.l, t.diaExtrato)} title={`Mudar a data do lançamento para ${brd(t.diaExtrato)}`}><i className="ti ti-calendar-check" /> Corrigir data → {brd(t.diaExtrato)}</button>}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Análise por dia que não bateu: sugestão + confronto Importado × Extrato (expandível) */}
         {divergentes.length > 0 && (
           <div style={{ marginBottom: 14 }}>
             {divergentes.map((d, i) => {
-              const { doDia, cand, dica } = analisarDia(d)
-              const isCand = l => cand.some(c => c.l === l)
+              const { dica } = analisarDia(d)
+              const pd = analise.porDia[d.data] || {}
+              const doDia = pd.doDia || []
               const modo = aberto[d.data]
-              const mostra = modo === 'estrela' ? doDia.filter(isCand) : doDia
-              const temSuspeito = cand.length > 0
+              const contaNome = c => c ? `${c}${planoMap[String(c)]?.nome ? ' · ' + planoMap[String(c)].nome : ''}` : 'sem contrapartida'
+              // Botões por lançamento na tela de revisão: editar (data/valor/E-S…) ou excluir.
+              const acoesLanc = l => (onEditar || onExcluir) ? (
+                <span style={{ display: 'inline-flex', gap: 6, marginLeft: 6, verticalAlign: 'middle' }}>
+                  {onEditar && <i className="ti ti-pencil" title="Editar o lançamento (data, valor, E/S…)" onClick={() => onEditar(l)} style={{ color: theme.accent, cursor: 'pointer', fontSize: 13.5 }} />}
+                  {onExcluir && <i className="ti ti-trash" title="Excluir este lançamento" onClick={() => onExcluir(l)} style={{ color: theme.red, cursor: 'pointer', fontSize: 13.5 }} />}
+                </span>
+              ) : null
               const linhaLanc = l => (
-                <tr key={l.historico + l.valor + l.entrada} style={{ borderTop: `1px solid ${theme.border}`, background: isCand(l) ? 'rgba(245,166,35,0.14)' : 'transparent' }}>
-                  <td style={{ ...ftd, fontSize: 11 }}>{isCand(l) && <i className="ti ti-star-filled" style={{ color: theme.yellow, marginRight: 4 }} title="Provável causa da diferença" />}{l.historico}</td>
+                <tr key={l.historico + l.valor + l.entrada} style={{ borderTop: `1px solid ${theme.border}` }}>
+                  <td style={{ ...ftd, fontSize: 11 }}>{l.historico}{acoesLanc(l)}</td>
                   <td style={{ ...ftd, fontSize: 11, textAlign: 'right', whiteSpace: 'nowrap', color: l.entrada ? theme.green : theme.red }}>{l.entrada ? '+' : '−'}{money(l.valor)}</td>
-                  <td style={{ ...ftd, fontSize: 11, whiteSpace: 'nowrap', color: theme.sub }}>{l.contra ? `${l.contra}${planoMap[String(l.contra)]?.nome ? ' · ' + planoMap[String(l.contra)].nome : ''}` : 'sem contrapartida'}</td>
+                  <td style={{ ...ftd, fontSize: 11, whiteSpace: 'nowrap', color: theme.sub }}>{contaNome(l.contra)}</td>
                 </tr>
               )
               return (
@@ -2324,54 +2395,33 @@ function ModalCruzaSaldo({ cruza, linhas, planoMap, titulo, onClose, onVerDia, o
                       <div style={{ color: theme.sub, marginTop: 3 }}>{dica}</div>
                     </div>
                     <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
-                      <button className="btn btn-ghost" style={{ fontSize: 11, padding: '3px 8px', whiteSpace: 'nowrap', borderColor: temSuspeito ? theme.yellow : theme.border, color: temSuspeito ? theme.yellow : theme.sub }} onClick={() => abrir(d.data, 'estrela')} title={temSuspeito ? 'Mostrar o lançamento que provavelmente causa a diferença' : 'Sem lançamento identificado para esta diferença'}><i className={`ti ${temSuspeito ? 'ti-star-filled' : 'ti-star'}`} /> suspeito</button>
-                      <button className="btn btn-ghost" style={{ fontSize: 11, padding: '3px 8px', whiteSpace: 'nowrap' }} onClick={() => abrir(d.data, 'todos')}><i className={`ti ${modo === 'todos' ? 'ti-chevron-up' : 'ti-chevron-down'}`} /> {doDia.length} lançto(s)</button>
+                      <button className="btn btn-ghost" style={{ fontSize: 11, padding: '3px 8px', whiteSpace: 'nowrap' }} onClick={() => abrir(d.data, 'todos')}><i className={`ti ${modo ? 'ti-chevron-up' : 'ti-chevron-down'}`} /> confronto</button>
                       {onVerDia && <button className="btn btn-ghost" style={{ fontSize: 11, padding: '3px 8px', whiteSpace: 'nowrap' }} onClick={() => onVerDia(d.data)} title="Filtrar a tabela por este dia"><i className="ti ti-filter" /> na tabela</button>}
                     </div>
                   </div>
                   {modo && (() => {
-                    // Confronto lançamento a lançamento: pareia Importado × Extrato pelo VALOR.
-                    // O que casa fica verde (bateu); o que sobra de cada lado fica vermelho (a diferença).
-                    const extDia = (cruza.extRowsDia?.[d.data] || []).filter(x => x.valor != null && Math.abs(x.valor) >= 0.005)
-                    const impItems = doDia.map(l => ({ v: r2(l.entrada ? l.valor : -l.valor), l }))
-                    const totImp = r2(impItems.reduce((s, i) => s + i.v, 0))
-                    const totExt = r2(extDia.reduce((s, x) => s + x.valor, 0))
+                    // Confronto lançamento a lançamento: usa o pareamento já calculado em `analise`
+                    // (exato/soma/quase, estornos anulados). O que casa fica verde; o que sobra de
+                    // cada lado fica vermelho (é a diferença real).
+                    const extDia = pd.extItems || []
+                    const impItems = pd.impItems || []
+                    const totImp = r2(impItems.reduce((s, x) => s + x.v, 0))
+                    const totExt = r2(extDia.reduce((s, x) => s + x.v, 0))
                     const difTot = r2(totImp - totExt)
-                    const contaNome = c => c ? `${c}${planoMap[String(c)]?.nome ? ' · ' + planoMap[String(c)].nome : ''}` : 'sem contrapartida'
                     // Cruzamento calculado numa versão antiga (sem os dados do extrato por
                     // linha) → orienta a recruzar para ver o confronto Importado × Extrato.
-                    if (!cruza.temValor) {
+                    if (!cruza.temValor || !pd.grupos) {
                       return (
                         <div style={{ borderTop: `0.5px solid rgba(229,72,77,0.25)`, background: theme.card }}>
                           {!cruza.extRowsDia && <p style={{ color: theme.yellow, fontSize: 11.5, margin: 0, padding: '8px 11px', display: 'flex', gap: 6, alignItems: 'center' }}><i className="ti ti-refresh" /> Este cruzamento é de uma versão anterior. Clique em <b>Trocar extrato</b> e suba o extrato de novo para ver o confronto <b>Importado × Extrato</b> lado a lado.</p>}
                           {doDia.length === 0
                             ? <p style={{ color: theme.sub, fontSize: 11.5, margin: 0, padding: '8px 11px' }}>Nenhum lançamento classificado neste dia — provável lançamento faltando de {money(Math.abs(d.delta))}.</p>
-                            : <table style={{ width: '100%', borderCollapse: 'collapse' }}><tbody>{mostra.map(linhaLanc)}</tbody></table>}
+                            : <table style={{ width: '100%', borderCollapse: 'collapse' }}><tbody>{doDia.map(linhaLanc)}</tbody></table>}
                         </div>
                       )
                     }
-                    // Pareamento inteligente Importado × Extrato:
-                    //  (1) exato 1:1; (2) SOMA (vários de um lado = 1 do outro, ex.: 2 lançamentos
-                    //  = 1 movimento do extrato); (3) QUASE-igual (diferença de centavos/reais).
-                    //  O que sobrar de cada lado fica vermelho (é a diferença real).
-                    const I = impItems.map((x, k) => ({ v: x.v, l: x.l, _k: 'i' + k, used: false }))
-                    const E = extDia.map((x, k) => ({ v: r2(x.valor), saldo: x.saldo, _k: 'e' + k, used: false }))
-                    const eqv = (a, b) => Math.abs(a - b) < 0.005
-                    const grupos = []
-                    for (const i of I) { if (i.used) continue; const e = E.find(e => !e.used && eqv(e.v, i.v)); if (e) { i.used = e.used = true; grupos.push({ imp: [i], ext: [e], dif: 0, tipo: 'exato' }) } }
-                    const subset = (pool, alvo) => { const livres = pool.filter(x => !x.used); let achou = null; const dfs = (st, sm, esc) => { if (achou) return; if (esc.length >= 2 && Math.abs(sm - alvo) < 0.005) { achou = esc.slice(); return } if (esc.length >= 4) return; for (let j = st; j < livres.length; j++) { esc.push(livres[j]); dfs(j + 1, sm + livres[j].v, esc); esc.pop(); if (achou) return } }; dfs(0, 0, []); return achou }
-                    for (const e of E) { if (e.used) continue; const s = subset(I, e.v); if (s) { e.used = true; s.forEach(x => x.used = true); grupos.push({ imp: s, ext: [e], dif: 0, tipo: 'soma' }) } }
-                    for (const i of I) { if (i.used) continue; const s = subset(E, i.v); if (s) { i.used = true; s.forEach(x => x.used = true); grupos.push({ imp: [i], ext: s, dif: 0, tipo: 'soma' }) } }
-                    for (const i of I) { if (i.used) continue; const c = E.filter(e => !e.used && Math.sign(e.v) === Math.sign(i.v)).map(e => ({ e, d: Math.abs(e.v - i.v) })).sort((a, b) => a.d - b.d)[0]; if (c && c.d <= 2) { i.used = c.e.used = true; grupos.push({ imp: [i], ext: [c.e], dif: r2(i.v - c.e.v), tipo: 'quase' }) } }
-                    // Anulados: um +X e um −X do MESMO lado, sem par no extrato, se cancelam
-                    // (lançamento errado + estorno) — efeito zero, não é diferença.
-                    const anular = (arr, lado) => { for (const p of arr) { if (p.used || p.v <= 0) continue; const q = arr.find(n => !n.used && n.v < 0 && Math.abs(n.v + p.v) < 0.005); if (q) { p.used = q.used = true; grupos.push({ imp: lado === 'i' ? [p, q] : [], ext: lado === 'e' ? [p, q] : [], dif: 0, tipo: 'anula' }) } } }
-                    anular(I, 'i'); anular(E, 'e')
-                    for (const i of I) if (!i.used) grupos.push({ imp: [i], ext: [], dif: i.v, tipo: 'sobra' })
-                    for (const e of E) if (!e.used) grupos.push({ imp: [], ext: [e], dif: -e.v, tipo: 'sobra' })
-                    const gruposReais = grupos.filter(g => g.tipo !== 'anula')
-                    const anulaItens = grupos.filter(g => g.tipo === 'anula').reduce((s, g) => s + g.imp.length + g.ext.length, 0)
-                    const gruposVis = modo === 'estrela' ? gruposReais.filter(g => g.tipo === 'sobra' || g.tipo === 'quase') : gruposReais
+                    const gruposReais = pd.grupos.filter(g => g.tipo !== 'anula')
+                    const anulaItens = pd.grupos.filter(g => g.tipo === 'anula').reduce((s, g) => s + g.imp.length + g.ext.length, 0)
                     const tintG = t => t === 'sobra' ? 'rgba(229,72,77,0.10)' : t === 'quase' ? 'rgba(245,166,35,0.12)' : 'rgba(48,164,108,0.09)'
                     const vlr = v => `${v >= 0 ? '+' : '−'}${money(Math.abs(v))}`
                     const corV = v => v >= 0 ? theme.green : theme.red
@@ -2391,11 +2441,11 @@ function ModalCruzaSaldo({ cruza, linhas, planoMap, titulo, onClose, onVerDia, o
                             <th style={{ ...ftd, width: 92, textAlign: 'right', fontSize: 10, textTransform: 'uppercase', letterSpacing: .4, fontWeight: 700, color: theme.sub, borderLeft: `1px solid ${theme.border}` }}>Diferença</th>
                           </tr></thead>
                           <tbody>
-                            {gruposVis.map((g, gi) => {
+                            {gruposReais.map((g, gi) => {
                               const n = Math.max(g.imp.length, g.ext.length, 1)
                               return Array.from({ length: n }).map((_, k) => (
                                 <tr key={gi + '-' + k} style={{ borderTop: k === 0 ? `1px solid ${theme.border}` : 'none', background: tintG(g.tipo) }}>
-                                  <td style={{ ...ftd, fontSize: 11, color: g.imp[k] ? theme.text : theme.sub, maxWidth: 210, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={g.imp[k] ? `${g.imp[k].l.historico} · ${contaNome(g.imp[k].l.contra)}` : ''}>{g.imp[k] ? g.imp[k].l.historico : ''}</td>
+                                  <td style={{ ...ftd, fontSize: 11, color: g.imp[k] ? theme.text : theme.sub, maxWidth: 210, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={g.imp[k] ? `${g.imp[k].l.historico} · ${contaNome(g.imp[k].l.contra)}` : ''}>{g.imp[k] ? <>{g.imp[k].l.historico}{acoesLanc(g.imp[k].l)}</> : ''}</td>
                                   <td style={{ ...ftd, fontSize: 11, textAlign: 'right', whiteSpace: 'nowrap', color: g.imp[k] ? corV(g.imp[k].v) : theme.sub }}>{g.imp[k] ? vlr(g.imp[k].v) : ''}</td>
                                   <td style={{ ...ftd, fontSize: 11, textAlign: 'right', whiteSpace: 'nowrap', color: g.ext[k] ? corV(g.ext[k].v) : theme.sub, borderLeft: `1px solid ${theme.border}` }}>{g.ext[k] ? vlr(g.ext[k].v) : ''}</td>
                                   {k === 0 && <td rowSpan={n} style={{ ...ftd, textAlign: 'right', verticalAlign: 'middle', whiteSpace: 'nowrap', borderLeft: `1px solid ${theme.border}`, color: g.tipo === 'sobra' ? theme.red : g.tipo === 'quase' ? theme.yellow : theme.green, fontWeight: 700 }} title={g.tipo === 'soma' ? 'A soma dos lançamentos bate com o movimento do extrato' : g.tipo === 'quase' ? `Diferença de ${money(Math.abs(g.dif))}` : g.tipo === 'sobra' ? 'Sem par — este valor compõe a diferença' : 'Bate exatamente'}>
@@ -2406,7 +2456,7 @@ function ModalCruzaSaldo({ cruza, linhas, planoMap, titulo, onClose, onVerDia, o
                                 </tr>
                               ))
                             })}
-                            {!gruposVis.length && <tr><td colSpan={4} style={{ ...ftd, fontSize: 11.5, color: theme.sub }}>{anulaItens ? 'Só lançamentos que se anulam neste dia (veja abaixo).' : 'Nada para confrontar neste dia.'}</td></tr>}
+                            {!gruposReais.length && <tr><td colSpan={4} style={{ ...ftd, fontSize: 11.5, color: theme.sub }}>{anulaItens ? 'Só lançamentos que se anulam neste dia (veja abaixo).' : 'Nada para confrontar neste dia.'}</td></tr>}
                           </tbody>
                         </table>
                         {anulaItens > 0 && (
@@ -2466,7 +2516,7 @@ function ModalCruzaSaldo({ cruza, linhas, planoMap, titulo, onClose, onVerDia, o
             </tbody>
           </table>
         </div>
-        <p style={{ color: theme.sub, fontSize: 11, margin: '10px 0 0' }}>Colunas <b style={{ color: theme.accent }}>Importado</b> (o que você classificou) × <b style={{ color: theme.green }}>Extrato</b> (o arquivo do banco). "Diferença" é a mudança do dia — o valor que sobra/falta ali. Abra um dia para confrontar <b>lançamento a lançamento</b> (a estrela ⭐ marca o provável culpado). Se o extrato não tiver coluna de movimento, use <b>Ajustar colunas</b>. Clique num dia para filtrar a tabela.</p>
+        <p style={{ color: theme.sub, fontSize: 11, margin: '10px 0 0' }}>Colunas <b style={{ color: theme.accent }}>Importado</b> (o que você classificou) × <b style={{ color: theme.green }}>Extrato</b> (o arquivo do banco). "Diferença" é a mudança do dia — o valor que sobra/falta ali. Abra um dia (<b>confronto</b>) para ver <b>lançamento a lançamento</b>; ali dá para <b><i className="ti ti-pencil" /> editar</b> ou <b><i className="ti ti-trash" /> excluir</b> um lançamento na hora. Se o extrato não tiver coluna de movimento, use <b>Ajustar colunas</b>. Clique num dia para filtrar a tabela.</p>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginTop: 14 }}>
           <button className="btn btn-ghost" onClick={exportar}><i className="ti ti-file-spreadsheet" /> Exportar apontamentos (Excel)</button>
           <button className="btn" onClick={onClose}>Fechar</button>
@@ -2615,7 +2665,7 @@ function ModalEditarLanc({ linha, banco, nomeBanco, competencia, planoMap, onClo
     onSalvar({ data: data || null, historico: historico.trim(), valor: Math.abs(v), entrada, contra: String(contra).trim() })
   }
   return (
-    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 16, zIndex: 60 }}>
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 16, zIndex: 80 }}>
       <div onClick={e => e.stopPropagation()} style={{ width: 'min(560px,96vw)', maxHeight: '90vh', overflow: 'auto', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 22 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
           <h2 style={{ fontSize: 16, margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}><i className="ti ti-pencil" style={{ color: theme.accent }} /> Editar lançamento</h2>
