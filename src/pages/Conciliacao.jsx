@@ -748,12 +748,20 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const ehEntidadeConta = ehPorEntidade(conta.nome) && tipoCta !== 'saldo'
   const { baixados, aproximadas } = ehEntidadeConta ? baixadosPorNF(lanc) : { baixados: new Set(), aproximadas: [] }
 
+  // Reconhece "cartão de crédito" pela expressão no histórico OU no nome da contrapartida —
+  // para juntar esses lançamentos num grupo só (em vez de espalhados no "não identificado").
+  const semAcento = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+  const ehCartaoCredito = l => {
+    const contras = (contraDe(l) || []).map(c => planoMap[c] || '').join(' ')
+    return /cartao\s+de\s+credito/.test(semAcento(`${l.historico || ''} ${contras}`))
+  }
   // Agrupa só o que está EM ABERTO (não baixado) por nome; incerto cai em "(não identificado)".
   const grupos = {}, nomes = []
   for (const l of lanc) {
     if (baixados.has(l) || foiConfirmado(l)) continue // baixado por NF ou confirmado em lote → saiu
     if (Math.abs(ov(l)) < 0.005) continue
-    const key = l.leitura.ident && l.leitura.entidade ? l.leitura.entidade : '(não identificado)'
+    const key = l.leitura.ident && l.leitura.entidade ? l.leitura.entidade
+      : ehCartaoCredito(l) ? 'Cartão de crédito' : '(não identificado)'
     if (!grupos[key]) { grupos[key] = []; nomes.push(key) }
     grupos[key].push(l)
   }
