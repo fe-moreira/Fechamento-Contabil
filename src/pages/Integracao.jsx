@@ -8,7 +8,7 @@ import CampoConta from '../components/CampoConta'
 import CampoCentroCusto from '../components/CampoCentroCusto'
 import { normHist, casarHistorico, casarHistoricoNivel, aprender, parseValor, dataISO, aplicarPerfil, extrairEntidade, ehEmpresa, catByRowDeMerges, expandirMerges } from '../lib/financeiro'
 import { gerarExcelTimbrado } from '../lib/excel'
-import { eventosDeLinhas, COLS_FOLHA } from '../lib/folha'
+import { eventosDeLinhas, COLS_FOLHA, novoRotuloArq, arquivosDoSlot, marcarEventos } from '../lib/folha'
 import { gerarDominioCSV } from '../lib/dominio'
 import { contasConciliacaoAbertas, montarBalancete } from '../lib/balancete'
 
@@ -771,6 +771,7 @@ function Folha({ competencia, empresaId, user, est, onEstado, onSemMov }) {
   const [busy, setBusy] = useState('')   // qual arquivo está sendo lido
   const [justAberto, setJustAberto] = useState(null) // código com justificativa aberta
   const [justTxt, setJustTxt] = useState('')
+  const [pendArq, setPendArq] = useState(null) // { alvo, file, path, eventos, rotulo, label } — pergunta substituir/complementar
 
   const arquivos = est?.arquivos || {}
   const justif = est?.justif || {}
@@ -792,39 +793,72 @@ function Folha({ competencia, empresaId, user, est, onEstado, onSemMov }) {
   const totDif = Math.round(resumo.filter(r => !r.just).reduce((s, r) => s + r.dif, 0) * 100) / 100
   const pendentes = resumo.filter(r => !r.ok).length
 
+  // Grava um estado de arquivos recalculando o "done" (só a folha mensal com eventos valida).
+  async function gravarArquivos(novoArq) {
+    const done = !!(novoArq.folha?.eventos?.length)
+    await onEstado({ ...est, arquivos: novoArq, justif, estado: done ? 'validado' : null, doc: done ? 'Folha · rubricas cruzadas' : null, usuario: user?.email || null })
+  }
+
   async function importar(alvo, file) {
     if (!file || !idx) return
     setErro(''); setBusy(alvo)
     try {
-      const eventos = await parseFolha(file)
-      if (!eventos.length) { setErro(`Não encontrei rubricas (coluna ${COLS_FOLHA.cod}) com valor (coluna ${COLS_FOLHA.valor}) no arquivo. Confira se é o relatório da folha do Domínio.`); setBusy(''); return }
-      let path = arquivos[alvo]?.path || ''
+      const lidos = await parseFolha(file)
+      if (!lidos.length) { setErro(`Não encontrei rubricas (coluna ${COLS_FOLHA.cod}) com valor (coluna ${COLS_FOLHA.valor}) no arquivo. Confira se é o relatório da folha do Domínio.`); setBusy(''); return }
+      const rotulo = novoRotuloArq(file.name)
+      const eventos = marcarEventos(lidos, rotulo.arq)
+      let path = ''
       if (idx.compId) {
         const ext = (file.name.match(/\.[a-z0-9]+$/i) || ['.xls'])[0].toLowerCase()
-        path = `folha/${idx.compId}/${alvo}${ext}`
+        path = `folha/${idx.compId}/${alvo}_${rotulo.arq.split('#')[1] || ''}${ext}`
         const { error: eUp } = await supabase.storage.from('extratos').upload(path, file, { upsert: true, contentType: file.type || undefined })
-        if (eUp) { setErro('Li o arquivo, mas não consegui guardá-lo p/ extrair depois: ' + eUp.message); path = '' }
+        if (eUp) path = ''
       }
-      const novoArq = { ...arquivos, [alvo]: { doc: file.name, path, eventos } }
-      // Folha vira validada no Status quando a folha mensal for importada (adiantamento é opcional).
-      const done = !!novoArq.folha
-      await onEstado({ ...est, arquivos: novoArq, justif, estado: done ? 'validado' : null, doc: done ? 'Folha · rubricas cruzadas' : null, usuario: user?.email || null })
-    } catch (e) { setErro('Não consegui ler: ' + e.message) }
-    setBusy('')
+      const jaTem = arquivos[alvo]?.eventos?.length
+      const pack = { alvo, path, eventos, rotulo, label: rotulo.doc }
+      setBusy('')
+      if (jaTem) setPendArq(pack)          // pergunta substituir × complementar
+      else await aplicarArquivo(pack, 'substituir')
+    } catch (e) { setErro('Não consegui ler: ' + e.message); setBusy('') }
   }
 
-  async function extrair(alvo) {
-    const a = arquivos[alvo]
-    if (!a?.path) { setErro('Este arquivo foi importado numa versão anterior e não ficou salvo. Reimporte uma vez para poder extrair.'); return }
-    const { data, error } = await supabase.storage.from('extratos').createSignedUrl(a.path, 300, { download: a.doc || `${alvo}.xls` })
+  // Aplica o arquivo lido no slot, substituindo ou complementando (soma sem apagar).
+  async function aplicarArquivo({ alvo, path, eventos, rotulo }, modo) {
+    const atual = arquivos[alvo]
+    const fileMeta = { arq: rotulo.arq, doc: rotulo.doc, data: rotulo.data, path, usuario: user?.email || null }
+    let novoSlot
+    if (modo === 'complementar' && atual?.eventos?.length) {
+      const filesAnt = (atual.files?.length ? atual.files : arquivosDoSlot(atual).map(f => ({ arq: f.arq, doc: f.doc, data: f.data, path: atual.path || '' })))
+      novoSlot = { doc: rotulo.doc, path: path || atual.path || '', eventos: [...atual.eventos, ...eventos], files: [...filesAnt, fileMeta] }
+    } else {
+      novoSlot = { doc: rotulo.doc, path, eventos, files: [fileMeta] }
+    }
+    await gravarArquivos({ ...arquivos, [alvo]: novoSlot })
+    setPendArq(null)
+  }
+
+  async function extrair(alvo, arqPath, doc) {
+    const path = arqPath || arquivos[alvo]?.path
+    if (!path) { setErro('Este arquivo foi importado numa versão anterior e não ficou salvo. Reimporte uma vez para poder extrair.'); return }
+    const nome = doc || arquivos[alvo]?.doc || `${alvo}.xls`
+    const { data, error } = await supabase.storage.from('extratos').createSignedUrl(path, 300, { download: nome })
     if (error) { setErro('Não consegui abrir o arquivo: ' + error.message); return }
-    const el = document.createElement('a'); el.href = data.signedUrl; el.download = a.doc || `${alvo}.xls`
+    const el = document.createElement('a'); el.href = data.signedUrl; el.download = nome
     document.body.appendChild(el); el.click(); el.remove()
   }
   async function removerArquivo(alvo) {
     const novoArq = { ...arquivos }; delete novoArq[alvo]
-    const done = !!novoArq.folha
-    await onEstado({ ...est, arquivos: novoArq, justif, estado: done ? 'validado' : null, doc: done ? 'Folha · rubricas cruzadas' : null, usuario: user?.email || null })
+    await gravarArquivos(novoArq)
+  }
+  // Exclui UM arquivo do slot (só os eventos daquele arquivo saem). Se ficar vazio, limpa o slot.
+  async function excluirArquivoDoSlot(alvo, arq) {
+    const a = arquivos[alvo]; if (!a) return
+    const files = arquivosDoSlot(a)
+    if (files.length <= 1) { if (window.confirm('Excluir este arquivo? O slot fica vazio.')) await removerArquivo(alvo); return }
+    if (!window.confirm('Excluir só este arquivo? As rubricas dele saem do total; os outros arquivos continuam.')) return
+    const eventos = (a.eventos || []).filter(e => (e.__arq || '__legado') !== arq)
+    const novosFiles = (a.files?.length ? a.files : files.map(f => ({ arq: f.arq, doc: f.doc, data: f.data, path: a.path || '' }))).filter(f => f.arq !== arq)
+    await gravarArquivos({ ...arquivos, [alvo]: { doc: novosFiles.slice(-1)[0]?.doc || a.doc, path: novosFiles.slice(-1)[0]?.path || '', eventos, files: novosFiles } })
   }
   // Marca um arquivo (ex.: adiantamento) como sem movimento no mês — pode não ter havido.
   async function semMovArquivo(alvo) {
@@ -865,17 +899,29 @@ function Folha({ competencia, empresaId, user, est, onEstado, onSemMov }) {
                 <span style={{ fontWeight: 600, fontSize: 13 }}>{label}</span>
                 {importado ? <i className="ti ti-circle-check" style={{ color: theme.green, marginLeft: 'auto' }} /> : semMovK ? <i className="ti ti-circle-minus" style={{ color: theme.sub, marginLeft: 'auto' }} /> : <span style={{ marginLeft: 'auto', color: theme.sub, fontSize: 12 }}>{k === 'folha' ? 'obrigatório' : 'opcional'}</span>}
               </div>
-              <p style={{ fontSize: 12, color: importado ? theme.text : theme.sub, margin: '0 0 10px' }}>{importado ? `${a.doc} · ${a.eventos.length} rubrica(s)` : semMovK ? 'Sem movimento no período.' : 'Relatório de rubricas do Domínio (colunas V/W/Z).'}</p>
+              <p style={{ fontSize: 12, color: importado ? theme.text : theme.sub, margin: '0 0 8px' }}>{importado ? `${a.eventos.length} rubrica(s) · ${arquivosDoSlot(a).length} arquivo(s)` : semMovK ? 'Sem movimento no período.' : 'Relatório de rubricas do Domínio (colunas V/W/Z).'}</p>
+              {importado && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 10 }}>
+                  {arquivosDoSlot(a).map((f, fi) => (
+                    <div key={f.arq + fi} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, background: theme.input, border: `1px solid ${theme.border}`, borderRadius: 8, padding: '4px 8px' }}>
+                      <i className="ti ti-file-spreadsheet" style={{ color: theme.sub, flexShrink: 0 }} />
+                      <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={`${f.doc}${f.data ? ' · ' + f.data : ''}`}>{f.doc}{f.data ? <span style={{ color: theme.sub }}> · {f.data}</span> : ''}</span>
+                      <span style={{ color: theme.sub, flexShrink: 0 }}>{f.n} rub.</span>
+                      {f.path && <i className="ti ti-download" title="Baixar este arquivo" onClick={() => extrair(k, f.path, f.doc)} style={{ color: theme.sub, cursor: 'pointer', flexShrink: 0 }} />}
+                      <i className="ti ti-trash" title="Excluir só este arquivo (as rubricas dele saem)" onClick={() => excluirArquivoDoSlot(k, f.arq)} style={{ color: theme.red, cursor: 'pointer', flexShrink: 0 }} />
+                    </div>
+                  ))}
+                </div>
+              )}
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                 {semMovK
                   ? <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => removerArquivo(k)}><i className="ti ti-rotate" /> Tem movimento</button>
                   : <>
                     <label className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', cursor: 'pointer' }}>
-                      <i className="ti ti-cloud-upload" /> {importado ? 'Reimportar' : 'Importar'}
+                      <i className="ti ti-cloud-upload" /> {importado ? 'Subir outro' : 'Importar'}
                       <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={e => importar(k, e.target.files?.[0])} />
                     </label>
-                    {a?.path && <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => extrair(k)}><i className="ti ti-download" /> Extrair</button>}
-                    {importado && <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', color: theme.sub }} onClick={() => removerArquivo(k)}>limpar</button>}
+                    {importado && <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', color: theme.sub }} onClick={() => { if (window.confirm('Limpar todos os arquivos deste tipo?')) removerArquivo(k) }}>limpar tudo</button>}
                     {k !== 'folha' && !importado && <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => semMovArquivo(k)} title={`Não houve ${label.toLowerCase()} neste mês`}><i className="ti ti-circle-minus" /> Sem movimento</button>}
                   </>}
                 {busy === k && <span style={{ color: theme.sub, fontSize: 12 }}><i className="ti ti-loader" /> lendo…</span>}
@@ -885,6 +931,20 @@ function Folha({ competencia, empresaId, user, est, onEstado, onSemMov }) {
         })}
       </div>
       {!arquivos.folha && <button className="btn btn-ghost" style={{ fontSize: 12.5, marginBottom: 12 }} onClick={onSemMov} title="Cliente sem folha no período (fica verde no Status)"><i className="ti ti-circle-minus" /> Marcar sem movimento</button>}
+
+      {pendArq && (
+        <div onClick={() => setPendArq(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 16, zIndex: 70 }}>
+          <div onClick={e => e.stopPropagation()} style={{ width: 'min(460px,96vw)', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 22 }}>
+            <h2 style={{ fontSize: 16, margin: '0 0 6px' }}>Já existe arquivo neste tipo</h2>
+            <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 16px' }}>O tipo <b style={{ color: theme.text }}>{ARQ_FOLHA.find(x => x[0] === pendArq.alvo)?.[1]}</b> já tem <b>{arquivos[pendArq.alvo]?.eventos?.length || 0}</b> rubrica(s). O arquivo <b style={{ color: theme.text }}>{pendArq.label}</b> tem <b>{pendArq.eventos.length}</b>. O que fazer?</p>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+              <button className="btn btn-ghost" onClick={() => setPendArq(null)}>Cancelar</button>
+              <button className="btn btn-ghost" style={{ color: theme.red, borderColor: 'rgba(229,72,77,0.4)' }} onClick={() => aplicarArquivo(pendArq, 'substituir')}><i className="ti ti-refresh" /> Substituir</button>
+              <button className="btn" onClick={() => aplicarArquivo(pendArq, 'complementar')}><i className="ti ti-plus" /> Complementar</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {eventos.length > 0 && <>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(180px,1fr))', gap: 12, margin: '4px 0 16px' }}>

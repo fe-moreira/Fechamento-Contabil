@@ -3,7 +3,9 @@ import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { fechaSozinho } from '../lib/clientes'
-import { folhaPorEmpresa } from '../lib/folha'
+import { folhaPorEmpresa, novoRotuloArq, marcarEventos, arquivosDoSlot } from '../lib/folha'
+
+const TIPOKEY_LABEL = { folha: 'Folha mensal', adiant: 'Adiantamento', decimo_adiant: '13º Adiantamento', complementar: 'Folha Complementar', plr: 'Participação de Lucros' }
 import { parsePlano } from '../lib/balancete'
 import { theme, money } from '../lib/theme'
 import CampoConta from '../components/CampoConta'
@@ -213,7 +215,10 @@ function MassaFolha({ competencias, competencia, recalcularPendencias }) {
   const [erro, setErro] = useState('')
   const [dados, setDados] = useState(null)   // { file, empresas } lido do arquivo
   const [prev, setPrev] = useState(null)     // conferência montada
+  const [modo, setModo] = useState('complementar') // como gravar quando já existe
   const [aplicando, setAplicando] = useState(false)
+  const [envios, setEnvios] = useState(null) // lista de envios da competência (para excluir)
+  const [carregEnv, setCarregEnv] = useState(false)
 
   const tipoLabel = TIPOS_FOLHA.find(t => t[0] === tipo)?.[1] || tipo
 
@@ -264,13 +269,16 @@ function MassaFolha({ competencias, competencia, recalcularPendencias }) {
     setAplicando(true); setMsg(''); setErro('')
     try {
       const { ano, mes } = prev
-      // Sobe o arquivo original UMA vez (para o "Extrair" na Integração baixar depois).
+      // Um RÓTULO por envio (mesmo em todas as empresas) → dá para excluir o envio inteiro
+      // depois. Sobe o arquivo original UMA vez (para o "Extrair" na Integração baixar depois).
+      const rotulo = novoRotuloArq(dados.file.name)
       let path = ''
       try {
         const ext = (dados.file.name.match(/\.[a-z0-9]+$/i) || ['.xls'])[0].toLowerCase()
-        path = `folha/massa/${ano}-${String(mes).padStart(2, '0')}_${tipo}${ext}`
+        path = `folha/massa/${rotulo.arq.split('#')[1] || ''}${ext}`
         await supabase.storage.from('extratos').upload(path, dados.file, { upsert: true, contentType: dados.file.type || undefined })
       } catch { path = '' }
+      const fileMeta = { arq: rotulo.arq, doc: rotulo.doc, data: rotulo.data, path, usuario: user?.email || null }
 
       let gravados = 0, pulados = 0
       for (const d of prev.destinos) {
@@ -284,16 +292,74 @@ function MassaFolha({ competencias, competencia, recalcularPendencias }) {
         if (!compId) { pulados++; continue }
         const integ = ex?.integracoes || {}
         const folha = integ.folha || {}
-        const arquivos = { ...(folha.arquivos || {}), [tipo]: { doc: dados.file.name, path, eventos: d.eventos } }
-        const done = !!arquivos.folha    // igual ao 1 a 1: só a folha mensal valida a integração
+        const atual = folha.arquivos?.[tipo]
+        const eventosTag = marcarEventos(d.eventos, rotulo.arq)
+        let slot
+        if (modo === 'complementar' && atual?.eventos?.length) {
+          const filesAnt = atual.files?.length ? atual.files : arquivosDoSlot(atual).map(f => ({ arq: f.arq, doc: f.doc, data: f.data, path: atual.path || '' }))
+          slot = { doc: rotulo.doc, path: path || atual.path || '', eventos: [...atual.eventos, ...eventosTag], files: [...filesAnt, fileMeta] }
+        } else {
+          slot = { doc: rotulo.doc, path, eventos: eventosTag, files: [fileMeta] }
+        }
+        const arquivos = { ...(folha.arquivos || {}), [tipo]: slot }
+        const done = !!(arquivos.folha?.eventos?.length)
         const novaFolha = { ...folha, arquivos, justif: folha.justif || {}, estado: done ? 'validado' : (folha.estado || null), doc: done ? 'Folha · rubricas cruzadas' : (folha.doc || null), usuario: user?.email || null }
         await supabase.from('competencias').update({ integracoes: { ...integ, folha: novaFolha } }).eq('id', compId)
         gravados++
       }
-      setMsg(`${tipoLabel}: ${gravados} empresa(s)/destino(s) gravado(s) em ${String(mes).padStart(2, '0')}/${ano}${pulados ? ` · ${pulados} pulado(s) (fechado)` : ''}.`)
+      setMsg(`${tipoLabel}: ${gravados} empresa(s) gravada(s) em ${String(mes).padStart(2, '0')}/${ano} (${modo === 'complementar' ? 'complementado' : 'substituído'})${pulados ? ` · ${pulados} pulado(s) (fechado)` : ''}.`)
       setPrev(null); setDados(null)
+      if (envios) carregarEnvios()
       recalcularPendencias?.()
     } catch (err) { setErro('Erro ao aplicar: ' + err.message) } finally { setAplicando(false) }
+  }
+
+  // Lista os ENVIOS de folha da competência (agrupa por rótulo do arquivo em todas as
+  // empresas) — para conferir e excluir um envio inteiro caso tenha subido errado.
+  async function carregarEnvios() {
+    setCarregEnv(true); setErro('')
+    try {
+      const [mes, ano] = alvo.split('/').map(Number)
+      const { data: comps } = await supabase.from('competencias').select('id, integracoes').eq('ano', ano).eq('mes', mes)
+      const grupos = new Map()
+      for (const c of (comps || [])) {
+        const arqs = c.integracoes?.folha?.arquivos || {}
+        for (const [tk, slot] of Object.entries(arqs)) {
+          for (const f of arquivosDoSlot(slot)) {
+            if (!f.arq || f.arq === '__legado') continue
+            const g = grupos.get(f.arq) || { arq: f.arq, doc: f.doc, data: f.data, tipo: tk, empresas: 0, rubricas: 0 }
+            g.empresas++; g.rubricas += f.n
+            grupos.set(f.arq, g)
+          }
+        }
+      }
+      setEnvios([...grupos.values()].sort((a, b) => (b.data || '').localeCompare(a.data || '')))
+    } catch (err) { setErro('Erro ao carregar envios: ' + err.message) } finally { setCarregEnv(false) }
+  }
+
+  async function excluirEnvio(env) {
+    if (!window.confirm(`Excluir o envio "${env.doc}" (${TIPOKEY_LABEL[env.tipo] || env.tipo}) de ${env.empresas} empresa(s)? As rubricas desse arquivo saem de todas elas.`)) return
+    setAplicando(true); setErro('')
+    try {
+      const [mes, ano] = alvo.split('/').map(Number)
+      const { data: comps } = await supabase.from('competencias').select('id, status, integracoes').eq('ano', ano).eq('mes', mes)
+      for (const c of (comps || [])) {
+        if (c.status === 'fechado') continue
+        const folha = c.integracoes?.folha; const slot = folha?.arquivos?.[env.tipo]
+        if (!slot || !(slot.eventos || []).some(e => e.__arq === env.arq)) continue
+        const eventos = (slot.eventos || []).filter(e => e.__arq !== env.arq)
+        const files = (slot.files || []).filter(f => f.arq !== env.arq)
+        const arquivos = { ...folha.arquivos }
+        if (eventos.length) arquivos[env.tipo] = { doc: files.slice(-1)[0]?.doc || slot.doc, path: files.slice(-1)[0]?.path || '', eventos, files }
+        else delete arquivos[env.tipo]
+        const done = !!(arquivos.folha?.eventos?.length)
+        const novaFolha = { ...folha, arquivos, estado: done ? 'validado' : null, doc: done ? 'Folha · rubricas cruzadas' : null, usuario: user?.email || null }
+        await supabase.from('competencias').update({ integracoes: { ...c.integracoes, folha: novaFolha } }).eq('id', c.id)
+      }
+      setMsg(`Envio "${env.doc}" excluído de ${env.empresas} empresa(s).`)
+      await carregarEnvios()
+      recalcularPendencias?.()
+    } catch (err) { setErro('Erro ao excluir envio: ' + err.message) } finally { setAplicando(false) }
   }
 
   return (
@@ -346,6 +412,11 @@ function MassaFolha({ competencias, competencia, recalcularPendencias }) {
             )}
             {prev.matrizAusente.length > 0 && <p style={{ color: theme.sub, fontSize: 12, margin: '0 0 8px' }}><b style={{ color: theme.yellow }}>Sem matriz:</b> {prev.matrizAusente.join(', ')}</p>}
             {prev.naoEncontrados.length > 0 && <p style={{ color: theme.sub, fontSize: 12, margin: '0 0 12px' }}><b style={{ color: theme.red }}>Sem cadastro:</b> {prev.naoEncontrados.join(', ')}</p>}
+            <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginBottom: 14, fontSize: 12.5 }}>
+              <span style={{ color: theme.sub }}>Se a empresa já tiver folha deste tipo:</span>
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}><input type="radio" checked={modo === 'complementar'} onChange={() => setModo('complementar')} /> Complementar (soma)</label>
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}><input type="radio" checked={modo === 'substituir'} onChange={() => setModo('substituir')} /> Substituir</label>
+            </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
               <button className="btn btn-ghost" onClick={() => { setPrev(null); setDados(null) }} disabled={aplicando}>Cancelar</button>
               <button className="btn" onClick={aplicar} disabled={aplicando || !prev.destinos.length}>{aplicando ? 'Gravando…' : 'Gravar folha'}</button>
@@ -354,6 +425,28 @@ function MassaFolha({ competencias, competencia, recalcularPendencias }) {
         </div>
       )}
       {msg && <p style={{ color: theme.green, fontSize: 12.5, margin: '10px 0 0' }}><i className="ti ti-info-circle" /> {msg}</p>}
+
+      {/* Envios da competência — conferir e excluir um arquivo subido errado (em todas as empresas de uma vez) */}
+      <div style={{ marginTop: 12, borderTop: `1px solid ${theme.border}`, paddingTop: 10 }}>
+        <button className="btn btn-ghost" style={{ fontSize: 12.5, padding: '5px 10px' }} onClick={() => (envios ? setEnvios(null) : carregarEnvios())} disabled={carregEnv}>
+          <i className={`ti ${envios ? 'ti-chevron-up' : 'ti-history'}`} /> {carregEnv ? 'Carregando…' : envios ? 'Ocultar envios' : `Envios de ${alvo}`}
+        </button>
+        {envios && (
+          envios.length
+            ? <div style={{ marginTop: 8, border: `1px solid ${theme.border}`, borderRadius: 10, overflow: 'hidden' }}>
+                {envios.map((e, i) => (
+                  <div key={e.arq} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderTop: i ? `1px solid ${theme.border}` : 'none', fontSize: 12 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}><b>{e.doc}</b> <span style={{ color: theme.sub }}>· {TIPOKEY_LABEL[e.tipo] || e.tipo}</span></div>
+                      <div style={{ color: theme.sub, fontSize: 11 }}>{e.data} · {e.empresas} empresa(s) · {e.rubricas} rubrica(s)</div>
+                    </div>
+                    <button className="btn btn-ghost" style={{ fontSize: 11.5, padding: '4px 9px', color: theme.red, borderColor: 'rgba(229,72,77,0.4)' }} onClick={() => excluirEnvio(e)} disabled={aplicando}><i className="ti ti-trash" /> excluir</button>
+                  </div>
+                ))}
+              </div>
+            : <p style={{ color: theme.sub, fontSize: 12, margin: '8px 0 0' }}>Nenhum envio de folha em massa nesta competência.</p>
+        )}
+      </div>
     </Bloco>
   )
 }
