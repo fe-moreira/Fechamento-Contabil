@@ -328,6 +328,7 @@ const HTML = `
 <section id="m-outras">
   <h2 class="m-sec">11 · Outras Contabilizações</h2>
   <p>Lançamentos específicos que fogem do fluxo automático, em cards enxutos:</p>
+  <div class="m-rule"><span class="k">Clique na linha para ver/editar</span> Em <b>Seguro</b> e <b>Despesa a Apropriar</b>, clicar em <b>qualquer linha</b> da lista (ou no botão <b>Editar</b>) abre o cadastro <b>já preenchido</b> com aquele registro — você confere/ajusta como ele foi cadastrado sem precisar procurar. Os botões de ação da linha (Apropriações, Apropriar, Saldo inicial, excluir) continuam funcionando normalmente.</div>
   <div class="m-grid">
     <div class="m-mod"><div class="h"><span class="ic">PD</span> PER/DCOMP</div><p>Crédito e compensação — a declaração que o time fiscal faz. Registra o crédito e o abatimento.</p></div>
     <div class="m-mod"><div class="h"><span class="ic">%</span> JSCP</div><p>Juros sobre capital próprio, com os campos da planilha real. IRRF padrão <b>17,5%</b> (alíquota vigente em 2026).</p></div>

@@ -42,8 +42,10 @@ function SecTitle({ children }) { return <p style={{ fontSize: 15, fontWeight: 7
 // Card de cadastro colapsável: começa RECOLHIDO para a tela ficar limpa (só os cards
 // de cima e a lista de registros aparecem). O cabeçalho inteiro é clicável; ao expandir,
 // o formulário aparece. Assim evita-se poluir a tela quando o objetivo é só consultar.
-function FormCard({ titulo, children }) {
-  const [aberto, setAberto] = useState(false)
+function FormCard({ titulo, children, aberto: abertoProp, onAberto }) {
+  const [abertoLocal, setAbertoLocal] = useState(false)
+  const aberto = abertoProp !== undefined ? abertoProp : abertoLocal
+  const setAberto = onAberto ? (v => onAberto(typeof v === 'function' ? v(aberto) : v)) : setAbertoLocal
   return (
     <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: 12, padding: 18 }}>
       <div onClick={() => setAberto(a => !a)} title={aberto ? 'Recolher o cadastro' : 'Expandir para cadastrar'}
@@ -755,12 +757,13 @@ function PaneSeguro({ clienteId, user, competencia, abrirGerar, enviarSaldoInici
   const [f, on, reset, setF] = useForm({ seguradora: '', apolice: '', ramo: '', vigencia_inicio: '', vigencia_fim: '', premio_total: '', num_parcelas: '12', valor_parcela: '', conta_despesa: '', conta_apropriar: '', conta_pagar: '', saldo_inicial: false, por_dia: false })
   const [sav, setSav] = useState(false)
   const [editId, setEditId] = useState(null)
+  const [formAberto, setFormAberto] = useState(false)
   // Ao mexer no total ou no nº de parcelas, já traz a parcela calculada (editável).
   const setCampo = (k, v) => setF(x => { const n = { ...x, [k]: v }; if (k === 'premio_total' || k === 'num_parcelas') { const t = num(n.premio_total), np = Number(n.num_parcelas) || 0; if (t && np) n.valor_parcela = String(Math.round(t / np * 100) / 100) } return n })
-  function cancelarEdicao() { reset(); setEditId(null) }
+  function cancelarEdicao() { reset(); setEditId(null); setFormAberto(false) }
   function editar(r) {
     setF({ seguradora: r.seguradora || '', apolice: r.apolice || '', ramo: r.ramo || '', vigencia_inicio: r.vigencia_inicio || '', vigencia_fim: r.vigencia_fim || '', premio_total: r.premio_total != null ? String(r.premio_total) : '', num_parcelas: r.num_parcelas != null ? String(r.num_parcelas) : '', valor_parcela: r.valor_parcela != null ? String(r.valor_parcela) : '', conta_despesa: r.conta_despesa || '', conta_apropriar: r.conta_apropriar || '', conta_pagar: r.conta_pagar || '', saldo_inicial: !!r.saldo_inicial, por_dia: !!r.por_dia })
-    setEditId(r.id); window.scrollTo({ top: 0, behavior: 'smooth' })
+    setEditId(r.id); setFormAberto(true); window.scrollTo({ top: 0, behavior: 'smooth' })
   }
   async function salvar(e) {
     e.preventDefault(); setSav(true)
@@ -768,12 +771,12 @@ function PaneSeguro({ clienteId, user, competencia, abrirGerar, enviarSaldoInici
     try {
       if (editId) await atualizar('seguros', editId, row)
       else await inserir('seguros', { cliente_id: clienteId, ...row, usuario: user?.email })
-      reset(); setEditId(null); recarregar()
+      reset(); setEditId(null); setFormAberto(false); recarregar()
     } catch (er) { alert(er.message) } finally { setSav(false) }
   }
   return (
     <div style={{ display: 'grid', gap: 14 }}>
-      <FormCard titulo={<><i className="ti ti-shield-half" style={{ color: ACC.seguro }} /> {editId ? 'Editar contrato de seguro' : 'Novo contrato de seguro'}</>}>
+      <FormCard aberto={formAberto} onAberto={setFormAberto} titulo={<><i className="ti ti-shield-half" style={{ color: ACC.seguro }} /> {editId ? 'Editar contrato de seguro' : 'Novo contrato de seguro'}</>}>
         <SecSub>Cadastre a apólice — depois gere a apropriação do mês, que vira lançamento.{editId && <b style={{ color: ACC.seguro }}> Editando um contrato.</b>}</SecSub>
         {!editId && <LeitorIA tipo="seguro" acento={ACC.seguro} onExtraido={d => aplicarIA(setF, d)} />}
         <form onSubmit={salvar} style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10 }}>
@@ -806,10 +809,10 @@ function PaneSeguro({ clienteId, user, competencia, abrirGerar, enviarSaldoInici
           {loading ? <Vazio colSpan={6} texto="Carregando…" /> : rows.length === 0 ? <Vazio colSpan={6} texto="Nenhum contrato cadastrado ainda." /> : rows.map(r => {
             const apropriado = contratoApropriado(r, aprops, 'seguro')
             return (
-            <tr key={r.id}>
+            <tr key={r.id} onClick={() => editar(r)} style={{ cursor: 'pointer' }} title="Clique para ver/editar o cadastro">
               <td style={td}><b>{r.seguradora}</b>{apropriado && <div style={{ marginTop: 4 }}><SeloApropriado competencia={competencia} /></div>}</td><td style={td}>{r.apolice}</td><td style={td}>{r.ramo}</td>
               <td style={{ ...td, textAlign: 'right' }}>{money(r.premio_total)}</td><td style={{ ...td, textAlign: 'right' }}>{money(r.valor_parcela)}</td>
-              <td style={{ ...td, whiteSpace: 'nowrap', textAlign: 'right' }}>
+              <td style={{ ...td, whiteSpace: 'nowrap', textAlign: 'right' }} onClick={e => e.stopPropagation()}>
                 <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => editar(r)} title="Editar contrato"><i className="ti ti-pencil" /> Editar</button>{' '}
                 <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => setCron(r)} title="Ver o cronograma de apropriações"><i className="ti ti-list-check" /> Apropriações</button>{' '}
                 <GerarBtn onClick={() => abrirGerar({ data: dataComp(competencia), conta_debito: r.conta_despesa, conta_credito: r.conta_apropriar, valor: valorApropriacaoMes(r, competencia), historico: `${`Apropriação seguro ${r.seguradora} ${r.apolice || ''}`.trim()}${sufixoParcela(r, competencia)}`, origem: 'seguro', documento: r.apolice }, `Apropriação — ${r.seguradora}`)}>{apropriado ? 'Apropriar de novo' : 'Apropriação do mês'}</GerarBtn>{' '}
@@ -837,11 +840,12 @@ function PaneDespesaApropriar({ clienteId, user, competencia, abrirGerar, enviar
   const [f, on, reset, setF] = useForm({ tipo: '', descricao: '', documento: '', valor_total: '', vigencia_inicio: '', vigencia_fim: '', num_parcelas: '12', valor_parcela: '', conta_despesa: '', conta_apropriar: '', conta_pagar: '', saldo_inicial: false, por_dia: false })
   const [sav, setSav] = useState(false)
   const [editId, setEditId] = useState(null)
+  const [formAberto, setFormAberto] = useState(false)
   const setCampo = (k, v) => setF(x => { const n = { ...x, [k]: v }; if (k === 'valor_total' || k === 'num_parcelas') { const t = num(n.valor_total), np = Number(n.num_parcelas) || 0; if (t && np) n.valor_parcela = String(Math.round(t / np * 100) / 100) } return n })
-  function cancelarEdicao() { reset(); setEditId(null) }
+  function cancelarEdicao() { reset(); setEditId(null); setFormAberto(false) }
   function editar(r) {
     setF({ tipo: r.tipo || '', descricao: r.descricao || '', documento: r.documento || '', valor_total: r.valor_total != null ? String(r.valor_total) : '', vigencia_inicio: r.vigencia_inicio || '', vigencia_fim: r.vigencia_fim || '', num_parcelas: r.num_parcelas != null ? String(r.num_parcelas) : '', valor_parcela: r.valor_parcela != null ? String(r.valor_parcela) : '', conta_despesa: r.conta_despesa || '', conta_apropriar: r.conta_apropriar || '', conta_pagar: r.conta_pagar || '', saldo_inicial: !!r.saldo_inicial, por_dia: !!r.por_dia })
-    setEditId(r.id); window.scrollTo({ top: 0, behavior: 'smooth' })
+    setEditId(r.id); setFormAberto(true); window.scrollTo({ top: 0, behavior: 'smooth' })
   }
   async function salvar(e) {
     e.preventDefault(); setSav(true)
@@ -849,12 +853,12 @@ function PaneDespesaApropriar({ clienteId, user, competencia, abrirGerar, enviar
     try {
       if (editId) await atualizar('despesas_apropriar', editId, row)
       else await inserir('despesas_apropriar', { cliente_id: clienteId, ...row, usuario: user?.email })
-      reset(); setEditId(null); recarregar()
+      reset(); setEditId(null); setFormAberto(false); recarregar()
     } catch (er) { alert(er.message) } finally { setSav(false) }
   }
   return (
     <div style={{ display: 'grid', gap: 14 }}>
-      <FormCard titulo={<><i className="ti ti-calendar-repeat" style={{ color: ACC.despesa }} /> {editId ? 'Editar despesa a apropriar' : 'Nova despesa a apropriar'}</>}>
+      <FormCard aberto={formAberto} onAberto={setFormAberto} titulo={<><i className="ti ti-calendar-repeat" style={{ color: ACC.despesa }} /> {editId ? 'Editar despesa a apropriar' : 'Nova despesa a apropriar'}</>}>
         <SecSub>IPVA, IPTU, aluguel antecipado, licenças… Cadastre uma vez e gere a apropriação do mês. O saldo que falta apropriar pode ir direto ao saldo inicial.{editId && <b style={{ color: ACC.despesa }}> Editando.</b>}</SecSub>
         <form onSubmit={salvar} style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10 }}>
           <Field label="Tipo (IPVA, IPTU…)"><input className="input" value={f.tipo} onChange={on('tipo')} placeholder="IPVA" required /></Field>
@@ -886,10 +890,10 @@ function PaneDespesaApropriar({ clienteId, user, competencia, abrirGerar, enviar
           {loading ? <Vazio colSpan={5} texto="Carregando…" /> : rows.length === 0 ? <Vazio colSpan={5} texto="Nenhuma despesa cadastrada ainda." /> : rows.map(r => {
             const apropriado = contratoApropriado(r, aprops, 'despesa')
             return (
-            <tr key={r.id}>
+            <tr key={r.id} onClick={() => editar(r)} style={{ cursor: 'pointer' }} title="Clique para ver/editar o cadastro">
               <td style={td}><b>{r.tipo}</b>{apropriado && <div style={{ marginTop: 4 }}><SeloApropriado competencia={competencia} /></div>}</td><td style={td}>{r.descricao}</td>
               <td style={{ ...td, textAlign: 'right' }}>{money(r.valor_total)}</td><td style={{ ...td, textAlign: 'right' }}>{money(r.valor_parcela)}</td>
-              <td style={{ ...td, whiteSpace: 'nowrap', textAlign: 'right' }}>
+              <td style={{ ...td, whiteSpace: 'nowrap', textAlign: 'right' }} onClick={e => e.stopPropagation()}>
                 <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => editar(r)} title="Editar despesa"><i className="ti ti-pencil" /> Editar</button>{' '}
                 <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => setCron(r)} title="Ver o cronograma de apropriações"><i className="ti ti-list-check" /> Apropriações</button>{' '}
                 <GerarBtn onClick={() => abrirGerar({ data: dataComp(competencia), conta_debito: r.conta_despesa, conta_credito: r.conta_apropriar, valor: valorApropriacaoMes(r, competencia), historico: `${`Apropriação ${r.tipo} ${r.descricao || ''}`.trim()}${sufixoParcela(r, competencia)}`, origem: 'despesa', documento: r.documento }, `Apropriação — ${r.tipo}`)}>{apropriado ? 'Apropriar de novo' : 'Apropriação do mês'}</GerarBtn>{' '}
