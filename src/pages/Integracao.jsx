@@ -773,7 +773,7 @@ function mapaExtratoValido(m, arr) {
 // com o razão pelo padrão "VALOR REF. <código> - <nome>". Resumo por rubrica com total → zero.
 // Rubricas informativas (ex.: "INF - SEGURO DE VIDA") que não são contabilizadas podem ser
 // justificadas para fechar em zero, do mesmo jeito que a fiscal.
-const ARQ_FOLHA = [['folha', 'Folha mensal', 'ti-users'], ['adiant', 'Adiantamento', 'ti-cash']]
+const ARQ_FOLHA = [['folha', 'Folha mensal', 'ti-users'], ['adiant', 'Adiantamento', 'ti-cash'], ['decimo_adiant', '13º Adiantamento', 'ti-gift'], ['complementar', 'Folha Complementar', 'ti-file-plus'], ['plr', 'Participação de Lucros', 'ti-pig-money']]
 function Folha({ competencia, empresaId, user, est, onEstado, onSemMov }) {
   const [idx, setIdx] = useState(null)   // { byCod, valores, compId }
   const [carregando, setCarregando] = useState(true)
@@ -793,8 +793,9 @@ function Folha({ competencia, empresaId, user, est, onEstado, onSemMov }) {
     return () => { ativo = false }
   }, [empresaId, competencia])
 
-  // Eventos unificados (folha + adiantamento) e o cruzamento AO VIVO com o razão atual.
-  const eventos = unificarFolha(arquivos.folha?.eventos, arquivos.adiant?.eventos)
+  // Eventos unificados (folha mensal + adiantamento + 13º adiant. + complementar + PLR) e
+  // o cruzamento AO VIVO com o razão atual.
+  const eventos = unificarFolha(arquivos.folha?.eventos, arquivos.adiant?.eventos, arquivos.decimo_adiant?.eventos, arquivos.complementar?.eventos, arquivos.plr?.eventos)
   const resumo = (eventos.length && idx) ? cruzarFolha(eventos, idx, justif) : []
   const totDoc = resumo.reduce((s, r) => s + r.valor, 0)
   const totRaz = resumo.reduce((s, r) => s + r.razao, 0)
@@ -872,7 +873,7 @@ function Folha({ competencia, empresaId, user, est, onEstado, onSemMov }) {
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
                 <i className={`ti ${icon}`} style={{ color: theme.accent }} />
                 <span style={{ fontWeight: 600, fontSize: 13 }}>{label}</span>
-                {importado ? <i className="ti ti-circle-check" style={{ color: theme.green, marginLeft: 'auto' }} /> : semMovK ? <i className="ti ti-circle-minus" style={{ color: theme.sub, marginLeft: 'auto' }} /> : <span style={{ marginLeft: 'auto', color: theme.sub, fontSize: 12 }}>{k === 'adiant' ? 'opcional' : 'obrigatório'}</span>}
+                {importado ? <i className="ti ti-circle-check" style={{ color: theme.green, marginLeft: 'auto' }} /> : semMovK ? <i className="ti ti-circle-minus" style={{ color: theme.sub, marginLeft: 'auto' }} /> : <span style={{ marginLeft: 'auto', color: theme.sub, fontSize: 12 }}>{k === 'folha' ? 'obrigatório' : 'opcional'}</span>}
               </div>
               <p style={{ fontSize: 12, color: importado ? theme.text : theme.sub, margin: '0 0 10px' }}>{importado ? `${a.doc} · ${a.eventos.length} rubrica(s)` : semMovK ? 'Sem movimento no período.' : 'Relatório de rubricas do Domínio (colunas V/W/Z).'}</p>
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
@@ -885,7 +886,7 @@ function Folha({ competencia, empresaId, user, est, onEstado, onSemMov }) {
                     </label>
                     {a?.path && <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => extrair(k)}><i className="ti ti-download" /> Extrair</button>}
                     {importado && <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', color: theme.sub }} onClick={() => removerArquivo(k)}>limpar</button>}
-                    {k === 'adiant' && !importado && <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => semMovArquivo(k)} title="Não houve adiantamento neste mês"><i className="ti ti-circle-minus" /> Sem movimento</button>}
+                    {k !== 'folha' && !importado && <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => semMovArquivo(k)} title={`Não houve ${label.toLowerCase()} neste mês`}><i className="ti ti-circle-minus" /> Sem movimento</button>}
                   </>}
                 {busy === k && <span style={{ color: theme.sub, fontSize: 12 }}><i className="ti ti-loader" /> lendo…</span>}
               </div>
