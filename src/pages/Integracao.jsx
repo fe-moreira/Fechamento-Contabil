@@ -1073,6 +1073,37 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
     })
   }, [empresaId])
 
+  // Reabrir sozinho o banco após um reload (ex.: botão "Atualizar" da nova versão): guarda
+  // em sessionStorage qual banco (e se o cruzamento) estava aberto e restaura ao voltar,
+  // para não ter que refazer todo o caminho. Chave por cliente+competência.
+  const restauradoRef = useRef(null)
+  const chaveAberto = () => `integ_aberto_${empresaId}_${competencia}`
+  // Restaura (uma vez por contexto), assim que o cadastro terminou de carregar.
+  useEffect(() => {
+    if (carregReg) return
+    const chave = chaveAberto()
+    if (restauradoRef.current === chave) return
+    restauradoRef.current = chave
+    if (raw?.banco) return // já tem um banco aberto (import em andamento) — não mexe
+    let alvo = null
+    try { alvo = JSON.parse(sessionStorage.getItem(chave) || 'null') } catch { alvo = null }
+    const s = alvo?.banco ? (est?.bancos || {})[alvo.banco] : null
+    if (s?.draft) {
+      continuarRascunho(alvo.banco)
+      if (alvo.cruzaOpen && s.cruza) setCruzaOpen(true)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [carregReg, empresaId, competencia])
+  // Guarda o banco aberto (e se o cruzamento está aberto) a cada mudança — só depois de restaurar.
+  useEffect(() => {
+    if (carregReg || restauradoRef.current !== chaveAberto()) return
+    try {
+      if (raw?.banco) sessionStorage.setItem(chaveAberto(), JSON.stringify({ banco: raw.banco, cruzaOpen }))
+      else sessionStorage.removeItem(chaveAberto())
+    } catch { /* sessionStorage indisponível */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [raw?.banco, cruzaOpen, carregReg])
+
   // Cadastro de bancos e memória valem para todas as competências (o cliente
   // cadastra uma vez). Por isso é lido sempre pelo registro mais recente, sem
   // filtro de mês, e persiste para os próximos meses.
