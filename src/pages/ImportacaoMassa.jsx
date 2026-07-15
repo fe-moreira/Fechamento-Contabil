@@ -326,14 +326,17 @@ function MassaFolha({ competencias, competencia, recalcularPendencias }) {
         const arqs = c.integracoes?.folha?.arquivos || {}
         for (const [tk, slot] of Object.entries(arqs)) {
           for (const f of arquivosDoSlot(slot)) {
-            if (!f.arq || f.arq === '__legado') continue
-            const g = grupos.get(f.arq) || { arq: f.arq, doc: f.doc, data: f.data, tipo: tk, empresas: 0, rubricas: 0 }
+            // Envios NOVOS têm carimbo (arq). Os ANTIGOS (subidos antes desta versão) não têm —
+            // aí agrupamos pelo tipo + nome do arquivo, para também poder conferir e excluir.
+            const legado = !f.arq || f.arq === '__legado'
+            const key = legado ? `legado::${tk}::${f.doc || ''}` : f.arq
+            const g = grupos.get(key) || { key, arq: legado ? null : f.arq, legado, tipo: tk, doc: f.doc, data: f.data || '', empresas: 0, rubricas: 0 }
             g.empresas++; g.rubricas += f.n
-            grupos.set(f.arq, g)
+            grupos.set(key, g)
           }
         }
       }
-      setEnvios([...grupos.values()].sort((a, b) => (b.data || '').localeCompare(a.data || '')))
+      setEnvios([...grupos.values()].sort((a, b) => (Number(a.legado) - Number(b.legado)) || (b.data || '').localeCompare(a.data || '')))
     } catch (err) { setErro('Erro ao carregar envios: ' + err.message) } finally { setCarregEnv(false) }
   }
 
@@ -343,20 +346,32 @@ function MassaFolha({ competencias, competencia, recalcularPendencias }) {
     try {
       const [mes, ano] = alvo.split('/').map(Number)
       const { data: comps } = await supabase.from('competencias').select('id, status, integracoes').eq('ano', ano).eq('mes', mes)
+      let n = 0
       for (const c of (comps || [])) {
         if (c.status === 'fechado') continue
         const folha = c.integracoes?.folha; const slot = folha?.arquivos?.[env.tipo]
-        if (!slot || !(slot.eventos || []).some(e => e.__arq === env.arq)) continue
-        const eventos = (slot.eventos || []).filter(e => e.__arq !== env.arq)
-        const files = (slot.files || []).filter(f => f.arq !== env.arq)
+        if (!slot) continue
+        let eventos, files
+        if (env.legado) {
+          // Antigo: casa pelo nome do arquivo; tira os eventos SEM carimbo (mantém os novos, se houver).
+          if ((slot.doc || '') !== env.doc) continue
+          if (!(slot.eventos || []).some(e => !e.__arq)) continue
+          eventos = (slot.eventos || []).filter(e => e.__arq)
+          files = (slot.files || []).filter(f => f.arq && f.arq !== '__legado')
+        } else {
+          if (!(slot.eventos || []).some(e => e.__arq === env.arq)) continue
+          eventos = (slot.eventos || []).filter(e => e.__arq !== env.arq)
+          files = (slot.files || []).filter(f => f.arq !== env.arq)
+        }
         const arquivos = { ...folha.arquivos }
         if (eventos.length) arquivos[env.tipo] = { doc: files.slice(-1)[0]?.doc || slot.doc, path: files.slice(-1)[0]?.path || '', eventos, files }
         else delete arquivos[env.tipo]
         const done = !!(arquivos.folha?.eventos?.length)
         const novaFolha = { ...folha, arquivos, estado: done ? 'validado' : null, doc: done ? 'Folha · rubricas cruzadas' : null, usuario: user?.email || null }
         await supabase.from('competencias').update({ integracoes: { ...c.integracoes, folha: novaFolha } }).eq('id', c.id)
+        n++
       }
-      setMsg(`Envio "${env.doc}" excluído de ${env.empresas} empresa(s).`)
+      setMsg(`Envio "${env.doc}" excluído de ${n} empresa(s).`)
       await carregarEnvios()
       recalcularPendencias?.()
     } catch (err) { setErro('Erro ao excluir envio: ' + err.message) } finally { setAplicando(false) }
@@ -435,10 +450,10 @@ function MassaFolha({ competencias, competencia, recalcularPendencias }) {
           envios.length
             ? <div style={{ marginTop: 8, border: `1px solid ${theme.border}`, borderRadius: 10, overflow: 'hidden' }}>
                 {envios.map((e, i) => (
-                  <div key={e.arq} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderTop: i ? `1px solid ${theme.border}` : 'none', fontSize: 12 }}>
+                  <div key={e.key} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderTop: i ? `1px solid ${theme.border}` : 'none', fontSize: 12 }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}><b>{e.doc}</b> <span style={{ color: theme.sub }}>· {TIPOKEY_LABEL[e.tipo] || e.tipo}</span></div>
-                      <div style={{ color: theme.sub, fontSize: 11 }}>{e.data} · {e.empresas} empresa(s) · {e.rubricas} rubrica(s)</div>
+                      <div style={{ color: theme.sub, fontSize: 11 }}>{e.data ? e.data + ' · ' : e.legado ? 'subido antes · ' : ''}{e.empresas} empresa(s) · {e.rubricas} rubrica(s)</div>
                     </div>
                     <button className="btn btn-ghost" style={{ fontSize: 11.5, padding: '4px 9px', color: theme.red, borderColor: 'rgba(229,72,77,0.4)' }} onClick={() => excluirEnvio(e)} disabled={aplicando}><i className="ti ti-trash" /> excluir</button>
                   </div>
