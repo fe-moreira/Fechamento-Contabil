@@ -271,6 +271,9 @@ const HTML = `
     <div class="row"><span class="lbl"><span class="m-dot dr"></span> Sem cliente</span><p>CNPJ não bateu: escolha no dropdown ou renomeie <span class="m-code">código-conta</span>.</p></div>
   </div>
   <div class="m-rule"><span class="k">Aprende sozinho</span> O número da conta confirmado no F4 é gravado no cadastro de contas bancárias. Do <b>2º mês em diante</b>, a mesma conta é reconhecida automaticamente (etiqueta “memória”). A extensão decide o destino: <b>PDF → Conciliação</b>; <b>Excel → Integração</b>.</div>
+  <h3><span class="m-dot db"></span> Folha em massa</h3>
+  <p>Um único relatório de rubricas do Domínio traz <b>várias empresas</b> (coluna A = código no Domínio). Em vez de subir a folha empresa por empresa na Integração, suba <b>o arquivo inteiro aqui</b>: escolha o <b>tipo</b> (Folha mensal, Adiantamento, 13º Adiantamento, Folha Complementar ou Participação de Lucros) e a competência, e o sistema <b>quebra por empresa</b> e joga a folha na Integração de cada cliente.</p>
+  <div class="m-rule"><span class="k">Como casa e roteia</span> Cada empresa é casada pelo <b>código do Domínio</b> (CNPJ de reserva). O destino segue o cadastro: <b>filial "Consolidado"</b> tem a folha <b>somada na matriz</b>; empresa <b>"Individualizado"</b> (ou matriz) recebe a sua própria. Antes de gravar, uma <b>tela de conferência</b> mostra cada destino (com o total e quantas rubricas), quem <b>consolida em quem</b>, e o que não entrou: empresa <b>sem cadastro</b>, filial <b>sem matriz cadastrada</b> ou linha <b>sem rubrica</b>. Competências <b>fechadas</b> são puladas.</div>
 </section>
 
 <section id="m-relmassa">

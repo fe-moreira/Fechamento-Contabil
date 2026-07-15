@@ -8,6 +8,7 @@ import CampoConta from '../components/CampoConta'
 import CampoCentroCusto from '../components/CampoCentroCusto'
 import { normHist, casarHistorico, casarHistoricoNivel, aprender, parseValor, dataISO, aplicarPerfil, extrairEntidade, ehEmpresa, catByRowDeMerges, expandirMerges } from '../lib/financeiro'
 import { gerarExcelTimbrado } from '../lib/excel'
+import { eventosDeLinhas, COLS_FOLHA } from '../lib/folha'
 import { gerarDominioCSV } from '../lib/dominio'
 import { contasConciliacaoAbertas, montarBalancete } from '../lib/balancete'
 
@@ -169,9 +170,6 @@ function totaisResumoPdf(texto) {
 // ---- Integração FOLHA: cruzamento rubrica × razão --------------------------
 // Dois arquivos (folha + adiantamento) unificados. Colunas do relatório do Domínio:
 // V = código do evento (rubrica), W = nome do evento, Z = valor calculado, U = P/D/I.
-const COLS_FOLHA = { cod: 'V', nome: 'W', valor: 'Z', pd: 'U' }
-// Código da rubrica só com dígitos, sem zeros à esquerda.
-const normRub = v => String(v ?? '').replace(/\D/g, '').replace(/^0+/, '')
 // Código da rubrica citado no histórico do razão — padrão "VALOR REF. <código> - <nome>".
 function rubDoHistorico(h) {
   const m = /valor\s*ref\.?\s*(\d+)\s*-/i.exec(String(h || ''))
@@ -182,15 +180,7 @@ async function parseFolha(file) {
   const XLSX = await import('xlsx')
   const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true })
   const arr = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' })
-  const cCod = XLSX.utils.decode_col(COLS_FOLHA.cod), cNome = XLSX.utils.decode_col(COLS_FOLHA.nome)
-  const cVal = XLSX.utils.decode_col(COLS_FOLHA.valor), cPd = XLSX.utils.decode_col(COLS_FOLHA.pd)
-  const out = []
-  for (const r of arr) {
-    const cod = normRub(r[cCod]); const valor = numFis(r[cVal])
-    if (!cod || !valor) continue // pula cabeçalho, linhas em branco e linhas sem código/valor
-    out.push({ cod, nome: String(r[cNome] ?? '').trim(), valor, pd: String(r[cPd] ?? '').trim().toUpperCase() })
-  }
-  return out
+  return eventosDeLinhas(arr)
 }
 // Unifica os eventos dos dois arquivos: agrupa por código somando os valores (a mesma
 // rubrica pode aparecer por funcionário / nos dois arquivos). Mantém o nome do evento.
