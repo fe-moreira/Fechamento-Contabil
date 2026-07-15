@@ -907,15 +907,17 @@ function Folha({ competencia, empresaId, user, est, onEstado, onSemMov }) {
           const a = arquivos[k]
           const semMovK = a?.semMovimento
           const importado = a && !semMovK
-          const cor = importado ? theme.green : semMovK ? theme.cb : theme.cb
+          const cor = importado || semMovK ? theme.green : theme.cb
           return (
             <div key={k} style={{ background: theme.card, border: `1px solid ${cor}`, borderRadius: 12, padding: 14 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
                 <i className={`ti ${icon}`} style={{ color: theme.accent }} />
                 <span style={{ fontWeight: 600, fontSize: 13 }}>{label}</span>
-                {importado ? <i className="ti ti-circle-check" style={{ color: theme.green, marginLeft: 'auto' }} /> : semMovK ? <i className="ti ti-circle-minus" style={{ color: theme.sub, marginLeft: 'auto' }} /> : <span style={{ marginLeft: 'auto', color: theme.sub, fontSize: 12 }}>{k === 'folha' ? 'obrigatório' : 'opcional'}</span>}
+                {importado ? <i className="ti ti-circle-check" style={{ color: theme.green, marginLeft: 'auto' }} />
+                  : semMovK ? <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 4, color: theme.green, fontSize: 12, fontWeight: 600 }}><i className="ti ti-circle-check" /> Sem movimento</span>
+                  : <span style={{ marginLeft: 'auto', color: theme.sub, fontSize: 12 }}>{k === 'folha' ? 'obrigatório' : 'opcional'}</span>}
               </div>
-              <p style={{ fontSize: 12, color: importado ? theme.text : theme.sub, margin: '0 0 8px' }}>{importado ? `${a.eventos.length} rubrica(s) · ${arquivosDoSlot(a).length} arquivo(s)` : semMovK ? 'Sem movimento no período.' : 'Relatório de rubricas do Domínio (colunas V/W/Z).'}</p>
+              <p style={{ fontSize: 12, color: importado ? theme.text : theme.sub, margin: '0 0 8px' }}>{importado ? `${a.eventos.length} rubrica(s) · ${arquivosDoSlot(a).length} arquivo(s)` : semMovK ? 'Marcado como sem movimento no período.' : 'Relatório de rubricas do Domínio (colunas V/W/Z).'}</p>
               {importado && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 10 }}>
                   {arquivosDoSlot(a).map((f, fi) => (
@@ -931,7 +933,7 @@ function Folha({ competencia, empresaId, user, est, onEstado, onSemMov }) {
               )}
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                 {semMovK
-                  ? <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => removerArquivo(k)}><i className="ti ti-rotate" /> Tem movimento</button>
+                  ? <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', color: theme.sub }} onClick={() => removerArquivo(k)} title="Desmarcar — voltar a poder importar este tipo"><i className="ti ti-rotate" /> Reverter (tem movimento)</button>
                   : <>
                     <label className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', cursor: 'pointer' }}>
                       <i className="ti ti-cloud-upload" /> {importado ? 'Subir outro' : 'Importar'}
