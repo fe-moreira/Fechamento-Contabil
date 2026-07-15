@@ -4,7 +4,7 @@ import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { theme, money, moneyDC } from '../lib/theme'
-import { montarBalancete, parsePlano, composicaoAbertura, difConciliacao, applyMask, erroContaSintetica } from '../lib/balancete'
+import { montarBalancete, parsePlano, composicaoAbertura, difConciliacao, applyMask, erroContaSintetica, ehCompetenciaInicial, excluirLinhaAbertura } from '../lib/balancete'
 import { abrePdfTimbrado } from '../lib/pdf'
 import { gerarExcelTimbrado } from '../lib/excel'
 import { listarComentariosConta, adicionarComentario, excluirComentario } from '../lib/comentarios'
@@ -561,6 +561,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const [verConferidos, setVerConferidos] = useState(false) // mostra a seção "Conferidos" (p/ reabrir)
   const [buscaNome, setBuscaNome] = useState('') // busca por nome na composição de clientes/fornecedores
   const [selLin, setSelLin] = useState(() => new Set()) // linhas marcadas p/ conectar (baixa manual)
+  const [abertura, setAbertura] = useState({ inicial: false, fechada: false }) // esta competência é a de abertura? está fechada?
   const [loteForn, setLoteForn] = useState(null) // { lines } — corrigir fornecedor em lote
   const [conectarDif, setConectarDif] = useState(null) // { alvo, net } — apontar desconto/juros da diferença
   const [novoLanc, setNovoLanc] = useState(false)       // abre o modal de novo lançamento manual nesta conta
@@ -683,6 +684,35 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     setCarregando(false)
   }
   useEffect(() => { carregarLanc() }, [compId, conta.conta]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Esta competência é a de ABERTURA do cliente? (só nela o "Saldo anterior" vem da carga
+  // inicial e pode ser excluído aqui). Guarda também se a abertura está fechada (trava).
+  useEffect(() => {
+    let ativo = true
+    ;(async () => {
+      const inicial = await ehCompetenciaInicial(empresaId, compId)
+      let fechada = false
+      if (inicial) { const ab = await aberturaComp(empresaId, competencia); fechada = !!ab.fechada }
+      if (ativo) setAbertura({ inicial, fechada })
+    })()
+    return () => { ativo = false }
+  }, [empresaId, compId, competencia])
+
+  // Exclui a linha do saldo inicial (Saldo anterior) da carga inicial — para tirar um
+  // duplicado sem ir à Base de Informações. Trava se a abertura estiver fechada.
+  async function excluirAbertura(l) {
+    if (abertura.fechada) { setMsg('A competência de abertura está FECHADA — reabra-a para excluir o saldo inicial.'); return }
+    const valor = (Number(l.debito) || 0) - (Number(l.credito) || 0)
+    const cliente = String(l._origEntidade ?? l.leitura?.entidade ?? '').trim()
+    const dataISOalvo = (l.data && l.data !== 'abertura') ? l.data : ''
+    if (!window.confirm(`Excluir esta linha do saldo inicial?\n\n${cliente || '(sem nome)'}${dataISOalvo ? ' · ' + dataISOalvo : ''} · ${money(Math.abs(valor))}\n\nA linha sai da carga inicial (você pode subir de novo em Base de Informações).`)) return
+    try {
+      const r = await excluirLinhaAbertura(empresaId, { conta: conta.conta, classifRaw: conta.classifRaw, valor, cliente, data: dataISOalvo }, usuario)
+      if (!r.removidas) { setMsg('Não encontrei essa linha na carga inicial (pode já ter sido removida).'); return }
+      setMsg('Linha do saldo inicial excluída.')
+      carregarLanc(); onMudou && onMudou()
+    } catch (e) { setMsg(e.message) }
+  }
 
   // Razão inteiro da competência, indexado por partida (mesma data + histórico),
   // para descobrir a contrapartida (a(s) conta(s) do lado oposto de cada lançamento).
@@ -1404,6 +1434,13 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
                                     )}
                                   </span>
                                 : <span style={{ color: theme.green, fontSize: 14 }}><i className="ti ti-circle-check" /></span>}
+                        {l._abertura && abertura.inicial && (
+                          <button title={abertura.fechada ? 'Abertura fechada — reabra para excluir' : 'Excluir esta linha do saldo inicial'}
+                            disabled={abertura.fechada} onClick={e => { e.stopPropagation(); excluirAbertura(l) }}
+                            style={{ marginLeft: 8, background: 'none', border: 'none', color: abertura.fechada ? theme.sub : theme.red, cursor: abertura.fechada ? 'not-allowed' : 'pointer', fontSize: 14, verticalAlign: 'middle' }}>
+                            <i className="ti ti-trash" />
+                          </button>
+                        )}
                       </td>
                     </tr>
                   )
@@ -1448,7 +1485,8 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       )}
       </>
       ) : (
-        <ListaLancamentos lanc={emAbertoTodos} carregando={carregando} contraDe={contraDe} planoMap={planoMap} tratados={tratados} onTratar={abrirLinha} />
+        <ListaLancamentos lanc={emAbertoTodos} carregando={carregando} contraDe={contraDe} planoMap={planoMap} tratados={tratados} onTratar={abrirLinha}
+          selLin={selLin} onToggleSel={toggleSelLin} onExcluirAbertura={excluirAbertura} podeExcluirAbertura={abertura.inicial} aberturaFechada={abertura.fechada} />
       )}
 
       {(() => {
@@ -1565,7 +1603,9 @@ function ModalComposicao({ titulo, itens, onClose }) {
 
 // Lista simples dos lançamentos de uma conta de composição que NÃO é por entidade
 // (ex.: IRRF s/ aplicação): sem nome/NF/agrupamento; cada lançamento é clicável.
-function ListaLancamentos({ lanc, carregando, contraDe, planoMap, tratados = new Set(), onTratar }) {
+function ListaLancamentos({ lanc, carregando, contraDe, planoMap, tratados = new Set(), onTratar, selLin, onToggleSel, onExcluirAbertura, podeExcluirAbertura, aberturaFechada }) {
+  const selectable = !!onToggleSel // permite marcar linhas p/ conectar (baixa manual)
+  const nCols = selectable ? 7 : 6
   return (
     <>
       <p style={{ color: theme.sub, fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: .5, margin: '4px 0 10px' }}>Lançamentos da conta</p>
@@ -1573,19 +1613,25 @@ function ListaLancamentos({ lanc, carregando, contraDe, planoMap, tratados = new
         <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 680 }}>
           <thead>
             <tr style={{ background: theme.input }}>
+              {selectable && <th style={{ ...th, width: 26 }} title="Marcar para conectar (baixa manual)"></th>}
               <th style={th}>Data</th><th style={th}>Histórico</th><th style={th}>Contrapartida</th>
               <th style={thR}>Débito</th><th style={thR}>Crédito</th><th style={{ ...th, textAlign: 'center' }}>Ação</th>
             </tr>
           </thead>
           <tbody>
             {carregando ? (
-              <tr><td colSpan={6} style={{ ...td, color: theme.sub }}>Carregando…</td></tr>
+              <tr><td colSpan={nCols} style={{ ...td, color: theme.sub }}>Carregando…</td></tr>
             ) : lanc.length === 0 ? (
-              <tr><td colSpan={6} style={{ ...td, color: theme.sub }}>Sem lançamentos nesta conta.</td></tr>
+              <tr><td colSpan={nCols} style={{ ...td, color: theme.sub }}>Sem lançamentos nesta conta.</td></tr>
             ) : lanc.map((l, i) => {
               const contras = contraDe(l)
               return (
                 <tr key={i} onClick={() => onTratar(l)} style={{ borderTop: `1px solid ${theme.border}`, cursor: 'pointer', opacity: (l.acerto || tratados.has(l.id)) ? 0.7 : 1, background: (l.acerto || tratados.has(l.id)) ? 'rgba(48,164,108,0.08)' : 'transparent' }} title={l.acerto ? `${tagAcertoLanc(l).titulo} — clique para ver ou desfazer` : tratados.has(l.id) ? 'Já tratado — clique para ver ou desfazer' : 'Justificar ou corrigir este lançamento'}>
+                  {selectable && (
+                    <td style={{ ...td, textAlign: 'center' }} onClick={e => e.stopPropagation()}>
+                      {!l.acerto && !l._abertura && l.id && <input type="checkbox" title="Conectar com outro (baixa manual)" checked={selLin?.has(l.id)} onChange={() => onToggleSel(l)} style={{ cursor: 'pointer', width: 15, height: 15 }} />}
+                    </td>
+                  )}
                   <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{l.data || '—'}</td>
                   <td style={{ ...td, color: theme.sub, fontFamily: 'monospace', fontSize: 11, maxWidth: 320 }}>{l.historico}</td>
                   <td style={{ ...td, fontSize: 11.5, whiteSpace: 'nowrap' }} title={contras.map(c => `${c}${planoMap[c] ? ' · ' + planoMap[c] : ''}`).join('\n')}>
@@ -1599,7 +1645,13 @@ function ListaLancamentos({ lanc, carregando, contraDe, planoMap, tratados = new
                     ? <span title={tagAcertoLanc(l).titulo} style={{ color: theme.accent, fontSize: 10.5, fontWeight: 700, whiteSpace: 'nowrap' }}><i className={`ti ${tagAcertoLanc(l).icon}`} /> {tagAcertoLanc(l).txt}</span>
                     : tratados.has(l.id)
                       ? <span title="Já tratado" style={{ color: theme.green, fontSize: 10.5, fontWeight: 700, whiteSpace: 'nowrap' }}><i className="ti ti-arrow-back-up" /> corrigido</span>
-                      : <i className="ti ti-dots" style={{ color: theme.sub }} />}</td>
+                      : l._abertura && podeExcluirAbertura
+                        ? <button title={aberturaFechada ? 'Abertura fechada — reabra para excluir' : 'Excluir esta linha do saldo inicial'}
+                            disabled={aberturaFechada} onClick={e => { e.stopPropagation(); onExcluirAbertura(l) }}
+                            style={{ background: 'none', border: 'none', color: aberturaFechada ? theme.sub : theme.red, cursor: aberturaFechada ? 'not-allowed' : 'pointer', fontSize: 14 }}>
+                            <i className="ti ti-trash" />
+                          </button>
+                        : <i className="ti ti-dots" style={{ color: theme.sub }} />}</td>
                 </tr>
               )
             })}
