@@ -7,6 +7,42 @@ import { folhaPorEmpresa, novoRotuloArq, marcarEventos, arquivosDoSlot } from '.
 import { periodoDistribuicao, montarDistribuicao, pdfDistribuicao, nomeArquivoDistribuicao } from '../lib/distribuicaoRelatorio'
 
 const TIPOKEY_LABEL = { folha: 'Folha mensal', adiant: 'Adiantamento', decimo_adiant: '13º Adiantamento', complementar: 'Folha Complementar', plr: 'Participação de Lucros' }
+const TIPOS_FOLHA_KEYS = ['folha', 'adiant', 'decimo_adiant', 'complementar', 'plr']
+const r2f = v => Math.round((v || 0) * 100) / 100
+const rubDoHist = h => { const m = /valor\s*ref\.?\s*(\d+)\s*-/i.exec(String(h || '')); return m ? m[1].replace(/^0+/, '') : '' }
+// Eventos unificados por rubrica (soma) de todos os tipos de folha da competência.
+function eventosUnifFolha(arquivos) {
+  const map = {}
+  for (const k of TIPOS_FOLHA_KEYS) for (const e of (arquivos?.[k]?.eventos || [])) {
+    const m = (map[e.cod] ||= { cod: e.cod, valor: 0 }); m.valor = r2f(m.valor + (Number(e.valor) || 0))
+  }
+  return Object.values(map)
+}
+// Índice do razão por rubrica (mesma regra da tela: código no histórico "VALOR REF. <cod> -").
+async function idxRazaoFolha(compId) {
+  const byCod = {}, valores = new Set()
+  const add = (hist, deb, cred) => { const cod = rubDoHist(hist); if (!cod) return; const b = (byCod[cod] ||= { deb: 0, cred: 0 }); b.deb = r2f(b.deb + (deb || 0)); b.cred = r2f(b.cred + (cred || 0)); for (const v of [deb, cred]) if (v) valores.add(Math.round(v * 100)) }
+  const [{ data: rz }, { data: aj }] = await Promise.all([
+    supabase.from('razao').select('id, historico, debito, credito').eq('competencia_id', compId),
+    supabase.from('ajuste_leitura').select('razao_id, historico'),
+  ])
+  const ajmap = {}; for (const a of (aj || [])) if (a.historico) ajmap[a.razao_id] = a.historico
+  for (const r of (rz || [])) add(ajmap[r.id] || r.historico, Number(r.debito) || 0, Number(r.credito) || 0)
+  const { data: lc } = await supabase.from('lancamentos').select('historico, valor').eq('competencia_id', compId)
+  for (const l of (lc || [])) { const v = Math.abs(Number(l.valor) || 0); add(l.historico, v, v) }
+  return { byCod, valores }
+}
+// Quantas rubricas NÃO batem (nem por código/valor, nem justificadas).
+function pendentesFolha(evs, idx, justif) {
+  let pend = 0
+  for (const e of evs) {
+    let razao = idx.byCod[e.cod] ? Math.max(idx.byCod[e.cod].deb, idx.byCod[e.cod].cred) : null
+    if (razao == null) razao = idx.valores.has(Math.round(e.valor * 100)) ? e.valor : 0
+    const ok = Math.abs(r2f(e.valor - razao)) < 0.005 || !!(justif && justif[e.cod])
+    if (!ok) pend++
+  }
+  return pend
+}
 import { parsePlano } from '../lib/balancete'
 import { theme, money } from '../lib/theme'
 import CampoConta from '../components/CampoConta'
@@ -294,6 +330,7 @@ function MassaFolha({ competencias, competencia, recalcularPendencias }) {
   const [marcarVazios, setMarcarVazios] = useState(true) // tipos opcionais sem arquivo → sem movimento
   const [vaziosFeito, setVaziosFeito] = useState(false)  // já rodou o "marcar vazios" nesta competência
   const [aplicando, setAplicando] = useState(false)
+  const [revalidando, setRevalidando] = useState(false)
   const [envios, setEnvios] = useState(null) // lista de envios da competência (para excluir)
   const [carregEnv, setCarregEnv] = useState(false)
 
@@ -459,6 +496,31 @@ function MassaFolha({ competencias, competencia, recalcularPendencias }) {
     } catch (err) { setErro('Erro ao excluir envio: ' + err.message) } finally { setAplicando(false) }
   }
 
+  // Revalida a folha de TODAS as empresas da competência: cruza as rubricas com o razão de
+  // cada uma e deixa "validado" (verde) SÓ quem bate; o resto volta a pendente. Conserta o
+  // verde que ficou preso de uploads antigos, sem precisar abrir empresa por empresa.
+  async function revalidar() {
+    const [mes, ano] = alvo.split('/').map(Number)
+    if (!window.confirm(`Revalidar a folha de ${alvo}? A integração fica verde só nas empresas em que as rubricas batem com o razão; as demais voltam a pendente.`)) return
+    setRevalidando(true); setErro(''); setMsg('')
+    try {
+      const { data: comps } = await supabase.from('competencias').select('id, status, integracoes').eq('ano', ano).eq('mes', mes)
+      let verdes = 0, pendente = 0
+      for (const c of (comps || [])) {
+        const folha = c.integracoes?.folha
+        if (c.status === 'fechado' || !folha || folha.estado === 'sem_movimento') continue
+        const evs = eventosUnifFolha(folha.arquivos)
+        let querido = null
+        if (evs.length) { const idx = await idxRazaoFolha(c.id); querido = pendentesFolha(evs, idx, folha.justif || {}) === 0 ? 'validado' : null }
+        if ((folha.estado || null) === querido) { if (querido === 'validado') verdes++; else pendente++; continue }
+        const novaFolha = { ...folha, estado: querido, doc: querido ? 'Folha · rubricas cruzadas' : null, usuario: user?.email || null }
+        await supabase.from('competencias').update({ integracoes: { ...c.integracoes, folha: novaFolha } }).eq('id', c.id)
+        if (querido === 'validado') verdes++; else pendente++
+      }
+      setMsg(`Folha revalidada em ${alvo}: ${verdes} verde(s) (batendo) · ${pendente} pendente(s).`)
+      recalcularPendencias?.()
+    } catch (err) { setErro('Erro ao revalidar: ' + err.message) } finally { setRevalidando(false) }
+  }
   // Aplica "sem movimento" (retroativo) nos tipos OPCIONAIS que ficaram sem arquivo, em todas
   // as empresas da competência que já têm folha mensal — resolve de uma vez os cards vazios.
   async function finalizarVazios() {
@@ -504,6 +566,9 @@ function MassaFolha({ competencias, competencia, recalcularPendencias }) {
         </label>
         <button className="btn btn-ghost" style={{ fontSize: 12.5, color: vaziosFeito ? theme.green : undefined, borderColor: vaziosFeito ? theme.green : undefined }} onClick={finalizarVazios} disabled={aplicando} title="Nas empresas que já têm folha mensal, marca os tipos opcionais vazios como sem movimento. Pode rodar de novo depois de subir mais arquivos.">
           <i className={`ti ${vaziosFeito ? 'ti-check' : 'ti-circle-minus'}`} /> {vaziosFeito ? 'Vazios marcados' : 'Marcar vazios sem movimento'}
+        </button>
+        <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={revalidar} disabled={revalidando || aplicando} title="Recalcula o cruzamento com o razão de cada empresa e deixa verde só quem bate (conserta o verde preso de uploads antigos).">
+          <i className="ti ti-checks" /> {revalidando ? 'Revalidando…' : 'Revalidar folha (verde só se bate)'}
         </button>
       </div>
       {erro && <p style={{ color: theme.red, fontSize: 12.5, margin: '10px 0 0' }}>{erro}</p>}
