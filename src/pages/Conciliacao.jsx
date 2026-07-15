@@ -156,9 +156,22 @@ function tipoConta(nome) {
 
 // Agrupa lançamentos por cliente/fornecedor (unificando nomes parecidos) → blocos p/ relatório.
 function agruparPorCliente(lancs) {
+  // Título e pagamento com a MESMA NF específica (>=5 díg.) são o mesmo fornecedor, mesmo
+  // com o nome lido diferente (ex.: "RSM ... AUDITORIA" no título e "RSM ... AUDITORES
+  // INDEPENDENTES" no pagamento). Junta os dois no MESMO bloco — assim o subtotal do
+  // fornecedor bate (débito e crédito juntos) no "Conciliados".
+  const canonPorNF = {}
+  const porNF = {}
+  for (const l of lancs) { const nf = nfKey(l.leitura?.nf); if (nf && nf.length >= 5 && l.leitura?.ident && String(l.leitura.entidade || '').trim()) (porNF[nf] = porNF[nf] || []).push(l.leitura.entidade.trim()) }
+  for (const nf in porNF) { const ns = [...new Set(porNF[nf])]; if (ns.length > 1) canonPorNF[nf] = ns.slice().sort((a, b) => a.length - b.length)[0] } // rótulo: o nome mais curto (mais limpo)
+  const nomeCanon = l => {
+    const nf = nfKey(l.leitura?.nf)
+    if (nf && canonPorNF[nf]) return canonPorNF[nf]
+    return l.leitura?.ident && l.leitura.entidade ? l.leitura.entidade : '(não identificado)'
+  }
   const grupos = {}, nomes = []
   for (const l of lancs) {
-    const k = l.leitura?.ident && l.leitura.entidade ? l.leitura.entidade : '(não identificado)'
+    const k = nomeCanon(l)
     if (!grupos[k]) { grupos[k] = []; nomes.push(k) }
     grupos[k].push(l)
   }
