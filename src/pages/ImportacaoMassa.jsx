@@ -1,7 +1,9 @@
 import { useState, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
+import { useAuth } from '../components/AuthProvider'
 import { fechaSozinho } from '../lib/clientes'
+import { folhaPorEmpresa } from '../lib/folha'
 import { parsePlano } from '../lib/balancete'
 import { theme, money } from '../lib/theme'
 import CampoConta from '../components/CampoConta'
@@ -128,6 +130,9 @@ export default function ImportacaoMassa() {
 
         {/* Recebimento de arquivos (extratos PDF/Excel) */}
         <RecebeArquivos competencias={competencias} competencia={competencia} recalcularPendencias={recalcularPendencias} />
+
+        {/* Folha em massa (um arquivo do Domínio com várias empresas → quebra por empresa) */}
+        <MassaFolha competencias={competencias} competencia={competencia} recalcularPendencias={recalcularPendencias} />
       </div>
 
       {/* Confirmação da importação */}
@@ -186,6 +191,171 @@ function Bloco({ icon, titulo, desc, children, emBreve }) {
 
 function Tag({ c, n, t }) {
   return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: theme.text }}><b style={{ color: c, fontSize: 15 }}>{n}</b> {t}</span>
+}
+
+// ---- Card: Folha em massa ----
+// Um único relatório de rubricas do Domínio traz VÁRIAS empresas (coluna A = código no
+// Domínio). Aqui a gente quebra por empresa e joga a folha na Integração de cada cliente,
+// respeitando o cadastro: filial "Consolidado" centraliza na MATRIZ; individualizado vai
+// na própria empresa. Casa por código do Domínio (CNPJ de reserva).
+const TIPOS_FOLHA = [
+  ['folha', 'Folha mensal'],
+  ['adiant', 'Adiantamento'],
+  ['decimo_adiant', '13º Adiantamento'],
+  ['complementar', 'Folha Complementar'],
+  ['plr', 'Participação de Lucros'],
+]
+function MassaFolha({ competencias, competencia, recalcularPendencias }) {
+  const { user } = useAuth()
+  const [alvo, setAlvo] = useState(competencia)
+  const [tipo, setTipo] = useState('folha')
+  const [msg, setMsg] = useState('')
+  const [erro, setErro] = useState('')
+  const [dados, setDados] = useState(null)   // { file, empresas } lido do arquivo
+  const [prev, setPrev] = useState(null)     // conferência montada
+  const [aplicando, setAplicando] = useState(false)
+
+  const tipoLabel = TIPOS_FOLHA.find(t => t[0] === tipo)?.[1] || tipo
+
+  async function analisar(e) {
+    const file = e.target.files?.[0]; e.target.value = ''
+    if (!file) return
+    setMsg(''); setErro(''); setPrev(null); setDados(null)
+    try {
+      const XLSX = await import('xlsx')
+      const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true })
+      const arr = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' })
+      const empresas = folhaPorEmpresa(arr)
+      if (!empresas.length) { setErro('Não encontrei empresas no arquivo (coluna A = código no Domínio). Confira se é o relatório de rubricas do Domínio com várias empresas.'); return }
+      setDados({ file, empresas })
+      await montarConferencia(file, empresas)
+    } catch (err) { setErro('Erro ao ler o arquivo: ' + err.message) }
+  }
+
+  async function montarConferencia(file, empresas) {
+    const { data: clientes } = await supabase.from('clientes')
+      .select('id, codigo_dominio, tipo, tipo_fechamento, codigo_matriz, razao_social, cnpj')
+    const porCod = new Map((clientes || []).map(c => [String(c.codigo_dominio || '').trim(), c]))
+    const porCnpj = new Map((clientes || []).map(c => [cnpj14(c.cnpj), c]))
+    const destinos = new Map()   // id → { id, nome, fontes:[], eventos:[] }
+    const naoEncontrados = [], matrizAusente = [], semRubrica = []
+    for (const emp of empresas) {
+      const cli = porCod.get(emp.cod) || porCnpj.get(cnpj14(emp.cnpj))
+      if (!cli) { naoEncontrados.push(`${emp.cod} · ${emp.nome}`); continue }
+      if (!emp.eventos.length) { semRubrica.push(`${emp.cod} · ${emp.nome}`); continue }
+      let dest = cli
+      if (!fechaSozinho(cli)) {   // filial consolidada → centraliza na matriz
+        const matriz = porCod.get(String(cli.codigo_matriz || '').trim())
+        if (!matriz) { matrizAusente.push(`${emp.cod} · ${emp.nome} (matriz ${cli.codigo_matriz || '?'} não cadastrada)`); continue }
+        dest = matriz
+      }
+      let d = destinos.get(dest.id)
+      if (!d) { d = { id: dest.id, nome: dest.razao_social, cod: dest.codigo_dominio, fontes: [], eventos: [] }; destinos.set(dest.id, d) }
+      d.fontes.push({ cod: emp.cod, nome: emp.nome, n: emp.eventos.length, consolida: dest.id !== cli.id })
+      d.eventos.push(...emp.eventos)
+    }
+    const lista = [...destinos.values()].map(d => ({ ...d, total: Math.round(d.eventos.reduce((s, e) => s + e.valor, 0) * 100) / 100 }))
+    const [mes, ano] = alvo.split('/').map(Number)
+    setPrev({ fileName: file.name, destinos: lista, naoEncontrados, matrizAusente, semRubrica, ano, mes })
+  }
+
+  async function aplicar() {
+    if (!prev || !dados) return
+    setAplicando(true); setMsg(''); setErro('')
+    try {
+      const { ano, mes } = prev
+      // Sobe o arquivo original UMA vez (para o "Extrair" na Integração baixar depois).
+      let path = ''
+      try {
+        const ext = (dados.file.name.match(/\.[a-z0-9]+$/i) || ['.xls'])[0].toLowerCase()
+        path = `folha/massa/${ano}-${String(mes).padStart(2, '0')}_${tipo}${ext}`
+        await supabase.storage.from('extratos').upload(path, dados.file, { upsert: true, contentType: dados.file.type || undefined })
+      } catch { path = '' }
+
+      let gravados = 0, pulados = 0
+      for (const d of prev.destinos) {
+        const { data: ex } = await supabase.from('competencias').select('id, status, integracoes').eq('cliente_id', d.id).eq('ano', ano).eq('mes', mes).maybeSingle()
+        if (ex?.status === 'fechado') { pulados++; continue }
+        let compId = ex?.id
+        if (!compId) {
+          const { data: cr } = await supabase.from('competencias').insert({ cliente_id: d.id, ano, mes }).select('id').single()
+          compId = cr?.id
+        }
+        if (!compId) { pulados++; continue }
+        const integ = ex?.integracoes || {}
+        const folha = integ.folha || {}
+        const arquivos = { ...(folha.arquivos || {}), [tipo]: { doc: dados.file.name, path, eventos: d.eventos } }
+        const done = !!arquivos.folha    // igual ao 1 a 1: só a folha mensal valida a integração
+        const novaFolha = { ...folha, arquivos, justif: folha.justif || {}, estado: done ? 'validado' : (folha.estado || null), doc: done ? 'Folha · rubricas cruzadas' : (folha.doc || null), usuario: user?.email || null }
+        await supabase.from('competencias').update({ integracoes: { ...integ, folha: novaFolha } }).eq('id', compId)
+        gravados++
+      }
+      setMsg(`${tipoLabel}: ${gravados} empresa(s)/destino(s) gravado(s) em ${String(mes).padStart(2, '0')}/${ano}${pulados ? ` · ${pulados} pulado(s) (fechado)` : ''}.`)
+      setPrev(null); setDados(null)
+      recalcularPendencias?.()
+    } catch (err) { setErro('Erro ao aplicar: ' + err.message) } finally { setAplicando(false) }
+  }
+
+  return (
+    <Bloco icon="ti-users-group" titulo="Folha em massa" desc="Suba UM relatório de rubricas do Domínio com várias empresas — o sistema quebra por empresa e joga a folha na Integração de cada cliente. Filial consolidada centraliza na matriz; individualizada vai na própria empresa.">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 12.5, color: theme.sub }}>Tipo:</span>
+        <select className="input" style={{ width: 'auto', padding: '6px 10px', fontSize: 13 }} value={tipo} onChange={e => setTipo(e.target.value)}>
+          {TIPOS_FOLHA.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+        </select>
+        <span style={{ fontSize: 12.5, color: theme.sub }}>Competência:</span>
+        <select className="input" style={{ width: 'auto', padding: '6px 10px', fontSize: 13 }} value={alvo} onChange={e => setAlvo(e.target.value)}>
+          {(competencias || [competencia]).map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+      </div>
+      <label className="btn" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 13 }}>
+        <i className="ti ti-file-import" /> Subir arquivo ({tipoLabel})
+        <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={analisar} />
+      </label>
+      {erro && <p style={{ color: theme.red, fontSize: 12.5, margin: '10px 0 0' }}>{erro}</p>}
+
+      {prev && (
+        <div onClick={() => !aplicando && (setPrev(null), setDados(null))} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 50 }}>
+          <div onClick={e => e.stopPropagation()} style={{ width: 'min(620px,96vw)', maxHeight: '88vh', overflow: 'auto', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
+            <h2 style={{ fontSize: 17, marginBottom: 4 }}>Folha em massa — {tipoLabel}</h2>
+            <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 14 }}>
+              Competência <b style={{ color: theme.text }}>{String(prev.mes).padStart(2, '0')}/{prev.ano}</b>. Cada empresa vira a folha <b style={{ color: theme.text }}>{tipoLabel}</b> na Integração do cliente. Filial consolidada é somada na <b>matriz</b>. Fechados são pulados.
+            </p>
+            <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginBottom: 14 }}>
+              <Tag c={theme.green} n={prev.destinos.length} t="destino(s) a gravar" />
+              {prev.matrizAusente.length > 0 && <Tag c={theme.yellow} n={prev.matrizAusente.length} t="sem matriz cadastrada" />}
+              {prev.naoEncontrados.length > 0 && <Tag c={theme.red} n={prev.naoEncontrados.length} t="empresa(s) sem cadastro" />}
+              {prev.semRubrica.length > 0 && <Tag c={theme.sub} n={prev.semRubrica.length} t="sem rubrica no arquivo" />}
+            </div>
+            {prev.destinos.length > 0 && (
+              <div style={{ maxHeight: 260, overflow: 'auto', border: `1px solid ${theme.border}`, borderRadius: 10, marginBottom: 12 }}>
+                {prev.destinos.map((d, i) => (
+                  <div key={i} style={{ padding: '9px 12px', borderTop: i ? `1px solid ${theme.border}` : 'none', fontSize: 12.5 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}>
+                      <b>{d.cod} · {d.nome}</b>
+                      <span style={{ color: theme.sub, whiteSpace: 'nowrap' }}>{money(d.total)} · {d.eventos.length} rubrica(s)</span>
+                    </div>
+                    {d.fontes.some(f => f.consolida) && (
+                      <div style={{ color: theme.sub, fontSize: 11.5, marginTop: 3 }}>
+                        <i className="ti ti-arrows-join" /> consolida: {d.fontes.map(f => `${f.cod}${f.consolida ? '' : ' (matriz)'}`).join(' + ')}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+            {prev.matrizAusente.length > 0 && <p style={{ color: theme.sub, fontSize: 12, margin: '0 0 8px' }}><b style={{ color: theme.yellow }}>Sem matriz:</b> {prev.matrizAusente.join(', ')}</p>}
+            {prev.naoEncontrados.length > 0 && <p style={{ color: theme.sub, fontSize: 12, margin: '0 0 12px' }}><b style={{ color: theme.red }}>Sem cadastro:</b> {prev.naoEncontrados.join(', ')}</p>}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button className="btn btn-ghost" onClick={() => { setPrev(null); setDados(null) }} disabled={aplicando}>Cancelar</button>
+              <button className="btn" onClick={aplicar} disabled={aplicando || !prev.destinos.length}>{aplicando ? 'Gravando…' : 'Gravar folha'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {msg && <p style={{ color: theme.green, fontSize: 12.5, margin: '10px 0 0' }}><i className="ti ti-info-circle" /> {msg}</p>}
+    </Bloco>
+  )
 }
 
 // ---- Card: Recebimento de arquivos (extratos PDF/Excel, cross-client, sem renomear) ----
