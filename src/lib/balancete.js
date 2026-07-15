@@ -1,5 +1,6 @@
 import { supabase } from './supabase'
 import { itensAbertosConta } from './aberturaArrasto'
+import { aberturaComp } from './cargaInicial'
 
 const baixa = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
 
@@ -304,6 +305,55 @@ export async function composicaoAbertura(empresaId, compId, contaCod, classifRaw
   if (!ant) return []
   const aberturaAnt = await composicaoAbertura(empresaId, ant, contaCod, classifRaw, contaNome, _depth + 1)
   return await itensAbertosConta(ant, contaCod, contaNome, classifRaw, aberturaAnt)
+}
+
+// Exclui UMA linha da composição (e o saldo gêmeo, se houver) da carga inicial que casa
+// com o item de "Saldo anterior" clicado na Conciliação — para tirar um saldo inicial
+// duplicado/errado sem ir à Base de Informações. Bloqueia se a competência de abertura
+// estiver FECHADA (mexer no saldo inicial arrasta para os meses seguintes). Registra
+// auditoria. `alvo`: { conta, classifRaw, valor (D−C com sinal), cliente, data (ISO) }.
+export async function excluirLinhaAbertura(empresaId, alvo, usuario) {
+  const { data: cli } = await supabase.from('clientes').select('competencia_inicio').eq('id', empresaId).maybeSingle()
+  const compIni = normalizaCompetencia(cli?.competencia_inicio)
+  const ab = await aberturaComp(empresaId, compIni)
+  if (ab.fechada) throw new Error('A competência de abertura está FECHADA — reabra-a para excluir o saldo inicial.')
+
+  const { data: cargas } = await supabase.from('cargas_cadastro').select('id, dados, obs')
+    .eq('cliente_id', empresaId).eq('tipo', 'financeiro').order('created_at', { ascending: false })
+  const rec = (cargas || []).find(c => { const d = c?.dados; return d && !Array.isArray(d) && (Array.isArray(d.composicoes) || Array.isArray(d.saldos)) })
+  if (!rec) throw new Error('Não encontrei a carga inicial para excluir a linha.')
+
+  const alvoContas = new Set([soDig(alvo.conta), soDig(alvo.classifRaw)].filter(Boolean))
+  const cliAlvo = String(alvo.cliente ?? '').trim()
+  const casa = r => {
+    if (!alvoContas.has(soDig(codConta(r)))) return false
+    const v = saldoSinalAb(campoPor(r, /valor|saldo/), campoPor(r, /^d\/?c$|natureza/))
+    if (Math.abs(v - (Number(alvo.valor) || 0)) > 0.005) return false
+    if (cliAlvo) { const c = String(campoPor(r, /cliente|fornec|nome|descri|histor/) || '').trim(); if (c !== cliAlvo) return false }
+    if (alvo.data) { if (dataCelulaISO(campoPor(r, /data/)) !== alvo.data) return false }
+    return true
+  }
+  // Remove no máximo UMA composição e, se houver, o saldo gêmeo (mesmos conta+valor+nome+data).
+  const comps = Array.isArray(rec.dados.composicoes) ? [...rec.dados.composicoes] : []
+  const saldos = Array.isArray(rec.dados.saldos) ? [...rec.dados.saldos] : []
+  const iComp = comps.findIndex(casa)
+  if (iComp >= 0) comps.splice(iComp, 1)
+  const iSaldo = saldos.findIndex(casa)
+  if (iSaldo >= 0) saldos.splice(iSaldo, 1)
+  if (iComp < 0 && iSaldo < 0) return { removidas: 0 }
+
+  const { error } = await supabase.from('cargas_cadastro').update({ dados: { ...rec.dados, composicoes: comps, saldos }, usuario }).eq('id', rec.id)
+  if (error) throw error
+  if (ab.id) {
+    try {
+      await supabase.from('auditoria').insert({
+        competencia_id: ab.id, modulo: 'Conciliação', item: `Saldo inicial ${alvo.conta}`, tipo: 'Correção',
+        detalhe: `Linha do saldo inicial excluída — ${cliAlvo || 's/ nome'}${alvo.data ? ' · ' + alvo.data : ''} · ${(Number(alvo.valor) || 0).toFixed(2)}`,
+        usuario: usuario || null,
+      })
+    } catch { /* auditoria é best-effort */ }
+  }
+  return { removidas: (iComp >= 0 ? 1 : 0) + (iSaldo >= 0 ? 1 : 0) }
 }
 
 // Balancete hierárquico (sintéticas + analíticas) de uma competência.
