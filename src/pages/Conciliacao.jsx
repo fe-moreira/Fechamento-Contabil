@@ -641,11 +641,11 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       const chave = a.razao_id || abItem
       if (!chave) continue
       if (a.razao_id) rz.add(a.razao_id); else ab.add(a.item)
-      // Chave ESTÁVEL (conta·data·NF, no campo `item`) além do razao_id: sobrevive à
-      // REIMPORTAÇÃO do razão (que gera novos uuid). Sem isso, baixas/conferências viram
-      // ÓRFÃS quando o razão é reimportado e o saldo do "Conciliados" desbalanceia (um lado
-      // do par — ex.: o pagamento — deixa de ser reconhecido como baixado).
-      if (a.item && !abItem) rz.add(a.item)
+      // BAIXA em lote: além do razao_id, guarda a chave ESTÁVEL (conta·data·NF, no `item`)
+      // para a conciliação SOBREVIVER à REIMPORTAÇÃO do razão (novos uuid). Sem isso um lado
+      // do par (ex.: o pagamento) vira órfão e o "Conciliados" desbalanceia. Só a baixa em
+      // lote usa isso — as demais tratativas (ajuste/correção) seguem pelo razao_id, para
+      // não mexer nos filtros/leitura incerta.
       if (String(a.detalhe || '').startsWith('Confirmado em lote')) { conf.add(chave); if (a.item && !abItem) conf.add(a.item) }
     }
     setTratados(rz); setTratadosAb(ab); setConfirmados(conf)
@@ -662,7 +662,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   for (const l of lanc) { if (!l._abertura && !l.acerto) { const k = itemConc(l); itemCount[k] = (itemCount[k] || 0) + 1 } }
   const itemUnico = l => itemCount[itemConc(l)] === 1
   const chaveTrat = l => l.acerto ? String(l.id).replace(/^ac_/, '') : (l._abertura ? chaveAbertura(l) : l.id)
-  const jaTratada = l => l._abertura ? tratadosAb.has(chaveAbertura(l)) : (tratados.has(l.id) || (itemUnico(l) && tratados.has(itemConc(l))))
+  const jaTratada = l => l._abertura ? tratadosAb.has(chaveAbertura(l)) : tratados.has(l.id)
   const foiConfirmado = l => confirmados.has(chaveTrat(l)) || (!l._abertura && !l.acerto && itemUnico(l) && confirmados.has(itemConc(l))) // saiu do em aberto (conciliado)
   useEffect(() => { carregarTratados() }, [compId]) // eslint-disable-line react-hooks/exhaustive-deps
 
