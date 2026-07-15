@@ -1029,7 +1029,22 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     if (Math.abs(net) >= 0.005) { setConectarDif({ alvo, net }); return }
     if (!window.confirm(`Conectar ${alvo.length} lançamento(s)? Eles zeram entre si e vão para Conciliados.`)) return
     await baixarConexao(alvo)
-    setMsg(`${alvo.length} lançamento(s) conectado(s) — foram para Conciliados.`)
+  }
+  // Ao CONECTAR lançamentos com nomes lidos diferentes (ex.: o título lido como "ELETROLAR"
+  // e o pagamento como "LIKE DISTRIBUICAO E LOGISTICA"), UNIFICA o fornecedor: adota o nome
+  // mais COMPLETO como o "fornecedor final" e APRENDE que os outros são o mesmo (apelido) —
+  // vale para os próximos meses e agrupa sozinho. Assim a plataforma vai aprendendo.
+  async function unificarNomesConectados(alvo) {
+    const nomes = [...new Set((alvo || []).filter(l => l.leitura?.ident && String(l.leitura.entidade || '').trim()).map(l => l.leitura.entidade.trim()))]
+    if (nomes.length < 2) return null
+    const canonical = nomes.slice().sort((a, b) => b.length - a.length)[0] // o mais completo
+    const aliases = { ...nomesAlias }
+    let mudou = false
+    for (const n of nomes) { const k = chaveNome(n); if (k && k !== chaveNome(canonical)) { aliases[k] = canonical; mudou = true } }
+    if (!mudou) return null
+    setNomesAlias(aliases)
+    await salvarNomes(nomesConf, nomesIsolados, aliases)
+    return canonical
   }
   // Marca as linhas da conexão como confirmadas (saem para Conciliados). `extraRazaoId` é o
   // lançamento de acerto da diferença (desconto/juros), que também deve sair do em aberto.
@@ -1047,8 +1062,11 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     const { error } = await supabase.from('auditoria').insert(rows)
     if (error) { setMsg('Não consegui conectar: ' + error.message); return false }
     marcarTratadas(alvo)
+    // Unifica e APRENDE o fornecedor final (nomes lidos diferentes → um só, nos próximos meses).
+    const canonical = await unificarNomesConectados(alvo)
     setSelLin(new Set()); setConectarDif(null)
     carregarTratados(); carregarLanc(); onMudou && onMudou()
+    if (!extraRazaoId) setMsg(`${alvo.length} lançamento(s) conectado(s) — foram para Conciliados.${canonical ? ` Fornecedor unificado como "${canonical}" e aprendido para os próximos meses.` : ''}`)
     return true
   }
   // Aplica a diferença como desconto/juros: gera o lançamento de acerto que ZERA a conta e
