@@ -2351,9 +2351,15 @@ function ModalCruzaSaldo({ cruza, linhas, planoMap, titulo, onClose, onVerDia, o
                     for (const e of E) { if (e.used) continue; const s = subset(I, e.v); if (s) { e.used = true; s.forEach(x => x.used = true); grupos.push({ imp: s, ext: [e], dif: 0, tipo: 'soma' }) } }
                     for (const i of I) { if (i.used) continue; const s = subset(E, i.v); if (s) { i.used = true; s.forEach(x => x.used = true); grupos.push({ imp: [i], ext: s, dif: 0, tipo: 'soma' }) } }
                     for (const i of I) { if (i.used) continue; const c = E.filter(e => !e.used && Math.sign(e.v) === Math.sign(i.v)).map(e => ({ e, d: Math.abs(e.v - i.v) })).sort((a, b) => a.d - b.d)[0]; if (c && c.d <= 2) { i.used = c.e.used = true; grupos.push({ imp: [i], ext: [c.e], dif: r2(i.v - c.e.v), tipo: 'quase' }) } }
+                    // Anulados: um +X e um −X do MESMO lado, sem par no extrato, se cancelam
+                    // (lançamento errado + estorno) — efeito zero, não é diferença.
+                    const anular = (arr, lado) => { for (const p of arr) { if (p.used || p.v <= 0) continue; const q = arr.find(n => !n.used && n.v < 0 && Math.abs(n.v + p.v) < 0.005); if (q) { p.used = q.used = true; grupos.push({ imp: lado === 'i' ? [p, q] : [], ext: lado === 'e' ? [p, q] : [], dif: 0, tipo: 'anula' }) } } }
+                    anular(I, 'i'); anular(E, 'e')
                     for (const i of I) if (!i.used) grupos.push({ imp: [i], ext: [], dif: i.v, tipo: 'sobra' })
                     for (const e of E) if (!e.used) grupos.push({ imp: [], ext: [e], dif: -e.v, tipo: 'sobra' })
-                    const gruposVis = modo === 'estrela' ? grupos.filter(g => g.tipo === 'sobra' || g.tipo === 'quase') : grupos
+                    const gruposReais = grupos.filter(g => g.tipo !== 'anula')
+                    const anulaItens = grupos.filter(g => g.tipo === 'anula').reduce((s, g) => s + g.imp.length + g.ext.length, 0)
+                    const gruposVis = modo === 'estrela' ? gruposReais.filter(g => g.tipo === 'sobra' || g.tipo === 'quase') : gruposReais
                     const tintG = t => t === 'sobra' ? 'rgba(229,72,77,0.10)' : t === 'quase' ? 'rgba(245,166,35,0.12)' : 'rgba(48,164,108,0.09)'
                     const vlr = v => `${v >= 0 ? '+' : '−'}${money(Math.abs(v))}`
                     const corV = v => v >= 0 ? theme.green : theme.red
@@ -2388,9 +2394,15 @@ function ModalCruzaSaldo({ cruza, linhas, planoMap, titulo, onClose, onVerDia, o
                                 </tr>
                               ))
                             })}
-                            {!gruposVis.length && <tr><td colSpan={4} style={{ ...ftd, fontSize: 11.5, color: theme.sub }}>Nada para confrontar neste dia.</td></tr>}
+                            {!gruposVis.length && <tr><td colSpan={4} style={{ ...ftd, fontSize: 11.5, color: theme.sub }}>{anulaItens ? 'Só lançamentos que se anulam neste dia (veja abaixo).' : 'Nada para confrontar neste dia.'}</td></tr>}
                           </tbody>
                         </table>
+                        {anulaItens > 0 && (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 11px', borderTop: `1px solid ${theme.border}`, fontSize: 11.5, color: theme.sub }}>
+                            <i className="ti ti-arrows-exchange" style={{ color: theme.sub }} />
+                            <span><b style={{ color: theme.text }}>{anulaItens}</b> lançamento(s) se <b>anulam entre si</b> (+ e −, sem correspondência no extrato) — provável lançamento errado + estorno. <b>Efeito zero</b>, não entram na diferença.</span>
+                          </div>
+                        )}
                       </div>
                     )
                   })()}
