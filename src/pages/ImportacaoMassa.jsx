@@ -373,8 +373,7 @@ function MassaFolha({ competencias, competencia, recalcularPendencias }) {
         const arquivos = { ...folha.arquivos }
         if (eventos.length) arquivos[env.tipo] = { doc: files.slice(-1)[0]?.doc || slot.doc, path: files.slice(-1)[0]?.path || '', eventos, files }
         else delete arquivos[env.tipo]
-        const done = !!(arquivos.folha?.eventos?.length)
-        const novaFolha = { ...folha, arquivos, estado: done ? 'validado' : null, doc: done ? 'Folha · rubricas cruzadas' : null, usuario: user?.email || null }
+        const novaFolha = { ...folha, arquivos, estado: null, doc: null, usuario: user?.email || null }
         await supabase.from('competencias').update({ integracoes: { ...c.integracoes, folha: novaFolha } }).eq('id', c.id)
         n++
       }
@@ -382,6 +381,31 @@ function MassaFolha({ competencias, competencia, recalcularPendencias }) {
       await carregarEnvios()
       recalcularPendencias?.()
     } catch (err) { setErro('Erro ao excluir envio: ' + err.message) } finally { setAplicando(false) }
+  }
+
+  // Aplica "sem movimento" (retroativo) nos tipos OPCIONAIS que ficaram sem arquivo, em todas
+  // as empresas da competência que já têm folha mensal — resolve de uma vez os cards vazios.
+  async function finalizarVazios() {
+    const [mes, ano] = alvo.split('/').map(Number)
+    if (!window.confirm(`Marcar como "sem movimento" os tipos opcionais SEM arquivo, em todas as empresas de ${alvo} que já têm folha mensal? (o que já tem arquivo ou já está marcado não muda)`)) return
+    setAplicando(true); setErro(''); setMsg('')
+    try {
+      const { data: comps } = await supabase.from('competencias').select('id, status, integracoes').eq('ano', ano).eq('mes', mes)
+      let empresas = 0, cards = 0
+      for (const c of (comps || [])) {
+        if (c.status === 'fechado') continue
+        const folha = c.integracoes?.folha
+        if (!folha?.arquivos?.folha?.eventos?.length) continue // só empresas com folha mensal
+        const arquivos = { ...folha.arquivos }
+        let mudou = false
+        for (const [k] of TIPOS_FOLHA) { if (k !== 'folha' && !arquivos[k]) { arquivos[k] = { semMovimento: true }; mudou = true; cards++ } }
+        if (!mudou) continue
+        await supabase.from('competencias').update({ integracoes: { ...c.integracoes, folha: { ...folha, arquivos } } }).eq('id', c.id)
+        empresas++
+      }
+      setMsg(`"Sem movimento" aplicado em ${empresas} empresa(s) (${cards} card(s) vazio(s)).`)
+      recalcularPendencias?.()
+    } catch (err) { setErro('Erro ao finalizar: ' + err.message) } finally { setAplicando(false) }
   }
 
   return (
@@ -396,10 +420,15 @@ function MassaFolha({ competencias, competencia, recalcularPendencias }) {
           {(competencias || [competencia]).map(c => <option key={c} value={c}>{c}</option>)}
         </select>
       </div>
-      <label className="btn" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 13 }}>
-        <i className="ti ti-file-import" /> Subir arquivo ({tipoLabel})
-        <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={analisar} />
-      </label>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <label className="btn" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 13 }}>
+          <i className="ti ti-file-import" /> Subir arquivo ({tipoLabel})
+          <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={analisar} />
+        </label>
+        <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={finalizarVazios} disabled={aplicando} title="Nas empresas que já têm folha mensal, marca os tipos opcionais vazios como sem movimento">
+          <i className="ti ti-circle-minus" /> Marcar vazios sem movimento
+        </button>
+      </div>
       {erro && <p style={{ color: theme.red, fontSize: 12.5, margin: '10px 0 0' }}>{erro}</p>}
 
       {prev && (
