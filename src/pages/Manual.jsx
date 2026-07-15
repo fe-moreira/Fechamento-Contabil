@@ -387,7 +387,8 @@ const HTML = `
     <li>A plataforma <b>aponta o provável culpado</b> da variação, com o motivo (valor fora do padrão, histórico genérico, não recorre nos meses anteriores).</li>
     <li>Por lançamento: <b>justificar</b> (tira a pendência) ou <b>corrigir</b> (reclassifica → vira lançamento).</li>
     <li>O drill-down do razão mostra o razão importado <b>e</b> as linhas de <b>AJUSTE</b> (os lançamentos feitos), fechando o total no valor vivo.</li>
-    <li><b>Corrigido some da tela:</b> ao corrigir um lançamento (cada um para a conta certa — pode ser conta diferente a cada um, não é em lote), ele e o ajuste dele <b>saem da lista</b> e o <b>Total já reflete a correção</b>. Você vai clicando e reclassificando um a um, e a lista vai <b>afinando</b> só no que falta. Uma faixa verde mostra <b>quantos foram corrigidos</b>, com <b>Mostrar corrigidos</b> para revê-los ou desfazer.</li>
+    <li><b>Corrigido some da tela:</b> ao corrigir um lançamento, ele e o ajuste dele <b>saem da lista</b> e o <b>Total já reflete a correção</b>. Você vai reclassificando e a lista vai <b>afinando</b> só no que falta. Uma faixa verde mostra <b>quantos foram corrigidos</b>, com <b>Mostrar corrigidos</b> para revê-los ou desfazer.</li>
+    <li><b>Corrigir em lote (contas diferentes):</b> marque vários lançamentos no <b>checkbox</b> e clique em <b>Corrigir selecionados (N)</b> — abre um painel com <b>um campo de conta para cada um</b> (podem ser <b>contas diferentes</b>, o valor vem do lançamento). <b>Gravar tudo</b> gera todas as reclassificações de uma vez (as em branco pula). Continua dando para corrigir <b>um a um</b> clicando na linha — o lote é só um atalho.</li>
     <li>Ao clicar num lançamento de despesa, dá para marcar <b>Dedutível / Indedutível</b> (LALUR). O <b>indedutível</b> vira <b>adição</b> no card do LALUR e no relatório de despesas indedutíveis — sem duplicar contas já cadastradas.</li>
   </ul>
 </section>

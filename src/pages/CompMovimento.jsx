@@ -680,6 +680,8 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
   const [msg, setMsg] = useState('')
   const [acaoLanc, setAcaoLanc] = useState(null) // { modo:'novo'|'ver', linha, corr }
   const [verCorrigidos, setVerCorrigidos] = useState(false) // mostrar os já corrigidos (ficam ocultos)
+  const [sel, setSel] = useState(() => new Set()) // ids marcados p/ corrigir em lote
+  const [lote, setLote] = useState(null) // [linhas] em edição no painel de correção em lote
 
   const mesDoLanc = l => todos ? (mesPorComp?.[l.competencia_id]) : mes
 
@@ -804,46 +806,69 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
     } catch (e) { setMsg('Erro ao desfazer: ' + (e.message || e)) } finally { setSalvando(false) }
   }
 
+  // Insere UMA correção (lançamento de reclassificação + auditoria + aprendizado). NÃO
+  // recarrega nem mexe em estado de UI — é o núcleo reusado pela correção individual e em
+  // lote. Lança erro em caso de problema (conta sintética, valor inválido, etc.).
+  async function inserirCorrecao(l, { contaCerta, valor, historico }) {
+    const eSint = erroContaSintetica(plano, contaCerta, conta)
+    if (eSint) throw new Error(eSint)
+    const v = Number(valor) || 0
+    if (v <= 0) throw new Error('Informe um valor maior que zero.')
+    const foiDebito = Number(l.debito) > 0
+    // Débito na conta errada → credita a errada e debita a certa (e vice-versa).
+    const conta_debito = foiDebito ? contaCerta : conta
+    const conta_credito = foiDebito ? conta : contaCerta
+    const cid = l.competencia_id
+    const mesL = mesDoLanc(l)
+    const { error } = await supabase.from('lancamentos').insert({
+      competencia_id: cid, data: l.data || null,
+      conta_debito, conta_credito, valor: v,
+      historico: historico || `Reclassificação ref. ${l.historico || ''}`.trim(),
+      origem: 'correcao', razao_id: l.id, usuario,
+    })
+    if (error) throw error
+    // A correção vive SÓ no lançamento (origem 'correcao'). Todos os relatórios leem o razão
+    // VIVO e já sobrepõem o lançamento — não se mexe no balancete importado. Trilha de auditoria.
+    await supabase.from('auditoria').insert({
+      competencia_id: cid, modulo: 'Comparativo',
+      item: `${conta} · ${MESES[(mesL || 1) - 1]}/${ANO}`, tipo: 'Correção',
+      detalhe: `Reclassificação ${conta} → ${contaCerta} · ${money(v)}${historico ? ' · ' + historico : ''}`,
+      razao_id: l.id, usuario,
+    })
+    // Aprendizado: contra banco → memória da integração; senão → memória de correção contábil.
+    return await aprenderDaCorrecao({ clienteId: empresaId, historico: l.historico, contrapartida: l.contrapartida, contaErrada: conta, contaCerta, usuario })
+  }
+
   // Gera o lançamento de CORREÇÃO (partida dobrada) que reclassifica o valor da conta
   // errada para a conta certa — é o lançamento que vai ser importado no Domínio.
-  async function gerarCorrecao(l, { contaCerta, valor, historico }) {
+  async function gerarCorrecao(l, dados) {
     setSalvando(true)
     try {
-      const eSint = erroContaSintetica(plano, contaCerta, conta)
-      if (eSint) { setMsg(eSint); setSalvando(false); return }
-      const v = Number(valor) || 0
-      if (v <= 0) { setMsg('Erro: informe um valor maior que zero.'); setSalvando(false); return }
-      const foiDebito = Number(l.debito) > 0
-      // Débito na conta errada → credita a errada e debita a certa (e vice-versa).
-      const conta_debito = foiDebito ? contaCerta : conta
-      const conta_credito = foiDebito ? conta : contaCerta
-      const cid = l.competencia_id
-      const mesL = mesDoLanc(l)
-      const { error } = await supabase.from('lancamentos').insert({
-        competencia_id: cid, data: l.data || null,
-        conta_debito, conta_credito, valor: v,
-        historico: historico || `Reclassificação ref. ${l.historico || ''}`.trim(),
-        origem: 'correcao', razao_id: l.id, usuario,
-      })
-      if (error) throw error
-      // A correção vive SÓ no lançamento (origem 'correcao'). Todos os relatórios (este
-      // comparativo, conciliação, cockpit) leem o razão VIVO e já sobrepõem o lançamento —
-      // não se mexe no balancete importado, para não contar o ajuste em dobro.
-      // Trilha de auditoria.
-      await supabase.from('auditoria').insert({
-        competencia_id: cid, modulo: 'Comparativo',
-        item: `${conta} · ${MESES[(mesL || 1) - 1]}/${ANO}`, tipo: 'Correção',
-        detalhe: `Reclassificação ${conta} → ${contaCerta} · ${money(v)}${historico ? ' · ' + historico : ''}`,
-        razao_id: l.id, usuario,
-      })
-      // Aprendizado: contra banco → memória da integração; senão → memória de correção
-      // contábil (que vira sugestão quando a mesma conta errada reaparecer no razão).
-      const aprendido = await aprenderDaCorrecao({ clienteId: empresaId, historico: l.historico, contrapartida: l.contrapartida, contaErrada: conta, contaCerta, usuario })
+      const aprendido = await inserirCorrecao(l, dados)
       setMsg('Correção gerada — lançamento no painel Contabilizar e refletido no comparativo.' + (aprendido ? ` · Aprendido: ${aprendido}` : ''))
       setAcaoLanc(null)
       await carregarLinhas()
       onCorrigido && onCorrigido()
     } catch (e) { setMsg('Erro ao gerar correção: ' + (e.message || e)) } finally { setSalvando(false) }
+  }
+
+  // Correção em LOTE: cada item vem com a SUA conta certa (podem ser diferentes) e valor.
+  // Gera todos de uma vez; só grava os que têm conta escolhida. Recarrega uma vez no fim.
+  async function gerarCorrecaoLote(itens) {
+    setSalvando(true)
+    try {
+      let ok = 0
+      for (const it of (itens || [])) {
+        if (!it.contaCerta || !(Number(it.valor) > 0)) continue
+        await inserirCorrecao(it.linha, { contaCerta: it.contaCerta, valor: it.valor, historico: it.historico })
+        ok++
+      }
+      if (!ok) { setMsg('Erro: escolha a conta certa de pelo menos um lançamento.'); setSalvando(false); return }
+      setMsg(`${ok} correção(ões) gerada(s) — no painel Contabilizar e refletidas no comparativo.`)
+      setLote(null); setSel(new Set())
+      await carregarLinhas()
+      onCorrigido && onCorrigido()
+    } catch (e) { setMsg('Erro ao gerar correções: ' + (e.message || e)) } finally { setSalvando(false) }
   }
 
 
@@ -870,6 +895,13 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
   const estaCorrigido = l => !!correcoes[l.id] || (l.ehLancamento && ajusteOculto.has(l.id))
   const nOcultos = linhas.filter(estaCorrigido).length
   const linhasVis = verCorrigidos ? linhas : linhas.filter(l => !estaCorrigido(l))
+
+  // Corrigível em lote: linha de razão ainda não corrigida (o ajuste e o já-corrigido não contam).
+  const corrigivel = l => !l.ehLancamento && !correcoes[l.id] && !!l.id
+  const toggleSel = l => setSel(prev => { const s = new Set(prev); s.has(l.id) ? s.delete(l.id) : s.add(l.id); return s })
+  const selLinhas = linhasVis.filter(l => corrigivel(l) && sel.has(l.id))
+  const selTotal = selLinhas.reduce((s, l) => s + (Number(l.debito) || 0) + (Number(l.credito) || 0), 0)
+  const corrigiveisVis = linhasVis.filter(corrigivel)
 
   let saldo = 0
   const totDeb = linhasVis.reduce((s, l) => s + (Number(l.debito) || 0), 0)
@@ -932,6 +964,11 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
             <table style={{ borderCollapse: 'collapse', width: '100%' }}>
               <thead>
                 <tr style={{ background: theme.input }}>
+                  <th style={{ ...th, width: 34, textAlign: 'center' }} title="Marcar para corrigir em lote">
+                    <input type="checkbox" style={{ width: 15, height: 15, cursor: 'pointer', accentColor: theme.accent }}
+                      checked={corrigiveisVis.length > 0 && corrigiveisVis.every(l => sel.has(l.id))}
+                      onChange={e => setSel(e.target.checked ? new Set(corrigiveisVis.map(l => l.id)) : new Set())} />
+                  </th>
                   {todos && <th style={th}>Mês</th>}
                   <th style={th}>Data</th>
                   <th style={th}>Histórico</th>
@@ -951,6 +988,9 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
                       style={{ borderTop: `1px solid ${theme.border}`, cursor: ehLanc ? 'default' : 'pointer', background: ehLanc ? 'rgba(74,124,255,0.08)' : corr ? 'rgba(48,164,108,0.08)' : l.suspeito ? 'rgba(245,166,35,0.07)' : undefined }}
                       title={ehLanc ? 'Lançamento de ajuste (correção/estorno) — reflete no razão vivo' : corr ? 'Corrigido — clique para ver/desfazer' : 'Clique para corrigir (reclassificar)'}
                     >
+                      <td style={{ ...td, textAlign: 'center' }} onClick={e => e.stopPropagation()}>
+                        {corrigivel(l) && <input type="checkbox" style={{ width: 15, height: 15, cursor: 'pointer', accentColor: theme.accent }} checked={sel.has(l.id)} onChange={() => toggleSel(l)} />}
+                      </td>
                       {todos && <td style={{ ...td, whiteSpace: 'nowrap', color: theme.sub }}>{MESES[(mesDoLanc(l) || 1) - 1]}</td>}
                       <td style={{ ...td, whiteSpace: 'nowrap' }}>{l.data || ''}</td>
                       <td style={{ ...td, maxWidth: 360, whiteSpace: 'normal' }}>
@@ -970,7 +1010,7 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
               </tbody>
               <tfoot>
                 <tr style={{ borderTop: `1px solid ${theme.border}`, background: theme.input }}>
-                  <td style={{ ...td, fontWeight: 700 }} colSpan={todos ? 3 : 2}>Total</td>
+                  <td style={{ ...td, fontWeight: 700 }} colSpan={todos ? 4 : 3}>Total</td>
                   <td style={{ ...td, textAlign: 'right', fontWeight: 700 }}>{money(totDeb)}</td>
                   <td style={{ ...td, textAlign: 'right', fontWeight: 700 }}>{money(totCred)}</td>
                   <td style={{ ...td, textAlign: 'right', fontWeight: 700 }}>{money(totDeb - totCred)}</td>
@@ -979,6 +1019,17 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
             </table>
           )}
         </div>
+
+        {selLinhas.length > 0 && (
+          <div style={{ margin: '0 22px 4px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', background: theme.input, border: `1px solid ${theme.accent}`, borderRadius: 12, padding: '11px 16px' }}>
+            <span style={{ fontSize: 13 }}><b style={{ color: theme.accent }}>{selLinhas.length}</b> selecionado(s) · total {money(selTotal)}</span>
+            <span style={{ flex: 1 }} />
+            <button className="btn" style={{ fontSize: 12.5 }} onClick={() => { setMsg(''); setLote(selLinhas.map(l => ({ linha: l }))) }}>
+              <i className="ti ti-arrows-exchange" /> Corrigir selecionados ({selLinhas.length})
+            </button>
+            <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={() => setSel(new Set())}><i className="ti ti-x" /> Limpar</button>
+          </div>
+        )}
 
         <div style={{ borderTop: `0.5px solid ${theme.cb}`, padding: '14px 22px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
           <span style={{ fontSize: 12.5, minHeight: 16, color: msg ? (msg.startsWith('Erro') ? theme.red : theme.green) : theme.sub }}>
@@ -1024,6 +1075,69 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
           onDesfazer={() => desfazerCorrecao(acaoLanc.linha, acaoLanc.corr)}
         />
       )}
+
+      {lote && (
+        <ModalCorrecaoLote
+          itens={lote} conta={conta} salvando={salvando}
+          onClose={() => setLote(null)}
+          onGravar={gerarCorrecaoLote}
+        />
+      )}
+    </div>
+  )
+}
+
+// Correção em LOTE: uma linha por lançamento selecionado, com a SUA conta certa (podem
+// ser diferentes) e valor. Grava todos de uma vez (só os que têm conta escolhida).
+function ModalCorrecaoLote({ itens, conta, salvando, onClose, onGravar }) {
+  const [rows, setRows] = useState(() => itens.map(it => {
+    const l = it.linha
+    const base = Number(l.debito) > 0 ? Number(l.debito) : Number(l.credito)
+    return { linha: l, contaCerta: '', valor: base ? base.toFixed(2).replace('.', ',') : '', historico: `Reclassificação ref. ${l.historico || ''}`.trim() }
+  }))
+  const set = (i, patch) => setRows(rs => rs.map((r, j) => j === i ? { ...r, ...patch } : r))
+  const prontos = rows.filter(r => r.contaCerta && numBR(r.valor) > 0).length
+
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 60 }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 'min(860px,96vw)', maxHeight: '88vh', display: 'flex', flexDirection: 'column', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, overflow: 'hidden' }}>
+        <div style={{ padding: '18px 22px', borderBottom: `0.5px solid ${theme.cb}` }}>
+          <h2 style={{ fontSize: 16, margin: '0 0 3px' }}>Reclassificar {rows.length} lançamento(s) — conta {conta}</h2>
+          <p style={{ color: theme.sub, fontSize: 12.5, margin: 0 }}>Escolha a conta certa de cada um (podem ser contas diferentes). Deixe em branco para pular. O valor vem do lançamento.</p>
+        </div>
+        <div style={{ overflow: 'auto', padding: '6px 0' }}>
+          {rows.map((r, i) => {
+            const l = r.linha
+            const foiDeb = Number(l.debito) > 0
+            return (
+              <div key={l.id || i} style={{ display: 'grid', gridTemplateColumns: '1fr 130px 240px', gap: 14, alignItems: 'start', padding: '12px 22px', borderTop: i ? `1px solid ${theme.border}` : 'none' }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 13 }}>{l.historico || ''}</div>
+                  <div style={{ color: theme.sub, fontSize: 11.5, marginTop: 2 }}>{l.data || ''} · {foiDeb ? 'Débito' : 'Crédito'} em {conta}</div>
+                </div>
+                <div>
+                  <label style={{ fontSize: 10.5, color: theme.sub, textTransform: 'uppercase', letterSpacing: .3 }}>Valor</label>
+                  <input className="input" value={r.valor} onChange={e => set(i, { valor: e.target.value })} placeholder="0,00" style={{ marginTop: 4, textAlign: 'right' }} />
+                </div>
+                <div>
+                  <label style={{ fontSize: 10.5, color: theme.sub, textTransform: 'uppercase', letterSpacing: .3 }}>Conta certa (destino)</label>
+                  <div style={{ marginTop: 4 }}><CampoConta value={r.contaCerta} onChange={v => set(i, { contaCerta: v })} /></div>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+        <div style={{ borderTop: `0.5px solid ${theme.cb}`, padding: '14px 22px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+          <span style={{ color: theme.sub, fontSize: 12.5 }}>{prontos} de {rows.length} com conta escolhida · ao gravar, os corrigidos somem da lista e o Total se atualiza.</span>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn btn-ghost" onClick={onClose} disabled={salvando}>Cancelar</button>
+            <button className="btn" style={{ background: theme.green, borderColor: theme.green, opacity: prontos && !salvando ? 1 : 0.55 }} disabled={!prontos || salvando}
+              onClick={() => onGravar(rows)}>
+              <i className="ti ti-check" /> {salvando ? 'Gravando…' : `Gravar tudo (${prontos})`}
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   )
 }
