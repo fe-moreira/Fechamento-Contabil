@@ -8,6 +8,7 @@ import { montarBalancete, parsePlano, composicaoAbertura, difConciliacao, applyM
 import { abrePdfTimbrado } from '../lib/pdf'
 import { gerarExcelTimbrado } from '../lib/excel'
 import { listarComentariosConta, adicionarComentario, excluirComentario } from '../lib/comentarios'
+import { aberturaComp, excluirSaldoInicialTudo } from '../lib/cargaInicial'
 import CampoConta from '../components/CampoConta'
 
 const dataHora = iso => { const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) }
@@ -283,6 +284,23 @@ export default function Conciliacao() {
   const [carregando, setCarregando] = useState(true)
   const [sel, setSel] = useState(null) // conta selecionada (detalhe)
   const [filtroFarol, setFiltroFarol] = useState('todos') // 'todos' | 'red' | 'yellow' | 'green'
+  const [saldoIni, setSaldoIni] = useState({ periodo: '', fechada: false }) // trava do saldo inicial (abertura)
+
+  // Competência de abertura do cliente + se está fechada (para o atalho de excluir saldo inicial).
+  useEffect(() => {
+    let ativo = true
+    if (!empresaId) { setSaldoIni({ periodo: '', fechada: false }); return }
+    supabase.from('clientes').select('competencia_inicio').eq('id', empresaId).maybeSingle()
+      .then(async ({ data }) => { const per = data?.competencia_inicio || ''; const ab = await aberturaComp(empresaId, per); if (ativo) setSaldoIni({ periodo: per, fechada: !!ab.fechada }) })
+    return () => { ativo = false }
+  }, [empresaId])
+
+  async function excluirSaldoIni() {
+    if (saldoIni.fechada) { alert('A competência de abertura está FECHADA. Reabra-a para mexer no saldo inicial.'); return }
+    if (!window.confirm('Excluir TODO o saldo inicial (carga inicial) deste cliente? Você poderá subir os arquivos de novo em Base de Informações.')) return
+    try { const n = await excluirSaldoInicialTudo(empresaId, saldoIni.periodo, user?.email); alert(`Saldo inicial excluído (${n} registro(s)).`); recarregar() }
+    catch (e) { alert(e.message) }
+  }
   // Clicar em "Conciliação" no menu (mesma rota) volta para a lista, mesmo estando
   // no detalhe de uma conta — cada navegação gera uma location.key nova.
   const location = useLocation()
@@ -468,6 +486,8 @@ export default function Conciliacao() {
             {o.cor ? <Dot c={o.cor} /> : <i className="ti ti-list" />} {o.txt} <span style={{ color: theme.sub }}>({o.n})</span>
           </button>
         ))}
+        <span style={{ flex: 1 }} />
+        {saldoIni.periodo && <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 12px', color: saldoIni.fechada ? theme.sub : theme.red, borderColor: saldoIni.fechada ? theme.cb : 'rgba(229,72,77,0.4)' }} disabled={saldoIni.fechada} onClick={excluirSaldoIni} title={saldoIni.fechada ? `Abertura (${saldoIni.periodo}) fechada — reabra para mexer no saldo inicial` : 'Apagar TODO o saldo inicial para subir os arquivos de novo (Base de Informações)'}><i className={`ti ${saldoIni.fechada ? 'ti-lock' : 'ti-trash'}`} /> {saldoIni.fechada ? 'Saldo inicial travado' : 'Excluir saldo inicial'}</button>}
       </div>
       <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'auto' }}>
         <table style={{ width: '100%', minWidth: 960, borderCollapse: 'collapse' }}>

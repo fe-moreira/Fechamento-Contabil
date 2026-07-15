@@ -9,6 +9,7 @@ import { theme, money } from '../lib/theme'
 import { parsePlano, applyMask, normalizaCompetencia } from '../lib/balancete'
 import { gerarExcelTimbrado } from '../lib/excel'
 import { abrePdfTimbrado } from '../lib/pdf'
+import { aberturaComp, excluirSaldoInicialTudo } from '../lib/cargaInicial'
 
 const hoje = () => new Date().toLocaleDateString('pt-BR')
 
@@ -240,6 +241,15 @@ export default function BaseInformacoes() {
   const [dist, setDist] = useState(null)   // linha de dist_lucros_config
   const [regime, setRegime] = useState('') // regime tributário do cliente (habilita o LALUR)
   const [modal, setModal] = useState(null)
+  const [aberturaTravada, setAberturaTravada] = useState(false) // competência de abertura fechada
+
+  // Descobre se a competência de ABERTURA está fechada (trava mexer no saldo inicial).
+  useEffect(() => {
+    let ativo = true
+    if (!empresaId || !periodo) { setAberturaTravada(false); return }
+    aberturaComp(empresaId, periodo).then(a => { if (ativo) setAberturaTravada(!!a.fechada) })
+    return () => { ativo = false }
+  }, [empresaId, periodo])
 
   async function carregarCargas() {
     const { data } = await supabase.from('cargas_cadastro')
@@ -317,7 +327,18 @@ export default function BaseInformacoes() {
     setCargaFeita(true); carregarCargas(); recalcularPendencias?.(); setModal(null)
   }
 
+  // Zera TODO o saldo inicial (todos os arquivos) para re-subir. Trava se a abertura fechou.
+  async function excluirTudoSaldoInicial() {
+    if (aberturaTravada) { alert('A competência de abertura está FECHADA. Reabra-a para mexer no saldo inicial.'); return }
+    if (!confirm('Excluir TODO o saldo inicial (carga inicial) deste cliente? Você poderá subir os arquivos de novo.')) return
+    try {
+      const n = await excluirSaldoInicialTudo(empresaId, periodo, user?.email)
+      setCargaFeita(false); carregarCargas(); recalcularPendencias?.()
+      alert(`Saldo inicial excluído (${n} registro(s)). Pode subir a carga inicial de novo.`)
+    } catch (e) { alert(e.message) }
+  }
   async function excluirCargaInicial(c) {
+    if (aberturaTravada) { alert('A competência de abertura está FECHADA. Reabra-a para mexer no saldo inicial.'); return }
     if (!confirm(`Excluir esta carga inicial (${String(c.obs || '').replace(/^Carga inicial · /, '') || 'sem arquivo'})?`)) return
     await supabase.from('cargas_cadastro').delete().eq('id', c.id)
     const resta = (cargas.financeiro || []).filter(x => x.id !== c.id && String(x.obs || '').startsWith('Carga inicial'))
@@ -336,6 +357,7 @@ export default function BaseInformacoes() {
   }
   // Exclui UM arquivo da carga (só as linhas dele). Se for o único, exclui a carga toda.
   async function excluirArquivoCarga(c, label) {
+    if (aberturaTravada) { alert('A competência de abertura está FECHADA. Reabra-a para mexer no saldo inicial.'); return }
     const arqs = arquivosDaCarga(c)
     if (arqs.length <= 1) return excluirCargaInicial(c)
     if (!confirm(`Excluir o arquivo "${label}" da carga inicial? Só as linhas dele saem do saldo inicial.`)) return
@@ -441,7 +463,11 @@ export default function BaseInformacoes() {
         const linhasArq = cis.flatMap(c => arquivosDaCarga(c).map(a => ({ c, a })))
         return (
           <div style={{ marginTop: 24 }}>
-            <p style={{ color: theme.sub, fontSize: 13, fontWeight: 600, textTransform: 'uppercase', letterSpacing: .8, margin: '4px 0 12px' }}>Carga inicial de saldos</p>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', margin: '4px 0 12px' }}>
+              <p style={{ color: theme.sub, fontSize: 13, fontWeight: 600, textTransform: 'uppercase', letterSpacing: .8, margin: 0 }}>Carga inicial de saldos</p>
+              <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 11px', color: aberturaTravada ? theme.sub : theme.red, borderColor: aberturaTravada ? theme.border : 'rgba(229,72,77,0.4)' }} disabled={aberturaTravada} onClick={excluirTudoSaldoInicial} title={aberturaTravada ? 'Competência de abertura fechada — reabra para mexer no saldo inicial' : 'Apaga TODO o saldo inicial para você subir os arquivos de novo'}><i className={`ti ${aberturaTravada ? 'ti-lock' : 'ti-trash'}`} /> Excluir saldo inicial (tudo)</button>
+            </div>
+            {aberturaTravada && <p style={{ color: theme.yellow, fontSize: 12, margin: '0 0 10px' }}><i className="ti ti-lock" /> A competência de <b>abertura</b> ({periodo}) está <b>fechada</b> — reabra-a para excluir/alterar o saldo inicial.</p>}
             <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'hidden' }}>
               {linhasArq.map(({ c, a }, i) => (
                 <div key={c.id + '·' + a.label} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderTop: i ? `1px solid ${theme.border}` : 'none', fontSize: 13 }}>
