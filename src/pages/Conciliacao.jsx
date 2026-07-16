@@ -1616,13 +1616,17 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         if (!selLancs.length) return null
         const net = selLancs.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
         const zera = Math.abs(net) < 0.005
+        // Só o título/saldo anterior tem NOME para corrigir/desvincular; acerto/estorno não.
+        const renomeaveis = selLancs.filter(l => !l.acerto && (l.leitura?.entidade || '').trim())
+        const semNome = renomeaveis.length === 0
+        const dicaSemNome = 'Selecione um título ou o saldo anterior — lançamentos de acerto/estorno não têm nome para corrigir.'
         return (
           <div style={{ position: 'fixed', left: '50%', bottom: 20, transform: 'translateX(-50%)', zIndex: 60, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '10px 16px', background: theme.card, border: `1px solid ${theme.accent}`, borderRadius: 12, boxShadow: '0 8px 30px rgba(0,0,0,0.4)' }}>
             <span style={{ color: theme.text, fontSize: 13 }}><b>{selLancs.length}</b> selecionado(s) · líquido <b style={{ color: zera ? theme.green : theme.yellow }}>{money(Math.abs(net))} {net < 0 ? 'C' : net > 0 ? 'D' : ''}</b> {zera ? '(zera)' : '(não zera)'}</span>
-            <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={() => setLoteForn({ lines: selLancs })}>
+            <button className="btn btn-ghost" disabled={semNome} title={semNome ? dicaSemNome : undefined} style={{ fontSize: 12.5, opacity: semNome ? 0.5 : 1, cursor: semNome ? 'not-allowed' : 'pointer' }} onClick={() => !semNome && setLoteForn({ lines: renomeaveis })}>
               <i className="ti ti-user-edit" /> Corrigir {lab}
             </button>
-            <button className="btn btn-ghost" style={{ fontSize: 12.5, color: theme.yellow, borderColor: theme.yellow }} title="Manter estes nomes separados (não unir com parecidos) — vale para todos os meses" onClick={() => desvincularLote(selLancs)}>
+            <button className="btn btn-ghost" disabled={semNome} title={semNome ? dicaSemNome : 'Manter estes nomes separados (não unir com parecidos) — vale para todos os meses'} style={{ fontSize: 12.5, color: theme.yellow, borderColor: theme.yellow, opacity: semNome ? 0.5 : 1, cursor: semNome ? 'not-allowed' : 'pointer' }} onClick={() => !semNome && desvincularLote(renomeaveis)}>
               <i className="ti ti-arrows-split" /> Desvincular
             </button>
             <button className="btn" disabled={selLancs.length < 2} style={{ fontSize: 12.5, background: selLancs.length >= 2 ? theme.green : undefined, borderColor: selLancs.length >= 2 ? theme.green : undefined, opacity: selLancs.length >= 2 ? 1 : 0.5 }} onClick={conectarSelecionados}>
