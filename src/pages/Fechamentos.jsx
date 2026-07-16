@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
+import { useAuth } from '../components/AuthProvider'
 import { fechaSozinho } from '../lib/clientes'
 import { normalizaCompetencia } from '../lib/balancete'
 import { calcularProgresso } from '../lib/progresso'
@@ -19,7 +20,8 @@ const ST = {
 }
 
 export default function Fechamentos() {
-  const { empresas, empresaId, empresaNome, competencia, setCompetencia, abrirFechamento, isAdmin, recalcularPendencias } = useAppData()
+  const { empresas, empresaId, empresaNome, competencia, setCompetencia, abrirFechamento, isAdmin, recalcularPendencias, refreshStatusCompetencia } = useAppData()
+  const { user } = useAuth()
   const nav = useNavigate()
   const cli = empresas.find(e => e.id === empresaId)
   const podeFechar = cli ? fechaSozinho(cli) : true // filial consolidada fecha na matriz
@@ -28,6 +30,9 @@ export default function Fechamentos() {
   const [loading, setLoading] = useState(true)
   const [fAno, setFAno] = useState('todos')
   const [fMes, setFMes] = useState('todos')
+  const [reabrirAlvo, setReabrirAlvo] = useState(null) // competência fechada clicada (modal reabrir)
+  const [excluirAlvo, setExcluirAlvo] = useState(null) // { comp, motivo } (modal excluir c/ motivo)
+  const [salvandoAcao, setSalvandoAcao] = useState(false)
   const [novo, setNovo] = useState(null)
 
   const [selMes, selAno] = competencia.split('/').map(Number)
@@ -75,8 +80,28 @@ export default function Fechamentos() {
   filtrada.forEach(c => { const e = efet(c); const b = e === 'pronto' ? 'fechado' : e; cont[b] = (cont[b] || 0) + 1 })
 
   function abrir(c) {
+    // Competência ENCERRADA: clicar pergunta se quer reabrir (ou só visualizar).
+    if (c.status === 'fechado') { setReabrirAlvo(c); return }
     abrirFechamento(c.mes, c.ano) // marca o fechamento como ativo (libera as funções)
     nav('/status')
+  }
+  // Só visualizar (somente leitura) — sem reabrir.
+  function verSomenteLeitura(c) {
+    setReabrirAlvo(null)
+    abrirFechamento(c.mes, c.ano)
+    nav('/status')
+  }
+  // Reabrir (hoje qualquer usuário; no futuro, só administrador). Volta status p/ andamento.
+  async function reabrirConfirmar(c) {
+    if (!isAdmin) { alert('Apenas um administrador pode reabrir um fechamento.'); return }
+    setSalvandoAcao(true)
+    const { error } = await supabase.from('competencias').update({ status: 'andamento' }).eq('id', c.id)
+    setSalvandoAcao(false)
+    setReabrirAlvo(null)
+    if (error) { alert('Não consegui reabrir: ' + error.message); return }
+    refreshStatusCompetencia?.()
+    await carregar()
+    abrirFechamento(c.mes, c.ano); nav('/status')
   }
   async function criar() {
     if (!podeFechar) { setNovo(null); return }
@@ -89,28 +114,35 @@ export default function Fechamentos() {
     if (!error && data) { await carregar(); abrir(data) }
   }
 
-  async function excluir(c, e) {
+  // Excluir: só administrador, e SEMPRE exige o motivo escrito (modal). Abre o modal.
+  function excluir(c, e) {
     e.stopPropagation()
-    const [{ count: nRaz }, { count: nLanc }, { count: nAud }] = await Promise.all([
-      supabase.from('razao').select('id', { count: 'exact', head: true }).eq('competencia_id', c.id),
-      supabase.from('lancamentos').select('id', { count: 'exact', head: true }).eq('competencia_id', c.id),
-      supabase.from('auditoria').select('id', { count: 'exact', head: true }).eq('competencia_id', c.id),
-    ])
-    const docsRecebidos = Array.isArray(c.documentos) ? c.documentos.filter(d => d?.rec).length : 0
-    const temDados = (nRaz || 0) + (nLanc || 0) + (nAud || 0) + docsRecebidos > 0 || c.status === 'fechado'
-    if (temDados && !isAdmin) {
-      alert('Este fechamento já tem dados (razão, lançamentos, documentos ou está fechado). Apenas um administrador pode excluí-lo.')
-      return
-    }
-    const aviso = temDados
-      ? `Excluir ${MESES[c.mes - 1]}/${c.ano}? Este fechamento TEM DADOS — vai apagar razão, balancete, lançamentos e auditoria desta competência. Tem certeza?`
-      : `Excluir o fechamento vazio de ${MESES[c.mes - 1]}/${c.ano}?`
-    if (!confirm(aviso)) return
-    for (const t of ['razao', 'balancete', 'lancamentos', 'auditoria']) {
-      await supabase.from(t).delete().eq('competencia_id', c.id)
-    }
-    await supabase.from('competencias').delete().eq('id', c.id)
-    await carregar(); recalcularPendencias?.()
+    if (!isAdmin) { alert('Apenas um administrador pode excluir um fechamento.'); return }
+    setExcluirAlvo({ comp: c, motivo: '' })
+  }
+  async function excluirConfirmar() {
+    const c = excluirAlvo?.comp
+    const motivo = (excluirAlvo?.motivo || '').trim()
+    if (!c) return
+    if (motivo.length < 3) { alert('Escreva o motivo da exclusão.'); return }
+    setSalvandoAcao(true)
+    try {
+      // Registra o motivo (com usuário e data) num log que SOBREVIVE à exclusão da competência.
+      await supabase.from('cargas_cadastro').insert({
+        cliente_id: empresaId, tipo: 'exclusao_fechamento', vigencia: `${String(c.mes).padStart(2, '0')}/${c.ano}`,
+        dados: { mes: c.mes, ano: c.ano, status: c.status, motivo }, usuario: user?.email || null,
+      })
+      // Se estiver fechada, reabre antes (o bloqueio do banco impede apagar dados de fechada).
+      if (c.status === 'fechado') await supabase.from('competencias').update({ status: 'andamento' }).eq('id', c.id)
+      for (const t of ['razao', 'balancete', 'lancamentos', 'auditoria', 'ajuste_leitura', 'conciliacao_conta', 'observacoes']) {
+        await supabase.from(t).delete().eq('competencia_id', c.id)
+      }
+      await supabase.from('competencias').delete().eq('id', c.id)
+      setExcluirAlvo(null)
+      await carregar(); recalcularPendencias?.()
+    } catch (err) {
+      alert('Não consegui excluir: ' + (err.message || err))
+    } finally { setSalvandoAcao(false) }
   }
 
   return (
@@ -213,6 +245,47 @@ export default function Fechamentos() {
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
               <button className="btn btn-ghost" onClick={() => setNovo(null)}>Cancelar</button>
               <button className="btn" onClick={criar}>Abrir fechamento</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: competência ENCERRADA — reabrir ou só visualizar */}
+      {reabrirAlvo && (
+        <div onClick={() => setReabrirAlvo(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 60 }}>
+          <div onClick={e => e.stopPropagation()} style={{ width: 'min(460px, 96vw)', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
+            <h2 style={{ fontSize: 17, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 8 }}><i className="ti ti-lock" style={{ color: theme.green }} /> Competência encerrada</h2>
+            <p style={{ color: theme.sub, fontSize: 13.5, margin: '0 0 18px', lineHeight: 1.55 }}>
+              <b style={{ color: theme.text }}>{MESES[reabrirAlvo.mes - 1]}/{reabrirAlvo.ano}</b> está <b>fechada (somente leitura)</b>. Você quer <b>reabrir para editar</b> ou só visualizar?
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap' }}>
+              <button className="btn btn-ghost" onClick={() => setReabrirAlvo(null)} disabled={salvandoAcao}>Cancelar</button>
+              <button className="btn btn-ghost" onClick={() => verSomenteLeitura(reabrirAlvo)} disabled={salvandoAcao}><i className="ti ti-eye" /> Ver (somente leitura)</button>
+              <button className="btn" style={{ background: theme.green }} onClick={() => reabrirConfirmar(reabrirAlvo)} disabled={salvandoAcao}>
+                <i className="ti ti-lock-open" /> {salvandoAcao ? 'Reabrindo…' : 'Reabrir'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: EXCLUIR fechamento — exige motivo escrito */}
+      {excluirAlvo && (
+        <div onClick={() => !salvandoAcao && setExcluirAlvo(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 60 }}>
+          <div onClick={e => e.stopPropagation()} style={{ width: 'min(480px, 96vw)', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
+            <h2 style={{ fontSize: 17, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 8, color: theme.red }}><i className="ti ti-alert-triangle" /> Excluir fechamento</h2>
+            <p style={{ color: theme.sub, fontSize: 13.5, margin: '0 0 14px', lineHeight: 1.55 }}>
+              Vai apagar <b style={{ color: theme.text }}>{MESES[excluirAlvo.comp.mes - 1]}/{excluirAlvo.comp.ano}</b> e todos os dados dela (razão, balancete, lançamentos, auditoria, conciliação). <b>Escreva o motivo</b> — fica registrado com seu usuário e a data.
+            </p>
+            <textarea className="input" rows={3} autoFocus placeholder="Motivo da exclusão (obrigatório)"
+              value={excluirAlvo.motivo} onChange={e => setExcluirAlvo(a => ({ ...a, motivo: e.target.value }))}
+              style={{ width: '100%', resize: 'vertical' }} />
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
+              <button className="btn btn-ghost" onClick={() => setExcluirAlvo(null)} disabled={salvandoAcao}>Cancelar</button>
+              <button className="btn" style={{ background: theme.red, opacity: excluirAlvo.motivo.trim().length < 3 ? 0.5 : 1 }}
+                onClick={excluirConfirmar} disabled={salvandoAcao || excluirAlvo.motivo.trim().length < 3}>
+                <i className="ti ti-trash" /> {salvandoAcao ? 'Excluindo…' : 'Excluir definitivamente'}
+              </button>
             </div>
           </div>
         </div>
