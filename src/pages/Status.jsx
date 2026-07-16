@@ -124,7 +124,9 @@ export default function Status() {
     if (!compId) return
     const p = progressoRef.current
     if (p == null) return
-    supabase.from('competencias').update({ pct: p }).eq('id', compId)
+    // IMPORTANTE: o builder do supabase-js é lazy — sem await/then a requisição NÃO é
+    // enviada. Precisa disparar de fato para gravar o pct.
+    ;(async () => { await supabase.from('competencias').update({ pct: p }).eq('id', compId) })()
   }, [compId, dados])
 
   if (!empresaId) {
