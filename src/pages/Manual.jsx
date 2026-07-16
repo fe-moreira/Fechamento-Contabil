@@ -292,6 +292,7 @@ const HTML = `
   <div class="m-eyebrow">No fechamento</div>
   <h2 class="m-sec">07 · Fechamentos</h2>
   <p>A porta de entrada do trabalho mensal. Lista as competências do cliente e o andamento de cada uma. Aqui você <b>abre</b> um fechamento existente ou <b>cria</b> um novo. A competência ativa aparece no topo da tela; use <b>Trocar</b> para mudar.</p>
+  <div class="m-rule"><span class="k">Progresso %</span> O <b>Progresso</b> do card mede quantos <b>gates do Status</b> já estão sem pendência (razão, conciliação, variações, banco × resultado, etc.). Ele é <b>recalculado e salvo ao abrir/atualizar o Status</b> daquela competência — conforme você resolve pendências, a porcentagem sobe; <b>fechado</b> fica 100%.</div>
   <div class="m-rule warn"><span class="k">Somente leitura</span> Fechamento marcado como <b>fechado</b> fica travado: nada muda até reabrir. Ações em massa também pulam competências fechadas.</div>
 </section>
 

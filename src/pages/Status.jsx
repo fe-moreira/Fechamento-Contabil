@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
@@ -41,6 +41,7 @@ export default function Status() {
   const [editLanc, setEditLanc] = useState(null)      // lançamento em edição (modal)
   const [balConf, setBalConf] = useState(null)        // conferência do balancete importado (encerramento)
   const [balBusy, setBalBusy] = useState(false)
+  const progressoRef = useRef(null)                   // % de progresso calculado no render (persiste em competencias.pct)
 
   async function carregar(silent) {
     setMsg('') // NÃO fecha o painel (sel) — ao justificar/corrigir, recarrega e mantém aberto atualizado
@@ -115,6 +116,16 @@ export default function Status() {
     setCompId(null); setStatus(null); setDados(null); setSel(null); setBalConf(null)
     carregar()
   }, [empresaId, competencia]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Persiste o % de progresso (calculado no render, a partir dos gates) em competencias.pct,
+  // para o card da lista de Fechamentos refletir o andamento. Roda sempre que os dados
+  // recarregam (após justificar/corrigir) — o render já atualizou progressoRef antes do efeito.
+  useEffect(() => {
+    if (!compId) return
+    const p = progressoRef.current
+    if (p == null) return
+    supabase.from('competencias').update({ pct: p }).eq('id', compId)
+  }, [compId, dados])
 
   if (!empresaId) {
     return <Wrapper><Aviso icon="ti-building" texto="Selecione uma empresa no menu lateral." /></Wrapper>
@@ -327,6 +338,12 @@ export default function Status() {
   const totalPendencias = gates.filter(g => !g.informativo).reduce((s, g) => s + pendDe(g), 0)
   const pronto = totalPendencias === 0
   const fechado = status === 'fechado'
+  // Progresso = fração dos gates bloqueantes já resolvidos (sem pendência). Fechado = 100%.
+  // É gravado em competencias.pct (efeito acima) para o card da lista de Fechamentos.
+  const gatesBloqueantes = gates.filter(g => !g.informativo)
+  const gatesFeitos = gatesBloqueantes.filter(g => pendDe(g) === 0).length
+  const progresso = fechado ? 100 : (gatesBloqueantes.length ? Math.round((gatesFeitos / gatesBloqueantes.length) * 100) : 0)
+  progressoRef.current = progresso
   const selGate = sel ? gates.find(g => g.key === sel) : null
 
   async function encerrar() {
