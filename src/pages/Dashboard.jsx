@@ -77,7 +77,7 @@ export default function Dashboard() {
       const inicioMes = new Date(hoje.getFullYear(), hoje.getMonth(), 1).toISOString()
       const [{ data: cli }, { data: comps }, { data: ts }, { data: rasc }] = await Promise.all([
         supabase.from('clientes').select('*'),
-        supabase.from('competencias').select('cliente_id, ano, mes, status, razao_importado, created_at'),
+        supabase.from('competencias').select('cliente_id, ano, mes, status, razao_importado, pct, created_at'),
         supabase.from('timesheet').select('cliente_id, cliente_nome, segundos, created_at').gte('created_at', inicioMes),
         // Trabalhos financeiros salvos para continuar depois (rascunhos), de qualquer usuário.
         supabase.from('competencias').select('cliente_id, ano, mes, integracoes, updated_at').not('integracoes->financeira', 'is', null),
@@ -93,7 +93,8 @@ export default function Dashboard() {
       // depois que o razão é importado; sem competência ou sem razão → "pendente".
       const compAlvo = {}
       for (const cp of cps) if (cp.ano === targAno && cp.mes === targMes) compAlvo[cp.cliente_id] = cp
-      const statusEfetivo = cp => cp?.status === 'fechado' ? 'fechado' : (cp && cp.razao_importado) ? 'andamento' : 'pendente'
+      // 100% dos gates (pct) conta como "fechado" (verde) mesmo antes de encerrar — igual à tela Fechamentos.
+      const statusEfetivo = cp => (cp?.status === 'fechado' || (cp && cp.razao_importado && (cp.pct || 0) >= 100)) ? 'fechado' : (cp && cp.razao_importado) ? 'andamento' : 'pendente'
       const contaStatus = lista => {
         const b = { fechado: [], andamento: [], pendente: [] }
         for (const c of lista) b[statusEfetivo(compAlvo[c.id])].push(c.razao_social)
