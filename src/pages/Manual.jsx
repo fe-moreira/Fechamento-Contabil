@@ -390,6 +390,7 @@ const HTML = `
     <li><b>Corrigido some da tela:</b> ao corrigir um lançamento, ele e o ajuste dele <b>saem da lista</b> e o <b>Total já reflete a correção</b>. Você vai reclassificando e a lista vai <b>afinando</b> só no que falta. Uma faixa verde mostra <b>quantos foram corrigidos</b>, com <b>Mostrar corrigidos</b> para revê-los ou desfazer.</li>
     <li><b>Corrigir em lote (contas diferentes):</b> marque vários lançamentos no <b>checkbox</b> e clique em <b>Corrigir selecionados (N)</b> — abre um painel com <b>um campo de conta para cada um</b> (podem ser <b>contas diferentes</b>, o valor vem do lançamento). <b>Gravar tudo</b> gera todas as reclassificações de uma vez (as em branco pula). Continua dando para corrigir <b>um a um</b> clicando na linha — o lote é só um atalho.</li>
     <li>Ao clicar num lançamento de despesa, dá para marcar <b>Dedutível / Indedutível</b> (LALUR). O <b>indedutível</b> vira <b>adição</b> no card do LALUR e no relatório de despesas indedutíveis — sem duplicar contas já cadastradas.</li>
+    <li><b>Reclassificou para uma despesa? Pergunta o LALUR:</b> quando a <b>conta de destino</b> da correção é uma <b>despesa</b> (classificação 4), a plataforma pergunta <b>Dedutível / Indedutível</b> ali mesmo (vale para a correção individual e em lote). <b>Sem nota fiscal</b>, já sugere <b>Indedutível</b>. Vale também na <b>Conciliação</b> (ao reclassificar um fornecedor direto para uma despesa).</li>
   </ul>
 </section>
 

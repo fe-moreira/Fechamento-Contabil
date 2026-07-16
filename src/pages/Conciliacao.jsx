@@ -962,6 +962,16 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         origem: 'correcao', razao_id: razaoIdLinha, usuario,
       })
       virouLancamento = true
+      // LALUR: reclassificou para uma DESPESA → registra dedutível/indedutível (aparece no
+      // relatório de Despesas indedutíveis). Sem NF, o padrão sugerido é indedutível.
+      if (payload.dedut?.tipo) {
+        await supabase.from('auditoria').insert({
+          competencia_id: id, modulo: 'Conciliação', tipo: 'Justificativa',
+          item: `${payload.dedut.conta} · dedutibilidade`,
+          detalhe: `${payload.dedut.tipo} — reclassificado de ${conta.conta} · ${money(payload.dedut.valor)} · ${acao?.historico || ''}`,
+          dedutibilidade: payload.dedut.tipo, razao_id: razaoIdLinha, usuario,
+        })
+      }
     }
     // Ajuste de leitura (nome/NF/histórico) — ajuda o sistema a cruzar; reaplicado sempre.
     // Não se aplica à abertura (a leitura dela vem da carga inicial, não do razão).
@@ -2351,6 +2361,17 @@ function ModalLancamento({ lanc, conta, lab, plano, natCredito, residuo = 0, onC
   const set = k => e => setForm(f => ({ ...f, [k]: e.target.value }))
   const setAj = k => e => setAjuste(a => ({ ...a, [k]: e.target.value }))
 
+  // Reclassificar para DESPESA (classif 4) → pergunta dedutível/indedutível (LALUR). A conta
+  // de destino é o lado da partida que NÃO é a conta conciliada. Sem NF, sugere indedutível.
+  const ehDesp = cod => String((plano || []).find(p => String(p.cod) === String(cod))?.classif || '').replace(/\D/g, '')[0] === '4'
+  const destinoConta = String(form.conta_debito) === String(conta.conta) ? form.conta_credito : (String(form.conta_credito) === String(conta.conta) ? form.conta_debito : '')
+  const destinoEhDespesa = ehDesp(destinoConta)
+  const [dedutDest, setDedutDest] = useState('')
+  useEffect(() => {
+    if (destinoEhDespesa) setDedutDest(d => d || (lanc.leitura?.nf ? 'Dedutível' : 'Indedutível'))
+    else setDedutDest('')
+  }, [destinoEhDespesa]) // eslint-disable-line react-hooks/exhaustive-deps
+
   // Diferença da NF tratada como Desconto financeiro ou Juros — pré-preenche a partida de acerto.
   const baixa = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
   const achaConta = re => (plano || []).find(p => re.test(baixa(p.nome)))?.cod || ''
@@ -2402,6 +2423,7 @@ function ModalLancamento({ lanc, conta, lab, plano, natCredito, residuo = 0, onC
         : (txt.trim() || form.historico),
       ajuste: ajusteMudou ? { entidade: ajuste.entidade.trim(), nf: ajuste.nf.trim(), historico: ajuste.historico.trim() } : null,
       lancamento: partidaOk ? form : null,
+      dedut: (partidaOk && destinoEhDespesa) ? { conta: String(destinoConta), valor: Number(form.valor) || 0, tipo: dedutDest } : null,
     })
   }
 
@@ -2468,6 +2490,19 @@ function ModalLancamento({ lanc, conta, lab, plano, natCredito, residuo = 0, onC
                 <div><label>Conta crédito</label><CampoConta value={form.conta_credito} onChange={v => setForm(f => ({ ...f, conta_credito: v }))} /></div>
                 <div style={{ gridColumn: '1 / -1' }}><label>Histórico da partida</label><textarea className="input" rows={2} value={form.historico} onChange={set('historico')} /></div>
               </div>
+              {destinoEhDespesa && (
+                <div style={{ marginTop: 12, background: 'rgba(245,166,35,0.08)', border: '1px solid rgba(245,166,35,0.4)', borderRadius: 10, padding: '10px 14px' }}>
+                  <label style={{ display: 'block', marginBottom: 6, color: theme.text }}>A conta de destino <b>{destinoConta}</b> é <b>despesa</b> — classifique para o LALUR{!lanc.leitura?.nf && <span style={{ color: theme.yellow }}> · sem nota fiscal</span>}</label>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    {['Dedutível', 'Indedutível'].map(op => (
+                      <button key={op} type="button" className={dedutDest === op ? 'btn' : 'btn btn-ghost'}
+                        style={{ fontSize: 12.5, padding: '6px 12px', flex: 1, ...(op === 'Indedutível' && dedutDest === op ? { background: theme.yellow, borderColor: theme.yellow } : {}) }}
+                        onClick={() => setDedutDest(op)}>{op}</button>
+                    ))}
+                  </div>
+                  <p style={{ color: theme.sub, fontSize: 11.5, margin: '8px 0 0' }}><b style={{ color: theme.yellow }}>Indedutível</b> entra como <b>adição</b> no LALUR. Sem nota fiscal, o padrão é indedutível.</p>
+                </div>
+              )}
             </div>
 
             <div style={{ marginTop: 12 }}><label>Observação na auditoria (opcional)</label><input className="input" value={txt} onChange={e => setTxt(e.target.value)} placeholder="O que estava errado / o que foi corrigido…" /></div>

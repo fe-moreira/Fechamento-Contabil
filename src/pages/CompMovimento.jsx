@@ -22,6 +22,9 @@ function numBR(v) {
   const n = parseFloat(s.replace(/[^\d.-]/g, '')); return isNaN(n) ? 0 : n
 }
 function limpaContra(v) { const s = String(v ?? '').trim(); return (!s || /^0+([.,]0+)?$/.test(s.replace(/\./g, ''))) ? null : s }
+// Detecta nota fiscal no histórico (NF/NF-e/NOTA FISCAL seguido de número). Sem NF, a
+// reclassificação para despesa sugere INDEDUTÍVEL por padrão (LALUR).
+function temNotaFiscal(h) { return /\b(NFS?-?e?|NOTA\s+FISCAL)\b\.?\s*(n[ºo°.]*\s*)?\d/i.test(String(h || '')) }
 
 const ANO = 2026
 const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
@@ -809,7 +812,7 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
   // Insere UMA correção (lançamento de reclassificação + auditoria + aprendizado). NÃO
   // recarrega nem mexe em estado de UI — é o núcleo reusado pela correção individual e em
   // lote. Lança erro em caso de problema (conta sintética, valor inválido, etc.).
-  async function inserirCorrecao(l, { contaCerta, valor, historico }) {
+  async function inserirCorrecao(l, { contaCerta, valor, historico, dedut }) {
     const eSint = erroContaSintetica(plano, contaCerta, conta)
     if (eSint) throw new Error(eSint)
     const v = Number(valor) || 0
@@ -835,9 +838,22 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
       detalhe: `Reclassificação ${conta} → ${contaCerta} · ${money(v)}${historico ? ' · ' + historico : ''}`,
       razao_id: l.id, usuario,
     })
+    // LALUR: se reclassificou para uma DESPESA (classif 4), registra dedutível/indedutível
+    // (aparece no relatório de Despesas indedutíveis). Sem NF, o padrão sugerido é indedutível.
+    if (dedut && ehDespesaCod(contaCerta)) {
+      await supabase.from('auditoria').insert({
+        competencia_id: cid, modulo: 'Comparativo', tipo: 'Justificativa',
+        item: `${contaCerta} · dedutibilidade`,
+        detalhe: `${dedut} — reclassificado de ${conta} · ${money(v)} · ${l.historico || ''}`,
+        dedutibilidade: dedut, razao_id: l.id, usuario,
+      })
+    }
     // Aprendizado: contra banco → memória da integração; senão → memória de correção contábil.
     return await aprenderDaCorrecao({ clienteId: empresaId, historico: l.historico, contrapartida: l.contrapartida, contaErrada: conta, contaCerta, usuario })
   }
+  // Conta de DESPESA (classif começa com 4) e detecção de nota fiscal no histórico.
+  const classifDe = cod => (plano || []).find(p => String(p.cod) === String(cod))?.classif || ''
+  const ehDespesaCod = cod => String(classifDe(cod)).replace(/\D/g, '')[0] === '4'
 
   // Gera o lançamento de CORREÇÃO (partida dobrada) que reclassifica o valor da conta
   // errada para a conta certa — é o lançamento que vai ser importado no Domínio.
@@ -859,8 +875,8 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
     try {
       let ok = 0
       for (const it of (itens || [])) {
-        if (!it.contaCerta || !(Number(it.valor) > 0)) continue
-        await inserirCorrecao(it.linha, { contaCerta: it.contaCerta, valor: it.valor, historico: it.historico })
+        if (!it.contaCerta || !(numBR(it.valor) > 0)) continue
+        await inserirCorrecao(it.linha, { contaCerta: it.contaCerta, valor: numBR(it.valor), historico: it.historico, dedut: it.dedut })
         ok++
       }
       if (!ok) { setMsg('Erro: escolha a conta certa de pelo menos um lançamento.'); setSalvando(false); return }
@@ -1067,7 +1083,7 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
 
       {acaoLanc && (
         <ModalCorrecao
-          acao={acaoLanc} conta={conta} salvando={salvando}
+          acao={acaoLanc} conta={conta} plano={plano} salvando={salvando}
           dedutAtual={dedut[acaoLanc.linha.id] || ''}
           onDedut={v => marcarDedut(acaoLanc.linha, v)}
           onClose={() => setAcaoLanc(null)}
@@ -1078,7 +1094,7 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
 
       {lote && (
         <ModalCorrecaoLote
-          itens={lote} conta={conta} salvando={salvando}
+          itens={lote} conta={conta} plano={plano} salvando={salvando}
           onClose={() => setLote(null)}
           onGravar={gerarCorrecaoLote}
         />
@@ -1089,13 +1105,16 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
 
 // Correção em LOTE: uma linha por lançamento selecionado, com a SUA conta certa (podem
 // ser diferentes) e valor. Grava todos de uma vez (só os que têm conta escolhida).
-function ModalCorrecaoLote({ itens, conta, salvando, onClose, onGravar }) {
+function ModalCorrecaoLote({ itens, conta, plano, salvando, onClose, onGravar }) {
+  const ehDesp = cod => String((plano || []).find(p => String(p.cod) === String(cod))?.classif || '').replace(/\D/g, '')[0] === '4'
   const [rows, setRows] = useState(() => itens.map(it => {
     const l = it.linha
     const base = Number(l.debito) > 0 ? Number(l.debito) : Number(l.credito)
-    return { linha: l, contaCerta: '', valor: base ? base.toFixed(2).replace('.', ',') : '', historico: `Reclassificação ref. ${l.historico || ''}`.trim() }
+    return { linha: l, contaCerta: '', valor: base ? base.toFixed(2).replace('.', ',') : '', historico: `Reclassificação ref. ${l.historico || ''}`.trim(), dedut: '' }
   }))
   const set = (i, patch) => setRows(rs => rs.map((r, j) => j === i ? { ...r, ...patch } : r))
+  // Ao escolher uma conta de DESPESA, sugere a dedutibilidade: sem nota fiscal → Indedutível.
+  const setConta = (i, v) => setRows(rs => rs.map((r, j) => j === i ? { ...r, contaCerta: v, dedut: (ehDesp(v) && !r.dedut) ? (temNotaFiscal(r.linha.historico) ? 'Dedutível' : 'Indedutível') : (ehDesp(v) ? r.dedut : '') } : r))
   const prontos = rows.filter(r => r.contaCerta && numBR(r.valor) > 0).length
 
   return (
@@ -1121,7 +1140,19 @@ function ModalCorrecaoLote({ itens, conta, salvando, onClose, onGravar }) {
                 </div>
                 <div>
                   <label style={{ fontSize: 10.5, color: theme.sub, textTransform: 'uppercase', letterSpacing: .3 }}>Conta certa (destino)</label>
-                  <div style={{ marginTop: 4 }}><CampoConta value={r.contaCerta} onChange={v => set(i, { contaCerta: v })} /></div>
+                  <div style={{ marginTop: 4 }}><CampoConta value={r.contaCerta} onChange={v => setConta(i, v)} /></div>
+                  {ehDesp(r.contaCerta) && (
+                    <div style={{ marginTop: 8, background: theme.input, border: `0.5px solid ${theme.cb}`, borderRadius: 8, padding: '8px 10px' }}>
+                      <div style={{ fontSize: 10.5, color: theme.sub, textTransform: 'uppercase', letterSpacing: .3, marginBottom: 5 }}>Despesa — LALUR{!temNotaFiscal(l.historico) && <span style={{ color: theme.yellow, textTransform: 'none', letterSpacing: 0 }}> · sem NF</span>}</div>
+                      <div style={{ display: 'flex', gap: 6 }}>
+                        {['Dedutível', 'Indedutível'].map(op => (
+                          <button key={op} type="button" onClick={() => set(i, { dedut: op })}
+                            className={r.dedut === op ? 'btn' : 'btn btn-ghost'}
+                            style={{ fontSize: 11.5, padding: '5px 9px', flex: 1, ...(op === 'Indedutível' && r.dedut === op ? { background: theme.yellow, borderColor: theme.yellow } : {}) }}>{op}</button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             )
@@ -1144,13 +1175,17 @@ function ModalCorrecaoLote({ itens, conta, salvando, onClose, onGravar }) {
 
 // Correção de um lançamento: gera um NOVO lançamento (partida dobrada) reclassificando
 // o valor da conta errada para a conta certa — o que será importado no Domínio.
-function ModalCorrecao({ acao, conta, salvando, dedutAtual, onDedut, onClose, onGerar, onDesfazer }) {
+function ModalCorrecao({ acao, conta, plano, salvando, dedutAtual, onDedut, onClose, onGerar, onDesfazer }) {
   const { modo, linha, corr } = acao
   const foiDebito = Number(linha.debito) > 0
   const valorBase = foiDebito ? Number(linha.debito) : Number(linha.credito)
-  const [contaCerta, setContaCerta] = useState('')
+  const [contaCerta, setContaCertaRaw] = useState('')
   const [valor, setValor] = useState(valorBase ? valorBase.toFixed(2).replace('.', ',') : '')
   const [historico, setHistorico] = useState(`Reclassificação ref. ${linha.historico || ''}`.trim())
+  const [dedutDest, setDedutDest] = useState('')
+  const ehDesp = cod => String((plano || []).find(p => String(p.cod) === String(cod))?.classif || '').replace(/\D/g, '')[0] === '4'
+  // Ao escolher uma conta de DESPESA, sugere a dedutibilidade: sem nota fiscal → Indedutível.
+  const setContaCerta = v2 => { setContaCertaRaw(v2); if (ehDesp(v2) && !dedutDest) setDedutDest(temNotaFiscal(linha.historico) ? 'Dedutível' : 'Indedutível'); if (!ehDesp(v2)) setDedutDest('') }
   const v = numBR(valor)
   const contaDeb = foiDebito ? (contaCerta || '—') : conta
   const contaCred = foiDebito ? conta : (contaCerta || '—')
@@ -1163,8 +1198,9 @@ function ModalCorrecao({ acao, conta, salvando, dedutAtual, onDedut, onClose, on
           {linha.data || ''} · {linha.historico || ''} · {foiDebito ? 'Débito' : 'Crédito'} {money(valorBase)} na conta <b style={{ color: theme.text }}>{conta}</b>.
         </p>
 
-        {/* Dedutibilidade (LALUR): indedutível vira adição no LALUR e no relatório. */}
-        {onDedut && (
+        {/* Dedutibilidade (LALUR) do lançamento original — some quando a correção já leva
+            para uma despesa (aí a pergunta é sobre a conta de DESTINO, mais abaixo). */}
+        {onDedut && !(modo !== 'ver' && ehDesp(contaCerta)) && (
           <div style={{ background: theme.input, border: `0.5px solid ${theme.cb}`, borderRadius: 10, padding: '10px 14px', marginBottom: 14 }}>
             <label style={{ fontSize: 12, color: theme.sub, display: 'block', marginBottom: 6 }}>Despesa — para o LALUR</label>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -1209,6 +1245,19 @@ function ModalCorrecao({ acao, conta, salvando, dedutAtual, onDedut, onClose, on
                 <textarea className="input" rows={2} value={historico} onChange={e => setHistorico(e.target.value)} style={{ marginTop: 4 }} />
               </div>
             </div>
+            {ehDesp(contaCerta) && (
+              <div style={{ background: 'rgba(245,166,35,0.08)', border: '1px solid rgba(245,166,35,0.4)', borderRadius: 10, padding: '10px 14px', marginTop: 12 }}>
+                <label style={{ fontSize: 12, color: theme.text, display: 'block', marginBottom: 6 }}>A conta de destino é <b>despesa</b> — classifique para o LALUR{!temNotaFiscal(linha.historico) && <span style={{ color: theme.yellow }}> · sem nota fiscal</span>}</label>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  {['Dedutível', 'Indedutível'].map(op => (
+                    <button key={op} type="button" className={dedutDest === op ? 'btn' : 'btn btn-ghost'} disabled={salvando}
+                      style={{ fontSize: 12.5, padding: '6px 12px', flex: 1, ...(op === 'Indedutível' && dedutDest === op ? { background: theme.yellow, borderColor: theme.yellow } : {}) }}
+                      onClick={() => setDedutDest(op)}>{op}</button>
+                  ))}
+                </div>
+                <p style={{ color: theme.sub, fontSize: 11.5, margin: '8px 0 0' }}><b style={{ color: theme.yellow }}>Indedutível</b> entra como <b>adição</b> no LALUR. Sem nota fiscal, o padrão é indedutível.</p>
+              </div>
+            )}
             <div style={{ background: theme.input, border: `0.5px solid ${theme.cb}`, borderRadius: 10, padding: '10px 14px', fontSize: 12.5, marginTop: 12 }}>
               <p style={{ margin: 0, color: theme.sub }}>Lançamento que será gerado:</p>
               <p style={{ margin: '5px 0 0', color: theme.text }}>Débito <b>{contaDeb}</b> · Crédito <b>{contaCred}</b> · <b>{money(v)}</b></p>
@@ -1216,7 +1265,7 @@ function ModalCorrecao({ acao, conta, salvando, dedutAtual, onDedut, onClose, on
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
               <button className="btn btn-ghost" onClick={onClose} disabled={salvando}>Cancelar</button>
               <button className="btn" disabled={salvando || !contaCerta.trim() || v <= 0}
-                onClick={() => onGerar({ contaCerta: contaCerta.trim(), valor: v, historico: historico.trim() })}>
+                onClick={() => onGerar({ contaCerta: contaCerta.trim(), valor: v, historico: historico.trim(), dedut: dedutDest })}>
                 {salvando ? 'Gerando…' : 'Gerar correção'}
               </button>
             </div>
