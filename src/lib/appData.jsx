@@ -101,6 +101,10 @@ export function AppDataProvider({ children }) {
   // --- Timesheet: registra o tempo trabalhado por cliente enquanto a empresa está ativa ---
   const { user } = useAuth()
   const userRef = useRef(user); userRef.current = user
+  // Lista de empresas sempre atual (para resolver o NOME do cliente na hora de gravar o
+  // timesheet — antes, se as empresas ainda não tinham carregado quando o cliente foi
+  // selecionado, o nome ia vazio e o relatório não mostrava o cliente).
+  const empresasRef = useRef(empresas); empresasRef.current = empresas
   const track = useRef({ cliente_id: null, nome: '', start: null })
   // Timesheet pausa após 10 min sem interação do usuário com o cliente.
   const lastAtiv = useRef(Date.now())
@@ -111,7 +115,8 @@ export function AppDataProvider({ children }) {
     if (tr.cliente_id && tr.start && document.visibilityState === 'visible') {
       const secs = Math.round((Date.now() - tr.start) / 1000)
       if (secs >= 5) {
-        supabase.from('timesheet').insert({ usuario: userRef.current?.email || null, cliente_id: tr.cliente_id, cliente_nome: tr.nome, segundos: secs }).then(() => {})
+        const nome = empresasRef.current.find(e => e.id === tr.cliente_id)?.razao_social || tr.nome || ''
+        supabase.from('timesheet').insert({ usuario: userRef.current?.email || null, cliente_id: tr.cliente_id, cliente_nome: nome, segundos: secs }).then(() => {})
       }
     }
     tr.start = finalizar ? null : Date.now()
