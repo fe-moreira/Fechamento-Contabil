@@ -213,8 +213,11 @@ async function carregarIndiceFolha(empresaId, competencia) {
   const { data: aj } = await supabase.from('ajuste_leitura').select('razao_id, historico')
   for (const a of (aj || [])) if (a.historico) ajuste[a.razao_id] = a.historico
   for (const r of (rz || [])) add(ajuste[r.id] || r.historico, Number(r.debito) || 0, Number(r.credito) || 0)
-  const { data: lc } = await supabase.from('lancamentos').select('historico, valor').eq('competencia_id', comp.id)
-  for (const l of (lc || [])) { const v = Math.abs(Number(l.valor) || 0); add(l.historico, v, v) }
+  // Pula as CORREÇÕES (reclassificações): elas só MOVEM o valor de uma conta para outra —
+  // o total da rubrica na folha não muda. Se entrassem aqui, somariam por cima do que o
+  // razão do Domínio já traz da folha e o valor apareceria DOBRADO na conferência.
+  const { data: lc } = await supabase.from('lancamentos').select('historico, valor, origem').eq('competencia_id', comp.id)
+  for (const l of (lc || [])) { if (l.origem === 'correcao') continue; const v = Math.abs(Number(l.valor) || 0); add(l.historico, v, v) }
   return { byCod, valores, compId: comp.id }
 }
 // Cruza os eventos unificados com o índice do razão. Casa pelo código; se o código não
