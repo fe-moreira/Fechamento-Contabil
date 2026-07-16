@@ -2662,7 +2662,10 @@ function ImpostoCards({ conta }) {
   const [erro, setErro] = useState('')
   const baixaAnterior = Number(conta.saldo_inicial) || 0
   const recolhido = Number(conta.debito) || 0
-  const baixaDif = baixaAnterior - recolhido
+  // Saldo anterior vem em D−C: imposto a recolher é CRÉDITO (negativo). O recolhido é um
+  // DÉBITO que ABATE esse saldo — então a diferença é saldo + recolhido (resíduo do mês
+  // anterior). Antes era saldo − recolhido, que somava as duas grandezas (parecia dobrado).
+  const baixaDif = baixaAnterior + recolhido
   const baixaOk = Math.abs(baixaDif) < 0.01
   const aRecolher = Number(conta.saldo_final) || 0
 
