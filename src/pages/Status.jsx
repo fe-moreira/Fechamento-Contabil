@@ -122,12 +122,13 @@ export default function Status() {
   // recarregam (após justificar/corrigir) — o render já atualizou progressoRef antes do efeito.
   useEffect(() => {
     if (!compId) return
+    if (status === 'fechado') return // competência fechada é somente leitura — não grava pct
     const p = progressoRef.current
     if (p == null) return
     // IMPORTANTE: o builder do supabase-js é lazy — sem await/then a requisição NÃO é
     // enviada. Precisa disparar de fato para gravar o pct.
-    ;(async () => { await supabase.from('competencias').update({ pct: p }).eq('id', compId) })()
-  }, [compId, dados])
+    ;(async () => { await supabase.from('competencias').update({ pct: p }).eq('id', compId).then(() => {}, () => {}) })()
+  }, [compId, dados, status])
 
   if (!empresaId) {
     return <Wrapper><Aviso icon="ti-building" texto="Selecione uma empresa no menu lateral." /></Wrapper>
