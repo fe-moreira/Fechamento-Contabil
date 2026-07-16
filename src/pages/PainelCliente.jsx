@@ -4,7 +4,6 @@ import { useAppData } from '../lib/appData'
 import { apurarVariacoes } from '../lib/variacoes'
 import { apurarDistribuicao } from '../lib/distribuicao'
 import { montarBalancete } from '../lib/balancete'
-import { montarDRE } from '../lib/dre'
 import { extrairEntidade } from '../lib/financeiro'
 import { gerarExcelTimbrado } from '../lib/excel'
 import { theme, money } from '../lib/theme'
@@ -73,7 +72,7 @@ export default function PainelCliente() {
         // Ativo − (Passivo + PL) = Resultado acumulado.
         const { data: compsAno } = await supabase.from('competencias').select('id, mes')
           .eq('cliente_id', empresaId).eq('ano', ano).order('mes', { ascending: true })
-        const porMes = {}, linhasResMes = {}, meses = []
+        const porMes = {}, meses = []
         for (const c of (compsAno || [])) {
           const linhasC = c.id === comp.id ? hier : (await montarBalancete(empresaId, c.id, 0, { comLancamentos: true })).linhas // vivo (com correções)
           const res = (linhasC || []).filter(l => !l.sintetica && ['3', '4', '5'].includes(String(l.classifRaw || '')[0]))
@@ -87,7 +86,6 @@ export default function PainelCliente() {
           const receita = -g3, custo = g4, despesa = g5 // grupo 3 credor → receita positiva; 4/5 devedores
           meses.push(c.mes)
           porMes[c.mes] = { receita, custo, despesa, resultado: receita - custo - despesa }
-          linhasResMes[c.mes] = res
         }
         meses.sort((a, b) => a - b)
         const receitaMes = m => porMes[m]?.receita || 0
@@ -98,16 +96,21 @@ export default function PainelCliente() {
         const resultado = resMes(mes)
         const acumulado = meses.filter(m => m <= mes).reduce((s, m) => s + resMes(m), 0)
 
-        // Gráfico de desempenho (combo): a DRE do mês (Receita Líquida, EBITDA, Lucro Líquido)
-        // a partir das linhas de resultado — o mesmo montarDRE dos Relatórios.
-        const dreMes = m => {
-          const rows = montarDRE(linhasResMes[m] || [])
-          const val = lbl => (rows.find(r => r.label === lbl)?.valor) || 0
-          return { receitaLiq: val('RECEITA LÍQUIDA'), ebitda: val('RESULTADO OPERACIONAL (EBITDA)'), lucroLiq: val('LUCRO LÍQUIDO DO EXERCÍCIO') }
-        }
+        // Gráfico de desempenho (combo): usa a MESMA base do painel (grupos por 1º dígito —
+        // 3 = receita, 4 = custo, 5 = despesa), e não o montarDRE detalhado (que assume a
+        // estrutura do Domínio 31/43/51… e, num plano simples, perde o custo/despesa e faz
+        // EBITDA e Lucro darem iguais à Receita — margem 100%).
+        //   Receita Líquida = receita (grupo 3)
+        //   EBITDA (resultado operacional) = receita − custo (grupo 3 − grupo 4)
+        //   Lucro Líquido = receita − custo − despesa (grupo 3 − 4 − 5)
         const serieCombo = meses.map(m => {
-          const r = dreMes(m)
-          return { mes: m, rotulo: MESES[m - 1], ...r, margemEbitda: r.receitaLiq ? (r.ebitda / r.receitaLiq) * 100 : 0, margemLiquida: r.receitaLiq ? (r.lucroLiq / r.receitaLiq) * 100 : 0 }
+          const p = porMes[m] || { receita: 0, custo: 0, despesa: 0, resultado: 0 }
+          const receitaLiq = p.receita, ebitda = p.receita - p.custo, lucroLiq = p.resultado
+          return {
+            mes: m, rotulo: MESES[m - 1], receitaLiq, ebitda, lucroLiq,
+            margemEbitda: receitaLiq ? (ebitda / receitaLiq) * 100 : 0,
+            margemLiquida: receitaLiq ? (lucroLiq / receitaLiq) * 100 : 0,
+          }
         })
 
         // Nível 1 resumido do mês da competência.
