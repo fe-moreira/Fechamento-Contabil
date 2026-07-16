@@ -24,7 +24,7 @@ const INTEGRACOES = [
 ]
 
 export default function Status() {
-  const { empresaId, empresaNome, competencia, getCompetenciaId, plano } = useAppData()
+  const { empresaId, empresaNome, competencia, getCompetenciaId, plano, refreshStatusCompetencia } = useAppData()
   const { user } = useAuth()
   const planoMap = Object.fromEntries((plano || []).map(p => [String(p.cod), p]))
   const contaInfo = c => { const p = planoMap[String(c)]; return { cod: String(c), classif: p?.classif || '', nome: p?.nome || '' } }
@@ -352,13 +352,13 @@ export default function Status() {
     setSalvando(true)
     const { error } = await supabase.from('competencias').update({ status: 'fechado' }).eq('id', compId)
     setSalvando(false)
-    if (!error) { setStatus('fechado'); setMsg('Fechamento encerrado.') }
+    if (!error) { setStatus('fechado'); setMsg('Fechamento encerrado.'); refreshStatusCompetencia && refreshStatusCompetencia() }
   }
   async function reabrir() {
     setSalvando(true)
     const { error } = await supabase.from('competencias').update({ status: 'andamento' }).eq('id', compId)
     setSalvando(false)
-    if (!error) { setStatus('andamento'); setMsg('Fechamento reaberto.'); setBalConf(null) }
+    if (!error) { setStatus('andamento'); setMsg('Fechamento reaberto.'); setBalConf(null); refreshStatusCompetencia && refreshStatusCompetencia() }
   }
 
   // Importa o balancete (exportado do Domínio) e confere se BATE com a conciliação —

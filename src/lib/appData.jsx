@@ -84,6 +84,18 @@ export function AppDataProvider({ children }) {
   }
   useEffect(() => { recalcularPendencias() }, [empresaId, competencia])
 
+  // Competência ENCERRADA (fechada) = somente leitura em toda a plataforma. Reabrir no
+  // Status é o único caminho para voltar a editar.
+  const [competenciaFechada, setCompetenciaFechada] = useState(false)
+  async function refreshStatusCompetencia() {
+    if (!empresaId) { setCompetenciaFechada(false); return }
+    const [mes, ano] = competencia.split('/').map(Number)
+    const { data } = await supabase.from('competencias').select('status')
+      .eq('cliente_id', empresaId).eq('ano', ano).eq('mes', mes).maybeSingle()
+    setCompetenciaFechada(data?.status === 'fechado')
+  }
+  useEffect(() => { refreshStatusCompetencia() }, [empresaId, competencia]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const empresaNome = empresas.find(e => e.id === empresaId)?.razao_social || ''
 
   // --- Timesheet: registra o tempo trabalhado por cliente enquanto a empresa está ativa ---
@@ -175,6 +187,7 @@ export function AppDataProvider({ children }) {
     pendencias, recalcularPendencias, isAdmin,
     fechamentoAtivo, setFechamentoAtivo, abrirFechamento,
     plano, recarregarPlano,
+    competenciaFechada, refreshStatusCompetencia,
   }
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }

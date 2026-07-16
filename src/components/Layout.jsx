@@ -92,7 +92,7 @@ function TimerSessao() {
 
 export default function Layout() {
   const { user, signOut } = useAuth()
-  const { competencia, empresaId, empresaNome, pendencias, fechamentoAtivo } = useAppData()
+  const { competencia, empresaId, empresaNome, pendencias, fechamentoAtivo, competenciaFechada } = useAppData()
   const location = useLocation()
   const navigate = useNavigate()
   // Ao trocar de cliente, vai para a tela de Fechamentos para escolher/abrir um.
@@ -209,6 +209,17 @@ export default function Layout() {
           </div>
         </div>
 
+        {fechamentoAtivo && competenciaFechada && (
+          <div style={{ background: 'rgba(48,164,108,0.12)', borderBottom: `1px solid ${theme.green}`, padding: '10px 32px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <i className="ti ti-lock" style={{ color: theme.green, fontSize: 18 }} />
+            <span style={{ fontSize: 13, color: theme.text }}>
+              <b>Competência {competencia} encerrada — somente leitura.</b> Nenhuma alteração é permitida enquanto o fechamento estiver fechado.
+            </span>
+            <Link to="/status" className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', marginLeft: 'auto' }}>
+              <i className="ti ti-lock-open" /> Reabrir no Status
+            </Link>
+          </div>
+        )}
         <div style={{ padding: '28px 32px', flex: 1 }}>
           {precisaFechamento ? <GateFechamento empresaId={empresaId} /> : <Outlet />}
         </div>
