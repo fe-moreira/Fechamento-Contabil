@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
 import { fechaSozinho } from '../lib/clientes'
 import { normalizaCompetencia } from '../lib/balancete'
+import { calcularProgresso } from '../lib/progresso'
 import { theme } from '../lib/theme'
 
 const MESES = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
@@ -35,9 +36,23 @@ export default function Fechamentos() {
     setLoading(true)
     const { data } = await supabase.from('competencias').select('id, ano, mes, status, razao_importado, pct, documentos')
       .eq('cliente_id', empresaId).order('ano', { ascending: false }).order('mes', { ascending: false })
-    setLista(data || []); setLoading(false)
+    const rows = data || []
+    setLista(rows); setLoading(false)
+    // Progresso AO VIVO (não depende de abrir o Status de cada cliente): recalcula o % das
+    // competências em andamento e atualiza o card + grava em competencias.pct (aquece o
+    // Dashboard, que lê o pct salvo). Só as "em andamento" (com razão, não fechadas) —
+    // fechadas já são 100% e sem razão ficam como estão.
+    const alvo = rows.filter(c => c.status !== 'fechado' && c.razao_importado)
+    if (!alvo.length) return
+    const pcts = await Promise.all(alvo.map(c => calcularProgresso(empresaId, `${String(c.mes).padStart(2, '0')}/${c.ano}`)))
+    const mapPct = {}
+    alvo.forEach((c, i) => { mapPct[c.id] = pcts[i] })
+    setLista(prev => prev.map(c => (c.id in mapPct ? { ...c, pct: mapPct[c.id] } : c)))
+    for (const c of alvo) {
+      if ((mapPct[c.id] || 0) !== (c.pct || 0)) await supabase.from('competencias').update({ pct: mapPct[c.id] }).eq('id', c.id)
+    }
   }
-  useEffect(() => { if (empresaId) carregar(); else { setLista([]); setLoading(false) } }, [empresaId])
+  useEffect(() => { if (empresaId) carregar(); else { setLista([]); setLoading(false) } }, [empresaId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!empresaId) {
     return <Wrapper><Aviso texto="Selecione uma empresa no menu lateral para ver os fechamentos." /></Wrapper>
