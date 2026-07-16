@@ -65,9 +65,15 @@ export async function apurarVariacoes(empresaId, opts = {}) {
   }
   mesesComDados.sort((a, b) => a - b)
 
-  // Justificadas
+  // Justificadas. A variação some quando a conta foi justificada no Comparativo de
+  // Movimento (modulo 'Comparativo') OU direto no gate "Variações sem justificativa" do
+  // Status (modulo 'Status', item `${conta} · ${NOME}`). Antes só o Comparativo era lido,
+  // então justificar pelo Status marcava "OK." mas a variação nunca baixava. A chave é
+  // (conta, mês): conta = 1º trecho do item (sempre o código); mês = da competência do
+  // registro. Itens de outros gates do Status (ex.: "Conta 326 · saldo…", "326 → 623 · …")
+  // têm 1º trecho não-numérico e não colidem com o código puro da variação.
   const { data: aud } = await supabase.from('auditoria').select('item, competencia_id')
-    .in('competencia_id', comps.map(c => c.id)).eq('modulo', 'Comparativo')
+    .in('competencia_id', comps.map(c => c.id)).in('modulo', ['Comparativo', 'Status'])
   const just = new Set()
   for (const a of (aud || [])) {
     const conta = String(a.item || '').split(' · ')[0].trim()
