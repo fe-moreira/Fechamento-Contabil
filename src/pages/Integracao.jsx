@@ -208,16 +208,32 @@ async function carregarIndiceFolha(empresaId, competencia) {
     b.cred = Math.round((b.cred + (cred || 0)) * 100) / 100
     for (const v of [deb, cred]) if (v) valores.add(Math.round(v * 100))
   }
-  const { data: rz } = await supabase.from('razao').select('id, historico, debito, credito').eq('competencia_id', comp.id)
+  // O Supabase devolve no máximo 1000 linhas por consulta. Razões grandes (milhares de
+  // lançamentos) ficavam TRUNCADOS aqui, e rubricas cujas linhas caíam fora das 1000
+  // (ex.: 980 ADIANTAMENTO SALARIAL) sumiam do índice — a conferência parecia "não ler" a
+  // rubrica. Agora paginamos (range) até trazer tudo.
+  const lerTudo = async (tabela, colunas) => {
+    const SIZE = 1000; let from = 0; const out = []
+    while (true) {
+      const { data, error } = await supabase.from(tabela).select(colunas)
+        .eq('competencia_id', comp.id).order('id', { ascending: true }).range(from, from + SIZE - 1)
+      if (error || !data) break
+      out.push(...data)
+      if (data.length < SIZE) break
+      from += SIZE
+    }
+    return out
+  }
+  const rz = await lerTudo('razao', 'id, historico, debito, credito')
   const ajuste = {}
-  const { data: aj } = await supabase.from('ajuste_leitura').select('razao_id, historico')
-  for (const a of (aj || [])) if (a.historico) ajuste[a.razao_id] = a.historico
-  for (const r of (rz || [])) add(ajuste[r.id] || r.historico, Number(r.debito) || 0, Number(r.credito) || 0)
+  const aj = await lerTudo('ajuste_leitura', 'razao_id, historico')
+  for (const a of aj) if (a.historico) ajuste[a.razao_id] = a.historico
+  for (const r of rz) add(ajuste[r.id] || r.historico, Number(r.debito) || 0, Number(r.credito) || 0)
   // Pula as CORREÇÕES (reclassificações): elas só MOVEM o valor de uma conta para outra —
   // o total da rubrica na folha não muda. Se entrassem aqui, somariam por cima do que o
   // razão do Domínio já traz da folha e o valor apareceria DOBRADO na conferência.
-  const { data: lc } = await supabase.from('lancamentos').select('historico, valor, origem').eq('competencia_id', comp.id)
-  for (const l of (lc || [])) { if (l.origem === 'correcao') continue; const v = Math.abs(Number(l.valor) || 0); add(l.historico, v, v) }
+  const lc = await lerTudo('lancamentos', 'historico, valor, origem')
+  for (const l of lc) { if (l.origem === 'correcao') continue; const v = Math.abs(Number(l.valor) || 0); add(l.historico, v, v) }
   return { byCod, valores, compId: comp.id }
 }
 // Cruza os eventos unificados com o índice do razão. Casa pelo código; se o código não
