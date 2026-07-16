@@ -91,8 +91,9 @@ const GENERICAS = new Set(['COMPANHIA', 'CIA', 'DISTRIBUIDORA', 'DISTRIBUIDOR', 
   // clientes diferentes que só compartilhavam o tipo da operação (ex.: "REVENDA DE
   // MERCADORIA - ESPERA DE ANCORAGEM ... EMPREENDIMENTOS IMOBILIARIOS SPE").
   'REVENDA', 'REVENDAS', 'MERCADORIA', 'MERCADORIAS', 'ESPERA', 'ANCORAGEM', 'FATURAMENTO', 'FATURAM', 'FUTURO', 'RECEB', 'RECEBER', 'SIMPLES', 'LCTO', 'LANCAMENTO', 'ACUM', 'TRIB', 'ANTECIPACAO',
-  // Estrutura societária de incorporadoras/imobiliárias (comum, não distingue).
-  'INCORPORACOES', 'INCORPORACAO', 'INCORPORADORA', 'IMOBILIARIOS', 'IMOBILIARIO', 'IMOBILIARIA', 'IMOBILIARIAS', 'SPE', 'CONSTRUTORA', 'CONSTRUCAO', 'CONSTRUCOES',
+  'RECEITA', 'RECEITAS', 'MONTAGEM', 'MONTAGENS', 'PROJETO', 'PROJETOS', 'REDES', 'REDE', 'PRESTACAO', 'PREST',
+  // Estrutura societária de incorporadoras/imobiliárias/engenharia (comum, não distingue).
+  'INCORPORACOES', 'INCORPORACAO', 'INCORPORADORA', 'IMOBILIARIOS', 'IMOBILIARIO', 'IMOBILIARIA', 'IMOBILIARIAS', 'SPE', 'CONSTRUTORA', 'CONSTRUCAO', 'CONSTRUCOES', 'ENGENHARIA', 'ENGENHARIAS', 'DESENVOLVIMENTO', 'DESENVOLVIMENTOS',
   'DO', 'DA', 'DE', 'DOS', 'DAS', 'E', 'EM'])
 const normNome = s => String(s || '').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim()
 // Tokens distintivos de um nome (>=3 letras, sem genéricas). Se sobrar vazio, usa todos.
