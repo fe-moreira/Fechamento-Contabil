@@ -172,9 +172,20 @@ function totaisResumoPdf(texto) {
 // V = código do evento (rubrica), W = nome do evento, Z = valor calculado, U = P/D/I.
 // Código da rubrica citado no histórico do razão — padrão "VALOR REF. <código> - <nome>".
 function rubDoHistorico(h) {
-  const m = /valor\s*ref\.?\s*(\d+)\s*-/i.exec(String(h || ''))
+  // O código da rubrica é o número logo após "VALOR REF." — NÃO exigir o traço depois do
+  // número: alguns históricos do Domínio vêm sem o "-" (ex.: "VALOR REF. 203 DESC. EMP.
+  // CRED. TRAB Nº ..."), e a rubrica ficava sem ser lida (aparecia 0 no razão).
+  const m = /valor\s*ref\.?\s*(\d+)/i.exec(String(h || ''))
   return m ? m[1].replace(/^0+/, '') : ''
 }
+// Nome da rubrica no histórico (o texto depois do número), sem o "MM/AAAA" do fim — para
+// desambiguar quando o razão reusa o MESMO número de referência para rubricas diferentes
+// (ex.: "VALOR REF. 23 - F.G.T.S DE RESCISAO" e "VALOR REF. 23 - INSS TERCEIROS ...").
+function nomeDoHistorico(h) {
+  const m = /valor\s*ref\.?\s*\d+\s*-?\s*(.+)/i.exec(String(h || ''))
+  return m ? m[1].replace(/\s*\d{2}\/\d{4}.*$/, '').trim() : ''
+}
+const normNomeRub = s => String(s || '').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Z0-9]+/g, ' ').trim()
 // Lê um arquivo da folha (folha mensal ou adiantamento) → eventos [{ cod, nome, valor, pd }].
 async function parseFolha(file) {
   const XLSX = await import('xlsx')
@@ -203,9 +214,17 @@ async function carregarIndiceFolha(empresaId, competencia) {
   if (!comp) return { byCod, valores, compId: null }
   const add = (hist, deb, cred) => {
     const cod = rubDoHistorico(hist); if (!cod) return
-    const b = (byCod[cod] ||= { cod, deb: 0, cred: 0 })
+    const b = (byCod[cod] ||= { cod, deb: 0, cred: 0, porNome: {} })
     b.deb = Math.round((b.deb + (deb || 0)) * 100) / 100
     b.cred = Math.round((b.cred + (cred || 0)) * 100) / 100
+    // Guarda o total por NOME dentro do código — usado quando o mesmo número serve a mais
+    // de uma rubrica (o cruzamento então casa pela do mesmo nome; ver cruzarFolha).
+    const nm = normNomeRub(nomeDoHistorico(hist))
+    if (nm) {
+      const p = (b.porNome[nm] ||= { deb: 0, cred: 0 })
+      p.deb = Math.round((p.deb + (deb || 0)) * 100) / 100
+      p.cred = Math.round((p.cred + (cred || 0)) * 100) / 100
+    }
     for (const v of [deb, cred]) if (v) valores.add(Math.round(v * 100))
   }
   // O Supabase devolve no máximo 1000 linhas por consulta. Razões grandes (milhares de
@@ -241,8 +260,27 @@ async function carregarIndiceFolha(empresaId, competencia) {
 // justificadas (informativas, ex.: "INF - ...") entram como resolvidas.
 function cruzarFolha(eventos, idx, justif = {}) {
   return eventos.map(e => {
-    let razao = idx.byCod[e.cod] ? Math.max(idx.byCod[e.cod].deb, idx.byCod[e.cod].cred) : null
-    let via = 'codigo'
+    const b = idx.byCod[e.cod]
+    let razao = null, via = 'codigo'
+    if (b) {
+      const chaves = Object.keys(b.porNome || {})
+      // Se o MESMO número de referência serve a mais de uma rubrica no razão, casa pela
+      // linha do MESMO nome do evento da folha (senão o total ficaria inflado). Nome que
+      // não bate → cai no total (comportamento antigo), sem regressão.
+      if (chaves.length > 1) {
+        const nmE = normNomeRub(e.nome)
+        // SOMA todas as linhas cujo nome bate (igual ou um contém o outro) — assim variações
+        // de nome da MESMA rubrica continuam somando, e só rubricas de nome diferente (que
+        // reusam o número) ficam de fora.
+        const casa = nmE ? chaves.filter(c => c === nmE || c.includes(nmE) || nmE.includes(c)) : []
+        if (casa.length) {
+          const deb = casa.reduce((s, c) => s + b.porNome[c].deb, 0)
+          const cred = casa.reduce((s, c) => s + b.porNome[c].cred, 0)
+          razao = Math.max(deb, cred); via = 'codigo+nome'
+        }
+      }
+      if (razao == null) razao = Math.max(b.deb, b.cred)
+    }
     if (razao == null) {
       if (idx.valores.has(Math.round(e.valor * 100))) { razao = e.valor; via = 'valor' }
       else { razao = 0; via = null }
