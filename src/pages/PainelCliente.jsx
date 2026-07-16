@@ -11,6 +11,12 @@ import { theme, money } from '../lib/theme'
 const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
 const num = v => Number(v) || 0
 const pct = (a, b) => (b ? (a / b) * 100 : null)
+// "Principais clientes" sai do histórico das NFs de receita. Alguns lançamentos de receita
+// (rendimento de aplicação) trazem o BANCO no histórico, e o texto às vezes deixa só uma
+// palavra genérica ("VALOR"). Esses NÃO são clientes — filtra banco e ruído.
+const BANCO_RE = /\bBANCO\b|SANTANDER|ITA[UÚ]|BRADESCO|\bCAIXA\b|SICOOB|SICREDI|\bINTER\b|NUBANK|\bBTG\b|SAFRA|DAYCOVAL|VOTORANTIM|PAGSEGURO|MERCADO ?PAGO|\bC6\b|BANRISUL|\bBB\b/i
+const LIXO_ENT = new Set(['VALOR', 'VALORES', 'RENDIMENTO', 'RENDIMENTOS', 'APLICACAO', 'APLICACOES', 'JUROS', 'SALDO', 'RESGATE', 'CDB', 'POUPANCA', 'TARIFA', 'TARIFAS', 'IOF', 'RECEITA', 'RECEITAS', 'FINANCEIRA', 'FINANCEIRAS', 'DIVERSOS', 'DIVERSAS', 'CLIENTE', 'CLIENTES', 'DEPOSITO', 'TRANSFERENCIA', 'TED', 'PIX', 'DOC'])
+const ehCliente = ent => { const n = String(ent || '').trim().toUpperCase(); return !!n && !BANCO_RE.test(n) && !LIXO_ENT.has(n) }
 const fmtPct = p => p == null ? '—' : `${p.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`
 const LARANJA = '#E5894D'
 // Lucro verde, prejuízo vermelho.
@@ -185,6 +191,7 @@ export default function PainelCliente() {
             totReceitaRazao += v
             const ent = extrairEntidade(l.historico)
             if (!ent || /^[\d.,\s]+$/.test(ent) || ent.replace(/[^A-Za-zÀ-ú]/g, '').length < 3) continue // descarta "nome" que é só número
+            if (!ehCliente(ent)) continue // não é cliente: banco (rendimento de aplicação) ou palavra genérica ("VALOR")
             mapa[ent] = (mapa[ent] || 0) + v
           }
           topClientes = Object.entries(mapa).map(([nome, valor]) => ({ nome, valor }))
