@@ -406,6 +406,7 @@ const HTML = `
   <p>O gate de pendências: o fechamento só libera quando zera. Vários checks clicáveis; o destaque é <b>Lançamentos banco × resultado</b> — aponta quando um banco cai direto numa conta de resultado (prefixo 3/4/5) que <b>não</b> está na lista de exceções liberadas.</p>
   <div class="m-rule stop"><span class="k">LALUR — obrigatório</span> Ao <b>justificar</b> um lançamento de despesa (classificação que começa com <span class="m-code">4</span>), é preciso classificar como <b>dedutível</b> ou <b>indedutível</b> — isso alimenta o relatório de despesas indedutíveis do LALUR.</div>
   <p>Cada apontamento tem justificar ou corrigir (reclassifica → Contabilizar). O relatório do gate sai em Excel/PDF, com as despesas indedutíveis.</p>
+  <div class="m-rule"><span class="k">Variações — justificar aqui OU no Comparativo</span> A pendência <b>Variações sem justificativa</b> pode ser resolvida <b>direto no gate do Status</b> (botão justificar) <b>ou</b> no <b>Comparativo de Movimento</b> — nos dois casos a variação <b>baixa da lista</b> na mesma conta e mês. Uma conta que <b>zerou/sumiu no mês</b> (tinha saldo no mês anterior e não veio no balancete) também conta como variação e precisa de justificativa — justificar num mês vale só para <b>aquele mês</b>.</div>
 </section>
 
 <section id="m-relatorios">
