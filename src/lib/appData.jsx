@@ -84,11 +84,27 @@ export function AppDataProvider({ children }) {
   }
   useEffect(() => { recalcularPendencias() }, [empresaId, competencia])
 
+  // Competência ENCERRADA (fechada) = somente leitura em toda a plataforma. Reabrir no
+  // Status é o único caminho para voltar a editar.
+  const [competenciaFechada, setCompetenciaFechada] = useState(false)
+  async function refreshStatusCompetencia() {
+    if (!empresaId) { setCompetenciaFechada(false); return }
+    const [mes, ano] = competencia.split('/').map(Number)
+    const { data } = await supabase.from('competencias').select('status')
+      .eq('cliente_id', empresaId).eq('ano', ano).eq('mes', mes).maybeSingle()
+    setCompetenciaFechada(data?.status === 'fechado')
+  }
+  useEffect(() => { refreshStatusCompetencia() }, [empresaId, competencia]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const empresaNome = empresas.find(e => e.id === empresaId)?.razao_social || ''
 
   // --- Timesheet: registra o tempo trabalhado por cliente enquanto a empresa está ativa ---
   const { user } = useAuth()
   const userRef = useRef(user); userRef.current = user
+  // Lista de empresas sempre atual (para resolver o NOME do cliente na hora de gravar o
+  // timesheet — antes, se as empresas ainda não tinham carregado quando o cliente foi
+  // selecionado, o nome ia vazio e o relatório não mostrava o cliente).
+  const empresasRef = useRef(empresas); empresasRef.current = empresas
   const track = useRef({ cliente_id: null, nome: '', start: null })
   // Timesheet pausa após 10 min sem interação do usuário com o cliente.
   const lastAtiv = useRef(Date.now())
@@ -99,7 +115,8 @@ export function AppDataProvider({ children }) {
     if (tr.cliente_id && tr.start && document.visibilityState === 'visible') {
       const secs = Math.round((Date.now() - tr.start) / 1000)
       if (secs >= 5) {
-        supabase.from('timesheet').insert({ usuario: userRef.current?.email || null, cliente_id: tr.cliente_id, cliente_nome: tr.nome, segundos: secs }).then(() => {})
+        const nome = empresasRef.current.find(e => e.id === tr.cliente_id)?.razao_social || tr.nome || ''
+        supabase.from('timesheet').insert({ usuario: userRef.current?.email || null, cliente_id: tr.cliente_id, cliente_nome: nome, segundos: secs }).then(() => {})
       }
     }
     tr.start = finalizar ? null : Date.now()
@@ -175,6 +192,7 @@ export function AppDataProvider({ children }) {
     pendencias, recalcularPendencias, isAdmin,
     fechamentoAtivo, setFechamentoAtivo, abrirFechamento,
     plano, recarregarPlano,
+    competenciaFechada, refreshStatusCompetencia,
   }
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }

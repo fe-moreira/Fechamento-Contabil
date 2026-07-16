@@ -22,24 +22,43 @@ export default function Timesheet() {
   const [carregando, setCarregando] = useState(true)
 
   useEffect(() => {
+    let vivo = true
     setCarregando(true)
-    let q = supabase.from('timesheet').select('cliente_id, cliente_nome, segundos, clientes(razao_social)')
-    if (modo === 'cliente' && empresaId) q = q.eq('cliente_id', empresaId)
-    if (mes) {
-      const [y, m] = mes.split('-').map(Number)
-      q = q.gte('created_at', new Date(y, m - 1, 1).toISOString()).lt('created_at', new Date(y, m, 1).toISOString())
+    // O Supabase devolve no máximo 1000 linhas por consulta. A timesheet tem milhares de
+    // registros/mês, então PAGINAMOS (range) até trazer tudo — senão a agregação por cliente
+    // fica incompleta e clientes com muitos registros (ex.: Eletros) somem do relatório.
+    const construir = () => {
+      let q = supabase.from('timesheet').select('cliente_id, cliente_nome, segundos, clientes(razao_social)')
+        .order('created_at', { ascending: true })
+      if (modo === 'cliente' && empresaId) q = q.eq('cliente_id', empresaId)
+      if (mes) {
+        const [y, m] = mes.split('-').map(Number)
+        q = q.gte('created_at', new Date(y, m - 1, 1).toISOString()).lt('created_at', new Date(y, m, 1).toISOString())
+      }
+      return q
     }
-    q.then(({ data }) => {
+    ;(async () => {
+      const SIZE = 1000; let from = 0; const todas = []
+      while (true) {
+        const { data, error } = await construir().range(from, from + SIZE - 1)
+        if (error || !data) break
+        todas.push(...data)
+        if (data.length < SIZE) break
+        from += SIZE
+      }
+      if (!vivo) return
       const agg = {}
-      for (const r of (data || [])) {
+      for (const r of todas) {
         const k = r.cliente_id || 'sem'
         const nome = r.clientes?.razao_social || r.cliente_nome || '(sem cliente)'
         const a = agg[k] || (agg[k] = { nome, segundos: 0, registros: 0 })
+        if (!a.nome || a.nome === '(sem cliente)') a.nome = nome // preenche o nome se a 1ª linha veio vazia
         a.segundos += r.segundos || 0; a.registros += 1
       }
       setLinhas(Object.values(agg).sort((a, b) => b.segundos - a.segundos))
       setCarregando(false)
-    })
+    })()
+    return () => { vivo = false }
   }, [modo, empresaId, mes])
 
   const total = linhas.reduce((s, l) => s + l.segundos, 0)
