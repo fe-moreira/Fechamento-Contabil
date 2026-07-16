@@ -156,6 +156,19 @@ export function parsePlano(dados) {
       mascara: String((kMask != null ? r[kMask] : '') ?? '').trim(),
     })
   }
+  // Robustez entre formatos: além da coluna "tipo", uma conta é SINTÉTICA (conta-mãe) se
+  // tiver DESCENDENTES no plano — a classificação de outra conta a estende. Cobre os
+  // formatos em que a coluna de tipo não vem (ou vem diferente), onde a mãe (ex.: FRETE)
+  // era lida como analítica e a hierarquia não somava. Nunca marca uma folha como sintética
+  // (folha não tem descendente). Detecção O(n log n): no plano ORDENADO pela classificação,
+  // a conta é mãe quando a PRÓXIMA classificação começa com a dela (respeitando o separador).
+  const comCl = out.filter(p => p.classif)
+  const ord = [...comCl].sort((a, b) => (a.classif < b.classif ? -1 : a.classif > b.classif ? 1 : 0))
+  for (let i = 0; i < ord.length - 1; i++) {
+    if (ord[i].sintetica) continue
+    const c = ord[i].classif, prox = ord[i + 1].classif
+    if (prox.length > c.length && prox.startsWith(c) && (c.includes('.') ? prox[c.length] === '.' : true)) ord[i].sintetica = true
+  }
   return out
 }
 
