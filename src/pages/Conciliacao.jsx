@@ -86,7 +86,14 @@ const tiraSufixo = e => e.replace(/\s+(S[./]?\s?A\.?|LTDA\.?|EIRELI|EPP|ME)\b.*$
 // ---- Unificação de nomes parecidos (mesmo cliente/fornecedor escrito de formas diferentes) ----
 // Palavras genéricas de razão social: não distinguem uma empresa de outra, então são ignoradas
 // na comparação (senão "...DE FORCA E LUZ" casaria empresas distintas).
-const GENERICAS = new Set(['COMPANHIA', 'CIA', 'DISTRIBUIDORA', 'DISTRIBUIDOR', 'ENERGIA', 'ENERGIAS', 'ELETRICA', 'ELETRICAS', 'FORCA', 'LUZ', 'COMERCIO', 'COMERCIAL', 'INDUSTRIA', 'INDUSTRIAL', 'SERVICO', 'SERVICOS', 'BRASIL', 'NACIONAL', 'GRUPO', 'HOLDING', 'PARTICIPACOES', 'EMPREENDIMENTOS', 'TRANSPORTE', 'TRANSPORTES', 'LOGISTICA', 'SOLUCOES', 'TECNOLOGIA', 'SISTEMAS', 'ASSOCIACAO', 'INSTITUTO', 'FUNDACAO', 'BANCO', 'SUPERMERCADO', 'SUPERMERCADOS', 'ALIMENTOS', 'DO', 'DA', 'DE', 'DOS', 'DAS', 'E', 'EM'])
+const GENERICAS = new Set(['COMPANHIA', 'CIA', 'DISTRIBUIDORA', 'DISTRIBUIDOR', 'ENERGIA', 'ENERGIAS', 'ELETRICA', 'ELETRICAS', 'FORCA', 'LUZ', 'COMERCIO', 'COMERCIAL', 'INDUSTRIA', 'INDUSTRIAL', 'SERVICO', 'SERVICOS', 'BRASIL', 'NACIONAL', 'GRUPO', 'HOLDING', 'PARTICIPACOES', 'EMPREENDIMENTOS', 'EMPREENDIMENTO', 'TRANSPORTE', 'TRANSPORTES', 'LOGISTICA', 'SOLUCOES', 'TECNOLOGIA', 'SISTEMAS', 'ASSOCIACAO', 'INSTITUTO', 'FUNDACAO', 'BANCO', 'SUPERMERCADO', 'SUPERMERCADOS', 'ALIMENTOS',
+  // Palavras de OPERAÇÃO/tipo de lançamento (não identificam o cliente) — antes fundiam
+  // clientes diferentes que só compartilhavam o tipo da operação (ex.: "REVENDA DE
+  // MERCADORIA - ESPERA DE ANCORAGEM ... EMPREENDIMENTOS IMOBILIARIOS SPE").
+  'REVENDA', 'REVENDAS', 'MERCADORIA', 'MERCADORIAS', 'ESPERA', 'ANCORAGEM', 'FATURAMENTO', 'FATURAM', 'FUTURO', 'RECEB', 'RECEBER', 'SIMPLES', 'LCTO', 'LANCAMENTO', 'ACUM', 'TRIB', 'ANTECIPACAO',
+  // Estrutura societária de incorporadoras/imobiliárias (comum, não distingue).
+  'INCORPORACOES', 'INCORPORACAO', 'INCORPORADORA', 'IMOBILIARIOS', 'IMOBILIARIO', 'IMOBILIARIA', 'IMOBILIARIAS', 'SPE', 'CONSTRUTORA', 'CONSTRUCAO', 'CONSTRUCOES',
+  'DO', 'DA', 'DE', 'DOS', 'DAS', 'E', 'EM'])
 const normNome = s => String(s || '').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim()
 // Tokens distintivos de um nome (>=3 letras, sem genéricas). Se sobrar vazio, usa todos.
 function tokensNome(nome) {
