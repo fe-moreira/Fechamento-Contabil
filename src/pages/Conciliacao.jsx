@@ -979,6 +979,21 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
           dedutibilidade: payload.dedut.tipo, razao_id: razaoIdLinha, usuario,
         })
       }
+      // A reclassificação também MOVIMENTA a conta de DESTINO. Se ela for de RESULTADO
+      // (3/4/5), o valor recebido gera variação no mês — e essa variação já está justificada
+      // (foi você quem a criou). Registra a justificativa (modulo Comparativo) na conta de
+      // destino para a variação não voltar como pendência "sem justificativa" no Comparativo/Status.
+      const classifDeCod = cod => (plano || []).find(p => String(p.cod) === String(cod))?.classif || ''
+      const ehResultadoCod = cod => ['3', '4', '5'].includes(String(classifDeCod(cod)).replace(/\D/g, '')[0])
+      const destino = [L.conta_debito, L.conta_credito].find(c => c && String(c) !== String(conta.conta) && ehResultadoCod(c))
+      if (destino) {
+        await supabase.from('auditoria').insert({
+          competencia_id: id, modulo: 'Comparativo', tipo: 'Justificativa',
+          item: `${destino} · ${competencia}`,
+          detalhe: `Recebido por reclassificação de ${conta.conta} · ${money(Number(L.valor) || 0)}${L.historico ? ' · ' + L.historico : ''}`,
+          razao_id: razaoIdLinha, usuario,
+        })
+      }
     }
     // Ajuste de leitura (nome/NF/histórico) — ajuda o sistema a cruzar; reaplicado sempre.
     // Não se aplica à abertura (a leitura dela vem da carga inicial, não do razão).
