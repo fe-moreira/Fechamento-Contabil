@@ -11,6 +11,8 @@ const MESES_CURTO = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Se
 
 const ST = {
   fechado: { txt: 'Fechado', cor: theme.green, bg: 'rgba(48,164,108,0.15)', icon: 'ti-circle-check', sub: () => 'Entregue' },
+  // 100% dos gates OK, ainda não encerrado formalmente. Verde (conta como Fechado no resumo).
+  pronto: { txt: 'Concluído', cor: theme.green, bg: 'rgba(48,164,108,0.15)', icon: 'ti-circle-check', sub: () => 'Pronto para encerrar · 100%' },
   andamento: { txt: 'Em andamento', cor: theme.yellow, bg: 'rgba(245,166,35,0.15)', icon: 'ti-progress', sub: c => `Progresso ${c.pct || 0}%` },
   pendente: { txt: 'Pendente', cor: theme.red, bg: 'rgba(229,72,77,0.15)', icon: 'ti-alert-triangle', sub: () => 'Aguardando importação do razão' },
 }
@@ -51,9 +53,11 @@ export default function Fechamentos() {
 
   const filtrada = lista.filter(c => !anteriorAoInicio(c) && (fAno === 'todos' || c.ano === +fAno) && (fMes === 'todos' || c.mes === +fMes))
   // Só é "em andamento" depois de importar o razão; sem razão (e não fechado) → "pendente".
-  const efet = c => c.status === 'fechado' ? 'fechado' : (c.razao_importado ? 'andamento' : 'pendente')
+  // 100% dos gates (pct) → "pronto" (verde), mesmo antes de encerrar formalmente.
+  const efet = c => c.status === 'fechado' ? 'fechado' : (c.razao_importado ? ((c.pct || 0) >= 100 ? 'pronto' : 'andamento') : 'pendente')
   const cont = { fechado: 0, andamento: 0, pendente: 0 }
-  filtrada.forEach(c => { cont[efet(c)] = (cont[efet(c)] || 0) + 1 })
+  // "pronto" (100%) conta junto com "fechado" no resumo verde.
+  filtrada.forEach(c => { const e = efet(c); const b = e === 'pronto' ? 'fechado' : e; cont[b] = (cont[b] || 0) + 1 })
 
   function abrir(c) {
     abrirFechamento(c.mes, c.ano) // marca o fechamento como ativo (libera as funções)
