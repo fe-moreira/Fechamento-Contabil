@@ -848,12 +848,26 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
         dedutibilidade: dedut, razao_id: l.id, usuario,
       })
     }
+    // A reclassificação também MOVIMENTA a conta de DESTINO. Se ela for de RESULTADO
+    // (3/4/5), o valor recebido gera variação no mês — e essa variação já está justificada
+    // (foi você quem a criou, ao reclassificar). Registra a justificativa na conta de destino
+    // para a variação não voltar como pendência "sem justificativa". (Só o lado de origem
+    // era justificado antes; o destino ficava aberto.)
+    if (ehResultadoCod(contaCerta)) {
+      await supabase.from('auditoria').insert({
+        competencia_id: cid, modulo: 'Comparativo', tipo: 'Justificativa',
+        item: `${contaCerta} · ${MESES[(mesL || 1) - 1]}/${ANO}`,
+        detalhe: `Recebido por reclassificação de ${conta} · ${money(v)}${historico ? ' · ' + historico : ''}`,
+        razao_id: l.id, usuario,
+      })
+    }
     // Aprendizado: contra banco → memória da integração; senão → memória de correção contábil.
     return await aprenderDaCorrecao({ clienteId: empresaId, historico: l.historico, contrapartida: l.contrapartida, contaErrada: conta, contaCerta, usuario })
   }
   // Conta de DESPESA (classif começa com 4) e detecção de nota fiscal no histórico.
   const classifDe = cod => (plano || []).find(p => String(p.cod) === String(cod))?.classif || ''
   const ehDespesaCod = cod => String(classifDe(cod)).replace(/\D/g, '')[0] === '4'
+  const ehResultadoCod = cod => ['3', '4', '5'].includes(String(classifDe(cod)).replace(/\D/g, '')[0])
 
   // Gera o lançamento de CORREÇÃO (partida dobrada) que reclassifica o valor da conta
   // errada para a conta certa — é o lançamento que vai ser importado no Domínio.
