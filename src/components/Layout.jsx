@@ -195,18 +195,14 @@ export default function Layout() {
               </Link>
             )}
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <i className="ti ti-calendar-event" style={{ color: fechamentoAtivo ? theme.green : theme.sub }} />
-            {fechamentoAtivo ? (
-              <>
-                <span style={{ fontSize: 12.5, color: theme.sub }}>Fechamento</span>
-                <span style={{ fontSize: 13, fontWeight: 600, color: theme.text }}>{competencia}</span>
-                <Link to="/fechamentos" className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }}><i className="ti ti-switch-horizontal" /> Trocar</Link>
-              </>
-            ) : (
-              <Link to="/fechamentos" className="btn" style={{ fontSize: 12.5, padding: '6px 12px' }}><i className="ti ti-calendar-plus" /> Abrir fechamento</Link>
-            )}
-          </div>
+          {fechamentoAtivo && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <i className="ti ti-calendar-event" style={{ color: theme.green }} />
+              <span style={{ fontSize: 12.5, color: theme.sub }}>Fechamento</span>
+              <span style={{ fontSize: 13, fontWeight: 600, color: theme.text }}>{competencia}</span>
+              <Link to="/fechamentos" className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }}><i className="ti ti-switch-horizontal" /> Trocar</Link>
+            </div>
+          )}
         </div>
 
         {fechamentoAtivo && competenciaFechada && (
