@@ -596,6 +596,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const [loteForn, setLoteForn] = useState(null) // { lines } — corrigir fornecedor em lote
   const [conectarDif, setConectarDif] = useState(null) // { alvo, net } — apontar desconto/juros da diferença
   const [novoLanc, setNovoLanc] = useState(false)       // abre o modal de novo lançamento manual nesta conta
+  const [reclassLote, setReclassLote] = useState(null)  // { lines } — reclassificar conta em lote
   const [nomesConf, setNomesConf] = useState(new Set())   // nomes CONFIÁVEIS do cliente (não pede revisão)
   const [nomesIsolados, setNomesIsolados] = useState(new Set()) // nomes a NÃO unir com parecidos (desvincular)
   const [nomesAlias, setNomesAlias] = useState({}) // APELIDOS: nomeAntigoKey -> nome correto (renomeia em todo lugar)
@@ -1188,6 +1189,59 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     setMsg(`Conectado com ${kind === 'juros' ? 'juros/multa' : 'desconto'} de ${money(dif)} — foi para Conciliados e o acerto para o Contabilizar.`)
   }
 
+  // Reclassifica VÁRIOS lançamentos de uma vez: para cada linha, gera a correção que move o
+  // valor desta conta para a conta de destino escolhida (mesma partida da reclassificação
+  // individual). `mapa` = { [razao_id]: contaDestino }. Aceita uma conta por linha (o usuário
+  // preenche cada uma) OU a mesma conta para todos (o modal preenche o mapa inteiro).
+  async function reclassificarLote(mapa) {
+    const id = await getCompetenciaId()
+    if (!id) { setMsg('Selecione uma empresa/competência.'); return }
+    // Só lançamentos do razão (têm razao_id = id da linha); abertura e acertos ficam de fora.
+    const alvo = lanc.filter(l => l.id != null && !l._abertura && !l.acerto && String(mapa[l.id] || '').trim())
+    const classifDeCod = cod => (plano || []).find(p => String(p.cod) === String(cod))?.classif || ''
+    const digito1 = cod => String(classifDeCod(cod)).replace(/\D/g, '')[0]
+    let feitos = 0, pulados = 0; const erros = []
+    for (const l of alvo) {
+      const destino = String(mapa[l.id]).trim()
+      if (!destino || destino === String(conta.conta)) { pulados++; continue }
+      // Um lançamento só pode ter UMA correção. Se já tem, pula (desfazer na linha para refazer).
+      const { count } = await supabase.from('lancamentos').select('id', { count: 'exact', head: true }).eq('competencia_id', id).eq('razao_id', l.id)
+      if (count) { pulados++; continue }
+      const ehDeb = Number(l.debito) > 0
+      const valor = Number(l.debito) || Number(l.credito) || 0
+      if (!valor) { pulados++; continue }
+      // Estorna o lado original na conta atual e joga o valor no destino (mesma lógica do individual).
+      const conta_debito = ehDeb ? destino : String(conta.conta)
+      const conta_credito = ehDeb ? String(conta.conta) : destino
+      const eSint = erroContaSintetica(plano, conta_debito, conta_credito)
+      if (eSint) { erros.push(`${l.historico || l.id}: ${eSint}`); continue }
+      const historico = (l.historico || '').trim() ? `Reclassificação · ${l.historico.trim()}` : `Reclassificação · ${conta.nome}`
+      const item = `${conta.conta} · ${l.data || ''} · NF ${l.leitura?.nf || '—'}`
+      await supabase.from('auditoria').insert({ competencia_id: id, modulo: 'Conciliação', item, tipo: 'Correção', detalhe: `Reclassificado para ${destino} (em lote)`, razao_id: l.id, usuario })
+      await supabase.from('lancamentos').insert({
+        competencia_id: id, data: l.data || null, conta_debito, conta_credito,
+        valor, historico, documento: l.leitura?.nf ? `NF ${l.leitura.nf}` : null,
+        origem: 'correcao', razao_id: l.id, usuario,
+      })
+      // LALUR: destino é DESPESA (classif 4) → registra dedutível/indedutível (sem NF → indedutível).
+      if (digito1(destino) === '4') {
+        const tipoDedut = l.leitura?.nf ? 'Dedutível' : 'Indedutível'
+        await supabase.from('auditoria').insert({ competencia_id: id, modulo: 'Conciliação', tipo: 'Justificativa', item: `${destino} · dedutibilidade`, detalhe: `${tipoDedut} — reclassificado de ${conta.conta} · ${money(valor)} · ${l.historico || ''}`, dedutibilidade: tipoDedut, razao_id: l.id, usuario })
+      }
+      // Destino de RESULTADO (3/4/5): a variação que ele recebe já está justificada (você criou).
+      if (['3', '4', '5'].includes(digito1(destino))) {
+        await supabase.from('auditoria').insert({ competencia_id: id, modulo: 'Comparativo', tipo: 'Justificativa', item: `${destino} · ${competencia}`, detalhe: `Recebido por reclassificação de ${conta.conta} · ${money(valor)}${l.historico ? ' · ' + l.historico : ''}`, razao_id: l.id, usuario })
+      }
+      feitos++
+    }
+    setReclassLote(null); setSelLin(new Set())
+    carregarTratados(); carregarLanc(); onMudou && onMudou()
+    const partes = [`${feitos} lançamento(s) reclassificado(s)`]
+    if (pulados) partes.push(`${pulados} pulado(s) (já corrigidos, sem conta ou destino igual à origem)`)
+    if (erros.length) partes.push(`${erros.length} com erro de conta sintética`)
+    setMsg(partes.join(' · '))
+  }
+
   // Cria um lançamento novo DENTRO desta conta (ex.: uma tarifa/ajuste que faltou no razão).
   // Uma das pernas já vem preenchida com a conta atual. Entra em Lançamentos (Status → Domínio),
   // aparece na composição como acerto e atualiza o saldo. Fica na tela para lançar outro.
@@ -1686,11 +1740,16 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         // lançamentos gerados/"não identificados" — nesses o nome fica salvo por lançamento).
         // Desvincular só faz sentido em quem já tem nome (título/saldo anterior).
         const desvincaveis = selLancs.filter(l => !l.acerto && (l.leitura?.entidade || '').trim())
+        // Reclassificáveis: lançamentos do razão (não abertura, não acerto) — têm razao_id.
+        const reclassificaveis = selLancs.filter(l => !l._abertura && !l.acerto && l.id != null)
         return (
           <div style={{ position: 'fixed', left: '50%', bottom: 20, transform: 'translateX(-50%)', zIndex: 60, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '10px 16px', background: theme.card, border: `1px solid ${theme.accent}`, borderRadius: 12, boxShadow: '0 8px 30px rgba(0,0,0,0.4)' }}>
             <span style={{ color: theme.text, fontSize: 13 }}><b>{selLancs.length}</b> selecionado(s) · líquido <b style={{ color: zera ? theme.green : theme.yellow }}>{money(Math.abs(net))} {net < 0 ? 'C' : net > 0 ? 'D' : ''}</b> {zera ? '(zera)' : '(não zera)'}</span>
             <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={() => setLoteForn({ lines: selLancs })}>
               <i className="ti ti-user-edit" /> Corrigir {lab}
+            </button>
+            <button className="btn btn-ghost" disabled={!reclassificaveis.length} title={!reclassificaveis.length ? 'Selecione lançamentos do razão para reclassificar.' : 'Trocar a conta destes lançamentos (uma conta por linha ou a mesma para todos)'} style={{ fontSize: 12.5, opacity: reclassificaveis.length ? 1 : 0.5, cursor: reclassificaveis.length ? 'pointer' : 'not-allowed' }} onClick={() => reclassificaveis.length && setReclassLote({ lines: reclassificaveis })}>
+              <i className="ti ti-arrows-exchange" /> Reclassificar conta
             </button>
             <button className="btn btn-ghost" disabled={!desvincaveis.length} title={!desvincaveis.length ? 'Selecione um título ou o saldo anterior (com nome).' : 'Manter estes nomes separados (não unir com parecidos) — vale para todos os meses'} style={{ fontSize: 12.5, color: theme.yellow, borderColor: theme.yellow, opacity: desvincaveis.length ? 1 : 0.5, cursor: desvincaveis.length ? 'pointer' : 'not-allowed' }} onClick={() => desvincaveis.length && desvincularLote(desvincaveis)}>
               <i className="ti ti-arrows-split" /> Desvincular
@@ -1709,6 +1768,10 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
 
       {loteForn && (
         <ModalLoteForn lines={loteForn.lines} lab={lab} onClose={() => setLoteForn(null)} onAplicar={aplicarFornecedorLote} />
+      )}
+
+      {reclassLote && (
+        <ModalReclassLote lines={reclassLote.lines} conta={conta} plano={plano} onClose={() => setReclassLote(null)} onAplicar={reclassificarLote} />
       )}
 
       {conectarDif && (
@@ -2406,6 +2469,61 @@ function ModalLoteForn({ lines, lab, onClose, onAplicar }) {
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
           <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
           <button className="btn" disabled={!nome.trim() || !total || busy} onClick={async () => { setBusy(true); await onAplicar(lines, nome, aprender) }}><i className="ti ti-check" /> Aplicar</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Reclassificar VÁRIOS lançamentos de uma vez: escolhe a conta de destino de cada um — ou
+// define UMA conta e aplica a todos. Ao confirmar, cada lançamento vira uma correção que
+// move o valor desta conta para a de destino (aparece no Contabilizar e some do em aberto).
+function ModalReclassLote({ lines, conta, plano, onClose, onAplicar }) {
+  const [contas, setContas] = useState({})   // { [razao_id]: contaDestino }
+  const [todas, setTodas] = useState('')      // conta única p/ aplicar a todos
+  const [busy, setBusy] = useState(false)
+  const setLinha = (id, v) => setContas(c => ({ ...c, [id]: v }))
+  const aplicarTodas = () => { if (!String(todas).trim()) return; const m = {}; for (const l of lines) m[l.id] = todas; setContas(m) }
+  const preenchidas = lines.filter(l => String(contas[l.id] || '').trim() && String(contas[l.id]).trim() !== String(conta.conta)).length
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 95 }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 'min(720px,96vw)', maxHeight: '88vh', display: 'flex', flexDirection: 'column', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 14, padding: 20 }}>
+        <h3 style={{ fontSize: 15, margin: '0 0 6px' }}><i className="ti ti-arrows-exchange" style={{ color: theme.accent, marginRight: 6 }} />Reclassificar {lines.length} lançamento(s) em lote</h3>
+        <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 12px' }}>Origem: <b style={{ color: theme.text }}>{conta.conta} · {conta.nome}</b>. Escolha a conta de destino de <b>cada</b> lançamento — ou defina <b>uma conta</b> e aplique a todos.</p>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap', background: theme.input, border: `1px solid ${theme.border}`, borderRadius: 10, padding: 12, marginBottom: 12 }}>
+          <div style={{ flex: 1, minWidth: 220 }}>
+            <label style={{ fontSize: 12, color: theme.sub }}>Mesma conta para todos (F4)</label>
+            <CampoConta value={todas} onChange={setTodas} plano={plano} />
+          </div>
+          <button className="btn btn-ghost" style={{ fontSize: 12.5 }} disabled={!String(todas).trim()} onClick={aplicarTodas}><i className="ti ti-arrow-down" /> Aplicar a todos</button>
+        </div>
+        <div style={{ overflow: 'auto', flex: 1, border: `1px solid ${theme.border}`, borderRadius: 10 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 560 }}>
+            <thead><tr style={{ background: theme.input, position: 'sticky', top: 0 }}>
+              <th style={{ ...th, fontSize: 10.5 }}>Data</th><th style={{ ...th, fontSize: 10.5 }}>Histórico</th><th style={{ ...tdR, ...th, fontSize: 10.5, textAlign: 'right' }}>Valor</th><th style={{ ...th, fontSize: 10.5, minWidth: 200 }}>Conta destino</th>
+            </tr></thead>
+            <tbody>
+              {lines.map(l => {
+                const ehDeb = Number(l.debito) > 0
+                const valor = Number(l.debito) || Number(l.credito) || 0
+                return (
+                  <tr key={l.id} style={{ borderTop: `1px solid ${theme.border}` }}>
+                    <td style={{ ...td, fontSize: 11, color: theme.sub, whiteSpace: 'nowrap' }}>{l.data || '—'}</td>
+                    <td style={{ ...td, fontSize: 11, fontFamily: 'monospace', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={l.historico}>{l.historico || '—'}</td>
+                    <td style={{ ...tdR, fontSize: 11.5, color: ehDeb ? theme.green : theme.red, whiteSpace: 'nowrap' }}>{money(valor)} {ehDeb ? 'D' : 'C'}</td>
+                    <td style={{ ...td, minWidth: 200 }}><CampoConta value={contas[l.id] || ''} onChange={v => setLinha(l.id, v)} plano={plano} /></td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 12, color: theme.sub }}><b style={{ color: theme.text }}>{preenchidas}</b> de {lines.length} com conta de destino</span>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+            <button className="btn" disabled={!preenchidas || busy} onClick={async () => { setBusy(true); await onAplicar(contas) }}><i className="ti ti-check" /> Reclassificar {preenchidas}</button>
+          </div>
         </div>
       </div>
     </div>
