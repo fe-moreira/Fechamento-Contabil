@@ -12,7 +12,7 @@ const MESES = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julh
 const MESES_CURTO = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
 
 const ST = {
-  fechado: { txt: 'Fechado', cor: theme.green, bg: 'rgba(48,164,108,0.15)', icon: 'ti-circle-check', sub: () => 'Entregue' },
+  fechado: { txt: 'Encerrado', cor: theme.green, bg: 'rgba(48,164,108,0.15)', icon: 'ti-lock-check', sub: () => 'Encerrado (somente leitura)' },
   // 100% dos gates OK, ainda não encerrado formalmente. Verde (conta como Fechado no resumo).
   pronto: { txt: 'Concluído', cor: theme.green, bg: 'rgba(48,164,108,0.15)', icon: 'ti-circle-check', sub: () => 'Pronto para encerrar · 100%' },
   andamento: { txt: 'Em andamento', cor: theme.yellow, bg: 'rgba(245,166,35,0.15)', icon: 'ti-progress', sub: c => `Progresso ${c.pct || 0}%` },
@@ -30,7 +30,6 @@ export default function Fechamentos() {
   const [loading, setLoading] = useState(true)
   const [fAno, setFAno] = useState('todos')
   const [fMes, setFMes] = useState('todos')
-  const [reabrirAlvo, setReabrirAlvo] = useState(null) // competência fechada clicada (modal reabrir)
   const [excluirAlvo, setExcluirAlvo] = useState(null) // { comp, motivo } (modal excluir c/ motivo)
   const [salvandoAcao, setSalvandoAcao] = useState(false)
   const [novo, setNovo] = useState(null)
@@ -79,29 +78,22 @@ export default function Fechamentos() {
   // "pronto" (100%) conta junto com "fechado" no resumo verde.
   filtrada.forEach(c => { const e = efet(c); const b = e === 'pronto' ? 'fechado' : e; cont[b] = (cont[b] || 0) + 1 })
 
+  // Clicar no card abre a competência (a encerrada abre em SOMENTE LEITURA — a faixa de
+  // leitura aparece na plataforma). Reabrir é feito pelo botão dedicado (com confirmação).
   function abrir(c) {
-    // Competência ENCERRADA: clicar pergunta se quer reabrir (ou só visualizar).
-    if (c.status === 'fechado') { setReabrirAlvo(c); return }
     abrirFechamento(c.mes, c.ano) // marca o fechamento como ativo (libera as funções)
     nav('/status')
   }
-  // Só visualizar (somente leitura) — sem reabrir.
-  function verSomenteLeitura(c) {
-    setReabrirAlvo(null)
-    abrirFechamento(c.mes, c.ano)
-    nav('/status')
-  }
-  // Reabrir (hoje qualquer usuário; no futuro, só administrador). Volta status p/ andamento.
-  async function reabrirConfirmar(c) {
+  // Reabrir DIRETO no card (só administrador): pergunta se tem certeza e volta a ABERTO.
+  async function reabrirDireto(c) {
     if (!isAdmin) { alert('Apenas um administrador pode reabrir um fechamento.'); return }
+    if (!window.confirm(`Reabrir o fechamento de ${MESES[c.mes - 1]}/${c.ano}? Ele volta a ficar ABERTO para edição.\n\nTem certeza?`)) return
     setSalvandoAcao(true)
     const { error } = await supabase.from('competencias').update({ status: 'andamento' }).eq('id', c.id)
     setSalvandoAcao(false)
-    setReabrirAlvo(null)
     if (error) { alert('Não consegui reabrir: ' + error.message); return }
     refreshStatusCompetencia?.()
     await carregar()
-    abrirFechamento(c.mes, c.ano); nav('/status')
   }
   async function criar() {
     if (!podeFechar) { setNovo(null); return }
@@ -217,7 +209,7 @@ export default function Fechamentos() {
                   <i className={`ti ${s.icon}`} /> {s.txt}
                 </span>
                 {efet(c) === 'fechado' && (
-                  <button className="btn btn-ghost" onClick={e => { e.stopPropagation(); isAdmin ? setReabrirAlvo(c) : alert('Apenas um administrador pode reabrir um fechamento.') }}
+                  <button className="btn btn-ghost" disabled={salvandoAcao} onClick={e => { e.stopPropagation(); reabrirDireto(c) }}
                     style={{ fontSize: 12.5, padding: '5px 12px', color: theme.yellow, borderColor: theme.yellow, flexShrink: 0, whiteSpace: 'nowrap' }} title="Reabrir este fechamento (somente administrador)">
                     <i className="ti ti-lock-open" /> Reabrir
                   </button>
@@ -262,24 +254,6 @@ export default function Fechamentos() {
         </div>
       )}
 
-      {/* Modal: competência ENCERRADA — reabrir ou só visualizar */}
-      {reabrirAlvo && (
-        <div onClick={() => setReabrirAlvo(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 60 }}>
-          <div onClick={e => e.stopPropagation()} style={{ width: 'min(460px, 96vw)', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
-            <h2 style={{ fontSize: 17, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 8 }}><i className="ti ti-lock" style={{ color: theme.green }} /> Competência encerrada</h2>
-            <p style={{ color: theme.sub, fontSize: 13.5, margin: '0 0 18px', lineHeight: 1.55 }}>
-              <b style={{ color: theme.text }}>{MESES[reabrirAlvo.mes - 1]}/{reabrirAlvo.ano}</b> está <b>fechada (somente leitura)</b>. Você quer <b>reabrir para editar</b> ou só visualizar?
-            </p>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap' }}>
-              <button className="btn btn-ghost" onClick={() => setReabrirAlvo(null)} disabled={salvandoAcao}>Cancelar</button>
-              <button className="btn btn-ghost" onClick={() => verSomenteLeitura(reabrirAlvo)} disabled={salvandoAcao}><i className="ti ti-eye" /> Ver (somente leitura)</button>
-              <button className="btn" style={{ background: theme.green }} onClick={() => reabrirConfirmar(reabrirAlvo)} disabled={salvandoAcao}>
-                <i className="ti ti-lock-open" /> {salvandoAcao ? 'Reabrindo…' : 'Reabrir'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Modal: EXCLUIR fechamento — exige motivo escrito */}
       {excluirAlvo && (
