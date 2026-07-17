@@ -712,13 +712,26 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   async function carregarLanc() {
     setCarregando(true)
     const contasRz = await contasDoRazao()
-    const [rz, { data: aj }, { data: acs }, abertura, { data: cn }] = await Promise.all([
+    const [rz, { data: aj }, { data: acs }, abertura, { data: cn }, { data: compInteg }] = await Promise.all([
       lerRazaoContas(compId, contasRz),
       supabase.from('ajuste_leitura').select('razao_id, nf, entidade, historico').eq('competencia_id', compId),
       supabase.from('lancamentos').select('id, data, conta_debito, conta_credito, valor, historico, razao_id, origem').eq('competencia_id', compId),
       composicaoAbertura(empresaId, compId, conta.conta, conta.classifRaw, conta.nome),
       supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'conciliacao_nomes').order('created_at', { ascending: false }).limit(1).maybeSingle(),
+      supabase.from('competencias').select('integracoes').eq('id', compId).maybeSingle(),
     ])
+    // NOME OFICIAL PELA NF (Fiscal): o acumulador do Fiscal traz o fornecedor/cliente da nota
+    // bem definido. Monta índice NF → nome (entradas=fornecedores, saídas/serviços=clientes)
+    // para identificar as linhas cujo histórico não deu nome. Padrão do sistema p/ todos.
+    const nfFiscal = {}
+    const tiposFis = compInteg?.integracoes?.fiscal?.tipos
+    if (tiposFis) for (const k of ['entradas', 'saidas', 'servicos']) {
+      for (const r of (tiposFis[k]?.rows || [])) {
+        const nfn = String(r.nf ?? '').replace(/\D/g, '').replace(/^0+/, '')
+        const nome = String(r.forn ?? '').trim()
+        if (nfn && nome && !nfFiscal[nfn]) nfFiscal[nfn] = nome
+      }
+    }
     // APELIDOS: renomeia o nome lido pelo nome correto (vale p/ saldo inicial e razão).
     const aliasMap = (cn?.dados?.aliases && typeof cn.dados.aliases === 'object') ? cn.dados.aliases : {}
     // Nomes CONFIÁVEIS do cliente → quem bate sobe para conf 'alta' (não pede revisão).
@@ -739,6 +752,12 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
           leitura = { ...leitura, entidade: ov.entidade || leitura.entidade, nf: (ov.nf != null && ov.nf !== '') ? ov.nf : leitura.nf, ident: true }
           if (ov.historico) hist = ov.historico
         }
+      }
+      // Não identificado? Tenta o nome do FISCAL pela NF (nome oficial da nota).
+      if (!leitura.ident && leitura.nf) {
+        const nfn = String(leitura.nf).replace(/\D/g, '').replace(/^0+/, '')
+        const fn = nfn && nfFiscal[nfn]
+        if (fn) leitura = { ...leitura, entidade: fn, ident: true }
       }
       const al = leitura.entidade ? aliasMap[chaveNome(leitura.entidade)] : null
       if (al && al !== leitura.entidade) leitura = { ...leitura, entidade: al, ident: true }
