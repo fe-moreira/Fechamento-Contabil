@@ -27,6 +27,15 @@ layout dos arquivos, ordem de construção).
    menu **Ajuda**) é documentação viva. Todo PR que cria/altera/remove uma funcionalidade,
    tela ou regra **deve atualizar a seção correspondente do manual no mesmo PR** — nunca
    deixar o manual desatualizado em relação ao produto.
+7. **Corte de 1000 linhas do Supabase (OBRIGATÓRIO):** o PostgREST/Supabase devolve no
+   máximo ~1000 linhas por página. Qualquer leitura que possa passar disso — sobretudo
+   `razao` e `lancamentos`, mas também `balancete` grande — **tem que** usar o helper
+   `lerTudo` (`src/lib/lerTudo.js`), que pagina até o fim:
+   `await lerTudo(() => supabase.from('razao').select('...').eq('competencia_id', id))`.
+   **Nunca** faça `.from('razao').select(...)` "solto" esperando todas as linhas — vira
+   total/relatório curto silenciosamente. Exceções que podem ficar sem paginar: `count`
+   (`head: true`), `insert`/`delete`, ou consultas comprovadamente pequenas (`.in('id', [...])`
+   com poucos ids, ou uma única conta pequena). Na dúvida, use `lerTudo`.
 
 ## Rodar localmente
 
