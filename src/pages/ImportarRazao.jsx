@@ -4,7 +4,7 @@ import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { gerarSugestoesDoRazao } from '../lib/sugestoesRazao'
 import { gerarSugestoesConciliacao } from '../lib/sugestoesConciliacao'
-import { checarCodigoArquivo } from '../lib/validarArquivoEmpresa'
+import { checarArquivoEmpresa } from '../lib/validarArquivoEmpresa'
 import DropZone from '../components/DropZone'
 import { theme } from '../lib/theme'
 import { money } from '../lib/theme'
@@ -139,9 +139,9 @@ export default function ImportarRazao() {
     await supabase.from('competencias').update({ integracoes: { ...integ, razao: { arquivos: novoArquivos } } }).eq('id', cid)
   }
 
-  function aoEscolherArquivo(file) {
+  async function aoEscolherArquivo(file) {
     if (!file) return
-    const errCod = checarCodigoArquivo(file.name, cliente)
+    const errCod = await checarArquivoEmpresa(file, cliente)
     if (errCod) { setErro(errCod); setArquivo(''); setFileObj(null); setHeaders([]); setLinhas([]); return }
     setErro(''); setResultado(''); setArquivo(file.name); setFileObj(file)
     const reader = new FileReader()

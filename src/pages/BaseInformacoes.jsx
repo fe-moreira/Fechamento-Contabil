@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
-import { checarCodigoArquivo } from '../lib/validarArquivoEmpresa'
+import { checarArquivoEmpresa } from '../lib/validarArquivoEmpresa'
 import { useAuth } from '../components/AuthProvider'
 import DropZone from '../components/DropZone'
 import CampoConta from '../components/CampoConta'
@@ -731,7 +731,7 @@ function ModalCarga({ carga, historico, empresaId, usuario, onClose, onImportado
   // Escolher/arrastar o arquivo faz a LEITURA e mostra a prévia; só grava ao confirmar.
   async function importarArquivo(file) {
     if (!file) return
-    const errCod = checarCodigoArquivo(file.name, cliente)
+    const errCod = await checarArquivoEmpresa(file, cliente)
     if (errCod) { setErro(errCod); return }
     if (!vigOk) { setErro('Informe a vigência (MM/AAAA) antes de escolher o arquivo.'); return }
     setErro(''); setMsgOk('')
@@ -1214,7 +1214,7 @@ function ModalCargaInicial({ vigencia, empresaId, onClose, onConcluir }) {
   }
   async function lerArquivo(file, setter, atual) {
     if (!file) return
-    const errCod = checarCodigoArquivo(file.name, cliente)
+    const errCod = await checarArquivoEmpresa(file, cliente)
     if (errCod) { setErro(errCod); return }
     setErro('')
     try {

@@ -2,7 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
-import { checarCodigoArquivo } from '../lib/validarArquivoEmpresa'
+import { checarArquivoEmpresa } from '../lib/validarArquivoEmpresa'
 import { useAuth } from '../components/AuthProvider'
 import { theme, money, moneyDC } from '../lib/theme'
 import CampoConta from '../components/CampoConta'
@@ -466,7 +466,7 @@ export default function Integracao() {
 
   async function importar(alvo, file) {
     if (!file) return
-    const errCod = checarCodigoArquivo(file.name, cliente)
+    const errCod = await checarArquivoEmpresa(file, cliente)
     if (errCod) { setErro(errCod); return }
     setErro('')
     try {
@@ -622,7 +622,7 @@ function Fiscal({ competencia, empresaId, cliente, user, est, onEstado }) {
 
   async function importar(file) {
     if (!file || !razIdx) return
-    const errCod = checarCodigoArquivo(file.name, cliente)
+    const errCod = await checarArquivoEmpresa(file, cliente)
     if (errCod) { setErro(errCod); return }
     setErro(''); setBusy(true); setExpand(null)
     try {
@@ -722,7 +722,7 @@ function Fiscal({ competencia, empresaId, cliente, user, est, onEstado }) {
   // — o complementar SOMA os totais de cada seção (Entradas/Saídas/Serviços) dos dois PDFs.
   async function importarResumo(file) {
     if (!file) return
-    const errCod = checarCodigoArquivo(file.name, cliente)
+    const errCod = await checarArquivoEmpresa(file, cliente)
     if (errCod) { setErro(errCod); return }
     setErro(''); setBusy(true)
     try {
@@ -1143,7 +1143,7 @@ function Folha({ competencia, empresaId, cliente, user, est, onEstado, onSemMov 
 
   async function importar(alvo, file) {
     if (!file || !idx) return
-    const errCod = checarCodigoArquivo(file.name, cliente)
+    const errCod = await checarArquivoEmpresa(file, cliente)
     if (errCod) { setErro(errCod); return }
     setErro(''); setBusy(alvo)
     try {
@@ -1757,7 +1757,7 @@ function Financeira({ competencia, est, empresaId, cliente, planoMap, user, onEs
 
   async function importar(file, bancoFixo, modoForcado) {
     if (!file) return
-    const errCod = checarCodigoArquivo(file.name, cliente)
+    const errCod = await checarArquivoEmpresa(file, cliente, { conteudo: false }) // extrato: só o nome
     if (errCod) { setErro(errCod); return }
     setErro(''); setMsg('')
     try {
@@ -1984,7 +1984,7 @@ function Financeira({ competencia, est, empresaId, cliente, planoMap, user, onEs
   // cruza. `mapaForcado` vem do modal de ajuste de colunas.
   async function cruzarSaldos(file, mapaForcado) {
     if (!file) return
-    const errCod = checarCodigoArquivo(file.name, cliente)
+    const errCod = await checarArquivoEmpresa(file, cliente, { conteudo: false }) // extrato: só o nome
     if (errCod) { setErro(errCod); return }
     setErro('')
     try {
@@ -2105,7 +2105,7 @@ function Financeira({ competencia, est, empresaId, cliente, planoMap, user, onEs
   // que NÃO é o banco. Aceita também uma planilha simples "Histórico | Conta".
   async function importarMemoria(file) {
     if (!file) return
-    const errCod = checarCodigoArquivo(file.name, cliente)
+    const errCod = await checarArquivoEmpresa(file, cliente, { conteudo: false }) // memória: só o nome
     if (errCod) { setErro(errCod); return }
     setErro('')
     try {
@@ -3503,7 +3503,7 @@ function Patrimonio({ empresaId, competencia, cliente, planoMap = {}, est, onEst
 
   async function importarPdf(file) {
     if (!file) return
-    const errCod = checarCodigoArquivo(file.name, cliente)
+    const errCod = await checarArquivoEmpresa(file, cliente)
     if (errCod) { setErro(errCod); return }
     setErro(''); setBusy(true)
     try {
