@@ -165,11 +165,14 @@ export default function Status() {
     // andamento) continua pendente até concluir.
     // A chave dos bancos é o conta_contabil SEM espaços (é como a Integração grava/consulta).
     // Sem o .trim(), um espaço à direita fazia um banco JÁ CONCLUÍDO aparecer como pendente.
-    const estadoBanco = c => fin.bancos?.[String(c.conta_contabil).trim()]?.estado
+    // E o "concluído" é o flag `concluido` (é o que a Integração usa para pintar de verde) —
+    // não só estado==='validado' (que pode ter virado 'rascunho' num salvamento posterior).
+    const regBanco = c => fin.bancos?.[String(c.conta_contabil).trim()]
+    const resolvido = c => { const b = regBanco(c); return !!b && (b.concluido === true || b.estado === 'validado' || b.estado === 'sem_movimento') }
     return contas
-      .filter(c => { const e = estadoBanco(c); return e !== 'validado' && e !== 'sem_movimento' })
+      .filter(c => !resolvido(c))
       .map(c => {
-        const e = estadoBanco(c)
+        const e = regBanco(c)?.estado
         return {
           item: `Integração Financeira — ${nomeBanco(c.conta_contabil)} ${e === 'rascunho' ? 'em andamento' : 'pendente'}`,
           detalhe: e === 'rascunho'
@@ -311,14 +314,17 @@ export default function Status() {
         ...INTEGRACOES.filter(ig => ig.key !== 'financeira')
           .filter(ig => { const e = dados.integracoes?.[ig.key]?.estado; return e !== 'validado' && e !== 'sem_movimento' })
           .map(ig => {
-            const e = dados.integracoes?.[ig.key]?.estado
-            const emConf = e === 'andamento'
+            const reg = dados.integracoes?.[ig.key] || {}
+            const emConf = reg.estado === 'andamento'
+            const dif = Number(reg.dif) || 0
+            const difTxt = dif > 0.005 ? ` de ${money(dif)}` : ''
             return {
-              item: `Integração ${ig.nome} ${emConf ? 'com diferença (não bateu)' : 'não validada'}`,
+              item: `Integração ${ig.nome} ${emConf ? `com diferença${difTxt} (não bateu)` : 'não validada'}`,
               detalhe: emConf
-                ? `Documento importado, mas ainda há diferença — confira e resolva as pendências na Integração ${ig.nome}. Só fica verde quando tudo bater.`
+                ? `Documento importado, mas ainda há diferença${difTxt} — confira na Integração ${ig.nome}. Resolva as pendências até bater, ou clique em Justificar para aceitar a diferença (fica verde e libera o fechamento).`
                 : 'Nenhum documento importado. Importe em Integração ou marque “Não tem movimento”.',
               integracao: ig.key,
+              integImportada: emConf, // importada, com diferença → oferece Justificar
             }
           }),
         ...itensFinanceira(),
@@ -422,6 +428,28 @@ export default function Status() {
       detalhe: 'Sem movimento no período.', usuario: user?.email,
     })
     setMsg(`Integração ${nome} marcada como “sem movimento”.`)
+    carregar()
+  }
+
+  // "Justificar" a diferença de uma integração (Fiscal/Folha) importada mas que ainda não
+  // bateu: o responsável ACEITA a diferença → a integração fica VERDE (validado) e libera o
+  // fechamento. Guarda a justificativa no estado (justAceita) e registra usuário e data.
+  async function justificarIntegracao(key) {
+    const nome = (INTEGRACOES.find(i => i.key === key) || {}).nome || key
+    const texto = window.prompt(`Justificar a diferença da Integração ${nome} (ela fica verde e libera o fechamento).\n\nDescreva o porquê da diferença:`)
+    if (texto == null) return
+    if (!texto.trim()) { setMsg('Escreva o motivo para justificar.'); return }
+    const id = await getCompetenciaId()
+    const { data: comp } = await supabase.from('competencias').select('integracoes').eq('id', id).maybeSingle()
+    const integ = (comp?.integracoes && typeof comp.integracoes === 'object') ? comp.integracoes : {}
+    const atual = (integ[key] && typeof integ[key] === 'object') ? integ[key] : {}
+    const novo = { ...integ, [key]: { ...atual, estado: 'validado', justAceita: true, justificativa: texto.trim(), justUsuario: user?.email || null } }
+    await supabase.from('competencias').update({ integracoes: novo }).eq('id', id)
+    await supabase.from('auditoria').insert({
+      competencia_id: id, modulo: 'Integração', item: `Integração ${nome}`, tipo: 'Justificativa',
+      detalhe: `Diferença aceita/justificada: ${texto.trim()}`, usuario: user?.email,
+    })
+    setMsg(`Integração ${nome} justificada — ficou verde e liberou o fechamento.`)
     carregar()
   }
 
@@ -702,6 +730,7 @@ export default function Status() {
           onJustificar={(it) => setModal({ item: it, tipo: 'Justificativa' })}
           onCorrigir={(it) => setModal({ item: it, tipo: it.partida ? 'Partida' : 'Correção' })}
           onSemMovimento={(key) => marcarSemMovimento(key)}
+          onJustificarIntegracao={(key) => justificarIntegracao(key)}
           onImportarContrato={importarContratoDoc}
         />
       )}
@@ -818,7 +847,7 @@ function ModalLancamentosDominio({ lancamentos, planoMap, pronto, totalPendencia
   )
 }
 
-function PainelGate({ gate, onClose, onJustificar, onCorrigir, onSemMovimento, onExportar, onImportarContrato }) {
+function PainelGate({ gate, onClose, onJustificar, onCorrigir, onSemMovimento, onJustificarIntegracao, onExportar, onImportarContrato }) {
   const legenda = gate.informativo
     ? 'Observações registradas (somente visualização — não bloqueiam o encerramento).'
     : gate.key === 'integracoes'
@@ -881,7 +910,9 @@ function PainelGate({ gate, onClose, onJustificar, onCorrigir, onSemMovimento, o
                 </div>
               ) : it.integracao ? (
                 <div style={{ display: 'flex', gap: 8 }}>
-                  <button className="btn" style={{ fontSize: 13 }} onClick={() => onSemMovimento(it.integracao)}><i className="ti ti-circle-minus" /> Não tem movimento</button>
+                  {it.integImportada
+                    ? <button className="btn" style={{ fontSize: 13 }} onClick={() => onJustificarIntegracao(it.integracao)} title="Aceitar a diferença (fica verde e libera o fechamento) — registra usuário e data"><i className="ti ti-flag" /> Justificar</button>
+                    : <button className="btn" style={{ fontSize: 13 }} onClick={() => onSemMovimento(it.integracao)}><i className="ti ti-circle-minus" /> Não tem movimento</button>}
                 </div>
               ) : (
                 <div style={{ display: 'flex', gap: 8 }}>
