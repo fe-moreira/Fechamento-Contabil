@@ -498,6 +498,7 @@ function Fiscal({ competencia, empresaId, user, est, onEstado }) {
   const [expand, setExpand] = useState(null)   // acumulador expandido
   const [justAberto, setJustAberto] = useState(false)
   const [justTxt, setJustTxt] = useState('')
+  const [pendFiscal, setPendFiscal] = useState(null) // { rows, path, nome } — pergunta substituir/complementar
 
   const tipos = est?.tipos || {}
   const atual = tipos[sub]
@@ -521,19 +522,36 @@ function Fiscal({ competencia, empresaId, user, est, onEstado }) {
     try {
       const rows = await parseAcumulador(file, sub)
       if (!rows.length) { setErro(`Não encontrei linhas com Acumulador (coluna ${COLS_FISCAL[sub].acum}) e Valor (coluna ${COLS_FISCAL[sub].valor}). Confira o arquivo/colunas.`); setBusy(false); return }
-      // Guarda o arquivo no Storage — assim qualquer usuário pode extrair/atualizar depois.
-      let path = tipos[sub]?.path || ''
+      // Guarda o arquivo no Storage (caminho ÚNICO por arquivo — assim, no complementar, um
+      // não sobrescreve o outro). Qualquer usuário pode extrair/atualizar depois.
+      let path = ''
       if (compId) {
         const ext = (file.name.match(/\.[a-z0-9]+$/i) || ['.xlsx'])[0].toLowerCase()
-        path = `fiscal/${compId}/${sub}${ext}`
+        const suf = Math.random().toString(36).slice(2, 8)
+        path = `fiscal/${compId}/${sub}_${suf}${ext}`
         const { error: eUp } = await supabase.storage.from('extratos').upload(path, file, { upsert: true, contentType: file.type || undefined })
         if (eUp) { setErro('Li o arquivo, mas não consegui guardá-lo p/ extrair depois: ' + eUp.message); path = '' }
       }
-      const novoTipos = { ...tipos, [sub]: { doc: file.name, path, rows, resumo: cruzarFiscal(rows, razIdx, COLS_FISCAL[sub].chave) } }
-      const done = CHAVES_FISCAL.every(k => novoTipos[k])
-      await onEstado({ ...est, tipos: novoTipos, estado: done ? 'validado' : null, doc: done ? 'Fiscal · 3 tipos importados' : null, usuario: user?.email || null })
+      const pack = { rows, path, nome: file.name }
+      // Matriz/filiais: se o tipo JÁ tem arquivo, pergunta substituir × complementar.
+      if (tipos[sub]?.rows?.length) { setPendFiscal(pack) }
+      else await aplicarFiscal(pack, 'substituir')
     } catch (e) { setErro('Não consegui ler: ' + e.message) }
     setBusy(false)
+  }
+  // Aplica o arquivo lido: substituir (troca) ou complementar (JUNTA as linhas — ex.: matriz
+  // + filial no mesmo tipo). O cruzamento é recalculado sobre as linhas resultantes.
+  async function aplicarFiscal(pend, modo) {
+    const base = tipos[sub]
+    const juntar = modo === 'complementar' && base?.rows?.length
+    const rowsFinal = juntar ? [...base.rows, ...pend.rows] : pend.rows
+    const filesAnt = base?.files?.length ? base.files : (base?.path ? [{ doc: base.doc, path: base.path }] : [])
+    const files = juntar ? [...filesAnt, { doc: pend.nome, path: pend.path }] : [{ doc: pend.nome, path: pend.path }]
+    const doc = files.length > 1 ? `${files.length} arquivos` : pend.nome
+    const novoTipos = { ...tipos, [sub]: { doc, path: pend.path, files, rows: rowsFinal, resumo: cruzarFiscal(rowsFinal, razIdx, COLS_FISCAL[sub].chave) } }
+    const done = CHAVES_FISCAL.every(k => novoTipos[k])
+    await onEstado({ ...est, tipos: novoTipos, estado: done ? 'validado' : null, doc: done ? 'Fiscal · 3 tipos importados' : null, usuario: user?.email || null })
+    setPendFiscal(null)
   }
 
   // Extrair (baixar) o arquivo que foi importado — inclusive por outro usuário. Usa a
@@ -733,6 +751,22 @@ function Fiscal({ competencia, empresaId, user, est, onEstado }) {
       </>}
       </>}
       {erro && <p style={{ color: theme.red, fontSize: 13, margin: '12px 0 0' }}>{erro}</p>}
+
+      {pendFiscal && (
+        <div onClick={() => setPendFiscal(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 70 }}>
+          <div onClick={e => e.stopPropagation()} style={{ width: 'min(460px,96vw)', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
+            <h2 style={{ fontSize: 17, margin: '0 0 6px' }}>Este tipo já tem arquivo</h2>
+            <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 16px' }}>
+              O tipo <b style={{ color: theme.text }}>{({ entradas: 'Entradas', saidas: 'Saídas', servicos: 'Serviços' })[sub] || sub}</b> já tem <b>{tipos[sub]?.rows?.length || 0}</b> linha(s). O arquivo <b style={{ color: theme.text }}>{pendFiscal.nome}</b> tem <b>{pendFiscal.rows.length}</b>. O que fazer? (Use <b>Complementar</b> para juntar matriz + filial.)
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap' }}>
+              <button className="btn btn-ghost" onClick={() => setPendFiscal(null)}>Cancelar</button>
+              <button className="btn btn-ghost" style={{ color: theme.red, borderColor: 'rgba(229,72,77,0.4)' }} onClick={() => aplicarFiscal(pendFiscal, 'substituir')}><i className="ti ti-refresh" /> Substituir</button>
+              <button className="btn" onClick={() => aplicarFiscal(pendFiscal, 'complementar')}><i className="ti ti-plus" /> Complementar</button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   )
 }
