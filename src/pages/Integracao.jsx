@@ -172,6 +172,17 @@ function estadoFiscal(tipos, razIdx) {
   return null
 }
 const docFiscal = e => e === 'validado' ? 'Fiscal · 3 tipos conferidos' : e === 'andamento' ? 'Fiscal · em conferência' : null
+// Diferença total (soma das diferenças por acumulador dos tipos que ainda não bateram).
+function difFiscal(tipos, razIdx) {
+  let dif = 0
+  for (const k of CHAVES_FISCAL) {
+    const t = tipos?.[k]
+    if (!t || t.semMovimento || t.justificativa) continue
+    const resumo = (t.rows && razIdx) ? cruzarFiscal(t.rows, razIdx, COLS_FISCAL[k].chave) : (t.resumo || [])
+    dif += resumo.reduce((s, a) => s + Math.abs(a.dif || 0), 0)
+  }
+  return Math.round(dif * 100) / 100
+}
 
 function cruzarFiscal(rows, idx, chave) {
   const porAcum = {}
@@ -593,14 +604,18 @@ function Fiscal({ competencia, empresaId, user, est, onEstado }) {
   // Mantém o estado da fiscal em dia quando o RAZÃO muda (importou/corrigiu) — sem depender
   // de reimportar. Verde só quando os 3 tipos batem; amarelo (andamento) se falta bater.
   const fiscalSt = CHAVES_FISCAL.map(k => statusTipoFiscal(tipos[k], razIdx, COLS_FISCAL[k].chave))
+  const fiscalDif = difFiscal(tipos, razIdx)
   useEffect(() => {
     if (carregando || !razIdx) return
+    // Diferença aceita/justificada pelo responsável (no Status) → fica verde e não é rebaixada.
+    if (est?.justAceita) return
     const querido = fiscalSt.every(s => s === 'ok') ? 'validado' : fiscalSt.some(s => s !== 'sem') ? 'andamento' : null
-    if ((est?.estado || null) !== querido && est?.estado !== 'sem_movimento') {
-      onEstado({ ...est, estado: querido, doc: docFiscal(querido), usuario: user?.email || null })
+    const difAtual = querido === 'andamento' ? fiscalDif : 0
+    if (((est?.estado || null) !== querido || (est?.dif || 0) !== difAtual) && est?.estado !== 'sem_movimento') {
+      onEstado({ ...est, estado: querido, dif: difAtual, doc: docFiscal(querido), usuario: user?.email || null })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [carregando, razIdx, fiscalSt.join('|')])
+  }, [carregando, razIdx, fiscalSt.join('|'), fiscalDif])
 
   async function importar(file) {
     if (!file || !razIdx) return
@@ -644,7 +659,8 @@ function Fiscal({ competencia, empresaId, user, est, onEstado }) {
     const path = files.slice(-1)[0]?.path || ''
     const novoTipos = { ...tipos, [sub]: { doc, path, files, rows: rowsFinal, resumo: cruzarFiscal(rowsFinal, razIdx, COLS_FISCAL[sub].chave) } }
     const e = estadoFiscal(novoTipos, razIdx)
-    await onEstado({ ...est, tipos: novoTipos, estado: e, doc: docFiscal(e), usuario: user?.email || null })
+    // Novo arquivo re-avalia a diferença: solta uma justificativa anterior (justAceita).
+    await onEstado({ ...est, tipos: novoTipos, estado: e, dif: e === 'andamento' ? difFiscal(novoTipos, razIdx) : 0, doc: docFiscal(e), justAceita: false, usuario: user?.email || null })
   }
   // Exclui UM arquivo do tipo (só as linhas dele saem); se sobrar vazio, limpa o tipo.
   async function excluirArquivoFiscal(id) {
@@ -1102,17 +1118,20 @@ function Folha({ competencia, empresaId, user, est, onEstado, onSemMov }) {
   // Mantém o estado em dia quando o RAZÃO muda (carrega/lança) — sem depender de reimportar.
   useEffect(() => {
     if (carregando || !idx || semMov) return
+    if (est?.justAceita) return // diferença aceita/justificada no Status → fica verde
     const querido = estadoReconciliado(arquivos, justif)
-    if ((est?.estado || null) !== querido && est?.estado !== 'sem_movimento') {
-      onEstado({ ...est, estado: querido, doc: querido ? 'Folha · rubricas cruzadas' : null, usuario: user?.email || null })
+    const difAtual = querido === 'andamento' ? Math.abs(totDif) : 0
+    if (((est?.estado || null) !== querido || (est?.dif || 0) !== difAtual) && est?.estado !== 'sem_movimento') {
+      onEstado({ ...est, estado: querido, dif: difAtual, doc: querido ? 'Folha · rubricas cruzadas' : null, usuario: user?.email || null })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [carregando, idx, semMov, pendentes, eventos.length])
+  }, [carregando, idx, semMov, pendentes, eventos.length, totDif])
 
   // Grava um estado de arquivos recalculando o estado (verde só quando cruzado e batendo).
   async function gravarArquivos(novoArq, novoJustif = justif) {
     const estado = estadoReconciliado(novoArq, novoJustif)
-    await onEstado({ ...est, arquivos: novoArq, justif: novoJustif, estado, doc: estado ? 'Folha · rubricas cruzadas' : null, usuario: user?.email || null })
+    // Novo arquivo/justificativa re-avalia a diferença: solta uma justificativa anterior (justAceita).
+    await onEstado({ ...est, arquivos: novoArq, justif: novoJustif, estado, doc: estado ? 'Folha · rubricas cruzadas' : null, justAceita: false, usuario: user?.email || null })
   }
 
   async function importar(alvo, file) {

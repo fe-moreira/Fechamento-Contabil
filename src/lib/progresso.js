@@ -45,7 +45,7 @@ export async function calcularProgresso(empresaId, competencia) {
   if (integracaoFin !== 'Excel') finPend = !fin.estado
   else if (fin.combinado?.estado === 'validado') finPend = false
   else if (!contasBancarias.length) finPend = true
-  else finPend = contasBancarias.some(c => { const e = fin.bancos?.[String(c.conta_contabil).trim()]?.estado; return e !== 'validado' && e !== 'sem_movimento' })
+  else finPend = contasBancarias.some(c => { const b = fin.bancos?.[String(c.conta_contabil).trim()]; return !(b && (b.concluido === true || b.estado === 'validado' || b.estado === 'sem_movimento')) })
 
   // Integrações (fiscal/folha/patrimônio): verde só quando 'validado' ou sem movimento.
   // 'andamento' (importado, mas ainda não bateu) continua pendente.
