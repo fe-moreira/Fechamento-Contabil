@@ -45,10 +45,11 @@ export async function calcularProgresso(empresaId, competencia) {
   if (integracaoFin !== 'Excel') finPend = !fin.estado
   else if (fin.combinado?.estado === 'validado') finPend = false
   else if (!contasBancarias.length) finPend = true
-  else finPend = contasBancarias.some(c => { const e = fin.bancos?.[String(c.conta_contabil)]?.estado; return e !== 'validado' && e !== 'sem_movimento' })
+  else finPend = contasBancarias.some(c => { const e = fin.bancos?.[String(c.conta_contabil).trim()]?.estado; return e !== 'validado' && e !== 'sem_movimento' })
 
-  // Integrações (fiscal/folha/patrimônio) sem estado + financeira.
-  const integPend = INTEG_NAO_FIN.some(k => !integracoes[k]?.estado) || finPend
+  // Integrações (fiscal/folha/patrimônio): verde só quando 'validado' ou sem movimento.
+  // 'andamento' (importado, mas ainda não bateu) continua pendente.
+  const integPend = INTEG_NAO_FIN.some(k => { const e = integracoes[k]?.estado; return e !== 'validado' && e !== 'sem_movimento' }) || finPend
 
   // Contratos ativos na competência sem documento e não justificados.
   const ini = `${ano}-${String(mes).padStart(2, '0')}-01`, fim = `${ano}-${String(mes).padStart(2, '0')}-31`
