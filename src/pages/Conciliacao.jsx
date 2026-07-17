@@ -747,6 +747,12 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       return (leitura === l.leitura && hist === l.historico) ? l : { ...l, leitura, historico: hist }
     }
     const ajById = {}; for (const a of (aj || [])) ajById[a.razao_id] = a
+    // Linhas do razão já processadas (com nome lido) e um mapa razao_id → cliente lido — para
+    // um acerto/reclassificação (que aponta para o razão pelo razao_id) HERDAR o cliente da
+    // linha original e agrupar junto dela (o par zera; senão cai em "não identificado").
+    const rzProc = (rz || []).map(l => bump(aplicarAjuste(l, ajById[l.id])))
+    const clientePorRazao = {}
+    for (const l of rzProc) { if (l.id != null && l.leitura?.ident && String(l.leitura.entidade || '').trim()) clientePorRazao[l.id] = l.leitura.entidade.trim() }
     // Correções pendentes (estornos/acertos) que tocam ESTA conta entram na composição
     // como lançamentos: o estorno aparece aqui e casa por NF com a baixa original → zera
     // (aparece em "Conciliados") e a contrapartida fica demonstrada nas duas contas.
@@ -761,13 +767,14 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
           debito: ehDeb ? (Number(a.valor) || 0) : 0,
           credito: ehDeb ? 0 : (Number(a.valor) || 0),
         }, null)
-        // Nome de fornecedor atribuído a este acerto ("Corrigir fornecedor") → identifica a linha.
-        const nomeAc = acNomesMap[a.id]
+        // Nome atribuído a este acerto ("Corrigir fornecedor") tem prioridade; senão, herda o
+        // cliente da linha do razão que a correção estorna (pelo razao_id).
+        const nomeAc = acNomesMap[a.id] || (a.razao_id ? clientePorRazao[a.razao_id] : '')
         if (nomeAc) base.leitura = { ...base.leitura, entidade: nomeAc, ident: true, conf: 'alta' }
         return { ...base, acerto: true, origem: a.origem || null, razaoRef: a.razao_id || null }
       })
     // Títulos de abertura (saldo anterior) primeiro; depois o movimento do mês; por fim os acertos.
-    setLanc([...(abertura || []).map(a => bump({ ...a, _abertura: true })), ...(rz || []).map(l => bump(aplicarAjuste(l, ajById[l.id]))), ...acertoLancs])
+    setLanc([...(abertura || []).map(a => bump({ ...a, _abertura: true })), ...rzProc, ...acertoLancs])
     setCarregando(false)
   }
   useEffect(() => { carregarLanc() }, [compId, conta.conta]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -1004,14 +1011,23 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       const L = payload.lancamento
       const eSint = erroContaSintetica(plano, L.conta_debito, L.conta_credito)
       if (eSint) { setMsg(eSint); return }
-      await supabase.from('lancamentos').insert({
+      const { data: lanIns } = await supabase.from('lancamentos').insert({
         competencia_id: id, data: L.data || null,
         conta_debito: L.conta_debito || null, conta_credito: L.conta_credito || null,
         valor: Number(L.valor) || 0, historico: L.historico || null,
         documento: acao?.leitura.nf ? `NF ${acao.leitura.nf}` : null,
         origem: 'correcao', razao_id: razaoIdLinha, usuario,
-      })
+      }).select('id').single()
       virouLancamento = true
+      // A correção (estorno) HERDA o cliente/fornecedor do lançamento reclassificado, para
+      // agrupar junto dele e o par ZERAR — senão a correção cai em "não identificado" e
+      // desbalanceia os totais (débito ≠ crédito).
+      const nomeHerda = (acao?.leitura?.ident && String(acao.leitura.entidade || '').trim()) ? acao.leitura.entidade.trim() : ''
+      if (lanIns?.id && nomeHerda) {
+        const acMap = { ...acertoNomes, [lanIns.id]: nomeHerda }
+        setAcertoNomes(acMap)
+        await salvarNomes(nomesConf, nomesIsolados, nomesAlias, aberturaAj, acMap)
+      }
       // LALUR: reclassificou para uma DESPESA → registra dedutível/indedutível (aparece no
       // relatório de Despesas indedutíveis). Sem NF, o padrão sugerido é indedutível.
       if (payload.dedut?.tipo) {
@@ -1213,6 +1229,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     const classifDeCod = cod => (plano || []).find(p => String(p.cod) === String(cod))?.classif || ''
     const digito1 = cod => String(classifDeCod(cod)).replace(/\D/g, '')[0]
     let feitos = 0, pulados = 0; const erros = []
+    const acMap = { ...acertoNomes }
     for (const l of alvo) {
       const destino = String(mapa[l.id]).trim()
       if (!destino || destino === String(conta.conta)) { pulados++; continue }
@@ -1230,11 +1247,14 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       const historico = (l.historico || '').trim() ? `Reclassificação · ${l.historico.trim()}` : `Reclassificação · ${conta.nome}`
       const item = `${conta.conta} · ${l.data || ''} · NF ${l.leitura?.nf || '—'}`
       await supabase.from('auditoria').insert({ competencia_id: id, modulo: 'Conciliação', item, tipo: 'Correção', detalhe: `Reclassificado para ${destino} (em lote)`, razao_id: l.id, usuario })
-      await supabase.from('lancamentos').insert({
+      const { data: lanIns } = await supabase.from('lancamentos').insert({
         competencia_id: id, data: l.data || null, conta_debito, conta_credito,
         valor, historico, documento: l.leitura?.nf ? `NF ${l.leitura.nf}` : null,
         origem: 'correcao', razao_id: l.id, usuario,
-      })
+      }).select('id').single()
+      // A correção herda o cliente/fornecedor do lançamento (para agrupar junto e zerar o par).
+      const nomeHerda = (l.leitura?.ident && String(l.leitura.entidade || '').trim()) ? l.leitura.entidade.trim() : ''
+      if (lanIns?.id && nomeHerda) acMap[lanIns.id] = nomeHerda
       // LALUR: destino é DESPESA (classif 4) → registra dedutível/indedutível (sem NF → indedutível).
       if (digito1(destino) === '4') {
         const tipoDedut = l.leitura?.nf ? 'Dedutível' : 'Indedutível'
@@ -1246,6 +1266,8 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       }
       feitos++
     }
+    setAcertoNomes(acMap)
+    await salvarNomes(nomesConf, nomesIsolados, nomesAlias, aberturaAj, acMap)
     setReclassLote(null); setSelLin(new Set())
     carregarTratados(); carregarLanc(); onMudou && onMudou()
     const partes = [`${feitos} lançamento(s) reclassificado(s)`]
