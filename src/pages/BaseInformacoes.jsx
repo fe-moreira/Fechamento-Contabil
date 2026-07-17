@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
@@ -610,6 +610,7 @@ function ModalCarga({ carga, historico, empresaId, usuario, onClose, onImportado
   const [planoRaw, setPlanoRaw] = useState([])   // linhas cruas do plano atual (p/ diff e mesclagem)
   const ehPlano = carga.tipo === 'plano'
   const vigOk = /^\d{2}\/\d{4}$/.test(vigencia)
+  const fileRef = useRef(null) // input escondido: o botão "Importar planilha" abre o seletor direto
 
   async function recarregar() {
     const { data } = await supabase.from('cargas_cadastro').select('id, vigencia, dados, usuario, obs, created_at')
@@ -810,8 +811,15 @@ function ModalCarga({ carga, historico, empresaId, usuario, onClose, onImportado
       </div>
 
       <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-        <button className={modo === 'arquivo' ? 'btn' : 'btn btn-ghost'} style={{ fontSize: 13 }} onClick={() => setModo('arquivo')}><i className="ti ti-cloud-upload" /> Importar planilha</button>
+        <button className={modo === 'arquivo' ? 'btn' : 'btn btn-ghost'} style={{ fontSize: 13 }}
+          onClick={() => {
+            setModo('arquivo')
+            if (!vigOk) { setErro('Informe a vigência (MM/AAAA) antes de importar.'); return }
+            if (!salvando && !pendente) fileRef.current?.click() // abre o seletor de arquivo direto
+          }}><i className="ti ti-cloud-upload" /> Importar planilha</button>
         <button className={modo === 'manual' ? 'btn' : 'btn btn-ghost'} style={{ fontSize: 13 }} onClick={() => setModo('manual')}><i className="ti ti-keyboard" /> Cadastrar manual</button>
+        <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }}
+          onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) importarArquivo(f) }} />
       </div>
 
       {modo === 'arquivo' ? (
