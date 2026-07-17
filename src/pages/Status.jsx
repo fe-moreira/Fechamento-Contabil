@@ -163,10 +163,13 @@ export default function Status() {
     }]
     // Resolvido só quando concluído (validado) ou sem movimento. Rascunho (em
     // andamento) continua pendente até concluir.
+    // A chave dos bancos é o conta_contabil SEM espaços (é como a Integração grava/consulta).
+    // Sem o .trim(), um espaço à direita fazia um banco JÁ CONCLUÍDO aparecer como pendente.
+    const estadoBanco = c => fin.bancos?.[String(c.conta_contabil).trim()]?.estado
     return contas
-      .filter(c => { const e = fin.bancos?.[String(c.conta_contabil)]?.estado; return e !== 'validado' && e !== 'sem_movimento' })
+      .filter(c => { const e = estadoBanco(c); return e !== 'validado' && e !== 'sem_movimento' })
       .map(c => {
-        const e = fin.bancos?.[String(c.conta_contabil)]?.estado
+        const e = estadoBanco(c)
         return {
           item: `Integração Financeira — ${nomeBanco(c.conta_contabil)} ${e === 'rascunho' ? 'em andamento' : 'pendente'}`,
           detalhe: e === 'rascunho'
@@ -303,13 +306,21 @@ export default function Status() {
       icon: 'ti-plug-connected',
       descricao: 'Fiscal, Folha, Patrimônio e Financeira: documento importado ou marcado sem movimento.',
       itens: [
+        // Verde só quando bate (estado 'validado') ou sem movimento. Importado mas ainda
+        // com diferença (estado 'andamento') aponta a pendência de conferência.
         ...INTEGRACOES.filter(ig => ig.key !== 'financeira')
-          .filter(ig => !dados.integracoes?.[ig.key]?.estado)
-          .map(ig => ({
-            item: `Integração ${ig.nome} não validada`,
-            detalhe: 'Nenhum documento importado. Importe em Integração ou marque “Não tem movimento”.',
-            integracao: ig.key,
-          })),
+          .filter(ig => { const e = dados.integracoes?.[ig.key]?.estado; return e !== 'validado' && e !== 'sem_movimento' })
+          .map(ig => {
+            const e = dados.integracoes?.[ig.key]?.estado
+            const emConf = e === 'andamento'
+            return {
+              item: `Integração ${ig.nome} ${emConf ? 'com diferença (não bateu)' : 'não validada'}`,
+              detalhe: emConf
+                ? `Documento importado, mas ainda há diferença — confira e resolva as pendências na Integração ${ig.nome}. Só fica verde quando tudo bater.`
+                : 'Nenhum documento importado. Importe em Integração ou marque “Não tem movimento”.',
+              integracao: ig.key,
+            }
+          }),
         ...itensFinanceira(),
       ],
     },
