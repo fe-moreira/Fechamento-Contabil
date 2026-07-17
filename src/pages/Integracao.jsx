@@ -104,6 +104,14 @@ async function carregarIndiceFiscal(empresaId, competencia) {
 }
 
 // Cruza as linhas do arquivo (acumulador) com o índice → resumo por acumulador.
+// Lista de arquivos de um tipo Fiscal. Tipos importados numa versão anterior (sem `files`)
+// viram um único arquivo "legado" — para o download/exclusão por arquivo funcionar igual.
+function filesFiscal(t) {
+  if (t?.files?.length) return t.files
+  if (t?.rows?.length) return [{ id: '__legado', doc: t.doc || 'arquivo', path: t.path || '', n: t.rows.length }]
+  return []
+}
+
 function cruzarFiscal(rows, idx, chave) {
   const porAcum = {}
   for (const row of rows) {
@@ -520,19 +528,21 @@ function Fiscal({ competencia, empresaId, user, est, onEstado }) {
     if (!file || !razIdx) return
     setErro(''); setBusy(true); setExpand(null)
     try {
-      const rows = await parseAcumulador(file, sub)
-      if (!rows.length) { setErro(`Não encontrei linhas com Acumulador (coluna ${COLS_FISCAL[sub].acum}) e Valor (coluna ${COLS_FISCAL[sub].valor}). Confira o arquivo/colunas.`); setBusy(false); return }
+      const lidas = await parseAcumulador(file, sub)
+      if (!lidas.length) { setErro(`Não encontrei linhas com Acumulador (coluna ${COLS_FISCAL[sub].acum}) e Valor (coluna ${COLS_FISCAL[sub].valor}). Confira o arquivo/colunas.`); setBusy(false); return }
+      // ID do arquivo — marca cada linha (__arq) para poder excluir só este arquivo depois.
+      const id = Math.random().toString(36).slice(2, 8)
+      const rows = lidas.map(r => ({ ...r, __arq: id }))
       // Guarda o arquivo no Storage (caminho ÚNICO por arquivo — assim, no complementar, um
       // não sobrescreve o outro). Qualquer usuário pode extrair/atualizar depois.
       let path = ''
       if (compId) {
         const ext = (file.name.match(/\.[a-z0-9]+$/i) || ['.xlsx'])[0].toLowerCase()
-        const suf = Math.random().toString(36).slice(2, 8)
-        path = `fiscal/${compId}/${sub}_${suf}${ext}`
+        path = `fiscal/${compId}/${sub}_${id}${ext}`
         const { error: eUp } = await supabase.storage.from('extratos').upload(path, file, { upsert: true, contentType: file.type || undefined })
         if (eUp) { setErro('Li o arquivo, mas não consegui guardá-lo p/ extrair depois: ' + eUp.message); path = '' }
       }
-      const pack = { rows, path, nome: file.name }
+      const pack = { id, rows, path, nome: file.name }
       // Matriz/filiais: se o tipo JÁ tem arquivo, pergunta substituir × complementar.
       if (tipos[sub]?.rows?.length) { setPendFiscal(pack) }
       else await aplicarFiscal(pack, 'substituir')
@@ -545,22 +555,38 @@ function Fiscal({ competencia, empresaId, user, est, onEstado }) {
     const base = tipos[sub]
     const juntar = modo === 'complementar' && base?.rows?.length
     const rowsFinal = juntar ? [...base.rows, ...pend.rows] : pend.rows
-    const filesAnt = base?.files?.length ? base.files : (base?.path ? [{ doc: base.doc, path: base.path }] : [])
-    const files = juntar ? [...filesAnt, { doc: pend.nome, path: pend.path }] : [{ doc: pend.nome, path: pend.path }]
+    const fileMeta = { id: pend.id, doc: pend.nome, path: pend.path, n: pend.rows.length }
+    const files = juntar ? [...filesFiscal(base), fileMeta] : [fileMeta]
     const doc = files.length > 1 ? `${files.length} arquivos` : pend.nome
-    const novoTipos = { ...tipos, [sub]: { doc, path: pend.path, files, rows: rowsFinal, resumo: cruzarFiscal(rowsFinal, razIdx, COLS_FISCAL[sub].chave) } }
+    await gravarTipoFiscal(files, rowsFinal, doc)
+    setPendFiscal(null)
+  }
+  // Grava o tipo atual (files + linhas) recalculando o cruzamento e o estado geral do Fiscal.
+  async function gravarTipoFiscal(files, rowsFinal, doc) {
+    const path = files.slice(-1)[0]?.path || ''
+    const novoTipos = { ...tipos, [sub]: { doc, path, files, rows: rowsFinal, resumo: cruzarFiscal(rowsFinal, razIdx, COLS_FISCAL[sub].chave) } }
     const done = CHAVES_FISCAL.every(k => novoTipos[k])
     await onEstado({ ...est, tipos: novoTipos, estado: done ? 'validado' : null, doc: done ? 'Fiscal · 3 tipos importados' : null, usuario: user?.email || null })
-    setPendFiscal(null)
+  }
+  // Exclui UM arquivo do tipo (só as linhas dele saem); se sobrar vazio, limpa o tipo.
+  async function excluirArquivoFiscal(id) {
+    const base = tipos[sub]; if (!base) return
+    const files = filesFiscal(base)
+    if (files.length <= 1) { if (window.confirm('Excluir este arquivo? O tipo fica vazio.')) { const novoTipos = { ...tipos }; delete novoTipos[sub]; await onEstado({ ...est, tipos: novoTipos, estado: null, doc: null, usuario: user?.email || null }) } return }
+    if (!window.confirm('Excluir só este arquivo? As linhas dele saem do total; os outros arquivos continuam.')) return
+    const rowsFinal = (base.rows || []).filter(r => (r.__arq || '__legado') !== id)
+    const novosFiles = files.filter(f => f.id !== id)
+    await gravarTipoFiscal(novosFiles, rowsFinal, novosFiles.length > 1 ? `${novosFiles.length} arquivos` : (novosFiles[0]?.doc || base.doc))
   }
 
   // Extrair (baixar) o arquivo que foi importado — inclusive por outro usuário. Usa a
   // opção de download do Storage + âncora para forçar o download (não abre aba em branco).
-  async function extrairArquivo() {
+  async function extrairArquivo(arqPath, arqDoc) {
     const t = tipos[sub]
-    if (!t?.path) { setErro('Este acumulador foi importado numa versão anterior e o arquivo não ficou salvo. Reimporte uma vez para poder extrair.'); return }
-    const nome = t.doc || `acumulador-${sub}.xls`
-    const { data, error } = await supabase.storage.from('extratos').createSignedUrl(t.path, 300, { download: nome })
+    const path = arqPath || t?.path
+    if (!path) { setErro('Este acumulador foi importado numa versão anterior e o arquivo não ficou salvo. Reimporte uma vez para poder extrair.'); return }
+    const nome = arqDoc || t?.doc || `acumulador-${sub}.xls`
+    const { data, error } = await supabase.storage.from('extratos').createSignedUrl(path, 300, { download: nome })
     if (error) { setErro('Não consegui abrir o arquivo: ' + error.message); return }
     const a = document.createElement('a')
     a.href = data.signedUrl; a.download = nome
@@ -652,8 +678,22 @@ function Fiscal({ competencia, empresaId, user, est, onEstado }) {
       <ImpCard titulo={`Importar acumulador — ${TIPOS_FISCAL.find(t => t[0] === sub)[1]}`}
         desc={`Colunas: ${[COLS_FISCAL[sub].nf && `NF (${COLS_FISCAL[sub].nf})`, COLS_FISCAL[sub].data && `Data (${COLS_FISCAL[sub].data})`, `Acumulador (${COLS_FISCAL[sub].acum})`, `${nomeLabel} (${COLS_FISCAL[sub].forn})`, `Valor (${COLS_FISCAL[sub].valor})`].filter(Boolean).join(', ')}. ${COLS_FISCAL[sub].chave === 'nf' ? 'Cruza NF a NF' : 'Cruza pelo acumulador'} com o razão.`}
         onImport={importar} nome={atual?.doc} qtd={atual ? resumoAtual.reduce((s, a) => s + a.qtd, 0) : undefined} />
+      {atual && !semMov && filesFiscal(atual).length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, margin: '10px 0 0' }}>
+          {filesFiscal(atual).length > 1 && <span style={{ fontSize: 11.5, color: theme.sub }}>{filesFiscal(atual).length} arquivos neste tipo (matriz + filiais) — juntos no cruzamento:</span>}
+          {filesFiscal(atual).map((f, fi) => (
+            <div key={(f.id || 'x') + fi} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, background: theme.input, border: `1px solid ${theme.border}`, borderRadius: 8, padding: '4px 8px' }}>
+              <i className="ti ti-file-spreadsheet" style={{ color: theme.sub, flexShrink: 0 }} />
+              <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={f.doc}>{f.doc}</span>
+              {f.n != null && <span style={{ color: theme.sub, flexShrink: 0 }}>{f.n} linha(s)</span>}
+              {f.path && <i className="ti ti-download" title="Baixar este arquivo" onClick={() => extrairArquivo(f.path, f.doc)} style={{ color: theme.sub, cursor: 'pointer', flexShrink: 0 }} />}
+              <i className="ti ti-trash" title="Excluir só este arquivo (as linhas dele saem do total)" onClick={() => excluirArquivoFiscal(f.id)} style={{ color: theme.red, cursor: 'pointer', flexShrink: 0 }} />
+            </div>
+          ))}
+        </div>
+      )}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '10px 0 0', flexWrap: 'wrap' }}>
-        {atual?.path && <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={extrairArquivo} title="Baixar o arquivo do acumulador importado"><i className="ti ti-download" /> Extrair arquivo</button>}
+        {atual?.path && filesFiscal(atual).length <= 1 && <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={() => extrairArquivo()} title="Baixar o arquivo do acumulador importado"><i className="ti ti-download" /> Extrair arquivo</button>}
         {!semMov && !atual?.resumo && <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={marcarSemMovTipo} title="Este cliente não tem esse tipo de movimento no período"><i className="ti ti-circle-minus" /> Marcar sem movimento</button>}
         {sub === 'saidas' && !tipos.saidas?.justificativa && <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={() => { setJustTxt(''); setJustAberto(true) }} title="Só Saídas: justificar valor de operação interna (ex.: rendimento). Entradas/Serviços têm que corrigir."><i className="ti ti-flag" /> Justificar</button>}
         {busy && <span style={{ color: theme.sub, fontSize: 12.5 }}><i className="ti ti-loader" /> Cruzando com razão + lançamentos + ajustes…</span>}
