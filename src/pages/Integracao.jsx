@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
+import { checarCodigoArquivo } from '../lib/validarArquivoEmpresa'
 import { useAuth } from '../components/AuthProvider'
 import { theme, money, moneyDC } from '../lib/theme'
 import CampoConta from '../components/CampoConta'
@@ -465,6 +466,8 @@ export default function Integracao() {
 
   async function importar(alvo, file) {
     if (!file) return
+    const errCod = checarCodigoArquivo(file.name, cliente)
+    if (errCod) { setErro(errCod); return }
     setErro('')
     try {
       const XLSX = await import('xlsx')
@@ -519,15 +522,15 @@ export default function Integracao() {
 
       {tab === 'financeira'
         ? (integ === 'Excel'
-          ? <Financeira competencia={competencia} est={estado.financeira || {}} empresaId={empresaId} planoMap={planoMap} user={user} onEstado={salvarFinanceira} isAdmin={isAdmin} usaCC={!!cliente?.usa_centro_custo} />
+          ? <Financeira competencia={competencia} est={estado.financeira || {}} empresaId={empresaId} cliente={cliente} planoMap={planoMap} user={user} onEstado={salvarFinanceira} isAdmin={isAdmin} usaCC={!!cliente?.usa_centro_custo} />
           : <FinanceiraViaSistema integ={integ} sistema={sistema} empresaId={empresaId} competencia={competencia} planoMap={planoMap} est={estado.financeira} onEstado={salvarFinanceira} />)
         : tab === 'fiscal'
-          ? <Fiscal competencia={competencia} empresaId={empresaId} user={user} est={estado.fiscal || {}} onEstado={salvarFiscal} />
+          ? <Fiscal competencia={competencia} empresaId={empresaId} cliente={cliente} user={user} est={estado.fiscal || {}} onEstado={salvarFiscal} />
           : tab === 'folha'
-            ? <Folha competencia={competencia} empresaId={empresaId} user={user} est={estado.folha || {}} onEstado={salvarFolha} onSemMov={() => marcarSemMov('folha')} />
+            ? <Folha competencia={competencia} empresaId={empresaId} cliente={cliente} user={user} est={estado.folha || {}} onEstado={salvarFolha} onSemMov={() => marcarSemMov('folha')} />
             : tab === 'patrimonio'
-              ? <Patrimonio empresaId={empresaId} competencia={competencia} planoMap={planoMap} est={estado.patrimonio} onEstado={salvarPatrimonio} onSemMov={() => marcarSemMov('patrimonio')} />
-              : <Cruzamento tab={tab} dados={dados[tab]} onImport={f => importar(tab, f)} onSemMov={() => marcarSemMov(tab)} onExtrair={() => extrairIntegracao(tab)} est={estado[tab]} />}
+              ? <Patrimonio empresaId={empresaId} competencia={competencia} cliente={cliente} planoMap={planoMap} est={estado.patrimonio} onEstado={salvarPatrimonio} onSemMov={() => marcarSemMov('patrimonio')} />
+              : <Cruzamento tab={tab} dados={dados[tab]} cliente={cliente} onImport={f => importar(tab, f)} onSemMov={() => marcarSemMov(tab)} onExtrair={() => extrairIntegracao(tab)} est={estado[tab]} />}
     </Wrapper>
   )
 }
@@ -547,7 +550,7 @@ function EstadoBadge({ est }) {
   )
 }
 
-function Cruzamento({ tab, dados, onImport, onSemMov, onExtrair, est }) {
+function Cruzamento({ tab, dados, cliente, onImport, onSemMov, onExtrair, est }) {
   const total = dados ? somaNumerica(dados.linhas) : 0
   const semMov = est?.estado === 'sem_movimento'
   return (
@@ -572,7 +575,7 @@ function Cruzamento({ tab, dados, onImport, onSemMov, onExtrair, est }) {
 // Integração FISCAL: importa o acumulador (Entradas/Saídas/Serviços) e cruza NF a NF
 // com o razão. Resumo por acumulador (total do documento × identificado × diferença);
 // clicando numa linha com diferença, mostra as NFs do acumulador que não achei no razão.
-function Fiscal({ competencia, empresaId, user, est, onEstado }) {
+function Fiscal({ competencia, empresaId, cliente, user, est, onEstado }) {
   const [sub, setSub] = useState('entradas')
   const [razIdx, setRazIdx] = useState(null)   // { byAcum, compId }
   const [compId, setCompId] = useState(null)
@@ -619,6 +622,8 @@ function Fiscal({ competencia, empresaId, user, est, onEstado }) {
 
   async function importar(file) {
     if (!file || !razIdx) return
+    const errCod = checarCodigoArquivo(file.name, cliente)
+    if (errCod) { setErro(errCod); return }
     setErro(''); setBusy(true); setExpand(null)
     try {
       const lidas = await parseAcumulador(file, sub)
@@ -717,6 +722,8 @@ function Fiscal({ competencia, empresaId, user, est, onEstado }) {
   // — o complementar SOMA os totais de cada seção (Entradas/Saídas/Serviços) dos dois PDFs.
   async function importarResumo(file) {
     if (!file) return
+    const errCod = checarCodigoArquivo(file.name, cliente)
+    if (errCod) { setErro(errCod); return }
     setErro(''); setBusy(true)
     try {
       if (!/\.pdf$/i.test(file.name)) { setErro('Envie o "Resumo por Acumulador" do Domínio em PDF (com texto).'); setBusy(false); return }
@@ -1077,7 +1084,7 @@ function mapaExtratoValido(m, arr) {
 // Rubricas informativas (ex.: "INF - SEGURO DE VIDA") que não são contabilizadas podem ser
 // justificadas para fechar em zero, do mesmo jeito que a fiscal.
 const ARQ_FOLHA = [['folha', 'Folha mensal', 'ti-users'], ['adiant', 'Adiantamento', 'ti-cash'], ['decimo_adiant', '13º Adiantamento', 'ti-gift'], ['complementar', 'Folha Complementar', 'ti-file-plus'], ['plr', 'Participação de Lucros', 'ti-pig-money']]
-function Folha({ competencia, empresaId, user, est, onEstado, onSemMov }) {
+function Folha({ competencia, empresaId, cliente, user, est, onEstado, onSemMov }) {
   const [idx, setIdx] = useState(null)   // { byCod, valores, compId }
   const [carregando, setCarregando] = useState(true)
   const [erro, setErro] = useState('')
@@ -1136,6 +1143,8 @@ function Folha({ competencia, empresaId, user, est, onEstado, onSemMov }) {
 
   async function importar(alvo, file) {
     if (!file || !idx) return
+    const errCod = checarCodigoArquivo(file.name, cliente)
+    if (errCod) { setErro(errCod); return }
     setErro(''); setBusy(alvo)
     try {
       const lidos = await parseFolha(file)
@@ -1362,7 +1371,7 @@ function validarCompetencia(linhas, mapa, comp) {
   return ''
 }
 
-function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isAdmin, usaCC }) {
+function Financeira({ competencia, est, empresaId, cliente, planoMap, user, onEstado, isAdmin, usaCC }) {
   const [contas, setContas] = useState([])       // [{ conta_contabil, agencia, conta }]
   const [memoria, setMemoria] = useState([])     // [{ termo, conta }]
   const [centros, setCentros] = useState([])     // centros de custo do cliente: [{ cod, nome, resp }]
@@ -1748,6 +1757,8 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
 
   async function importar(file, bancoFixo, modoForcado) {
     if (!file) return
+    const errCod = checarCodigoArquivo(file.name, cliente)
+    if (errCod) { setErro(errCod); return }
     setErro(''); setMsg('')
     try {
       if (modo === 'combinado' && !contas.length) { setErro('Cadastre as contas bancárias antes de importar uma planilha combinada.'); return }
@@ -1973,6 +1984,8 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   // cruza. `mapaForcado` vem do modal de ajuste de colunas.
   async function cruzarSaldos(file, mapaForcado) {
     if (!file) return
+    const errCod = checarCodigoArquivo(file.name, cliente)
+    if (errCod) { setErro(errCod); return }
     setErro('')
     try {
       const XLSX = await import('xlsx')
@@ -2092,6 +2105,8 @@ function Financeira({ competencia, est, empresaId, planoMap, user, onEstado, isA
   // que NÃO é o banco. Aceita também uma planilha simples "Histórico | Conta".
   async function importarMemoria(file) {
     if (!file) return
+    const errCod = checarCodigoArquivo(file.name, cliente)
+    if (errCod) { setErro(errCod); return }
     setErro('')
     try {
       const XLSX = await import('xlsx')
@@ -3452,7 +3467,7 @@ function analiticasSob(codes, linhas) {
 // Integração PATRIMÔNIO: cadastra a conta SINTÉTICA (imobilizado − depreciação) e importa o
 // "Resumo da Depreciação Fiscal" (PDF). O saldo da sintética deve bater com o "Saldo a
 // depreciar" (imobilizado líquido) do documento. Bateu → verde.
-function Patrimonio({ empresaId, competencia, planoMap = {}, est, onEstado, onSemMov }) {
+function Patrimonio({ empresaId, competencia, cliente, planoMap = {}, est, onEstado, onSemMov }) {
   const contas = est?.contas || (est?.conta ? [est.conta] : []) // migra do formato antigo (1 conta)
   const valorDoc = est?.valorDoc
   const semMov = est?.estado === 'sem_movimento'
@@ -3488,6 +3503,8 @@ function Patrimonio({ empresaId, competencia, planoMap = {}, est, onEstado, onSe
 
   async function importarPdf(file) {
     if (!file) return
+    const errCod = checarCodigoArquivo(file.name, cliente)
+    if (errCod) { setErro(errCod); return }
     setErro(''); setBusy(true)
     try {
       if (!/\.pdf$/i.test(file.name)) { setErro('Envie o "Resumo da Depreciação Fiscal" em PDF (com texto).'); setBusy(false); return }
