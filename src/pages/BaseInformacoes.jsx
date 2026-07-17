@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
+import { checarCodigoArquivo } from '../lib/validarArquivoEmpresa'
 import { useAuth } from '../components/AuthProvider'
 import DropZone from '../components/DropZone'
 import CampoConta from '../components/CampoConta'
@@ -236,7 +237,8 @@ function extrairConta(obj) {
 
 export default function BaseInformacoes() {
   const { empresaId, empresaNome, competencia, plano, empresas, recalcularPendencias, recarregarPlano } = useAppData()
-  const usaCentroCusto = !!(empresas || []).find(e => e.id === empresaId)?.usa_centro_custo
+  const cliente = (empresas || []).find(e => e.id === empresaId)
+  const usaCentroCusto = !!cliente?.usa_centro_custo
   const planoMap = Object.fromEntries((plano || []).map(p => [String(p.cod), p]))
   const { user } = useAuth()
 
@@ -729,6 +731,8 @@ function ModalCarga({ carga, historico, empresaId, usuario, onClose, onImportado
   // Escolher/arrastar o arquivo faz a LEITURA e mostra a prévia; só grava ao confirmar.
   async function importarArquivo(file) {
     if (!file) return
+    const errCod = checarCodigoArquivo(file.name, cliente)
+    if (errCod) { setErro(errCod); return }
     if (!vigOk) { setErro('Informe a vigência (MM/AAAA) antes de escolher o arquivo.'); return }
     setErro(''); setMsgOk('')
     try {
@@ -1210,6 +1214,8 @@ function ModalCargaInicial({ vigencia, empresaId, onClose, onConcluir }) {
   }
   async function lerArquivo(file, setter, atual) {
     if (!file) return
+    const errCod = checarCodigoArquivo(file.name, cliente)
+    if (errCod) { setErro(errCod); return }
     setErro('')
     try {
       const XLSX = await import('xlsx')

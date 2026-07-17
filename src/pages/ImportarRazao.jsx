@@ -4,6 +4,7 @@ import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { gerarSugestoesDoRazao } from '../lib/sugestoesRazao'
 import { gerarSugestoesConciliacao } from '../lib/sugestoesConciliacao'
+import { checarCodigoArquivo } from '../lib/validarArquivoEmpresa'
 import DropZone from '../components/DropZone'
 import { theme } from '../lib/theme'
 import { money } from '../lib/theme'
@@ -94,7 +95,8 @@ function autoMapear(headers) {
 const rowsPathDe = (compId, id) => `razao/${compId}/${id}.json`
 
 export default function ImportarRazao() {
-  const { empresaId, empresaNome, competencia, getCompetenciaId, recalcularPendencias } = useAppData()
+  const { empresas, empresaId, empresaNome, competencia, getCompetenciaId, recalcularPendencias } = useAppData()
+  const cliente = empresas?.find(e => e.id === empresaId)
   const { user } = useAuth()
   const [headers, setHeaders] = useState([])
   const [linhas, setLinhas] = useState([])   // linhas de dados (arrays)
@@ -139,6 +141,8 @@ export default function ImportarRazao() {
 
   function aoEscolherArquivo(file) {
     if (!file) return
+    const errCod = checarCodigoArquivo(file.name, cliente)
+    if (errCod) { setErro(errCod); setArquivo(''); setFileObj(null); setHeaders([]); setLinhas([]); return }
     setErro(''); setResultado(''); setArquivo(file.name); setFileObj(file)
     const reader = new FileReader()
     reader.onload = async (ev) => {
