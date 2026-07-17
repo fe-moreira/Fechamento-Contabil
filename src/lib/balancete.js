@@ -287,6 +287,17 @@ export async function competenciaAnterior(empresaId, compId) {
 // - Competência INICIAL do cliente: vêm da CARGA INICIAL (composições informadas).
 // - Demais competências: ARRASTO — o que ficou em aberto no mês ANTERIOR (recursivo).
 //   Assim, se você mexer no mês anterior, a abertura deste mês atualiza sozinha.
+// Remove o PREFIXO de tipo de conta do nome do cliente/fornecedor. Ex.: nas contas de
+// "Adiantamento de Fornecedor/Cliente" o Domínio escreve "ADIANTAMENTO DE FORNECEDOR
+// CONNECT FOR PEOPLE ... 003881" — o cliente é "CONNECT FOR PEOPLE ...". Tira o prefixo
+// (adiantamento de/a fornecedor/cliente) e o código numérico solto no fim.
+export function limparNomeEntidade(nome) {
+  let s = String(nome || '').trim()
+  s = s.replace(/^\s*ADIANTAMENTOS?\s+(?:DE\s+|A\s+|AO\s+|AOS\s+)?(?:FORNECEDOR(?:ES)?|CLIENTE(?:S)?)\b\s*/i, '')
+  s = s.replace(/\s+\d{3,}\s*$/, '') // código no fim (ex.: "... SOLUCOES 003881")
+  return s.trim() || String(nome || '').trim()
+}
+
 export async function composicaoAbertura(empresaId, compId, contaCod, classifRaw, contaNome = '', _depth = 0) {
   if (await ehCompetenciaInicial(empresaId, compId)) {
     const { composicoes } = await carregarCargaInicial(empresaId)
@@ -298,7 +309,7 @@ export async function composicaoAbertura(empresaId, compId, contaCod, classifRaw
       if (!alvo.has(soDig(codConta(r)))) continue
       const valor = saldoSinalAb(campoPor(r, /valor|saldo/), campoPor(r, /^d\/?c$|natureza/))
       if (Math.abs(valor) < 0.005) continue
-      const cliente = String(campoPor(r, /cliente|fornec|nome|descri|histor/) || '').trim()
+      const cliente = limparNomeEntidade(String(campoPor(r, /cliente|fornec|nome|descri|histor/) || '').trim())
       const nf = String(campoPor(r, /\bnf\b|nota|document/) || '').trim()
       // Data REAL do título (jan/fev/mar…), mesmo sem os meses anteriores fechados.
       // Tudo isso compõe o saldo inicial (entendido como o último dia antes da abertura).

@@ -5,7 +5,7 @@ import { lerTudo } from '../lib/lerTudo'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { theme, money, moneyDC } from '../lib/theme'
-import { montarBalancete, parsePlano, composicaoAbertura, difConciliacao, applyMask, erroContaSintetica, ehCompetenciaInicial, excluirLinhaAbertura } from '../lib/balancete'
+import { montarBalancete, parsePlano, composicaoAbertura, difConciliacao, applyMask, erroContaSintetica, ehCompetenciaInicial, excluirLinhaAbertura, limparNomeEntidade } from '../lib/balancete'
 import { abrePdfTimbrado } from '../lib/pdf'
 import { gerarExcelTimbrado } from '../lib/excel'
 import { listarComentariosConta, adicionarComentario, excluirComentario } from '../lib/comentarios'
@@ -123,12 +123,14 @@ function lerHistorico(h) {
   let entidade = '', ident = false
   const mRec = corpo.match(/\b(?:RECEBIMENTO|RECEBTO|PAGAMENTO|PAGTO)\s+(?:A\s+|DE\s+|AO\s+)?(.+)$/i)
   if (mRec) {
-    // "VALOR REF. RECEBIMENTO <NOME> NF ..."
-    entidade = tiraSufixo(mRec[1].trim()); ident = true
+    // "VALOR REF. RECEBIMENTO <NOME> NF ..." (tira também o prefixo "ADIANTAMENTO DE FORNECEDOR/CLIENTE").
+    entidade = tiraSufixo(limparNomeEntidade(mRec[1].trim())); ident = true
+  } else if (/^\s*ADIANTAMENTOS?\s+(?:DE\s+|A\s+|AO\s+|AOS\s+)?(?:FORNECEDOR(?:ES)?|CLIENTE(?:S)?)\b/i.test(corpo)) {
+    // "ADIANTAMENTO DE FORNECEDOR <NOME> 003881" → tira o prefixo do tipo de conta e o código.
+    entidade = tiraSufixo(limparNomeEntidade(corpo)); ident = true
   } else if (/\s[-–]\s/.test(corpo)) {
     // "... - ACUM. N - <NOME> CF. NF. ..." → último segmento entre travessões
-    const segs = corpo.split(/\s[-–]\s/).map(x => x.trim()).filter(Boolean)
-    entidade = tiraSufixo(segs[segs.length - 1]); ident = true
+    entidade = tiraSufixo(limparNomeEntidade(corpo.split(/\s[-–]\s/).map(x => x.trim()).filter(Boolean).slice(-1)[0])); ident = true
   }
   // Fallback: heurística antiga de remoção de ruído (leitura incerta).
   if (!entidade || entidade.length < 3) {
