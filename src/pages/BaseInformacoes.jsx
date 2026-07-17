@@ -207,7 +207,9 @@ function campoPor(obj, re) {
 }
 // Chave de conta p/ casar saldo × composição (dígitos da classificação/código).
 const chaveConta = v => String(v ?? '').replace(/\D/g, '')
-function extrairConta(obj) {
+// Detecta as CHAVES (nomes de coluna) de código/nome/tipo/classificação numa linha crua —
+// usado tanto para LER (extrairConta) quanto para GRAVAR de volta (edição de conta).
+function colKeys(obj) {
   const keys = Object.keys(obj || {})
   const acha = re => keys.find(k => re.test(normK(k)))
   // Código REDUZIDO da conta (chave estável). Cuidado: no export cru do Domínio há
@@ -217,12 +219,18 @@ function extrairConta(obj) {
     || keys.find(k => /codigo/.test(normK(k)) && !/classif/.test(normK(k)))
     || keys.find(k => /^cod/.test(normK(k)))
     || keys.find(k => /conta/.test(normK(k)) && !/(nome|tipo|classif|razao|inscri|detalhe|grupo|emp|scp|dados|linha|mascara)/.test(normK(k)))
+  const kNome = acha(/nome.*conta|conta.*nome/) || acha(/nome|descri/)
   const kTipo = keys.find(k => /tipo/.test(normK(k)) && /conta/.test(normK(k))) || acha(/^tipo/) || acha(/tipo/)
+  const kClass = acha(/classific/)
+  return { kCod, kNome, kTipo, kClass }
+}
+function extrairConta(obj) {
+  const { kCod, kNome, kTipo, kClass } = colKeys(obj)
   return {
     codigo: String(obj[kCod] ?? '').trim(),
-    nome: String(obj[acha(/nome.*conta|conta.*nome/) || acha(/nome|descri/)] ?? '').trim(),
+    nome: String(obj[kNome] ?? '').trim(),
     tipo: String(obj[kTipo] ?? '').trim(),
-    classif: String(obj[acha(/classific/)] ?? '').trim(),
+    classif: String(obj[kClass] ?? '').trim(),
   }
 }
 
@@ -608,6 +616,7 @@ function ModalCarga({ carga, historico, empresaId, usuario, onClose, onImportado
   const [msgOk, setMsgOk] = useState('')
   const [pendente, setPendente] = useState(null) // { dados, nome, diff? } aguardando confirmação
   const [planoRaw, setPlanoRaw] = useState([])   // linhas cruas do plano atual (p/ diff e mesclagem)
+  const [editConta, setEditConta] = useState(null) // { idx, codigo, classif, nome, tipo } conta em edição
   const ehPlano = carga.tipo === 'plano'
   const vigOk = /^\d{2}\/\d{4}$/.test(vigencia)
   const fileRef = useRef(null) // input escondido: o botão "Importar planilha" abre o seletor direto
@@ -616,6 +625,29 @@ function ModalCarga({ carga, historico, empresaId, usuario, onClose, onImportado
     const { data } = await supabase.from('cargas_cadastro').select('id, vigencia, dados, usuario, obs, created_at')
       .eq('cliente_id', empresaId).eq('tipo', carga.tipo).order('created_at', { ascending: true })
     setHist(data || [])
+  }
+
+  // Salva a EDIÇÃO de uma conta já cadastrada (importada por planilha ou manual): grava o
+  // código/nome/tipo/classificação de volta na linha crua da carga mais recente, nas MESMAS
+  // colunas do arquivo, e atualiza a carga. Corrige direto no cadastro atual.
+  async function salvarEdicaoConta(ed) {
+    const cr = hist.length ? hist[hist.length - 1] : null
+    if (!cr) return
+    setSalvando(true); setErro('')
+    try {
+      const dados = Array.isArray(cr.dados) ? cr.dados.map(r => ({ ...r })) : []
+      const row = dados[ed.idx]
+      if (!row) throw new Error('linha não encontrada')
+      const { kCod, kNome, kTipo, kClass } = colKeys(row)
+      if (kCod) row[kCod] = ed.codigo
+      if (kNome) row[kNome] = ed.nome
+      if (kTipo) row[kTipo] = ed.tipo
+      if (kClass) row[kClass] = ed.classif
+      const { error } = await supabase.from('cargas_cadastro').update({ dados }).eq('id', cr.id)
+      if (error) throw error
+      setEditConta(null); await recarregar(); onImportado()
+      setMsgOk('Conta atualizada.')
+    } catch (err) { setErro('Erro ao salvar a conta: ' + (err.message || err)) } finally { setSalvando(false) }
   }
 
   // Carrega o plano de contas para autopreencher nome/classificação a partir do código.
@@ -785,15 +817,20 @@ function ModalCarga({ carga, historico, empresaId, usuario, onClose, onImportado
 
   // Carga mais recente → "Contas já cadastradas".
   const cargaRecente = hist.length ? hist[hist.length - 1] : null
-  const contasCad = cargaRecente ? (Array.isArray(cargaRecente.dados) ? cargaRecente.dados : []).map(extrairConta).filter(c => c.codigo || c.nome) : []
+  // Guarda o ÍNDICE da linha crua (idx) em cada conta, para poder EDITAR direto na carga.
+  const contasCad = cargaRecente ? (Array.isArray(cargaRecente.dados) ? cargaRecente.dados : [])
+    .map((raw, idx) => ({ idx, ...extrairConta(raw) })).filter(c => c.codigo || c.nome) : []
   const ehBR = carga.tipo === 'bancoresult'
   const bancosCad = contasCad.filter(c => normK(c.tipo).includes('banco'))
   const resultCad = contasCad.filter(c => /result|liber/.test(normK(c.tipo)))
   const credito = cargaRecente ? `${(cargaRecente.usuario || '').split('@')[0] || '—'} · ${new Date(cargaRecente.created_at).toLocaleDateString('pt-BR')}` : ''
   const LinhaConta = ({ c }) => (
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '8px 0', borderTop: `1px solid ${theme.border}`, fontSize: 13 }}>
-      <span style={{ color: theme.text }}><span style={{ color: theme.sub }}>{c.codigo}</span>{c.codigo && c.nome ? ' · ' : ''}{c.nome}</span>
-      <span style={{ color: theme.sub, fontSize: 12, whiteSpace: 'nowrap' }}>{credito}</span>
+      <span style={{ color: theme.text, minWidth: 0 }}><span style={{ color: theme.sub }}>{c.codigo}</span>{c.codigo && c.nome ? ' · ' : ''}{c.nome}{c.tipo ? <span style={{ color: theme.sub, fontSize: 11, marginLeft: 6 }}>({String(c.tipo).toUpperCase().slice(0, 1) === 'S' ? 'sintética' : 'analítica'})</span> : ''}</span>
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10, whiteSpace: 'nowrap' }}>
+        <span style={{ color: theme.sub, fontSize: 12 }}>{credito}</span>
+        {c.idx != null && <i className="ti ti-pencil" title="Editar conta" onClick={() => setEditConta({ ...c })} style={{ color: theme.sub, cursor: 'pointer', fontSize: 15 }} />}
+      </span>
     </div>
   )
   const SubTit = ({ children }) => <p style={{ color: theme.sub, fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: .4, margin: '14px 0 2px' }}>{children}</p>
@@ -944,6 +981,35 @@ function ModalCarga({ carga, historico, empresaId, usuario, onClose, onImportado
           )}
         </div>
       )}
+
+      {editConta && (
+        <ModalEditarConta conta={editConta} ehPlano={ehPlano} salvando={salvando}
+          onClose={() => setEditConta(null)} onSalvar={salvarEdicaoConta} />
+      )}
+    </Modal>
+  )
+}
+
+// Edita uma conta já cadastrada (código, classificação, nome, tipo sintética/analítica).
+function ModalEditarConta({ conta, ehPlano, salvando, onClose, onSalvar }) {
+  const [f, setF] = useState({ codigo: conta.codigo || '', classif: conta.classif || '', nome: conta.nome || '', tipo: String(conta.tipo || '').toUpperCase().slice(0, 1) === 'S' ? 'S' : 'A' })
+  const set = k => e => setF(s => ({ ...s, [k]: e.target.value }))
+  return (
+    <Modal titulo="Editar conta" sub="Ajusta a conta na carga atual" onClose={onClose} largura={460}>
+      <div style={{ display: 'grid', gap: 12 }}>
+        <div><label>Código (reduzido)</label><input className="input" value={f.codigo} onChange={set('codigo')} autoFocus /></div>
+        {ehPlano && <div><label>Classificação</label><input className="input" value={f.classif} onChange={set('classif')} placeholder="ex.: 1110010000000001" /></div>}
+        <div><label>Nome</label><input className="input" value={f.nome} onChange={set('nome')} /></div>
+        {ehPlano && (
+          <div><label>Tipo</label>
+            <select className="input" value={f.tipo} onChange={set('tipo')}>
+              <option value="A">A · analítica (recebe lançamento)</option>
+              <option value="S">S · sintética (soma as analíticas)</option>
+            </select>
+          </div>
+        )}
+      </div>
+      <Rodape onClose={onClose} salvando={salvando} onSalvar={() => onSalvar({ idx: conta.idx, codigo: f.codigo.trim(), classif: f.classif.trim(), nome: f.nome.trim(), tipo: f.tipo })} />
     </Modal>
   )
 }
