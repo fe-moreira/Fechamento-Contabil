@@ -388,6 +388,26 @@ export async function montarBalancete(empresaId, compId, _depth = 0, opts = {}) 
   const cortes = cortesDaMascara(mascara)
   const temPlano = plano.length > 0
 
+  // Ancestrais (sintéticas) de uma classificação = as sintéticas REAIS do plano cujo código
+  // de classificação é PREFIXO desta. A hierarquia do Domínio é por prefixo, mas com larguras
+  // IRREGULARES (ex.: 1 → 11 → 111 → 1110010 → 1110010000000001), e a máscara declarada
+  // muitas vezes NÃO bate com os níveis reais — cortar pela máscara criava níveis fantasma
+  // ("—" sem nome) e deixava sintéticas (ex.: DISPONIBILIDADES) sem somar. Usar as sintéticas
+  // reais resolve para qualquer formato de plano.
+  const sintSet = new Set(plano.filter(p => p.sintetica && p.classif).map(p => p.classif))
+  const sintLens = [...new Set([...sintSet].map(c => c.length))].sort((a, b) => a - b)
+  const ancestraisDe = classif => {
+    const out = []
+    for (const L of sintLens) { if (L < classif.length) { const pref = classif.slice(0, L); if (sintSet.has(pref)) out.push(pref) } }
+    return out
+  }
+  // Agrega o valor da analítica nas suas sintéticas (com plano, por prefixo real; sem plano,
+  // pelos pontos da classificação).
+  const agregar = (classif, temP, fn) => {
+    if (temP && sintSet.size) { for (const anc of ancestraisDe(classif)) fn(ensure(anc)) }
+    else { const segs = classif.split('.'); for (let i = 1; i < segs.length; i++) fn(ensure(segs.slice(0, i).join('.'))) }
+  }
+
   // Índices do plano: por código (reduzido → conta) e por classificação (classif → conta).
   const porReduzido = {}, porClassif = {}
   for (const p of plano) {
@@ -439,14 +459,8 @@ export async function montarBalancete(empresaId, compId, _depth = 0, opts = {}) 
     folha.debito += deb; folha.credito += cre; folha.saldo_inicial += ini
     if (!folha.nome && (p?.nome || mv.nome)) folha.nome = p?.nome || mv.nome
     if (!folha.reduzido) folha.reduzido = p?.reduzido || cod
-    // Ancestrais (sintéticas): prefixos da classificação nos cortes da máscara (com plano),
-    // ou pelos pontos do próprio código (fallback sem plano).
-    if (p) {
-      for (const corte of cortes) { if (corte < classif.length) { const e = ensure(classif.slice(0, corte)); e.debito += deb; e.credito += cre; e.saldo_inicial += ini } }
-    } else {
-      const segs = classif.split('.')
-      for (let i = 1; i < segs.length; i++) { const e = ensure(segs.slice(0, i).join('.')); e.debito += deb; e.credito += cre; e.saldo_inicial += ini }
-    }
+    // Ancestrais (sintéticas): pelas sintéticas REAIS do plano (prefixo), não pela máscara.
+    agregar(classif, !!p, e => { e.debito += deb; e.credito += cre; e.saldo_inicial += ini })
   }
 
   // Saldo de ABERTURA (carga inicial) — só na competência inicial do cliente e só nas contas
@@ -487,8 +501,7 @@ export async function montarBalancete(empresaId, compId, _depth = 0, opts = {}) 
         if (!folha.nome && p?.nome) folha.nome = p.nome
         if (!folha.reduzido) folha.reduzido = p?.reduzido || cod
         folha.saldo_inicial += val
-        if (p) { for (const corte of cortes) { if (corte < classif.length) ensure(classif.slice(0, corte)).saldo_inicial += val } }
-        else { const segs = classif.split('.'); for (let i = 1; i < segs.length; i++) ensure(segs.slice(0, i).join('.')).saldo_inicial += val }
+        agregar(classif, !!p, e => { e.saldo_inicial += val })
       }
     }
   } else if (_depth < 24) {
@@ -511,8 +524,7 @@ export async function montarBalancete(empresaId, compId, _depth = 0, opts = {}) 
         if (!folha.nome && lp.nome) folha.nome = lp.nome
         if (!folha.reduzido) folha.reduzido = lp.reduzido
         folha.saldo_inicial += val
-        if (temPlano) { for (const corte of cortes) { if (corte < classif.length) ensure(classif.slice(0, corte)).saldo_inicial += val } }
-        else { const segs = classif.split('.'); for (let i = 1; i < segs.length; i++) ensure(segs.slice(0, i).join('.')).saldo_inicial += val }
+        agregar(classif, temPlano, e => { e.saldo_inicial += val })
       }
     }
   }
@@ -533,7 +545,10 @@ export async function montarBalancete(empresaId, compId, _depth = 0, opts = {}) 
   // bancos) desempata pelo código reduzido, para a ordem ficar estável.
   const rd = x => String(x.reduzido ?? '')
   const ordena = (a, b) => a.classifRaw < b.classifRaw ? -1 : a.classifRaw > b.classifRaw ? 1 : (rd(a) < rd(b) ? -1 : rd(a) > rd(b) ? 1 : 0)
-  const grauDe = classif => temPlano ? Math.max(1, cortes.filter(c => c <= classif.length).length) : classif.split('.').length
+  // Grau (nível de indentação) = nº de sintéticas ancestrais + 1 (pela hierarquia real do
+  // plano; sem plano, pelos pontos). A máscara não serve porque os níveis reais podem ter
+  // larguras irregulares.
+  const grauDe = classif => (temPlano && sintSet.size) ? ancestraisDe(classif).length + 1 : classif.split('.').length
 
   const linhas = Object.values(map).map(e => ({
     reduzido: e.reduzido,
