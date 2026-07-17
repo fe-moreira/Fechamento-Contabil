@@ -1,4 +1,5 @@
 import { supabase } from './supabase'
+import { lerTudo } from './lerTudo'
 import { parsePlano, composicaoAbertura } from './balancete'
 import { aplicarAjuste, tokensNome, mesmoCliente, ehPorEntidade, nfKey, itensAbertosConta } from './aberturaArrasto'
 import { encodePartida } from './sugestoesRazao'
@@ -38,9 +39,9 @@ const ehAdiantamento = nome => /adiantament/.test(baixa(nome))
 // Carrega os lançamentos (abertura + razão do mês, com leitura) de uma conta de composição.
 async function lancComposicao(empresaId, compId, conta) {
   const abertura = await composicaoAbertura(empresaId, compId, conta.cod, conta.classifRaw, conta.nome)
-  const [{ data: rz }, { data: aj }] = await Promise.all([
-    supabase.from('razao').select('id, data, contrapartida, historico, debito, credito')
-      .eq('competencia_id', compId).eq('conta', conta.cod).order('data'),
+  const [rz, { data: aj }] = await Promise.all([
+    lerTudo(() => supabase.from('razao').select('id, data, contrapartida, historico, debito, credito')
+      .eq('competencia_id', compId).eq('conta', conta.cod).order('data')),
     supabase.from('ajuste_leitura').select('razao_id, nf, entidade, historico').eq('competencia_id', compId),
   ])
   const ajById = {}; for (const a of (aj || [])) ajById[a.razao_id] = a

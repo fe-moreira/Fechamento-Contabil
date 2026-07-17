@@ -1,4 +1,5 @@
 import { supabase } from './supabase'
+import { lerTudo } from './lerTudo'
 import { parsePlano } from './balancete'
 import { money } from './theme'
 
@@ -42,8 +43,8 @@ export async function apurarBancoResultado(empresaId, compId) {
 
   if (!compId || !bancos.size) return { temCarga: rows.length > 0, bancos: bancos.size, lancamentos: [] }
 
-  const { data: razao } = await supabase.from('razao')
-    .select('data, conta, contrapartida, historico, debito, credito').eq('competencia_id', compId)
+  const razao = await lerTudo(() => supabase.from('razao')
+    .select('data, conta, contrapartida, historico, debito, credito').eq('competencia_id', compId))
 
   const flagged = []
   // O razão traz os DOIS lados do lançamento (linha do banco + linha da conta de

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import { lerTudo } from '../lib/lerTudo'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { theme, money, moneyDC } from '../lib/theme'
@@ -801,8 +802,9 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // Razão inteiro da competência, indexado por partida (mesma data + histórico),
   // para descobrir a contrapartida (a(s) conta(s) do lado oposto de cada lançamento).
   useEffect(() => {
-    supabase.from('razao').select('data, conta, historico, debito, credito').eq('competencia_id', compId)
-      .then(({ data }) => {
+    if (!compId) return
+    lerTudo(() => supabase.from('razao').select('data, conta, historico, debito, credito').eq('competencia_id', compId))
+      .then(data => {
         const idx = {}
         for (const r of (data || [])) { const k = `${r.data || ''}|${r.historico || ''}`; (idx[k] = idx[k] || []).push(r) }
         setPartidas(idx)

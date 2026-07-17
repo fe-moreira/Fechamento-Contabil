@@ -1,4 +1,5 @@
 import { supabase } from './supabase'
+import { lerTudo } from './lerTudo'
 import { extrairEntidade, tokensHist, aprender } from './financeiro'
 
 // ============================================================================
@@ -162,8 +163,8 @@ export async function gerarSugestoesDoRazao(clienteId, competenciaId, competenci
     .eq('cliente_id', clienteId).eq('tipo', 'memoria_correcao').order('created_at', { ascending: false }).limit(1).maybeSingle()
   const memoria = Array.isArray(memRow?.dados) ? memRow.dados : []
   if (memoria.length) {
-    const { data: razao } = await supabase.from('razao').select('id, conta, historico, debito, credito')
-      .eq('competencia_id', competenciaId)
+    const razao = await lerTudo(() => supabase.from('razao').select('id, conta, historico, debito, credito')
+      .eq('competencia_id', competenciaId))
     for (const l of (razao || [])) {
       const htoks = new Set(tokensHist(l.historico))
       if (!htoks.size) continue

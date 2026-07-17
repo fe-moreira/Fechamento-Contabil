@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
+import { lerTudo } from '../lib/lerTudo'
 import { useAppData } from '../lib/appData'
 import { apurarVariacoes } from '../lib/variacoes'
 import { apurarDistribuicao } from '../lib/distribuicao'
@@ -182,8 +183,8 @@ export default function PainelCliente() {
         const receitaCods = [...new Set(analit.filter(l => g(l) === '3').map(l => String(l.reduzido)))]
         let topClientes = [], totReceitaRazao = 0
         if (receitaCods.length) {
-          const { data: rz } = await supabase.from('razao').select('conta, historico, debito, credito')
-            .eq('competencia_id', comp.id).in('conta', receitaCods)
+          const rz = await lerTudo(() => supabase.from('razao').select('conta, historico, debito, credito')
+            .eq('competencia_id', comp.id).in('conta', receitaCods))
           const mapa = {}
           for (const l of (rz || [])) {
             const v = num(l.credito) - num(l.debito) // receita = crédito (estorno debita)

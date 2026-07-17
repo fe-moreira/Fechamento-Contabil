@@ -1,4 +1,5 @@
 import { supabase } from './supabase'
+import { lerTudo } from './lerTudo'
 
 const baixa = (s) => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
 
@@ -17,9 +18,8 @@ export async function apurarDistribuicao(empresaId, compId, ano = null, mes = nu
 
   let lanc = []
   if (compId && contas.length) {
-    const { data } = await supabase.from('razao').select('conta, historico, debito, credito')
-      .eq('competencia_id', compId).in('conta', contas)
-    lanc = data || []
+    lanc = await lerTudo(() => supabase.from('razao').select('conta, historico, debito, credito')
+      .eq('competencia_id', compId).in('conta', contas))
   }
 
   const socios = (cfg.socios || []).map(s => {
