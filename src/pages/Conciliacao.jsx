@@ -676,10 +676,40 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const foiConfirmado = l => confirmados.has(chaveTrat(l)) || (!l._abertura && !l.acerto && itemUnico(l) && confirmados.has(itemConc(l))) // saiu do em aberto (conciliado)
   useEffect(() => { carregarTratados() }, [compId]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Contas cujo razão compõe esta linha: a própria conta e — quando ela é SINTÉTICA — todas
+  // as analíticas descendentes (o movimento fica nas filhas, não na conta-mãe; sem isso, a
+  // sintética mostra saldo mas "Sem lançamentos"). Analítica → só ela mesma.
+  async function contasDoRazao() {
+    if (!conta.sintetica || !conta.classifRaw) return [conta.conta]
+    const { data: pc } = await supabase.from('cargas_cadastro').select('dados')
+      .eq('cliente_id', empresaId).eq('tipo', 'plano').order('created_at', { ascending: false }).limit(1).maybeSingle()
+    const pref = String(conta.classifRaw)
+    const filhas = parsePlano(pc?.dados)
+      .filter(p => p.reduzido && !p.sintetica && String(p.classif || '').startsWith(pref) && String(p.classif).length > pref.length)
+      .map(p => String(p.reduzido))
+    return [...new Set([conta.conta, ...filhas].filter(Boolean))]
+  }
+  // Lê o razão das contas (paginado — o Supabase corta em 1000 linhas por página).
+  async function lerRazaoContas(cid, contas) {
+    if (!contas.length) return []
+    const SIZE = 1000; let from = 0; const out = []
+    for (;;) {
+      const { data, error } = await supabase.from('razao')
+        .select('id, data, contrapartida, historico, debito, credito, conta')
+        .eq('competencia_id', cid).in('conta', contas).order('data').range(from, from + SIZE - 1)
+      if (error) break
+      out.push(...(data || []))
+      if (!data || data.length < SIZE) break
+      from += SIZE
+    }
+    return out
+  }
+
   async function carregarLanc() {
     setCarregando(true)
-    const [{ data: rz }, { data: aj }, { data: acs }, abertura, { data: cn }] = await Promise.all([
-      supabase.from('razao').select('id, data, contrapartida, historico, debito, credito').eq('competencia_id', compId).eq('conta', conta.conta).order('data'),
+    const contasRz = await contasDoRazao()
+    const [rz, { data: aj }, { data: acs }, abertura, { data: cn }] = await Promise.all([
+      lerRazaoContas(compId, contasRz),
       supabase.from('ajuste_leitura').select('razao_id, nf, entidade, historico').eq('competencia_id', compId),
       supabase.from('lancamentos').select('id, data, conta_debito, conta_credito, valor, historico, razao_id, origem').eq('competencia_id', compId),
       composicaoAbertura(empresaId, compId, conta.conta, conta.classifRaw, conta.nome),
