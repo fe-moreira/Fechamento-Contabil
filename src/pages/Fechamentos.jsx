@@ -216,6 +216,18 @@ export default function Fechamentos() {
                 <span style={{ background: s.bg, color: s.cor, fontSize: 12, fontWeight: 600, padding: '5px 12px', borderRadius: 20, display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
                   <i className={`ti ${s.icon}`} /> {s.txt}
                 </span>
+                {efet(c) === 'fechado' && (
+                  <button className="btn btn-ghost" onClick={e => { e.stopPropagation(); isAdmin ? setReabrirAlvo(c) : alert('Apenas um administrador pode reabrir um fechamento.') }}
+                    style={{ fontSize: 12.5, padding: '5px 12px', color: theme.yellow, borderColor: theme.yellow, flexShrink: 0, whiteSpace: 'nowrap' }} title="Reabrir este fechamento (somente administrador)">
+                    <i className="ti ti-lock-open" /> Reabrir
+                  </button>
+                )}
+                {efet(c) === 'pronto' && (
+                  <button className="btn" onClick={e => { e.stopPropagation(); abrir(c) }}
+                    style={{ fontSize: 12.5, padding: '5px 12px', background: theme.green, borderColor: theme.green, flexShrink: 0, whiteSpace: 'nowrap' }} title="Abrir o Status para encerrar formalmente o fechamento">
+                    <i className="ti ti-lock-check" /> Encerrar
+                  </button>
+                )}
                 <i className="ti ti-trash" title="Excluir fechamento" onClick={e => excluir(c, e)}
                   style={{ color: theme.sub, fontSize: 17, flexShrink: 0, cursor: 'pointer' }} />
                 <i className="ti ti-chevron-right" style={{ color: theme.sub, fontSize: 20, flexShrink: 0 }} />
