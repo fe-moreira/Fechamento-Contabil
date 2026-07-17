@@ -112,6 +112,23 @@ function filesFiscal(t) {
   return []
 }
 
+// Lista de arquivos do Resumo por Acumulador. Resumos importados numa versão anterior
+// (sem `files`) viram um único arquivo "legado" com os totais que já estavam guardados.
+function filesResumo(rp) {
+  if (rp?.files?.length) return rp.files
+  if (rp?.totais && Object.keys(rp.totais).length) return [{ id: '__legado', doc: rp.doc || 'resumo.pdf', path: rp.path || '', totais: rp.totais }]
+  return []
+}
+// Soma os totais por seção (entradas/saidas/servicos) de todos os arquivos do resumo.
+function somarTotaisResumo(files) {
+  const out = {}
+  for (const f of files) for (const [k, v] of Object.entries(f.totais || {})) {
+    if (v == null) continue
+    out[k] = Math.round(((out[k] || 0) + v) * 100) / 100
+  }
+  return out
+}
+
 function cruzarFiscal(rows, idx, chave) {
   const porAcum = {}
   for (const row of rows) {
@@ -507,6 +524,7 @@ function Fiscal({ competencia, empresaId, user, est, onEstado }) {
   const [justAberto, setJustAberto] = useState(false)
   const [justTxt, setJustTxt] = useState('')
   const [pendFiscal, setPendFiscal] = useState(null) // { rows, path, nome } — pergunta substituir/complementar
+  const [pendResumo, setPendResumo] = useState(null) // { id, totais, path, nome } — pergunta substituir/complementar (Resumo)
 
   const tipos = est?.tipos || {}
   const atual = tipos[sub]
@@ -618,7 +636,9 @@ function Fiscal({ competencia, empresaId, user, est, onEstado }) {
     setJustAberto(false); setJustTxt('')
   }
 
-  // Resumo final: importa o "Resumo por Acumulador" (PDF-texto) → totais por tipo.
+  // Resumo final: importa o "Resumo por Acumulador" (PDF-texto) → totais por tipo. Aceita
+  // MAIS DE UM arquivo (matriz + filiais): ao subir o 2º, pergunta substituir × complementar
+  // — o complementar SOMA os totais de cada seção (Entradas/Saídas/Serviços) dos dois PDFs.
   async function importarResumo(file) {
     if (!file) return
     setErro(''); setBusy(true)
@@ -628,14 +648,50 @@ function Fiscal({ competencia, empresaId, user, est, onEstado }) {
       const texto = await extrairTextoPdf(file)
       const totais = totaisResumoPdf(texto)
       if (!Object.keys(totais).length) { setErro('Não identifiquei os totais (Entradas/Saídas/Serviços) no resumo. Confira se o PDF tem texto (não é imagem).'); setBusy(false); return }
-      let path = est.resumoPdf?.path || ''
+      const id = Math.random().toString(36).slice(2, 8)
+      let path = ''
       if (compId) {
-        path = `fiscal/${compId}/resumo.pdf`
-        await supabase.storage.from('extratos').upload(path, file, { upsert: true, contentType: file.type || 'application/pdf' })
+        path = `fiscal/${compId}/resumo_${id}.pdf`
+        const { error: eUp } = await supabase.storage.from('extratos').upload(path, file, { upsert: true, contentType: file.type || 'application/pdf' })
+        if (eUp) { setErro('Li o resumo, mas não consegui guardá-lo p/ extrair depois: ' + eUp.message); path = '' }
       }
-      await onEstado({ ...est, resumoPdf: { doc: file.name, path, totais } })
+      const pack = { id, totais, path, nome: file.name }
+      // Já tem resumo? Pergunta substituir × complementar (matriz/filiais). Senão, aplica direto.
+      if (filesResumo(est.resumoPdf).length) setPendResumo(pack)
+      else await aplicarResumo(pack, 'substituir')
     } catch (e) { setErro('Não consegui ler o resumo: ' + e.message) }
     setBusy(false)
+  }
+  // Aplica o resumo lido: substituir (troca) ou complementar (SOMA os totais por seção).
+  async function aplicarResumo(pend, modo) {
+    const juntar = modo === 'complementar' && filesResumo(est.resumoPdf).length
+    const fileMeta = { id: pend.id, doc: pend.nome, path: pend.path, totais: pend.totais }
+    const files = juntar ? [...filesResumo(est.resumoPdf), fileMeta] : [fileMeta]
+    await gravarResumo(files)
+    setPendResumo(null)
+  }
+  // Grava o resumo (lista de arquivos) somando os totais de todas as seções de cada arquivo.
+  async function gravarResumo(files) {
+    if (!files.length) { const novo = { ...est }; delete novo.resumoPdf; await onEstado(novo); return }
+    const totais = somarTotaisResumo(files)
+    const ult = files.slice(-1)[0]
+    const doc = files.length > 1 ? `${files.length} arquivos` : ult.doc
+    await onEstado({ ...est, resumoPdf: { doc, path: ult.path || '', files, totais } })
+  }
+  async function excluirArquivoResumo(id) {
+    const files = filesResumo(est.resumoPdf)
+    if (files.length <= 1) { if (window.confirm('Excluir este resumo? A conferência fica sem referência.')) await gravarResumo([]); return }
+    if (!window.confirm('Excluir só este arquivo? Os totais dele saem da soma; os outros continuam.')) return
+    await gravarResumo(files.filter(f => f.id !== id))
+  }
+  async function extrairResumo(arqPath, arqDoc) {
+    const path = arqPath || est.resumoPdf?.path
+    if (!path) { setErro('Este resumo foi importado numa versão anterior e não ficou salvo. Reimporte uma vez para extrair.'); return }
+    const nome = arqDoc || est.resumoPdf?.doc || 'resumo.pdf'
+    const { data, error } = await supabase.storage.from('extratos').createSignedUrl(path, 300, { download: nome })
+    if (error) { setErro('Não consegui abrir o arquivo: ' + error.message); return }
+    const a = document.createElement('a'); a.href = data.signedUrl; a.download = nome
+    document.body.appendChild(a); a.click(); a.remove()
   }
   // Total importado do acumulador por tipo (null = ainda pendente).
   const totalImportado = k => {
@@ -672,7 +728,7 @@ function Fiscal({ competencia, empresaId, user, est, onEstado }) {
         </button>
       </div>
 
-      {sub === 'resumo' && <ResumoFinal est={est} totalImportado={totalImportado} onImport={importarResumo} busy={busy} />}
+      {sub === 'resumo' && <ResumoFinal est={est} totalImportado={totalImportado} onImport={importarResumo} onExtrair={extrairResumo} onExcluir={excluirArquivoResumo} busy={busy} />}
 
       {sub !== 'resumo' && <>
       <ImpCard titulo={`Importar acumulador — ${TIPOS_FISCAL.find(t => t[0] === sub)[1]}`}
@@ -807,18 +863,35 @@ function Fiscal({ competencia, empresaId, user, est, onEstado }) {
           </div>
         </div>
       )}
+
+      {pendResumo && (
+        <div onClick={() => setPendResumo(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 70 }}>
+          <div onClick={e => e.stopPropagation()} style={{ width: 'min(460px,96vw)', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
+            <h2 style={{ fontSize: 17, margin: '0 0 6px' }}>Já existe um Resumo importado</h2>
+            <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 16px' }}>
+              Já há <b>{filesResumo(est.resumoPdf).length}</b> arquivo(s) de Resumo. O arquivo <b style={{ color: theme.text }}>{pendResumo.nome}</b> traz <b>{Object.keys(pendResumo.totais).length}</b> seção(ões). O que fazer? (Use <b>Complementar</b> para <b>somar</b> matriz + filial.)
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap' }}>
+              <button className="btn btn-ghost" onClick={() => setPendResumo(null)}>Cancelar</button>
+              <button className="btn btn-ghost" style={{ color: theme.red, borderColor: 'rgba(229,72,77,0.4)' }} onClick={() => aplicarResumo(pendResumo, 'substituir')}><i className="ti ti-refresh" /> Substituir</button>
+              <button className="btn" onClick={() => aplicarResumo(pendResumo, 'complementar')}><i className="ti ti-plus" /> Complementar</button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   )
 }
 
 // Tela de Resumo Final: importa o "Resumo por Acumulador" (Domínio) e cruza o total
 // de cada tipo (Entradas/Saídas/Serviços) com o que foi importado do acumulador.
-function ResumoFinal({ est, totalImportado, onImport, busy }) {
+function ResumoFinal({ est, totalImportado, onImport, onExtrair, onExcluir, busy }) {
   const totais = est?.resumoPdf?.totais || {}
   const temResumo = !!est?.resumoPdf
+  const arquivos = filesResumo(est?.resumoPdf)
   const linhas = TIPOS_FISCAL.map(([k, label]) => {
     const imp = totalImportado(k)          // total importado do acumulador (0 = sem movimento; null = pendente)
-    const ref = totais[k]                  // total do resumo do Domínio
+    const ref = totais[k]                  // total do resumo do Domínio (soma matriz + filiais)
     const dif = (imp != null && ref != null) ? Math.round((imp - ref) * 100) / 100 : null
     return { k, label, imp, ref, dif }
   })
@@ -826,15 +899,24 @@ function ResumoFinal({ est, totalImportado, onImport, busy }) {
   return (
     <>
       <ImpCard titulo="Importar Resumo por Acumulador (Domínio)"
-        desc={'PDF (com texto) do "Resumo por Acumulador". Leio os totais de Entradas, Saídas e Serviços e confiro com o que foi importado.'}
-        onImport={onImport} nome={est?.resumoPdf?.doc} qtd={temResumo ? Object.keys(totais).length : undefined} />
+        desc={'PDF (com texto) do "Resumo por Acumulador". Leio os totais de Entradas, Saídas e Serviços e confiro com o que foi importado. Vários arquivos (matriz + filiais) somam.'}
+        onImport={onImport} nome={temResumo ? est?.resumoPdf?.doc : undefined} qtd={arquivos.length} unidade="arquivo"
+        accept=".pdf" label={temResumo ? 'Subir outro' : 'Importar'} />
+      {arquivos.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, margin: '10px 0 0' }}>
+          {arquivos.length > 1 && <span style={{ fontSize: 11.5, color: theme.sub }}>{arquivos.length} arquivos (matriz + filiais) — totais somados por seção:</span>}
+          {arquivos.map((f, fi) => (
+            <div key={(f.id || 'x') + fi} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, background: theme.input, border: `1px solid ${theme.border}`, borderRadius: 8, padding: '4px 8px' }}>
+              <i className="ti ti-file-typography" style={{ color: theme.sub, flexShrink: 0 }} />
+              <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={f.doc}>{f.doc}</span>
+              <span style={{ color: theme.sub, flexShrink: 0 }}>{Object.keys(f.totais || {}).length} seção(ões)</span>
+              {f.path && <i className="ti ti-download" title="Baixar este arquivo" onClick={() => onExtrair(f.path, f.doc)} style={{ color: theme.sub, cursor: 'pointer', flexShrink: 0 }} />}
+              <i className="ti ti-trash" title="Excluir só este arquivo (os totais dele saem da soma)" onClick={() => onExcluir(f.id)} style={{ color: theme.red, cursor: 'pointer', flexShrink: 0 }} />
+            </div>
+          ))}
+        </div>
+      )}
       <div style={{ display: 'flex', gap: 12, margin: '10px 0 0', flexWrap: 'wrap' }}>
-        {est?.resumoPdf?.path && <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={async () => {
-          const { data, error } = await supabase.storage.from('extratos').createSignedUrl(est.resumoPdf.path, 300, { download: est.resumoPdf.doc || 'resumo.pdf' })
-          if (error) return
-          const a = document.createElement('a'); a.href = data.signedUrl; a.download = est.resumoPdf.doc || 'resumo.pdf'
-          document.body.appendChild(a); a.click(); a.remove()
-        }} title="Baixar o resumo importado"><i className="ti ti-download" /> Extrair arquivo</button>}
         {busy && <span style={{ color: theme.sub, fontSize: 12.5 }}><i className="ti ti-loader" /> Lendo o resumo…</span>}
       </div>
 
@@ -3521,7 +3603,7 @@ function FinanceiraViaSistema({ integ, sistema, empresaId, competencia, planoMap
   )
 }
 
-function ImpCard({ titulo, desc, onImport, nome, qtd }) {
+function ImpCard({ titulo, desc, onImport, nome, qtd, accept = '.xlsx,.xls,.csv', unidade = 'linha', label = 'Importar' }) {
   return (
     <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: 18, display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
       <span style={{ background: 'rgba(74,124,255,0.15)', borderRadius: 10, width: 42, height: 42, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
@@ -3529,11 +3611,12 @@ function ImpCard({ titulo, desc, onImport, nome, qtd }) {
       </span>
       <div style={{ flex: 1, minWidth: 180 }}>
         <p style={{ color: theme.text, fontSize: 14, fontWeight: 600, margin: 0 }}>{titulo}</p>
-        <p style={{ color: theme.sub, fontSize: 12.5, margin: '2px 0 0' }}>{nome ? `${nome} — ${qtd} linha(s)` : desc}</p>
+        <p style={{ color: theme.sub, fontSize: 12.5, margin: '2px 0 0' }}>{nome ? `${nome} — ${qtd} ${unidade}(s)` : desc}</p>
       </div>
       <label className="btn" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
-        <i className="ti ti-file-spreadsheet" /> Importar
-        <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={e => onImport(e.target.files?.[0])} />
+        <i className="ti ti-file-spreadsheet" /> {label}
+        {/* reseta o value p/ permitir reenviar o MESMO arquivo (senão o onChange não dispara) */}
+        <input type="file" accept={accept} style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; onImport(f) }} />
       </label>
     </div>
   )
