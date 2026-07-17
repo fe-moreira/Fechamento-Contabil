@@ -1119,13 +1119,21 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // Conecta (baixa manual) os lançamentos SELECIONADOS — nota + pagamento que o sistema
   // não casou sozinho (NF diferente, sem NF, ou nomes separados). Vão para Conciliados.
   const toggleSelLin = l => setSelLin(prev => { const s = new Set(prev); s.has(l.id) ? s.delete(l.id) : s.add(l.id); return s })
+  // Selecionar tudo / desmarcar tudo (as linhas passadas): se todas já estão marcadas, limpa;
+  // senão, marca todas as selecionáveis (id != null).
+  const selecionarTodos = linhas => setSelLin(prev => {
+    const ids = linhas.map(l => l.id).filter(x => x != null)
+    const todos = ids.length > 0 && ids.every(id => prev.has(id))
+    const s = new Set(prev)
+    if (todos) ids.forEach(id => s.delete(id)); else ids.forEach(id => s.add(id))
+    return s
+  })
   async function conectarSelecionados() {
     const alvo = lanc.filter(l => selLin.has(l.id) && l.id != null)
     if (alvo.length < 2) { setMsg('Selecione ao menos 2 lançamentos (a nota e o pagamento) para conectar.'); return }
     const net = alvo.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
-    // Se NÃO zera, é obrigatório apontar se a diferença é DESCONTO ou JUROS/MULTA (com a
-    // conta) — abre o passo dedicado. Só zerando conecta direto.
-    if (Math.abs(net) >= 0.005) { setConectarDif({ alvo, net }); return }
+    // Conectar SÓ quando ZERA. Se sobra diferença, não conecta (o botão já fica desabilitado).
+    if (Math.abs(net) >= 0.005) { setMsg(`Só dá para conectar quando o líquido ZERA. Ainda sobra ${money(Math.abs(net))} ${net < 0 ? 'C' : 'D'} — ajuste a seleção.`); return }
     if (!window.confirm(`Conectar ${alvo.length} lançamento(s)? Eles zeram entre si e vão para Conciliados.`)) return
     await baixarConexao(alvo)
   }
@@ -1600,7 +1608,9 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
             <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }}>
               <thead>
                 <tr style={{ borderTop: `1px solid ${theme.border}` }}>
-                  <th style={{ ...th, width: 26 }} title="Marcar para conectar (baixa manual)"></th>
+                  <th style={{ ...th, width: 26 }} title={grp.every(l => selLin.has(l.id)) ? 'Desmarcar todos deste' : 'Selecionar tudo deste'}>
+                    {grp.length > 0 && <input type="checkbox" checked={grp.every(l => selLin.has(l.id))} onChange={() => selecionarTodos(grp)} style={{ cursor: 'pointer', width: 15, height: 15 }} />}
+                  </th>
                   <th style={th}>Data</th><th style={th}>NF</th><th style={th}>Histórico</th><th style={th}>Contrapartida</th>
                   <th style={thR}>Débito</th><th style={thR}>Crédito</th><th style={{ ...th, textAlign: 'center' }}>Conf.</th>
                 </tr>
@@ -1698,7 +1708,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       ) : (
         <>
         <ListaLancamentos lanc={emAbertoTodos} carregando={carregando} contraDe={contraDe} planoMap={planoMap} tratados={tratados} onTratar={abrirLinha}
-          selLin={selLin} onToggleSel={toggleSelLin} onExcluirAbertura={excluirAbertura} podeExcluirAbertura={abertura.inicial} aberturaFechada={abertura.fechada} />
+          selLin={selLin} onToggleSel={toggleSelLin} onSelTodos={selecionarTodos} onExcluirAbertura={excluirAbertura} podeExcluirAbertura={abertura.inicial} aberturaFechada={abertura.fechada} />
         {conferidosGrupos.length > 0 && (
           <div style={{ marginTop: 6 }}>
             <button onClick={() => setVerConferidos(v => !v)} style={{ background: 'none', border: 'none', color: theme.sub, cursor: 'pointer', fontSize: 12.5, padding: '6px 2px', display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -1754,9 +1764,17 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
             <button className="btn btn-ghost" disabled={!desvincaveis.length} title={!desvincaveis.length ? 'Selecione um título ou o saldo anterior (com nome).' : 'Manter estes nomes separados (não unir com parecidos) — vale para todos os meses'} style={{ fontSize: 12.5, color: theme.yellow, borderColor: theme.yellow, opacity: desvincaveis.length ? 1 : 0.5, cursor: desvincaveis.length ? 'pointer' : 'not-allowed' }} onClick={() => desvincaveis.length && desvincularLote(desvincaveis)}>
               <i className="ti ti-arrows-split" /> Desvincular
             </button>
-            <button className="btn" disabled={selLancs.length < 2} style={{ fontSize: 12.5, background: selLancs.length >= 2 ? theme.green : undefined, borderColor: selLancs.length >= 2 ? theme.green : undefined, opacity: selLancs.length >= 2 ? 1 : 0.5 }} onClick={conectarSelecionados}>
-              <i className="ti ti-link" /> Conectar (baixar)
-            </button>
+            {(() => {
+              // Conectar (baixar) só quando ZERA (2+ linhas cujo líquido é 0). Se não zera,
+              // o botão fica desabilitado — não dá nem para apertar.
+              const podeConectar = selLancs.length >= 2 && zera
+              const motivo = selLancs.length < 2 ? 'Selecione ao menos 2 lançamentos (nota + pagamento).' : !zera ? `Só dá para conectar quando o líquido ZERA — aqui sobra ${money(Math.abs(net))} ${net < 0 ? 'C' : 'D'}.` : 'Conectar e baixar (vão para Conciliados)'
+              return (
+                <button className="btn" disabled={!podeConectar} title={motivo} style={{ fontSize: 12.5, background: podeConectar ? theme.green : undefined, borderColor: podeConectar ? theme.green : undefined, opacity: podeConectar ? 1 : 0.5, cursor: podeConectar ? 'pointer' : 'not-allowed' }} onClick={conectarSelecionados}>
+                  <i className="ti ti-link" /> Conectar (baixar)
+                </button>
+              )
+            })()}
             <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={() => setSelLin(new Set())}><i className="ti ti-x" /> Limpar</button>
           </div>
         )
@@ -1858,9 +1876,11 @@ function ModalComposicao({ titulo, itens, onClose }) {
 
 // Lista simples dos lançamentos de uma conta de composição que NÃO é por entidade
 // (ex.: IRRF s/ aplicação): sem nome/NF/agrupamento; cada lançamento é clicável.
-function ListaLancamentos({ lanc, carregando, contraDe, planoMap, tratados = new Set(), onTratar, selLin, onToggleSel, onExcluirAbertura, podeExcluirAbertura, aberturaFechada }) {
+function ListaLancamentos({ lanc, carregando, contraDe, planoMap, tratados = new Set(), onTratar, selLin, onToggleSel, onSelTodos, onExcluirAbertura, podeExcluirAbertura, aberturaFechada }) {
   const selectable = !!onToggleSel // permite marcar linhas p/ conectar (baixa manual)
   const nCols = selectable ? 7 : 6
+  const selecionaveis = lanc.filter(l => l.id != null)
+  const todosMarcados = selecionaveis.length > 0 && selecionaveis.every(l => selLin?.has(l.id))
   return (
     <>
       <p style={{ color: theme.sub, fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: .5, margin: '4px 0 10px' }}>Lançamentos da conta</p>
@@ -1868,7 +1888,7 @@ function ListaLancamentos({ lanc, carregando, contraDe, planoMap, tratados = new
         <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 680 }}>
           <thead>
             <tr style={{ background: theme.input }}>
-              {selectable && <th style={{ ...th, width: 26 }} title="Marcar para conectar (baixa manual)"></th>}
+              {selectable && <th style={{ ...th, width: 26 }} title={todosMarcados ? 'Desmarcar todos' : 'Selecionar tudo'}>{selecionaveis.length > 0 && onSelTodos && <input type="checkbox" checked={todosMarcados} onChange={() => onSelTodos(selecionaveis)} style={{ cursor: 'pointer', width: 15, height: 15 }} />}</th>}
               <th style={th}>Data</th><th style={th}>Histórico</th><th style={th}>Contrapartida</th>
               <th style={thR}>Débito</th><th style={thR}>Crédito</th><th style={{ ...th, textAlign: 'center' }}>Ação</th>
             </tr>
