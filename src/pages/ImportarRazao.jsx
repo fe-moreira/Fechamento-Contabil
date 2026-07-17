@@ -87,6 +87,12 @@ function autoMapear(headers) {
   return map
 }
 
+// Metadado dos arquivos do razão: guardado em competencias.integracoes.razao.arquivos
+// (sem tocar no schema). O razão importado é a UNIÃO das linhas de todos os arquivos —
+// reconstruída ao complementar/excluir. Cada arquivo guarda o original (extrair) e um
+// JSON das linhas normalizadas (rebuild sem reprocessar a planilha).
+const rowsPathDe = (compId, id) => `razao/${compId}/${id}.json`
+
 export default function ImportarRazao() {
   const { empresaId, empresaNome, competencia, getCompetenciaId, recalcularPendencias } = useAppData()
   const { user } = useAuth()
@@ -94,31 +100,46 @@ export default function ImportarRazao() {
   const [linhas, setLinhas] = useState([])   // linhas de dados (arrays)
   const [map, setMap] = useState({})
   const [arquivo, setArquivo] = useState('')
+  const [fileObj, setFileObj] = useState(null) // File original (p/ subir ao Storage)
   const [erro, setErro] = useState('')
   const [importando, setImportando] = useState(false)
   const [resultado, setResultado] = useState(null)
-  const [jaImportado, setJaImportado] = useState(null)
   const [mascaraIdx, setMascaraIdx] = useState(-1)
+  const [compId, setCompId] = useState(null)
+  const [arquivos, setArquivos] = useState([])   // [{ id, nome, path, linhas }]
+  const [pend, setPend] = useState(null)          // { registros, file, nome } — pergunta substituir/complementar
+  const [msg, setMsg] = useState('')
 
-  // Mostra se já há razão importado para a competência atual.
+  // Carrega compId + a lista de arquivos do razão já importados na competência.
   useEffect(() => {
-    setResultado(null); setJaImportado(null)
+    setResultado(null); setCompId(null); setArquivos([]); setMsg('')
     if (!empresaId) return
     let vivo = true
     ;(async () => {
       const [mes, ano] = competencia.split('/').map(Number)
-      const { data: comp } = await supabase.from('competencias').select('id')
+      const { data: comp } = await supabase.from('competencias').select('id, integracoes')
         .eq('cliente_id', empresaId).eq('ano', ano).eq('mes', mes).maybeSingle()
       if (!comp || !vivo) return
+      setCompId(comp.id)
+      const metaArq = comp.integracoes?.razao?.arquivos
+      if (Array.isArray(metaArq) && metaArq.length) { setArquivos(metaArq); return }
+      // Sem metadado (razão importado numa versão anterior): mostra um arquivo "legado".
       const { count } = await supabase.from('razao').select('id', { count: 'exact', head: true }).eq('competencia_id', comp.id)
-      if (vivo && count) setJaImportado(count)
+      if (vivo && count) setArquivos([{ id: '__legado', nome: 'Razão importado (versão anterior)', path: '', linhas: count }])
     })()
     return () => { vivo = false }
   }, [empresaId, competencia])
 
+  // Salva a lista de arquivos no metadado da competência (read-modify-write no integracoes).
+  async function salvarMeta(cid, novoArquivos) {
+    const { data } = await supabase.from('competencias').select('integracoes').eq('id', cid).maybeSingle()
+    const integ = (data?.integracoes && typeof data.integracoes === 'object') ? data.integracoes : {}
+    await supabase.from('competencias').update({ integracoes: { ...integ, razao: { arquivos: novoArquivos } } }).eq('id', cid)
+  }
+
   function aoEscolherArquivo(file) {
     if (!file) return
-    setErro(''); setResultado(''); setArquivo(file.name)
+    setErro(''); setResultado(''); setArquivo(file.name); setFileObj(file)
     const reader = new FileReader()
     reader.onload = async (ev) => {
       try {
@@ -153,89 +174,154 @@ export default function ImportarRazao() {
     return String(valorCol(linha, 'conta') ?? '').trim()
   }
 
+  // Lê os registros normalizados do arquivo atual (mapeamento) e valida o mês.
+  function lerRegistros(competencia_id) {
+    const registros = linhas.map(l => ({
+      competencia_id,
+      data: toISO(valorCol(l, 'data')),
+      conta: contaDe(l) || null,
+      contrapartida: limpaContra(valorCol(l, 'contrapartida')),
+      historico: String(valorCol(l, 'historico') ?? '').trim() || null,
+      debito: num(valorCol(l, 'debito')),
+      credito: num(valorCol(l, 'credito')),
+      centro_custo: String(valorCol(l, 'centro_custo') ?? '').trim() || null,
+      nome: String(valorCol(l, 'nome') ?? '').trim() || null,   // só para o balancete
+    })).filter(r => r.conta && (r.debito || r.credito))
+    if (!registros.length) return { erro: 'Nenhuma linha válida (confira o mapeamento de Conta/Débito/Crédito).' }
+    // Validação: o mês dos lançamentos tem que ser o da competência selecionada.
+    const [cmes, cano] = competencia.split('/').map(Number)
+    const cont = {}
+    for (const r of registros) { if (!r.data) continue; const [y, m] = r.data.split('-').map(Number); cont[`${m}/${y}`] = (cont[`${m}/${y}`] || 0) + 1 }
+    const chaves = Object.keys(cont)
+    if (chaves.length) {
+      const dominante = chaves.sort((a, b) => cont[b] - cont[a])[0]
+      if (dominante !== `${cmes}/${cano}`) {
+        const [dm, dy] = dominante.split('/')
+        return { erro: `Os lançamentos são de ${String(dm).padStart(2, '0')}/${dy}, mas o fechamento selecionado é ${competencia}. Selecione a competência correta no topo antes de importar.` }
+      }
+    }
+    return { registros }
+  }
+
   async function importar() {
     setErro(''); setImportando(true); setResultado(null)
     try {
       const competencia_id = await getCompetenciaId()
       if (!competencia_id) { setErro('Selecione uma empresa no topo.'); setImportando(false); return }
+      const { registros, erro } = lerRegistros(competencia_id)
+      if (erro) { setErro(erro); setImportando(false); return }
+      // Já tem arquivo? Pergunta substituir × complementar (matriz/filiais). Senão, aplica direto.
+      if (arquivos.length) { setPend({ registros, file: fileObj, nome: arquivo }); setImportando(false); return }
+      await aplicar({ registros, file: fileObj, nome: arquivo }, 'substituir', competencia_id)
+    } catch (err) {
+      setErro('Erro ao gravar: ' + err.message); setImportando(false)
+    }
+  }
 
-      const registros = linhas.map(l => ({
-        competencia_id,
-        data: toISO(valorCol(l, 'data')),
-        conta: contaDe(l) || null,
-        contrapartida: limpaContra(valorCol(l, 'contrapartida')),
-        historico: String(valorCol(l, 'historico') ?? '').trim() || null,
-        debito: num(valorCol(l, 'debito')),
-        credito: num(valorCol(l, 'credito')),
-        centro_custo: String(valorCol(l, 'centro_custo') ?? '').trim() || null,
-        nome: String(valorCol(l, 'nome') ?? '').trim() || null,   // só para o balancete
-      })).filter(r => r.conta && (r.debito || r.credito))
+  // Reconstrói o razão + balancete a partir da UNIÃO das linhas de todos os arquivos da lista.
+  // cache: { [id]: registros } evita rebaixar do Storage o arquivo recém-lido.
+  async function rebuildRazao(cid, novoArquivos, cache = {}) {
+    // Carrega os registros de cada arquivo (do cache ou do JSON no Storage).
+    const porArquivo = []
+    for (const a of novoArquivos) {
+      if (cache[a.id]) { porArquivo.push(cache[a.id]); continue }
+      const jsonPath = rowsPathDe(cid, a.id)
+      const { data, error } = await supabase.storage.from('extratos').download(jsonPath)
+      if (error || !data) throw new Error(`Não consegui reler as linhas de "${a.nome}". Reimporte este arquivo.`)
+      porArquivo.push(JSON.parse(await data.text()))
+    }
+    const todos = porArquivo.flat().map(r => ({ ...r, competencia_id: cid }))
+    // Regrava o razão (sem a coluna nome, que é só do balancete).
+    await supabase.from('razao').delete().eq('competencia_id', cid)
+    const paraRazao = todos.map(({ nome, ...r }) => r)
+    for (let i = 0; i < paraRazao.length; i += 500) {
+      const { error } = await supabase.from('razao').insert(paraRazao.slice(i, i + 500))
+      if (error) throw error
+    }
+    // Balancete derivado: agrupa por conta (soma matriz + filiais), com o nome lido do razão.
+    const porConta = {}
+    for (const r of todos) {
+      const c = porConta[r.conta] || (porConta[r.conta] = { conta: r.conta, nome: r.nome || null, debito: 0, credito: 0 })
+      if (!c.nome && r.nome) c.nome = r.nome
+      c.debito += r.debito; c.credito += r.credito
+    }
+    const balancete = Object.values(porConta).map(c => ({
+      competencia_id: cid, conta: c.conta, nome: c.nome || null,
+      saldo_inicial: 0, debito: c.debito, credito: c.credito, saldo_final: c.debito - c.credito,
+    }))
+    await supabase.from('balancete').delete().eq('competencia_id', cid)
+    for (let i = 0; i < balancete.length; i += 500) {
+      const { error } = await supabase.from('balancete').insert(balancete.slice(i, i + 500))
+      if (error) throw error
+    }
+    await supabase.from('competencias').update({ razao_importado: todos.length > 0 }).eq('id', cid)
+    await salvarMeta(cid, novoArquivos)
+    // Regenera as sugestões do mês a partir do razão resultante.
+    if (todos.length) {
+      try { await gerarSugestoesDoRazao(empresaId, cid, competencia, user?.email) } catch (e) { console.error('sugestões:', e) }
+      try { await gerarSugestoesConciliacao(empresaId, cid, competencia, user?.email) } catch (e) { console.error('sugestões concil.:', e) }
+    }
+    return { balancete, todos }
+  }
 
-      if (!registros.length) { setErro('Nenhuma linha válida (confira o mapeamento de Conta/Débito/Crédito).'); setImportando(false); return }
-
-      // Validação: o mês dos lançamentos tem que ser o da competência selecionada.
-      const [cmes, cano] = competencia.split('/').map(Number)
-      const cont = {}
-      for (const r of registros) {
-        if (!r.data) continue
-        const [y, m] = r.data.split('-').map(Number)
-        cont[`${m}/${y}`] = (cont[`${m}/${y}`] || 0) + 1
+  // Aplica o arquivo lido: substituir (troca a lista) ou complementar (soma à lista, sem fundir).
+  async function aplicar(pack, modo, cidArg) {
+    setImportando(true); setErro('')
+    try {
+      const cid = cidArg || compId || await getCompetenciaId()
+      if (!cid) { setErro('Selecione uma empresa no topo.'); setImportando(false); return }
+      const id = Math.random().toString(36).slice(2, 10)
+      // Sobe o original (extrair) e o JSON das linhas (rebuild).
+      let path = ''
+      if (pack.file) {
+        const ext = (pack.nome.match(/\.[a-z0-9]+$/i) || ['.xlsx'])[0].toLowerCase()
+        path = `razao/${cid}/${id}${ext}`
+        await supabase.storage.from('extratos').upload(path, pack.file, { upsert: true, contentType: pack.file.type || undefined })
       }
-      const chaves = Object.keys(cont)
-      if (chaves.length) {
-        const dominante = chaves.sort((a, b) => cont[b] - cont[a])[0]
-        if (dominante !== `${cmes}/${cano}`) {
-          const [dm, dy] = dominante.split('/')
-          setErro(`Os lançamentos são de ${String(dm).padStart(2, '0')}/${dy}, mas o fechamento selecionado é ${competencia}. Selecione a competência correta no topo antes de importar.`)
-          setImportando(false); return
-        }
-      }
-
-      // Reimportação: limpa o que havia desta competência e regrava (razao não tem coluna nome).
-      await supabase.from('razao').delete().eq('competencia_id', competencia_id)
-      const paraRazao = registros.map(({ nome, ...r }) => r)
-      for (let i = 0; i < paraRazao.length; i += 500) {
-        const { error } = await supabase.from('razao').insert(paraRazao.slice(i, i + 500))
-        if (error) throw error
-      }
-
-      // Balancete derivado: agrupa por conta (saldo final = débito − crédito), com o nome lido do razão.
-      const porConta = {}
-      for (const r of registros) {
-        const c = porConta[r.conta] || (porConta[r.conta] = { conta: r.conta, nome: r.nome || null, debito: 0, credito: 0 })
-        if (!c.nome && r.nome) c.nome = r.nome
-        c.debito += r.debito; c.credito += r.credito
-      }
-      const balancete = Object.values(porConta).map(c => ({
-        competencia_id, conta: c.conta, nome: c.nome || null,
-        saldo_inicial: 0, debito: c.debito, credito: c.credito,
-        saldo_final: c.debito - c.credito,
-      }))
-      await supabase.from('balancete').delete().eq('competencia_id', competencia_id)
-      for (let i = 0; i < balancete.length; i += 500) {
-        const { error } = await supabase.from('balancete').insert(balancete.slice(i, i + 500))
-        if (error) throw error
-      }
-
-      // Razão importado → a competência passa a contar como "em andamento".
-      await supabase.from('competencias').update({ razao_importado: true }).eq('id', competencia_id)
-
-      // Gera as sugestões do mês (apropriações + correções recorrentes) no Painel de Sugestões.
-      try { await gerarSugestoesDoRazao(empresaId, competencia_id, competencia, user?.email) } catch (e) { console.error('sugestões:', e) }
-      // Sugestões da conciliação: desconto/juros (baixa pelo banco) e baixa de adiantamento.
-      try { await gerarSugestoesConciliacao(empresaId, competencia_id, competencia, user?.email) } catch (e) { console.error('sugestões concil.:', e) }
-
-      const totDeb = registros.reduce((s, r) => s + r.debito, 0)
-      const totCred = registros.reduce((s, r) => s + r.credito, 0)
-      setResultado({ lancamentos: registros.length, contas: balancete.length, totDeb, totCred })
-      setJaImportado(registros.length)
+      const jsonBlob = new Blob([JSON.stringify(pack.registros)], { type: 'application/json' })
+      await supabase.storage.from('extratos').upload(rowsPathDe(cid, id), jsonBlob, { upsert: true, contentType: 'application/json' })
+      const meta = { id, nome: pack.nome, path, linhas: pack.registros.length }
+      const base = modo === 'complementar' ? arquivos.filter(a => a.id !== '__legado') : []
+      const novoArquivos = [...base, meta]
+      const { balancete, todos } = await rebuildRazao(cid, novoArquivos, { [id]: pack.registros })
+      setArquivos(novoArquivos)
+      const totDeb = todos.reduce((s, r) => s + r.debito, 0)
+      const totCred = todos.reduce((s, r) => s + r.credito, 0)
+      setResultado({ lancamentos: todos.length, contas: balancete.length, totDeb, totCred })
       recalcularPendencias()
-      setHeaders([]); setLinhas([]); setArquivo('')
+      setHeaders([]); setLinhas([]); setArquivo(''); setFileObj(null); setPend(null)
     } catch (err) {
       setErro('Erro ao gravar: ' + err.message)
     } finally {
       setImportando(false)
     }
+  }
+
+  // Exclui UM arquivo da lista e reconstrói o razão com os que sobraram.
+  async function excluirArquivo(a) {
+    if (a.id === '__legado') {
+      if (!window.confirm('Limpar o razão importado desta competência? Você poderá importar de novo.')) return
+      setImportando(true)
+      try { await rebuildRazao(compId, []); setArquivos([]); setResultado(null); recalcularPendencias(); setMsg('Razão limpo.') }
+      catch (e) { setErro(e.message) } finally { setImportando(false) }
+      return
+    }
+    if (!window.confirm(`Excluir o arquivo "${a.nome}"? As linhas dele saem do razão; os outros arquivos continuam.`)) return
+    setImportando(true); setErro('')
+    try {
+      const novoArquivos = arquivos.filter(x => x.id !== a.id)
+      await rebuildRazao(compId, novoArquivos)
+      setArquivos(novoArquivos)
+      setMsg(novoArquivos.length ? 'Arquivo excluído; razão reconstruído com os demais.' : 'Último arquivo excluído — razão vazio.')
+    } catch (e) { setErro(e.message) } finally { setImportando(false) }
+  }
+
+  async function extrair(a) {
+    if (!a.path) { setErro('Este arquivo foi importado numa versão anterior e o original não ficou salvo. Reimporte para poder extrair.'); return }
+    const { data, error } = await supabase.storage.from('extratos').createSignedUrl(a.path, 300, { download: a.nome })
+    if (error) { setErro('Não consegui abrir o arquivo: ' + error.message); return }
+    const el = document.createElement('a'); el.href = data.signedUrl; el.download = a.nome
+    document.body.appendChild(el); el.click(); el.remove()
   }
 
   const temArquivo = headers.length > 0
@@ -254,20 +340,54 @@ export default function ImportarRazao() {
         <b style={{ color: theme.text }}>{empresaNome}</b> · competência <b style={{ color: theme.text }}>{competencia}</b>
       </p>
 
-      {jaImportado != null && !resultado && (
-        <div style={{ background: 'rgba(48,164,108,0.12)', border: '0.5px solid rgba(48,164,108,0.4)', borderRadius: 10, padding: '12px 14px', fontSize: 13, color: theme.green, marginBottom: 18 }}>
-          <i className="ti ti-circle-check" /> Já há <b>{jaImportado}</b> lançamento(s) importado(s) nesta competência. Importar de novo substitui os dados.
+      {arquivos.length > 0 && (
+        <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: 16, marginBottom: 18 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+            <i className="ti ti-files" style={{ color: theme.accent }} />
+            <b style={{ fontSize: 13 }}>{arquivos.length} arquivo(s) de razão nesta competência</b>
+            <span style={{ marginLeft: 'auto', fontSize: 12, color: theme.sub }}>{arquivos.reduce((s, a) => s + (a.linhas || 0), 0)} linha(s) no total</span>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {arquivos.map((a, i) => (
+              <div key={(a.id || 'x') + i} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, background: theme.input, border: `1px solid ${theme.border}`, borderRadius: 8, padding: '6px 10px' }}>
+                <i className="ti ti-file-spreadsheet" style={{ color: theme.sub, flexShrink: 0 }} />
+                <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={a.nome}>{a.nome}</span>
+                <span style={{ color: theme.sub, flexShrink: 0 }}>{a.linhas} linha(s)</span>
+                {a.path && <i className="ti ti-download" title="Extrair (baixar) este arquivo" onClick={() => extrair(a)} style={{ color: theme.sub, cursor: 'pointer', flexShrink: 0 }} />}
+                <i className="ti ti-trash" title="Excluir só este arquivo (as linhas dele saem do razão)" onClick={() => excluirArquivo(a)} style={{ color: theme.red, cursor: 'pointer', flexShrink: 0 }} />
+              </div>
+            ))}
+          </div>
+          <p style={{ fontSize: 11.5, color: theme.sub, margin: '10px 2px 0' }}>Ao importar outro arquivo o sistema pergunta <b>Substituir</b> ou <b>Complementar</b> (soma sem apagar — para matriz + filiais). Cada arquivo pode ser baixado ou excluído individualmente.</p>
         </div>
       )}
 
+      {msg && <p style={{ color: theme.green, fontSize: 13, marginBottom: 14 }}><i className="ti ti-circle-check" /> {msg}</p>}
+
       {/* Upload */}
       <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: 22, marginBottom: 18 }}>
-        <label style={{ fontSize: 13, color: theme.text, marginBottom: 10, display: 'block' }}>Arquivo do razão (Excel do Domínio — .xlsx, .xls ou .csv)</label>
+        <label style={{ fontSize: 13, color: theme.text, marginBottom: 10, display: 'block' }}>{arquivos.length ? 'Importar outro arquivo do razão' : 'Arquivo do razão'} (Excel do Domínio — .xlsx, .xls ou .csv)</label>
         <DropZone onArquivo={aoEscolherArquivo} hint="Arraste o razão aqui ou clique · .xlsx, .xls ou .csv" />
         {arquivo && <p style={{ fontSize: 12.5, color: theme.sub, marginTop: 10 }}><i className="ti ti-file-spreadsheet" /> {arquivo} — {linhas.length} linha(s) detectada(s)</p>}
       </div>
 
       {erro && <p style={{ color: theme.red, fontSize: 13, marginBottom: 14 }}>{erro}</p>}
+
+      {pend && (
+        <div onClick={() => setPend(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 70 }}>
+          <div onClick={e => e.stopPropagation()} style={{ width: 'min(470px,96vw)', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
+            <h2 style={{ fontSize: 17, margin: '0 0 6px' }}>Já existe razão importado</h2>
+            <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 16px' }}>
+              Esta competência já tem <b>{arquivos.length}</b> arquivo(s) de razão. O arquivo <b style={{ color: theme.text }}>{pend.nome}</b> traz <b>{pend.registros.length}</b> linha(s). O que fazer? (Use <b>Complementar</b> para <b>somar</b> matriz + filial, sem apagar o que já subiu.)
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap' }}>
+              <button className="btn btn-ghost" onClick={() => setPend(null)}>Cancelar</button>
+              <button className="btn btn-ghost" style={{ color: theme.red, borderColor: 'rgba(229,72,77,0.4)' }} onClick={() => aplicar(pend, 'substituir')} disabled={importando}><i className="ti ti-refresh" /> Substituir</button>
+              <button className="btn" onClick={() => aplicar(pend, 'complementar')} disabled={importando}><i className="ti ti-plus" /> Complementar</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Mapeamento + prévia */}
       {temArquivo && (
