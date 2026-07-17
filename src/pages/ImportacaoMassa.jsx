@@ -1,5 +1,6 @@
 import { useState, useRef } from 'react'
 import { supabase } from '../lib/supabase'
+import { lerTudo } from '../lib/lerTudo'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { fechaSozinho } from '../lib/clientes'
@@ -22,8 +23,8 @@ function eventosUnifFolha(arquivos) {
 async function idxRazaoFolha(compId) {
   const byCod = {}, valores = new Set()
   const add = (hist, deb, cred) => { const cod = rubDoHist(hist); if (!cod) return; const b = (byCod[cod] ||= { deb: 0, cred: 0 }); b.deb = r2f(b.deb + (deb || 0)); b.cred = r2f(b.cred + (cred || 0)); for (const v of [deb, cred]) if (v) valores.add(Math.round(v * 100)) }
-  const [{ data: rz }, { data: aj }] = await Promise.all([
-    supabase.from('razao').select('id, historico, debito, credito').eq('competencia_id', compId),
+  const [rz, { data: aj }] = await Promise.all([
+    lerTudo(() => supabase.from('razao').select('id, historico, debito, credito').eq('competencia_id', compId)),
     supabase.from('ajuste_leitura').select('razao_id, historico'),
   ])
   const ajmap = {}; for (const a of (aj || [])) if (a.historico) ajmap[a.razao_id] = a.historico

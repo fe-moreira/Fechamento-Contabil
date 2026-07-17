@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
+import { lerTudo } from '../lib/lerTudo'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { theme, money, moneyDC } from '../lib/theme'
@@ -691,11 +692,10 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
   async function carregarLinhas() {
     setCarregando(true)
     const ids = todos ? compIds : [compId]
-    const { data } = await supabase
+    const rows = await lerTudo(() => supabase
       .from('razao').select('id, competencia_id, data, conta, contrapartida, historico, debito, credito')
       .in('competencia_id', ids).eq('conta', conta)
-      .order('data', { ascending: true })
-    const rows = data || []
+      .order('data', { ascending: true }))
     // Correções já geradas para estes lançamentos (para marcar/desfazer).
     const razaoIds = rows.map(r => r.id)
     let corrMap = {}
@@ -727,8 +727,8 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
       mv = analisarMovers(rows, ant || [])
       // Se alguma entidade caiu, procura ela em outras contas no mês (reclassificação).
       if (mv.some(m => Math.abs(m.movAtual) < Math.abs(m.movAnterior))) {
-        const { data: mesTodo } = await supabase.from('razao').select('conta, historico, debito, credito')
-          .eq('competencia_id', compId)
+        const mesTodo = await lerTudo(() => supabase.from('razao').select('conta, historico, debito, credito')
+          .eq('competencia_id', compId))
         mv = anotarReclass(mv, mesTodo || [], conta, plano)
       }
     }
