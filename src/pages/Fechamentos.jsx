@@ -84,6 +84,17 @@ export default function Fechamentos() {
     abrirFechamento(c.mes, c.ano) // marca o fechamento como ativo (libera as funções)
     nav('/status')
   }
+  // Encerrar DIRETO no card: pergunta se tem certeza e marca a competência como ENCERRADA
+  // (somente leitura). Só aparece a 100% (pronto).
+  async function encerrarDireto(c) {
+    if (!window.confirm(`Encerrar o fechamento de ${MESES[c.mes - 1]}/${c.ano}? Ele fica ENCERRADO (somente leitura) — para editar depois é preciso Reabrir (admin).\n\nTem certeza?`)) return
+    setSalvandoAcao(true)
+    const { error } = await supabase.from('competencias').update({ status: 'fechado' }).eq('id', c.id)
+    setSalvandoAcao(false)
+    if (error) { alert('Não consegui encerrar: ' + error.message); return }
+    refreshStatusCompetencia?.()
+    await carregar()
+  }
   // Reabrir DIRETO no card (só administrador): pergunta se tem certeza e volta a ABERTO.
   async function reabrirDireto(c) {
     if (!isAdmin) { alert('Apenas um administrador pode reabrir um fechamento.'); return }
@@ -215,8 +226,8 @@ export default function Fechamentos() {
                   </button>
                 )}
                 {efet(c) === 'pronto' && (
-                  <button className="btn" onClick={e => { e.stopPropagation(); abrir(c) }}
-                    style={{ fontSize: 12.5, padding: '5px 12px', background: theme.green, borderColor: theme.green, flexShrink: 0, whiteSpace: 'nowrap' }} title="Abrir o Status para encerrar formalmente o fechamento">
+                  <button className="btn" disabled={salvandoAcao} onClick={e => { e.stopPropagation(); encerrarDireto(c) }}
+                    style={{ fontSize: 12.5, padding: '5px 12px', background: theme.green, borderColor: theme.green, flexShrink: 0, whiteSpace: 'nowrap' }} title="Encerrar o fechamento (fica somente leitura)">
                     <i className="ti ti-lock-check" /> Encerrar
                   </button>
                 )}
