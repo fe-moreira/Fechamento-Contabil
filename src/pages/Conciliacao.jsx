@@ -728,7 +728,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     if (tiposFis) for (const k of ['entradas', 'saidas', 'servicos']) {
       for (const r of (tiposFis[k]?.rows || [])) {
         const nfn = String(r.nf ?? '').replace(/\D/g, '').replace(/^0+/, '')
-        const nome = String(r.forn ?? '').trim()
+        const nome = limparNomeEntidade(String(r.forn ?? '').trim())
         if (nfn && nome && !nfFiscal[nfn]) nfFiscal[nfn] = nome
       }
     }
@@ -765,6 +765,9 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       }
       const al = leitura.entidade ? aliasMap[chaveNome(leitura.entidade)] : null
       if (al && al !== leitura.entidade) leitura = { ...leitura, entidade: al, ident: true }
+      // Rede de segurança: seja qual for a origem do nome (histórico, fiscal, alias), tira
+      // prefixo de tipo de conta / imposto colado no começo (ex.: "ADIANTAMENTO DE CLIENTES …").
+      if (leitura.entidade) { const limpo = limparNomeEntidade(leitura.entidade); if (limpo && limpo !== leitura.entidade) leitura = { ...leitura, entidade: limpo } }
       // Recalcula a confiança após ajustes (nome + NF = alta).
       if (leitura.ident && leitura.entidade && ((leitura.nf && leitura.entidade.length >= 4) || confSet.has(chaveNome(leitura.entidade))) && leitura.conf !== 'alta') leitura = { ...leitura, conf: 'alta', confiavel: !leitura.nf }
       return (leitura === l.leitura && hist === l.historico) ? l : { ...l, leitura, historico: hist }
