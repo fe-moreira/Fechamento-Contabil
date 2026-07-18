@@ -2608,7 +2608,7 @@ function RelatoriosComposicao({ conta, emAberto, zerados, contraDe }) {
   function pdf(linhas, sub) {
     const blocos = agruparPorCliente(linhas)
     abrePdfTimbrado({
-      titulo: titulo(sub), empresa: empresaNome, competencia,
+      titulo: titulo(sub),
       sub: `${blocos.length} ${blocos.length === 1 ? 'cliente/fornecedor' : 'clientes/fornecedores'} · ${linhas.length} lançamento(s)`,
       colunas: [{ nome: 'Data' }, { nome: 'NF' }, { nome: 'Histórico' }, { nome: 'Contrapartida' }, { nome: 'Débito', alinhar: 'right' }, { nome: 'Crédito', alinhar: 'right' }],
       secoes: blocos.map(b => ({
