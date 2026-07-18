@@ -1536,6 +1536,12 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       let q = supabase.from('auditoria').delete().eq('competencia_id', compId).eq('modulo', 'Conciliação')
       q = l._abertura ? q.eq('item', chaveAbertura(l)) : (l.acerto ? q.eq('razao_id', String(l.id).replace(/^ac_/, '')) : q.eq('razao_id', l.id))
       await q
+      // A confirmação em lote SOBREVIVE à reimportação do razão pela chave ESTÁVEL (conta·data·
+      // NF, no campo `item`) — o razao_id novo não acha o registro antigo. Então, para linhas de
+      // razão com item ÚNICO, apaga também por essa chave; senão o "Reabrir" não surtia efeito.
+      if (!l._abertura && !l.acerto && itemUnico(l)) {
+        await supabase.from('auditoria').delete().eq('competencia_id', compId).eq('modulo', 'Conciliação').eq('item', itemConc(l))
+      }
     }
     setMsg(`${lancs.length} lançamento(s) reaberto(s) — voltaram para o em aberto.`)
     carregarTratados(); carregarLanc(); onMudou && onMudou()
