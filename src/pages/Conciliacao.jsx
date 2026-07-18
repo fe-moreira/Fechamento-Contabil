@@ -235,9 +235,13 @@ function baixadosPorNF(lancs) {
     const temC = grp.some(l => Number(l.credito) > 0.005)
     if (!temD || !temC) return
     if (Math.abs(grp.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)) >= 0.005) return
-    for (const l of grp) baixados.add(l)
     const strs = [...new Set(grp.map(l => String(l.leitura?.nf ?? '').trim()).filter(Boolean))]
-    if (strs.length > 1) aproximadas.push(strs.join(' = '))
+    // AUTOMÁTICO só quando bate cliente + NF EXATA + valor (o par zera). Se a NF só é
+    // "parecida" (mesmo número ignorando zeros à esquerda, ex.: 05602823 × 5602823), NÃO
+    // baixa sozinho — fica em aberto como SUGESTÃO para o usuário aprovar (baixar em lote).
+    // Assim o painel "Conciliados" só recebe casamento 100% certo (débito = crédito).
+    if (strs.length > 1) { aproximadas.push(strs.join(' = ')); return }
+    for (const l of grp) baixados.add(l)
   }
   const nomeDe = l => (l.leitura?.ident && l.leitura.entidade) ? l.leitura.entidade : null
   for (const nf in porNF) {
@@ -1530,7 +1534,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
           revs > 0 && { key: 'incerta', sev: 'yellow', grupo: 'acao', n: revs, rot: 'Leitura incerta', filtra: true,
             full: <>{revs} lançamento(s) com leitura incerta — corrija o {lab} para o sistema aprender.</> },
           aproximadas.length > 0 && { key: 'aproximadas', sev: 'blue', grupo: 'conferir', n: aproximadas.length, rot: 'NF aproximada', filtra: false,
-            full: <>{aproximadas.length} baixa(s) conciliada(s) por <b>NF aproximada</b> (mesmo número ignorando zeros à esquerda) — confirme: {aproximadas.slice(0, 4).join('; ')}. Veja no relatório “Conciliados”.</> },
+            full: <>{aproximadas.length} par(es) com <b>NF aproximada</b> (mesmo número ignorando zeros à esquerda, ex.: {aproximadas.slice(0, 4).join('; ')}) — <b>não</b> foram baixados no automático porque a NF não é idêntica. Ficam como <b>sugestão</b>: confira e baixe em lote se for o mesmo título.</> },
           unificados > 0 && { key: 'unificados', sev: 'blue', grupo: 'conferir', n: unificados, rot: 'Nomes unificados', filtra: true,
             full: <>{unificados} {lab}(s) com nomes parecidos foram <b>unificados</b> — confira se é mesmo o mesmo {lab} (veja “nomes unidos” em cada card).</> },
         ].filter(Boolean)
@@ -1597,7 +1601,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         return (
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '10px 14px', marginBottom: 12, background: 'rgba(48,164,108,0.10)', border: `1px solid ${theme.green}`, borderRadius: 12 }}>
           <i className="ti ti-checks" style={{ color: theme.green, fontSize: 18 }} />
-          <span style={{ color: theme.text, fontSize: 13, flex: 1, minWidth: 200 }}><b>{confirmaveis.length}</b> {lab}(s) identificado(s) e <b>zerado(s) sem NF</b> — marque quais quer baixar em lote.</span>
+          <span style={{ color: theme.text, fontSize: 13, flex: 1, minWidth: 200 }}><b>{confirmaveis.length}</b> {lab}(s) identificado(s) e <b>zerado(s)</b> (sem NF ou com NF só aproximada) — <b>sugestão</b>: marque quais quer aprovar e baixar em lote. No automático só baixa quando bate cliente + NF idêntica + valor.</span>
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: theme.sub, cursor: 'pointer' }}>
             <input type="checkbox" checked={todosSel} ref={el => { if (el) el.indeterminate = selConf.length > 0 && !todosSel }}
               onChange={e => setSelEnt(e.target.checked ? new Set(confirmaveis.map(g => g.nome)) : new Set())} /> Selecionar todos
