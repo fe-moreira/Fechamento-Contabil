@@ -736,23 +736,34 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     // NOME OFICIAL PELA NF (Fiscal): o acumulador do Fiscal traz o fornecedor/cliente da nota
     // bem definido. Monta índice NF → nome (entradas=fornecedores, saídas/serviços=clientes)
     // para identificar as linhas cujo histórico não deu nome. Padrão do sistema p/ todos.
-    const nfFiscal = {}
-    // Nomes OFICIAIS do fiscal (todos os tipos) — inclusive SAÍDAS, que não têm NF na planilha
-    // (cruzam por acumulador). Guardamos {tk: tokens, nome} para recuperar o cliente quando o
-    // histórico do razão vem "sujo" (natureza da operação + acumulador colados no nome), já que
-    // nesses casos não há NF para casar. Ex.: fiscal traz "HM 26 EMPREENDIMENTO IMOBILIARIO" e o
-    // razão traz "REVENDA DE MERCADORIA – REDES/FACHADEIRO HM 26 EMPREENDIMENTO IMOBILIARIO".
-    const fiscalNomes = []
-    const vistosFis = new Set()
-    const tiposFis = compInteg?.integracoes?.fiscal?.tipos
-    if (tiposFis) for (const k of ['entradas', 'saidas', 'servicos']) {
-      for (const r of (tiposFis[k]?.rows || [])) {
-        const nfn = String(r.nf ?? '').replace(/\D/g, '').replace(/^0+/, '')
-        const nome = limparNomeEntidade(String(r.forn ?? '').trim())
-        if (nfn && nome && !nfFiscal[nfn]) nfFiscal[nfn] = nome
-        if (nome) { const ch = chaveNome(nome); const tk = tokensNome(nome); if (tk.length >= 2 && !vistosFis.has(ch)) { vistosFis.add(ch); fiscalNomes.push({ tk, nome }) } }
-      }
+    // Nomes OFICIAIS do fiscal para acertar cliente/fornecedor. Regra: ENTRADAS = FORNECEDORES;
+    // SAÍDAS + SERVIÇOS PRESTADOS = CLIENTES. Mantemos os dois SEPARADOS para uma conta de cliente
+    // NÃO pegar nome de fornecedor (e vice-versa) — inclusive quando a mesma NF se repete entre um
+    // fornecedor e um cliente. Cada lado: índice por NF e lista {tk,nome} para casar por continência
+    // (recupera o nome mesmo sem NF, ex.: saídas, onde o histórico vem "sujo").
+    const nfCli = {}, nfForn = {}
+    const nomesCli = [], nomesForn = []
+    const vistosCli = new Set(), vistosForn = new Set()
+    const addFis = (nfMap, lista, vistos, nfn, nome) => {
+      if (nfn && nome && !nfMap[nfn]) nfMap[nfn] = nome
+      if (nome) { const ch = chaveNome(nome); const tk = tokensNome(nome); if (tk.length >= 2 && !vistos.has(ch)) { vistos.add(ch); lista.push({ tk, nome }) } }
     }
+    const nfDe = r => String(r.nf ?? '').replace(/\D/g, '').replace(/^0+/, '')
+    const nomeDe = r => limparNomeEntidade(String(r.forn ?? '').trim())
+    const tiposFis = compInteg?.integracoes?.fiscal?.tipos
+    if (tiposFis) {
+      for (const r of (tiposFis.entradas?.rows || [])) addFis(nfForn, nomesForn, vistosForn, nfDe(r), nomeDe(r)) // ENTRADAS → fornecedores
+      for (const k of ['saidas', 'servicos']) for (const r of (tiposFis[k]?.rows || [])) addFis(nfCli, nomesCli, vistosCli, nfDe(r), nomeDe(r)) // SAÍDAS + SERVIÇOS → clientes
+    }
+    // Esta conta é de FORNECEDOR ou de CLIENTE? Pelo NOME (tem prioridade — cobre "adiantamento a
+    // fornecedor" no ativo e "adiantamento de clientes" no passivo); senão, pela classificação
+    // (1 = ativo → cliente; 2 = passivo → fornecedor). Ambíguo → usa os dois (não perde match).
+    const nomeCta = baixaTxt(conta.nome || '')
+    const d1cta = String(conta.classifRaw || conta.classif || '').replace(/\D/g, '')[0]
+    const ehFornCta = /fornecedor|a pagar/.test(nomeCta), ehCliCta = /client|a receber|duplicata/.test(nomeCta)
+    const usaForn = (ehFornCta && !ehCliCta) ? true : (ehCliCta && !ehFornCta) ? false : d1cta === '2' ? true : d1cta === '1' ? false : null
+    const nfFiscal = usaForn === true ? nfForn : usaForn === false ? nfCli : { ...nfCli, ...nfForn }
+    const fiscalNomes = usaForn === true ? nomesForn : usaForn === false ? nomesCli : [...nomesCli, ...nomesForn]
     // Recupera o nome do cliente/fornecedor pelo fiscal por CONTINÊNCIA de tokens: se todos os
     // tokens de um nome do fiscal (>=2 tokens) estão contidos no nome lido do razão, o lido é o
     // fiscal + lixo na frente/atrás → adota o nome limpo do fiscal. Casa o caso das SAÍDAS (sem NF).
