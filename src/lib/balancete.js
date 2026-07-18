@@ -293,7 +293,12 @@ export async function competenciaAnterior(empresaId, compId) {
 // (adiantamento de/a fornecedor/cliente) e o código numérico solto no fim.
 export function limparNomeEntidade(nome) {
   let s = String(nome || '').trim()
-  s = s.replace(/^\s*ADIANTAMENTOS?\s+(?:DE\s+|A\s+|AO\s+|AOS\s+)?(?:FORNECEDOR(?:ES)?|CLIENTE(?:S)?)\b\s*/i, '')
+  // Tira, do INÍCIO, palavras de "tipo de conta" que vêm coladas no nome: adiantamento de/a
+  // fornecedor/cliente e prefixos de IMPOSTO (COFINS, PIS, ICMS, ISS, IRPJ, CSLL, IRRF, INSS,
+  // IPI, DARF, DAS…). Repete enquanto houver (ex.: "PIS COFINS MIRAGE ..." → "MIRAGE ...").
+  const pref = /^\s*(?:ADIANTAMENTOS?\s+(?:DE\s+|A\s+|AO\s+|AOS\s+)?(?:FORNECEDOR(?:ES)?|CLIENTE(?:S)?)|PIS\s*\/?\s*COFINS|COFINS|PIS|ICMS(?:\s+ST)?|ISS(?:QN)?|IRPJ|CSLL|IRRF|INSS|IPI|DARF|DAS|SIMPLES)\b[\s.\-/]*/i
+  let prev
+  do { prev = s; s = s.replace(pref, '') } while (s !== prev && s)
   s = s.replace(/\s+\d{3,}\s*$/, '') // código no fim (ex.: "... SOLUCOES 003881")
   return s.trim() || String(nome || '').trim()
 }
