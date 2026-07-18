@@ -223,9 +223,9 @@ const nfKey = nf => String(nf ?? '').replace(/\D/g, '').replace(/^0+/, '')
 // (nome aproximado). Valor igual com NF diferente NÃO zera (ex.: faturou NF 3256 e
 // recebeu NF 3249 — títulos distintos). Retorna { baixados, aproximadas } onde
 // aproximadas são as NFs que só casaram após ignorar zeros (para alertar e confirmar).
-function baixadosPorNF(lancs) {
+function baixadosPorNF(lancs, skipNF = new Set()) {
   const porNF = {}
-  for (const l of lancs) { const nf = nfKey(l.leitura?.nf); if (nf) (porNF[nf] = porNF[nf] || []).push(l) }
+  for (const l of lancs) { const nf = nfKey(l.leitura?.nf); if (nf && !skipNF.has(nf)) (porNF[nf] = porNF[nf] || []).push(l) }
   const baixados = new Set()
   const aproximadas = []
   // Tenta baixar um conjunto de lançamentos da mesma NF+cliente: precisa de débito e
@@ -597,6 +597,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const [tratadosAb, setTratadosAb] = useState(new Set()) // itens de ABERTURA já conferidos (sem razao_id, chave AB·…)
   const [confirmados, setConfirmados] = useState(new Set()) // linhas confirmadas EM LOTE — saem do em aberto (Conciliados)
   const [verConferidos, setVerConferidos] = useState(false) // mostra a seção "Conferidos" (p/ reabrir)
+  const [verBaixados, setVerBaixados] = useState(false) // mostra a seção "Baixados por NF" (p/ reabrir e vincular à mão)
   const [buscaNome, setBuscaNome] = useState('') // busca por nome na composição de clientes/fornecedores
   const [selLin, setSelLin] = useState(() => new Set()) // linhas marcadas p/ conectar (baixa manual)
   const [abertura, setAbertura] = useState({ inicial: false, fechada: false }) // esta competência é a de abertura? está fechada?
@@ -609,6 +610,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const [nomesAlias, setNomesAlias] = useState({}) // APELIDOS: nomeAntigoKey -> nome correto (renomeia em todo lugar)
   const [aberturaAj, setAberturaAj] = useState({}) // ajustes por item de saldo inicial: {chave:{nf,entidade,historico}}
   const [acertoNomes, setAcertoNomes] = useState({}) // nome de fornecedor por lançamento de acerto: {uuid: nome}
+  const [baixasReabertas, setBaixasReabertas] = useState(new Set()) // baixas por NF que o usuário PUXOU de volta p/ em aberto: {`conta·nfKey`} — não baixa de novo no automático
   // Chave ESTÁVEL de um item de saldo inicial (não muda ao editar NF/nome/histórico): conta +
   // valor + nome ORIGINAL da carga. Usa _origEntidade quando já foi ajustado antes.
   const chaveAberturaAj = l => `${conta.conta}·${Math.round(((Number(l.debito) || 0) - (Number(l.credito) || 0)) * 100)}·${chaveNome(l._origEntidade || l.leitura?.entidade || '')}`
@@ -624,12 +626,13 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     setNomesAlias(d.aliases && typeof d.aliases === 'object' ? d.aliases : {})
     setAberturaAj(d.aberturaAjustes && typeof d.aberturaAjustes === 'object' ? d.aberturaAjustes : {})
     setAcertoNomes(d.acertoNomes && typeof d.acertoNomes === 'object' ? d.acertoNomes : {})
+    setBaixasReabertas(new Set(Array.isArray(d.baixasReabertas) ? d.baixasReabertas : []))
   }
   useEffect(() => { if (empresaId) carregarNomes() }, [empresaId]) // eslint-disable-line react-hooks/exhaustive-deps
-  async function salvarNomes(conf, iso, aliases = nomesAlias, aberAj = aberturaAj, acNomes = acertoNomes) {
+  async function salvarNomes(conf, iso, aliases = nomesAlias, aberAj = aberturaAj, acNomes = acertoNomes, baixasReab = baixasReabertas) {
     await supabase.from('cargas_cadastro').delete().eq('cliente_id', empresaId).eq('tipo', 'conciliacao_nomes')
     // vigencia é NOT NULL — usa a competência atual (o registro é único por cliente, lido sempre o mais recente).
-    const { error } = await supabase.from('cargas_cadastro').insert({ cliente_id: empresaId, tipo: 'conciliacao_nomes', vigencia: competencia || '00/0000', dados: { confiaveis: [...conf], isolados: [...iso], aliases: aliases || {}, aberturaAjustes: aberAj || {}, acertoNomes: acNomes || {} }, usuario })
+    const { error } = await supabase.from('cargas_cadastro').insert({ cliente_id: empresaId, tipo: 'conciliacao_nomes', vigencia: competencia || '00/0000', dados: { confiaveis: [...conf], isolados: [...iso], aliases: aliases || {}, aberturaAjustes: aberAj || {}, acertoNomes: acNomes || {}, baixasReabertas: [...baixasReab] }, usuario })
     if (error) { setMsg('Não consegui salvar: ' + error.message); return error }
   }
   async function marcarConfiavel(nome) {
@@ -930,7 +933,10 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
 
   // Conciliação por NF + cliente: tira do "em aberto" o que já se baixou (mesma NF, cliente bate).
   const ehEntidadeConta = ehPorEntidade(conta.nome) && tipoCta !== 'saldo'
-  const { baixados, aproximadas } = ehEntidadeConta ? baixadosPorNF(lanc) : { baixados: new Set(), aproximadas: [] }
+  // NFs que o usuário reabriu (puxou de volta para o em aberto) NESTA conta — não baixa de novo.
+  const pref = `${conta.conta}·`
+  const nfsReabertas = new Set([...baixasReabertas].filter(k => k.startsWith(pref)).map(k => k.slice(pref.length)))
+  const { baixados, aproximadas } = ehEntidadeConta ? baixadosPorNF(lanc, nfsReabertas) : { baixados: new Set(), aproximadas: [] }
 
   // Correção que se ANULA com a origem: o lançamento de acerto (estorno/reclassificação)
   // aponta para a linha original que corrige (razaoRef → id). Quando os dois se anulam
@@ -1001,6 +1007,41 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const conferidosPorNome = {}
   for (const l of conferidosLancs) { const k = autoConc.has(l) ? 'Correções conciliadas (estorno ↔ origem)' : (l.leitura?.entidade || '(sem nome)'); (conferidosPorNome[k] = conferidosPorNome[k] || []).push(l) }
   const conferidosGrupos = Object.entries(conferidosPorNome).map(([nome, lancs]) => ({ nome, lancs }))
+  // Baixados AUTOMATICAMENTE por NF (par título + pagamento com a mesma NF). Também podem ser
+  // REABERTOS: o usuário puxa a NF de volta para o em aberto para vincular do jeito certo à mão.
+  const baixadosPorNome = {}
+  for (const l of [...baixados]) { if (Math.abs(ov(l)) < 0.005) continue; const k = l.leitura?.entidade || '(sem nome)'; (baixadosPorNome[k] = baixadosPorNome[k] || []).push(l) }
+  const baixadosGrupos = Object.entries(baixadosPorNome).map(([nome, lancs]) => ({ nome, lancs }))
+  const blocoReabrirBaixados = baixadosGrupos.length > 0 ? (
+    <div style={{ marginTop: 6 }}>
+      <button onClick={() => setVerBaixados(v => !v)} style={{ background: 'none', border: 'none', color: theme.sub, cursor: 'pointer', fontSize: 12.5, padding: '6px 2px', display: 'flex', alignItems: 'center', gap: 6 }}>
+        <i className={`ti ${verBaixados ? 'ti-chevron-down' : 'ti-chevron-right'}`} /> <i className="ti ti-link" style={{ color: theme.accent }} /> Baixados automaticamente por NF ({[...baixados].filter(l => Math.abs(ov(l)) >= 0.005).length}) — {verBaixados ? 'clique para ocultar' : 'clique para ver e reabrir (vincular à mão)'}
+      </button>
+      {verBaixados && baixadosGrupos.map((g, gi) => (
+        <div key={gi} style={{ background: theme.card, border: `1px solid ${theme.cb}`, borderRadius: 12, overflow: 'hidden', marginBottom: 10, opacity: 0.9 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', background: theme.input, gap: 8 }}>
+            <span style={{ color: theme.text, fontSize: 13, fontWeight: 600 }}><i className="ti ti-link" style={{ color: theme.accent, marginRight: 6 }} />{g.nome}</span>
+            <button className="btn btn-ghost" style={{ fontSize: 12, padding: '4px 10px', color: theme.yellow, borderColor: theme.yellow }} onClick={() => reabrirBaixaNF(g.lancs)}><i className="ti ti-rotate-2" /> Reabrir p/ vincular ({g.lancs.length})</button>
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 640 }}>
+              <tbody>
+                {g.lancs.map((l, i) => (
+                  <tr key={i} style={{ borderTop: `1px solid ${theme.border}`, fontSize: 12 }}>
+                    <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{l.data || '—'}</td>
+                    <td style={{ ...td, color: theme.sub }}>NF {l.leitura?.nf || '—'}</td>
+                    <td style={{ ...td, color: theme.sub, fontFamily: 'monospace', fontSize: 11, maxWidth: 320 }}>{l.historico}</td>
+                    <td style={{ ...tdR, color: theme.green }}>{Number(l.debito) ? money(l.debito) : '—'}</td>
+                    <td style={{ ...tdR, color: theme.red }}>{Number(l.credito) ? money(l.credito) : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ))}
+    </div>
+  ) : null
   const algoEmAberto = lista.length > 0 || conferidosGrupos.length > 0
 
   // Leitura incerta = ainda PENDENTE (não conferida/confirmada). O que já foi tratado sai da conta.
@@ -1499,6 +1540,18 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     setMsg(`${lancs.length} lançamento(s) reaberto(s) — voltaram para o em aberto.`)
     carregarTratados(); carregarLanc(); onMudou && onMudou()
   }
+  // Reabre uma baixa AUTOMÁTICA por NF: registra a NF como "manter em aberto" (persistido) para
+  // NÃO baixar de novo no automático — os lançamentos voltam para o em aberto para vincular à mão.
+  async function reabrirBaixaNF(lancs) {
+    if (!lancs?.length) return
+    if (!window.confirm(`Reabrir ${lancs.length} lançamento(s) que o sistema baixou por NF? Voltam para "em aberto" para você vincular manualmente (não baixam mais sozinhos).`)) return
+    const s = new Set(baixasReabertas)
+    for (const l of lancs) { const nf = nfKey(l.leitura?.nf); if (nf) s.add(`${conta.conta}·${nf}`) }
+    setBaixasReabertas(s)
+    await salvarNomes(nomesConf, nomesIsolados, nomesAlias, aberturaAj, acertoNomes, s)
+    setMsg(`${lancs.length} lançamento(s) reaberto(s) — voltaram para o em aberto para vincular à mão.`)
+    carregarLanc(); onMudou && onMudou()
+  }
 
   // Desfazer uma correção/estorno: remove o lançamento de acerto e o registro de
   // auditoria daquela linha; a linha volta a ficar pendente e o saldo se reverte.
@@ -1670,10 +1723,13 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       ) : lanc.length === 0 ? (
         <Aviso icon="ti-inbox" texto="Sem lançamentos nesta conta." />
       ) : !algoEmAberto ? (
+        <>
         <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: '20px 22px', display: 'flex', alignItems: 'center', gap: 14 }}>
           <i className="ti ti-circle-check" style={{ fontSize: 22, color: theme.green }} />
           <p style={{ fontSize: 13.5, color: theme.text, margin: 0 }}>Nada em aberto — débitos e créditos se conciliaram por NF (saldo zerado). Anexe o relatório de {natCredito ? 'contas a pagar' : 'contas a receber'} ou justifique no card acima.</p>
         </div>
+        {blocoReabrirBaixados}
+        </>
       ) : (<>
       {confirmaveis.length > 0 && (() => {
         const selConf = confirmaveis.filter(g => selEnt.has(g.nome))
@@ -1870,6 +1926,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
           ))}
         </div>
       )}
+      {blocoReabrirBaixados}
       </>
       )}
       </>
