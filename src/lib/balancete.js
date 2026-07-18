@@ -293,6 +293,13 @@ export async function competenciaAnterior(empresaId, compId) {
 // (adiantamento de/a fornecedor/cliente) e o código numérico solto no fim.
 export function limparNomeEntidade(nome) {
   let s = String(nome || '').trim()
+  // Prefixo de NATUREZA DE OPERAÇÃO + ACUMULADOR que o Domínio cola no nome nos lançamentos
+  // integrados pelo fiscal (sobretudo SAÍDAS/clientes, onde não há NF para casar): ex.:
+  // "REVENDA DE MERCADORIA – REDES/FACHADEIRO HM 26 EMPREENDIMENTO IMOBILIARIO" → o cliente
+  // é "HM 26 EMPREENDIMENTO IMOBILIARIO". Tira a natureza (revenda/venda/compra/serviço…) e o
+  // nome do acumulador (um token, pode ter "/") logo após o traço.
+  const opAcum = /^\s*(?:(?:RE)?VENDAS?|COMPRAS?|AQUISI[CÇ][AÃ]O|PRESTA[CÇ][AÃ]O|DEVOLU[CÇ][AÃ]O|RETORNO|REMESSA|TRANSFER[EÊ]NCIA|BONIFICA[CÇ][AÃ]O|FATURAMENTO)(?:\s+(?:DE|PARA|DO|DA|EM|A|AO))?\s+(?:MERCADORIAS?|PRODU[CÇ][AÃ]O|PRODUTOS?|SERVI[CÇ]OS?|COMERCIALIZA[CÇ][AÃ]O|INDUSTRIALIZA[CÇ][AÃ]O|CONSUMO|IMOBILIZADO)(?:\s*[-–—]\s*[A-Za-zÀ-ÿ0-9./]+)?\s+(?=[A-Za-zÀ-ÿ0-9])/i
+  s = s.replace(opAcum, '')
   // Tira, do INÍCIO, palavras de "tipo de conta" que vêm coladas no nome: adiantamento de/a
   // fornecedor/cliente e prefixos de IMPOSTO (COFINS, PIS, ICMS, ISS, IRPJ, CSLL, IRRF, INSS,
   // IPI, DARF, DAS…). Repete enquanto houver (ex.: "PIS COFINS MIRAGE ..." → "MIRAGE ...").

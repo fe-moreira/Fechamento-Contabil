@@ -728,13 +728,35 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     // bem definido. Monta índice NF → nome (entradas=fornecedores, saídas/serviços=clientes)
     // para identificar as linhas cujo histórico não deu nome. Padrão do sistema p/ todos.
     const nfFiscal = {}
+    // Nomes OFICIAIS do fiscal (todos os tipos) — inclusive SAÍDAS, que não têm NF na planilha
+    // (cruzam por acumulador). Guardamos {tk: tokens, nome} para recuperar o cliente quando o
+    // histórico do razão vem "sujo" (natureza da operação + acumulador colados no nome), já que
+    // nesses casos não há NF para casar. Ex.: fiscal traz "HM 26 EMPREENDIMENTO IMOBILIARIO" e o
+    // razão traz "REVENDA DE MERCADORIA – REDES/FACHADEIRO HM 26 EMPREENDIMENTO IMOBILIARIO".
+    const fiscalNomes = []
+    const vistosFis = new Set()
     const tiposFis = compInteg?.integracoes?.fiscal?.tipos
     if (tiposFis) for (const k of ['entradas', 'saidas', 'servicos']) {
       for (const r of (tiposFis[k]?.rows || [])) {
         const nfn = String(r.nf ?? '').replace(/\D/g, '').replace(/^0+/, '')
         const nome = limparNomeEntidade(String(r.forn ?? '').trim())
         if (nfn && nome && !nfFiscal[nfn]) nfFiscal[nfn] = nome
+        if (nome) { const ch = chaveNome(nome); const tk = tokensNome(nome); if (tk.length >= 2 && !vistosFis.has(ch)) { vistosFis.add(ch); fiscalNomes.push({ tk, nome }) } }
       }
+    }
+    // Recupera o nome do cliente/fornecedor pelo fiscal por CONTINÊNCIA de tokens: se todos os
+    // tokens de um nome do fiscal (>=2 tokens) estão contidos no nome lido do razão, o lido é o
+    // fiscal + lixo na frente/atrás → adota o nome limpo do fiscal. Casa o caso das SAÍDAS (sem NF).
+    const nomeDoFiscal = ent => {
+      const tkE = tokensNome(ent)
+      if (tkE.length < 2) return null
+      let melhor = null
+      for (const f of fiscalNomes) {
+        if (f.nome === ent) return ent // já é exatamente o nome do fiscal
+        if (f.tk.length >= tkE.length) continue // só recupera quando o fiscal é MAIS curto (subconjunto real)
+        if (f.tk.every(t => tkE.includes(t)) && (!melhor || f.tk.length > melhor.tk.length)) melhor = f
+      }
+      return melhor ? melhor.nome : null
     }
     // APELIDOS: renomeia o nome lido pelo nome correto (vale p/ saldo inicial e razão).
     const aliasMap = (cn?.dados?.aliases && typeof cn.dados.aliases === 'object') ? cn.dados.aliases : {}
@@ -766,6 +788,13 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         const nfn = String(leitura.nf).replace(/\D/g, '').replace(/^0+/, '')
         const fn = nfn && nfFiscal[nfn]
         if (fn) leitura = { ...leitura, entidade: fn, ident: true }
+      }
+      // Sem casar por NF (típico das SAÍDAS/clientes, que não têm NF na planilha fiscal):
+      // se o nome lido CONTÉM um nome oficial do fiscal, adota o do fiscal (limpo). Assim o
+      // "REVENDA DE MERCADORIA – REDES/FACHADEIRO HM 26 …" vira "HM 26 …". Não mexe em ajuste manual.
+      if (!manualAbert && leitura.entidade) {
+        const rec = nomeDoFiscal(leitura.entidade)
+        if (rec && rec !== leitura.entidade) leitura = { ...leitura, entidade: rec, ident: true }
       }
       const al = leitura.entidade ? aliasMap[chaveNome(leitura.entidade)] : null
       if (al && al !== leitura.entidade) leitura = { ...leitura, entidade: al, ident: true }
