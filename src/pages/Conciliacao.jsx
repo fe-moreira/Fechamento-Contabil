@@ -1030,6 +1030,35 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const pendentesEnt = g => g.lancs.filter(l => l.id && !l.acerto && !jaTratada(l))
   const podeConfirmarEnt = g => Math.abs(g.total) < 0.005 && g.total >= -0.005 && !g.unk && baixaSemTitulo(g).size === 0 && pendentesEnt(g).length > 0
   const confirmaveis = lista.filter(podeConfirmarEnt)
+  // SUGESTÕES DE VÍNCULO: pares EM ABERTO do MESMO cliente e MESMO valor em lados opostos
+  // (um título/débito, um pagamento/crédito) que NÃO casaram por NF — a NF veio diferente ou
+  // ausente (ex.: histórico traz o nº do documento no lugar da nota). Cliente + valor batem,
+  // mas a NF não → NÃO baixa no automático (regra do usuário); vira SUGESTÃO para aprovar.
+  // Cada linha entra em no máximo um par; ignora acertos e o que já é confirmável em lote.
+  const sugeridosVinculo = []
+  if (ehEntidade) {
+    const emConfirmavel = new Set(confirmaveis.flatMap(g => g.lancs))
+    const abertos = lista.flatMap(g => g.lancs).filter(l => l.id != null && !l.acerto && l.leitura?.ident && String(l.leitura.entidade || '').trim() && !emConfirmavel.has(l))
+    const debs = abertos.filter(l => Number(l.debito) > 0.005)
+    const creds = abertos.filter(l => Number(l.credito) > 0.005)
+    const usados = new Set()
+    for (const d of debs) {
+      if (usados.has(d)) continue
+      const vd = Math.round((Number(d.debito) || 0) * 100)
+      const tkd = tokensNome(d.leitura.entidade)
+      for (const c of creds) {
+        if (usados.has(c)) continue
+        if (Math.round((Number(c.credito) || 0) * 100) !== vd) continue
+        const nfd = nfKey(d.leitura?.nf), nfc = nfKey(c.leitura?.nf)
+        if (nfd && nfc && nfd === nfc) continue // mesma NF já baixaria no automático
+        if (!mesmoCliente(tkd, tokensNome(c.leitura.entidade))) continue
+        const cli = (d.leitura.entidade.length >= c.leitura.entidade.length) ? d.leitura.entidade : c.leitura.entidade
+        sugeridosVinculo.push({ a: d, b: c, cliente: cli, valor: Number(d.debito) || 0 })
+        usados.add(d); usados.add(c)
+        break
+      }
+    }
+  }
   // Filtro por situação — mesma definição de cada faixa de aviso. Só filtra a lista
   // (não confirma nada); a única situação que também baixa em lote é "confirmaveis".
   const sitPred = {
@@ -1259,6 +1288,28 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     carregarTratados(); carregarLanc(); onMudou && onMudou()
     if (!extraRazaoId) setMsg(`${alvo.length} lançamento(s) conectado(s) — foram para Conciliados.${canonical ? ` Fornecedor unificado como "${canonical}" e aprendido para os próximos meses.` : ''}`)
     return true
+  }
+  // Aprova SUGESTÕES DE VÍNCULO (cliente + valor batem, NF diferente): baixa os pares como
+  // conexão manual — vão para Conciliados. Unifica o nome DENTRO de cada par (nunca entre pares
+  // diferentes, para não fundir clientes distintos).
+  async function aprovarVinculos(pares) {
+    if (!pares || !pares.length) return
+    if (!window.confirm(`Vincular ${pares.length} par(es) sugerido(s)? Cliente e valor batem — os lançamentos vão para Conciliados.`)) return
+    const id = await getCompetenciaId()
+    const alvo = pares.flatMap(p => [p.a, p.b])
+    const rows = alvo.map(l => ({
+      competencia_id: id, modulo: 'Conciliação',
+      item: l._abertura ? chaveAbertura(l) : `${conta.conta} · ${l.data || ''} · NF ${l.leitura?.nf || '—'}`,
+      tipo: 'Justificativa',
+      detalhe: 'Vínculo aprovado — cliente e valor batem (NF diferente/ausente).',
+      razao_id: l._abertura ? null : (l.acerto ? String(l.id).replace(/^ac_/, '') : l.id), usuario,
+    }))
+    const { error } = await supabase.from('auditoria').insert(rows)
+    if (error) { setMsg('Não consegui vincular: ' + error.message); return }
+    marcarTratadas(alvo)
+    for (const p of pares) await unificarNomesConectados([p.a, p.b])
+    carregarTratados(); carregarLanc(); onMudou && onMudou()
+    setMsg(`${pares.length} par(es) vinculado(s) — foram para Conciliados.`)
   }
   // Aplica a diferença como desconto/juros: gera o lançamento de acerto que ZERA a conta e
   // conecta tudo (par + acerto) para Conciliados.
@@ -1645,6 +1696,33 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         </div>
         )
       })()}
+      {sugeridosVinculo.length > 0 && (
+        <div style={{ marginBottom: 12, border: `1px solid ${theme.accent}`, borderRadius: 12, overflow: 'hidden' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '10px 14px', background: 'rgba(74,124,255,0.10)' }}>
+            <i className="ti ti-link" style={{ color: theme.accent, fontSize: 18 }} />
+            <span style={{ color: theme.text, fontSize: 13, flex: 1, minWidth: 200 }}><b>{sugeridosVinculo.length}</b> sugestão(ões) de <b>vínculo</b>: o <b>cliente e o valor batem</b>, mas a <b>NF veio diferente</b> — aprove para vincular a nota (vão para Conciliados). No automático só baixa com NF idêntica.</span>
+            <button className="btn" style={{ fontSize: 12.5, background: theme.accent, borderColor: theme.accent }} onClick={() => aprovarVinculos(sugeridosVinculo)}>
+              <i className="ti ti-checks" /> Aprovar todas ({sugeridosVinculo.length})
+            </button>
+          </div>
+          <div>
+            {sugeridosVinculo.map((p, i) => (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '8px 14px', borderTop: `1px solid ${theme.cb}`, background: theme.card }}>
+                <div style={{ flex: 1, minWidth: 260 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: theme.text, marginBottom: 2 }}>{p.cliente} · {money(p.valor)}</div>
+                  <div style={{ fontSize: 11.5, color: theme.sub }}>
+                    <span title={p.a.historico}>Título/D: {p.a.data || '—'} · NF {p.a.leitura?.nf || '—'}</span>{'  ↔  '}
+                    <span title={p.b.historico}>Pagto/C: {p.b.data || '—'} · NF {p.b.leitura?.nf || '—'}</span>
+                  </div>
+                </div>
+                <button className="btn" style={{ fontSize: 12, padding: '4px 12px', background: theme.accent, borderColor: theme.accent }} onClick={() => aprovarVinculos([p])}>
+                  <i className="ti ti-link" /> Aprovar (vincular)
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       {filtroSit === 'confirmaveis' && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '8px 12px', marginBottom: 12, background: theme.input, borderRadius: 10, fontSize: 12.5, color: theme.sub }}>
           <i className="ti ti-filter" style={{ color: theme.accent }} />
