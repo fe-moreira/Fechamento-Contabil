@@ -744,6 +744,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       if (!l?.leitura) return l
       let leitura = l.leitura, hist = l.historico
       // Saldo inicial: guarda o nome ORIGINAL (para a chave estável) e aplica o ajuste salvo.
+      let manualAbert = false
       if (l._abertura) {
         const orig = l._origEntidade || leitura.entidade
         l = { ...l, _origEntidade: orig }
@@ -751,10 +752,13 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         if (ov) {
           leitura = { ...leitura, entidade: ov.entidade || leitura.entidade, nf: (ov.nf != null && ov.nf !== '') ? ov.nf : leitura.nf, ident: true }
           if (ov.historico) hist = ov.historico
+          manualAbert = true
         }
       }
-      // Não identificado? Tenta o nome do FISCAL pela NF (nome oficial da nota).
-      if (!leitura.ident && leitura.nf) {
+      // Nome OFICIAL do Fiscal pela NF: é o nome da nota, então SOBREPÕE a leitura do histórico
+      // (ex.: "COFINS MIRAGE ..." → nome correto do fiscal). Só não sobrepõe um ajuste manual
+      // do saldo inicial; apelidos (renomear em todo lugar) ainda vêm depois.
+      if (leitura.nf && !manualAbert) {
         const nfn = String(leitura.nf).replace(/\D/g, '').replace(/^0+/, '')
         const fn = nfn && nfFiscal[nfn]
         if (fn) leitura = { ...leitura, entidade: fn, ident: true }
@@ -1002,8 +1006,13 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const listaBase = (filtroSit && sitPred[filtroSit]) ? lista.filter(sitPred[filtroSit]) : lista
   // Busca por nome: mostra as entidades cujo nome (ou variação) OU algum histórico contém o texto.
   const termoBusca = baixaTxt(buscaNome).trim()
+  // Busca também por NF e VALOR (dígitos): se digitar um número, casa NF ou valor da linha.
+  const termoDig = String(buscaNome || '').replace(/\D/g, '')
+  const valDig = l => String(Math.round(Math.abs((Number(l.debito) || 0) - (Number(l.credito) || 0)) * 100))
   const listaVis = termoBusca
-    ? listaBase.filter(g => baixaTxt(g.nome).includes(termoBusca) || (g.variacoes || []).some(v => baixaTxt(v).includes(termoBusca)) || g.lancs.some(l => baixaTxt(l.historico).includes(termoBusca)))
+    ? listaBase.filter(g => baixaTxt(g.nome).includes(termoBusca) || (g.variacoes || []).some(v => baixaTxt(v).includes(termoBusca)) || g.lancs.some(l => baixaTxt(l.historico).includes(termoBusca))
+        || (termoDig && g.lancs.some(l => String(l.leitura?.nf || '').replace(/\D/g, '').includes(termoDig)))
+        || (termoDig.length >= 3 && g.lancs.some(l => valDig(l).includes(termoDig))))
     : listaBase
 
   async function registrar(tipo, payload) {
@@ -1501,7 +1510,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         <div style={{ position: 'relative', minWidth: 240 }}>
           <i className="ti ti-search" style={{ position: 'absolute', left: 9, top: '50%', transform: 'translateY(-50%)', color: theme.sub, fontSize: 14 }} />
           <input className="input" value={buscaNome} onChange={e => setBuscaNome(e.target.value)}
-            placeholder={`Buscar ${lab} por nome…`} style={{ fontSize: 12.5, padding: '6px 28px 6px 30px', width: '100%' }} />
+            placeholder={`Buscar por nome, NF ou valor…`} style={{ fontSize: 12.5, padding: '6px 28px 6px 30px', width: '100%' }} />
           {buscaNome && <i className="ti ti-x" onClick={() => setBuscaNome('')} style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', color: theme.sub, cursor: 'pointer', fontSize: 14 }} />}
         </div>
       </div>
