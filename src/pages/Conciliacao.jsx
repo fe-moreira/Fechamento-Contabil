@@ -611,6 +611,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const [aberturaAj, setAberturaAj] = useState({}) // ajustes por item de saldo inicial: {chave:{nf,entidade,historico}}
   const [acertoNomes, setAcertoNomes] = useState({}) // nome de fornecedor por lançamento de acerto: {uuid: nome}
   const [baixasReabertas, setBaixasReabertas] = useState(new Set()) // baixas por NF que o usuário PUXOU de volta p/ em aberto: {`conta·nfKey`} — não baixa de novo no automático
+  const [sugestoesRejeitadas, setSugestoesRejeitadas] = useState(new Set()) // sugestões de vínculo que o usuário NÃO aprovou: {chaveSug} — não sugere de novo
   // Chave ESTÁVEL de um item de saldo inicial (não muda ao editar NF/nome/histórico): conta +
   // valor + nome ORIGINAL da carga. Usa _origEntidade quando já foi ajustado antes.
   const chaveAberturaAj = l => `${conta.conta}·${Math.round(((Number(l.debito) || 0) - (Number(l.credito) || 0)) * 100)}·${chaveNome(l._origEntidade || l.leitura?.entidade || '')}`
@@ -627,12 +628,13 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     setAberturaAj(d.aberturaAjustes && typeof d.aberturaAjustes === 'object' ? d.aberturaAjustes : {})
     setAcertoNomes(d.acertoNomes && typeof d.acertoNomes === 'object' ? d.acertoNomes : {})
     setBaixasReabertas(new Set(Array.isArray(d.baixasReabertas) ? d.baixasReabertas : []))
+    setSugestoesRejeitadas(new Set(Array.isArray(d.sugestoesRejeitadas) ? d.sugestoesRejeitadas : []))
   }
   useEffect(() => { if (empresaId) carregarNomes() }, [empresaId]) // eslint-disable-line react-hooks/exhaustive-deps
-  async function salvarNomes(conf, iso, aliases = nomesAlias, aberAj = aberturaAj, acNomes = acertoNomes, baixasReab = baixasReabertas) {
+  async function salvarNomes(conf, iso, aliases = nomesAlias, aberAj = aberturaAj, acNomes = acertoNomes, baixasReab = baixasReabertas, sugRej = sugestoesRejeitadas) {
     await supabase.from('cargas_cadastro').delete().eq('cliente_id', empresaId).eq('tipo', 'conciliacao_nomes')
     // vigencia é NOT NULL — usa a competência atual (o registro é único por cliente, lido sempre o mais recente).
-    const { error } = await supabase.from('cargas_cadastro').insert({ cliente_id: empresaId, tipo: 'conciliacao_nomes', vigencia: competencia || '00/0000', dados: { confiaveis: [...conf], isolados: [...iso], aliases: aliases || {}, aberturaAjustes: aberAj || {}, acertoNomes: acNomes || {}, baixasReabertas: [...baixasReab] }, usuario })
+    const { error } = await supabase.from('cargas_cadastro').insert({ cliente_id: empresaId, tipo: 'conciliacao_nomes', vigencia: competencia || '00/0000', dados: { confiaveis: [...conf], isolados: [...iso], aliases: aliases || {}, aberturaAjustes: aberAj || {}, acertoNomes: acNomes || {}, baixasReabertas: [...baixasReab], sugestoesRejeitadas: [...sugRej] }, usuario })
     if (error) { setMsg('Não consegui salvar: ' + error.message); return error }
   }
   async function marcarConfiavel(nome) {
@@ -1094,7 +1096,10 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         if (nfd && nfc && nfd === nfc) continue // mesma NF já baixaria no automático
         if (!mesmoCliente(tkd, tokensNome(c.leitura.entidade))) continue
         const cli = (d.leitura.entidade.length >= c.leitura.entidade.length) ? d.leitura.entidade : c.leitura.entidade
-        sugeridosVinculo.push({ a: d, b: c, cliente: cli, valor: Number(d.debito) || 0 })
+        // Chave ESTÁVEL da sugestão (sobrevive à reimportação): conta · cliente · valor · NFs.
+        const chaveSug = `${conta.conta}·${chaveNome(cli)}·${vd}·${nfd || '-'}·${nfc || '-'}`
+        if (sugestoesRejeitadas.has(chaveSug)) continue // o usuário já disse "não aprovar" — nem sugere
+        sugeridosVinculo.push({ a: d, b: c, cliente: cli, valor: Number(d.debito) || 0, chave: chaveSug })
         usados.add(d); usados.add(c)
         break
       }
@@ -1351,6 +1356,18 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     for (const p of pares) await unificarNomesConectados([p.a, p.b])
     carregarTratados(); carregarLanc(); onMudou && onMudou()
     setMsg(`${pares.length} par(es) vinculado(s) — foram para Conciliados.`)
+  }
+  // NÃO APROVAR uma sugestão de vínculo: registra a chave (persistido) para não sugerir de novo.
+  // Não mexe nos lançamentos — eles continuam em aberto para você tratar de outro jeito.
+  async function rejeitarVinculo(pares) {
+    const lista = Array.isArray(pares) ? pares : [pares]
+    const chaves = lista.map(p => p.chave).filter(Boolean)
+    if (!chaves.length) return
+    const s = new Set(sugestoesRejeitadas)
+    chaves.forEach(k => s.add(k))
+    setSugestoesRejeitadas(s)
+    await salvarNomes(nomesConf, nomesIsolados, nomesAlias, aberturaAj, acertoNomes, baixasReabertas, s)
+    setMsg(`${chaves.length} sugestão(ões) descartada(s) — não vou sugerir de novo. As linhas seguem em aberto.`)
   }
   // Aplica a diferença como desconto/juros: gera o lançamento de acerto que ZERA a conta e
   // conecta tudo (par + acerto) para Conciliados.
@@ -1777,9 +1794,14 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
                     <span title={p.b.historico}>Pagto/C: {p.b.data || '—'} · NF {p.b.leitura?.nf || '—'}</span>
                   </div>
                 </div>
-                <button className="btn" style={{ fontSize: 12, padding: '4px 12px', background: theme.accent, borderColor: theme.accent }} onClick={() => aprovarVinculos([p])}>
-                  <i className="ti ti-link" /> Aprovar (vincular)
-                </button>
+                <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                  <button className="btn" style={{ fontSize: 12, padding: '4px 12px', background: theme.accent, borderColor: theme.accent }} onClick={() => aprovarVinculos([p])}>
+                    <i className="ti ti-link" /> Aprovar (vincular)
+                  </button>
+                  <button className="btn btn-ghost" title="Não é o mesmo par — descartar esta sugestão (não sugere de novo)" style={{ fontSize: 12, padding: '4px 12px', color: theme.sub }} onClick={() => rejeitarVinculo(p)}>
+                    <i className="ti ti-x" /> Não aprovar
+                  </button>
+                </div>
               </div>
             ))}
           </div>
