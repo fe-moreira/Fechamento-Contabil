@@ -1080,28 +1080,30 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // Cada linha entra em no máximo um par; ignora acertos e o que já é confirmável em lote.
   const sugeridosVinculo = []
   if (ehEntidade) {
-    const emConfirmavel = new Set(confirmaveis.flatMap(g => g.lancs))
-    const abertos = lista.flatMap(g => g.lancs).filter(l => l.id != null && !l.acerto && l.leitura?.ident && String(l.leitura.entidade || '').trim() && !emConfirmavel.has(l))
-    const debs = abertos.filter(l => Number(l.debito) > 0.005)
-    const creds = abertos.filter(l => Number(l.credito) > 0.005)
-    const usados = new Set()
-    for (const d of debs) {
-      if (usados.has(d)) continue
-      const vd = Math.round((Number(d.debito) || 0) * 100)
-      const tkd = tokensNome(d.leitura.entidade)
-      for (const c of creds) {
-        if (usados.has(c)) continue
-        if (Math.round((Number(c.credito) || 0) * 100) !== vd) continue
-        const nfd = nfKey(d.leitura?.nf), nfc = nfKey(c.leitura?.nf)
-        if (nfd && nfc && nfd === nfc) continue // mesma NF já baixaria no automático
-        if (!mesmoCliente(tkd, tokensNome(c.leitura.entidade))) continue
-        const cli = (d.leitura.entidade.length >= c.leitura.entidade.length) ? d.leitura.entidade : c.leitura.entidade
-        // Chave ESTÁVEL da sugestão (sobrevive à reimportação): conta · cliente · valor · NFs.
-        const chaveSug = `${conta.conta}·${chaveNome(cli)}·${vd}·${nfd || '-'}·${nfc || '-'}`
-        if (sugestoesRejeitadas.has(chaveSug)) continue // o usuário já disse "não aprovar" — nem sugere
-        sugeridosVinculo.push({ a: d, b: c, cliente: cli, valor: Number(d.debito) || 0, chave: chaveSug })
-        usados.add(d); usados.add(c)
-        break
+    // Por CLIENTE (cada card): pares título↔pagamento do mesmo cliente com MESMO valor e NF
+    // diferente. Fica DENTRO do card, no contexto, para revisar e aprovar ali. Pula os que já
+    // zeram como um todo (confirmáveis em lote).
+    for (const g of lista) {
+      if (podeConfirmarEnt(g)) continue
+      const linhas = g.lancs.filter(l => l.id != null && !l.acerto && l.leitura?.ident && String(l.leitura.entidade || '').trim())
+      const debs = linhas.filter(l => Number(l.debito) > 0.005)
+      const creds = linhas.filter(l => Number(l.credito) > 0.005)
+      const usados = new Set()
+      for (const d of debs) {
+        if (usados.has(d)) continue
+        const vd = Math.round((Number(d.debito) || 0) * 100)
+        for (const c of creds) {
+          if (usados.has(c)) continue
+          if (Math.round((Number(c.credito) || 0) * 100) !== vd) continue
+          const nfd = nfKey(d.leitura?.nf), nfc = nfKey(c.leitura?.nf)
+          if (nfd && nfc && nfd === nfc) continue // mesma NF já baixaria no automático
+          // Chave ESTÁVEL da sugestão (sobrevive à reimportação): conta · cliente · valor · NFs.
+          const chaveSug = `${conta.conta}·${chaveNome(g.nome)}·${vd}·${nfd || '-'}·${nfc || '-'}`
+          if (sugestoesRejeitadas.has(chaveSug)) continue // o usuário já disse "não aprovar" — nem sugere
+          sugeridosVinculo.push({ a: d, b: c, cliente: g.nome, valor: Number(d.debito) || 0, chave: chaveSug })
+          usados.add(d); usados.add(c)
+          break
+        }
       }
     }
   }
@@ -1776,35 +1778,10 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         )
       })()}
       {sugeridosVinculo.length > 0 && (
-        <div style={{ marginBottom: 12, border: `1px solid ${theme.accent}`, borderRadius: 12, overflow: 'hidden' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '10px 14px', background: 'rgba(74,124,255,0.10)' }}>
-            <i className="ti ti-link" style={{ color: theme.accent, fontSize: 18 }} />
-            <span style={{ color: theme.text, fontSize: 13, flex: 1, minWidth: 200 }}><b>{sugeridosVinculo.length}</b> sugestão(ões) de <b>vínculo</b>: o <b>cliente e o valor batem</b>, mas a <b>NF veio diferente</b> — aprove para vincular a nota (vão para Conciliados). No automático só baixa com NF idêntica.</span>
-            <button className="btn" style={{ fontSize: 12.5, background: theme.accent, borderColor: theme.accent }} onClick={() => aprovarVinculos(sugeridosVinculo)}>
-              <i className="ti ti-checks" /> Aprovar todas ({sugeridosVinculo.length})
-            </button>
-          </div>
-          <div>
-            {sugeridosVinculo.map((p, i) => (
-              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '8px 14px', borderTop: `1px solid ${theme.cb}`, background: theme.card }}>
-                <div style={{ flex: 1, minWidth: 260 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: theme.text, marginBottom: 2 }}>{p.cliente} · {money(p.valor)}</div>
-                  <div style={{ fontSize: 11.5, color: theme.sub }}>
-                    <span title={p.a.historico}>Título/D: {p.a.data || '—'} · NF {p.a.leitura?.nf || '—'}</span>{'  ↔  '}
-                    <span title={p.b.historico}>Pagto/C: {p.b.data || '—'} · NF {p.b.leitura?.nf || '—'}</span>
-                  </div>
-                </div>
-                <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-                  <button className="btn" style={{ fontSize: 12, padding: '4px 12px', background: theme.accent, borderColor: theme.accent }} onClick={() => aprovarVinculos([p])}>
-                    <i className="ti ti-link" /> Aprovar (vincular)
-                  </button>
-                  <button className="btn btn-ghost" title="Não é o mesmo par — descartar esta sugestão (não sugere de novo)" style={{ fontSize: 12, padding: '4px 12px', color: theme.sub }} onClick={() => rejeitarVinculo(p)}>
-                    <i className="ti ti-x" /> Não aprovar
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '10px 14px', marginBottom: 12, background: 'rgba(74,124,255,0.10)', border: `1px solid ${theme.accent}`, borderRadius: 12 }}>
+          <i className="ti ti-link" style={{ color: theme.accent, fontSize: 18 }} />
+          <span style={{ color: theme.text, fontSize: 13, flex: 1, minWidth: 200 }}><b>{sugeridosVinculo.length}</b> sugestão(ões) de <b>vínculo</b> (cliente e valor batem, NF diferente) — aparecem <b>no card de cada cliente</b> abaixo, com <b>Aprovar</b> / <b>Não aprovar</b>. No automático só baixa com NF idêntica.</span>
+          <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={() => aprovarVinculos(sugeridosVinculo)}><i className="ti ti-checks" /> Aprovar todas ({sugeridosVinculo.length})</button>
         </div>
       )}
       {filtroSit === 'confirmaveis' && (
@@ -1825,6 +1802,9 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         // Confirmar em lote: só quando a composição já ZEROU, o nome está identificado e não
         // há erro de NF/natureza — e ainda restam linhas pendentes (não tratadas).
         const podeConfirmar = podeConfirmarEnt(g)
+        // Sugestões de vínculo DESTE cliente (par título ↔ pagamento, cliente + valor batem,
+        // NF diferente): mostradas dentro do card, no contexto, para revisar e aprovar aqui.
+        const sugsCard = sugeridosVinculo.filter(p => grp.includes(p.a) && grp.includes(p.b))
         return (
           <div key={gi} style={{ background: theme.card, border: `1px solid ${borda}`, borderRadius: 12, overflow: 'hidden', marginBottom: 12 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '13px 16px', background: theme.input, flexWrap: 'wrap', gap: 8 }}>
@@ -1856,6 +1836,16 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
                 Unificado de: {g.variacoes.join(' · ')}
               </div>
             )}
+            {sugsCard.map((p, pi) => (
+              <div key={`sug${pi}`} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '9px 16px', borderTop: `1px solid ${theme.border}`, background: 'rgba(74,124,255,0.07)' }}>
+                <i className="ti ti-link" style={{ color: theme.accent }} />
+                <span style={{ flex: 1, minWidth: 220, fontSize: 12.5, color: theme.text }}>
+                  <b>Sugestão de vínculo</b> · {money(p.valor)} — <span title={p.a.historico}>Título NF {p.a.leitura?.nf || '—'} ({p.a.data || '—'})</span> ↔ <span title={p.b.historico}>Pagto NF {p.b.leitura?.nf || '—'} ({p.b.data || '—'})</span>
+                </span>
+                <button className="btn" style={{ fontSize: 12, padding: '4px 12px', background: theme.accent, borderColor: theme.accent }} onClick={() => aprovarVinculos([p])}><i className="ti ti-link" /> Aprovar</button>
+                <button className="btn btn-ghost" title="Não é o mesmo par — descartar (não sugere de novo)" style={{ fontSize: 12, padding: '4px 12px', color: theme.sub }} onClick={() => rejeitarVinculo(p)}><i className="ti ti-x" /> Não aprovar</button>
+              </div>
+            ))}
             <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }}>
               <thead>
