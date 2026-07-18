@@ -824,28 +824,6 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     // Correções pendentes (estornos/acertos) que tocam ESTA conta entram na composição
     // como lançamentos: o estorno aparece aqui e casa por NF com a baixa original → zera
     // (aparece em "Conciliados") e a contrapartida fica demonstrada nas duas contas.
-    // RE-LIGA o estorno à linha do razão que ele corrige. O vínculo é pelo razao_id (uuid); mas
-    // quando o razão é REIMPORTADO os uuids MUDAM e a correção guarda o razao_id ANTIGO — o par
-    // se perde, o estorno não herda o nome (cai em "(não identificado)") e não zera com a origem
-    // (fica em aberto, mesmo tendo zerado). Fallback: reacha a origem pela CHAVE ESTÁVEL
-    // (data + valor + histórico embutido no "Reclassificação · …") e usa o id ATUAL da linha.
-    const rzPorId = {}; for (const l of rzProc) if (l.id != null) rzPorId[l.id] = l
-    const rzPorDataValor = {}
-    for (const l of rzProc) {
-      const v = Math.round(Math.abs((Number(l.debito) || 0) - (Number(l.credito) || 0)) * 100)
-      if (v) (rzPorDataValor[`${l.data || ''}·${v}`] = rzPorDataValor[`${l.data || ''}·${v}`] || []).push(l)
-    }
-    const origemDoAcerto = a => {
-      if (a.razao_id && rzPorId[a.razao_id]) return rzPorId[a.razao_id] // vínculo normal (uuid vivo)
-      if (!a.razao_id) return null // acerto sem origem no razão (lançamento novo, desconto/juros)
-      const v = Math.round(Math.abs(Number(a.valor) || 0) * 100)
-      const cands = rzPorDataValor[`${a.data || ''}·${v}`] || []
-      if (!cands.length) return null
-      const histOrig = baixaTxt(String(a.historico || '').replace(/^\s*reclassifica[çc][ãa]o\s*·\s*/i, ''))
-      const porHist = cands.filter(l => { const h = baixaTxt(l.historico); return h && histOrig.includes(h.slice(0, 24)) })
-      if (porHist.length === 1) return porHist[0]
-      return cands.length === 1 ? cands[0] : null // única linha com essa data+valor → é ela
-    }
     const acertoLancs = (acs || [])
       .filter(a => String(a.conta_debito) === String(conta.conta) || String(a.conta_credito) === String(conta.conta))
       .map(a => {
@@ -857,13 +835,11 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
           debito: ehDeb ? (Number(a.valor) || 0) : 0,
           credito: ehDeb ? 0 : (Number(a.valor) || 0),
         }, null)
-        const orig = origemDoAcerto(a)
         // Nome atribuído a este acerto ("Corrigir fornecedor") tem prioridade; senão, herda o
-        // cliente da linha do razão que a correção estorna (re-ligada pela chave estável).
-        const nomeAc = acNomesMap[a.id] || (orig?.leitura?.ident && String(orig.leitura.entidade || '').trim() ? orig.leitura.entidade.trim() : (a.razao_id ? clientePorRazao[a.razao_id] : ''))
+        // cliente da linha do razão que a correção estorna (pelo razao_id).
+        const nomeAc = acNomesMap[a.id] || (a.razao_id ? clientePorRazao[a.razao_id] : '')
         if (nomeAc) base.leitura = { ...base.leitura, entidade: nomeAc, ident: true, conf: 'alta' }
-        // razaoRef = id ATUAL da origem (para o autoConc zerar o par). Sem origem viva, mantém o antigo.
-        return { ...base, acerto: true, origem: a.origem || null, razaoRef: (orig?.id) || a.razao_id || null }
+        return { ...base, acerto: true, origem: a.origem || null, razaoRef: a.razao_id || null }
       })
     // Títulos de abertura (saldo anterior) primeiro; depois o movimento do mês; por fim os acertos.
     setLanc([...(abertura || []).map(a => bump({ ...a, _abertura: true })), ...rzProc, ...acertoLancs])
@@ -2632,7 +2608,7 @@ function RelatoriosComposicao({ conta, emAberto, zerados, contraDe }) {
   function pdf(linhas, sub) {
     const blocos = agruparPorCliente(linhas)
     abrePdfTimbrado({
-      titulo: titulo(sub),
+      titulo: titulo(sub), empresa: empresaNome, competencia,
       sub: `${blocos.length} ${blocos.length === 1 ? 'cliente/fornecedor' : 'clientes/fornecedores'} · ${linhas.length} lançamento(s)`,
       colunas: [{ nome: 'Data' }, { nome: 'NF' }, { nome: 'Histórico' }, { nome: 'Contrapartida' }, { nome: 'Débito', alinhar: 'right' }, { nome: 'Crédito', alinhar: 'right' }],
       secoes: blocos.map(b => ({
