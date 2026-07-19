@@ -75,19 +75,26 @@ function acharCabecalho(linhas) {
   return 0
 }
 
+const semAcento = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
 function autoMapear(headers) {
   const map = {}
   for (const alvo of ALVOS) {
+    if (alvo.key === 'centro_custo') continue // tratado depois (prioriza a DESCRIÇÃO do centro)
     const idx = headers.findIndex(h => {
       const hl = String(h || '').toLowerCase()
       if (alvo.key === 'conta') return hl === 'clasc' || (hl.includes('conta') && !hl.includes('contra') && !hl.includes('nome'))
       if (alvo.key === 'nome') return hl === 'nomec' || hl.includes('nome da conta') || hl.includes('nome conta')
-      // Centro de custo: casa sem acento (ex.: "Descrição C.Custo", "Centro de Custo").
-      if (alvo.key === 'centro_custo') { const n = hl.normalize('NFD').replace(/[̀-ͯ]/g, ''); return alvo.dicas.some(d => n.includes(d)) }
       return alvo.dicas.some(d => hl.includes(d))
     })
     map[alvo.key] = idx >= 0 ? String(idx) : ''
   }
+  // Centro de custo: um arquivo costuma ter DUAS colunas — código (codigo_ccu) e descrição
+  // (descricao_ccu). Preferimos a DESCRIÇÃO (é o que o usuário quer ver e filtrar); só se não
+  // houver descrição, cai no código. Casa sem acento.
+  const ehCC = h => { const n = semAcento(h); return n.includes('centro') || n.includes('ccu') || n.includes('cencus') || n.includes('ccusto') || n.includes('c.custo') || n.includes('c custo') || n.includes('cto custo') }
+  const ccCols = headers.map((h, i) => ({ h, i })).filter(x => ehCC(x.h))
+  const desc = ccCols.find(x => { const n = semAcento(x.h); return n.includes('desc') || n.includes('nome') })
+  map['centro_custo'] = desc ? String(desc.i) : (ccCols[0] ? String(ccCols[0].i) : '')
   return map
 }
 
