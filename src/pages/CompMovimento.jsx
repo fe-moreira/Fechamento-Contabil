@@ -595,7 +595,7 @@ export default function CompMovimento() {
         <i className="ti ti-calendar-plus" style={{ color: theme.accent, fontSize: 18 }} />
         <span style={{ fontSize: 12.5, color: theme.sub, flex: 1, minWidth: 200 }}>Comecei depois do início do ano? Importe o razão dos <b style={{ color: theme.text }}>meses anteriores</b> (um arquivo com os meses) para ter a comparação de oscilação.</span>
         <label className="btn btn-ghost" style={{ fontSize: 12.5, cursor: impBusy ? 'wait' : 'pointer' }}>
-          <i className="ti ti-file-import" /> {impBusy ? 'Importando…' : 'Importar meses anteriores'}
+          <i className={impBusy ? 'ti ti-loader-2 girando' : 'ti ti-file-import'} /> {impBusy ? 'Importando…' : 'Importar meses anteriores'}
           <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} disabled={impBusy} onChange={e => importarMeses(e.target.files?.[0])} />
         </label>
       </div>
