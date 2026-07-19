@@ -426,8 +426,9 @@ export default function CompMovimento() {
             .eq('cliente_id', empresaId).eq('tipo', 'centro_custo').order('created_at', { ascending: false }).limit(1).maybeSingle()
           if (!vivo) return
           const kBy = (o, re) => { const k = Object.keys(o || {}).find(k => re.test(String(k).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, ''))); return k ? String(o[k] ?? '').trim() : '' }
-          const nomeByCod = {}
-          for (const r of (Array.isArray(ccCarga?.dados) ? ccCarga.dados : [])) { const cod = kBy(r, /cod/); if (cod) nomeByCod[cod] = kBy(r, /nome|descri/) }
+          const norm = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+          const nomeByCod = {}, codByNome = {}
+          for (const r of (Array.isArray(ccCarga?.dados) ? ccCarga.dados : [])) { const cod = kBy(r, /cod/); if (cod) { const nm = kBy(r, /nome|descri/); nomeByCod[cod] = nm; if (nm) codByNome[norm(nm)] = cod } }
           const rz = await lerTudo(() => supabase.from('razao').select('conta, centro_custo, debito, credito, competencia_id').in('competencia_id', competencias.map(c => c.id)))
           if (!vivo) return
           const SEM = '(sem centro)'
@@ -436,7 +437,10 @@ export default function CompMovimento() {
           const mcc = {}, presentes = new Set()
           for (const l of rz) {
             const am = compAM[l.competencia_id]; if (!am) continue
-            const codcc = ehSem(l.centro_custo) ? SEM : String(l.centro_custo).trim()
+            // Resolve contra o cadastro: já é código → mantém; é nome (razão antigo) → vira código.
+            let codcc
+            if (ehSem(l.centro_custo)) codcc = SEM
+            else { const raw = String(l.centro_custo).trim(); codcc = nomeByCod[raw] ? raw : (codByNome[norm(raw)] || raw) }
             presentes.add(codcc)
             const conta = String(l.conta || '').trim(); if (!conta) continue
             const v = (Number(l.debito) || 0) - (Number(l.credito) || 0)
@@ -444,9 +448,11 @@ export default function CompMovimento() {
             mcc[conta][am][codcc] = (mcc[conta][am][codcc] || 0) + v
           }
           // Lista = centros CADASTRADOS + os do razão + SEMPRE a opção "Sem centro de custo" (por último).
+          // Agrupa por código (chave k), mas MOSTRA só o nome. Ordena por nome, "Sem centro" no fim.
           const todosCod = new Set([...Object.keys(nomeByCod), ...presentes, SEM])
-          const centros = [...todosCod].sort((a, b) => (a === SEM ? 1 : 0) - (b === SEM ? 1 : 0) || String(a).localeCompare(String(b), 'pt-BR'))
-            .map(cod => ({ k: cod, nome: cod === SEM ? 'Sem centro de custo' : (nomeByCod[cod] ? `${cod} · ${nomeByCod[cod]}` : cod) }))
+          const centros = [...todosCod]
+            .map(cod => ({ k: cod, nome: cod === SEM ? 'Sem centro de custo' : (nomeByCod[cod] || cod) }))
+            .sort((a, b) => (a.k === SEM ? 1 : 0) - (b.k === SEM ? 1 : 0) || String(a.nome).localeCompare(String(b.nome), 'pt-BR'))
           if (!vivo) return
           const temCentroReal = [...presentes].some(c => c !== SEM)
           setUsaCC(true); setCentrosCC(centros); setMovCC(mcc); setCcTemDados(temCentroReal)
@@ -490,7 +496,8 @@ export default function CompMovimento() {
   const filtroCC = usaCC && ccSel.size > 0                 // vazio = todos → sem filtro
   const ehResult = c => c && ['3', '4', '5'].includes(String(c.classifRaw || c.classif)[0])
   const toggleCC = k => setCcSel(prev => { const n = new Set(prev); n.has(k) ? n.delete(k) : n.add(k); return n })
-  const resumoCC = ccSel.size === 0 ? 'Todos' : (ccSel.size <= 2 ? [...ccSel].join(', ') : `${ccSel.size} centros`)
+  const nomeCC = k => centrosCC.find(c => c.k === k)?.nome || k
+  const resumoCC = ccSel.size === 0 ? 'Todos' : (ccSel.size <= 2 ? [...ccSel].map(nomeCC).join(', ') : `${ccSel.size} centros`)
   // Matriz efetiva: com filtro CC, recalcula o resultado usando só os centros marcados
   // (analíticas somam os centros marcados; sintéticas somam as analíticas descendentes).
   // O patrimonial (1/2) fica intacto — não tem centro de custo.
@@ -854,6 +861,7 @@ export default function CompMovimento() {
           onDesfeita={() => marcarNaoJustificada(detalhe.conta, detalhe.mes)}
           onCorrigido={() => setRefresh(x => x + 1)}
           plano={plano}
+          centrosCC={centrosCC}
           onClose={() => setDetalhe(null)}
         />
       )}
@@ -861,10 +869,12 @@ export default function CompMovimento() {
   )
 }
 
-function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuario, jaJustificada, justTextoAtual, onJustificada, onDesfeita, onCorrigido, plano, onClose }) {
+function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuario, jaJustificada, justTextoAtual, onJustificada, onDesfeita, onCorrigido, plano, centrosCC = [], onClose }) {
   const { conta, nome, mes, compId, todos, compIds, mesPorComp, classif } = detalhe
   // Conta de resultado (3/4/5) → precisa de centro de custo; sem CC aparece destacado.
   const contaResultado = ['3', '4', '5'].includes(String(classif || '')[0])
+  // Centro de custo: mostra o NOME (o código guardado no razão vira o descritivo do cadastro).
+  const nomeCentro = cod => centrosCC.find(c => String(c.k) === String(cod))?.nome || cod
   const [carregando, setCarregando] = useState(true)
   const [linhas, setLinhas] = useState([])
   const [movers, setMovers] = useState([]) // entidades que mais explicam a variação (mês × mês anterior)
@@ -1225,7 +1235,7 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
                         {corr && <div style={{ color: theme.green, fontSize: 11, marginTop: 2 }}>corrigido — {corr.conta_debito} (D) / {corr.conta_credito} (C) · {money(corr.valor)}</div>}
                         {l.suspeito && !corr && <div style={{ color: theme.yellow, fontSize: 11, marginTop: 2 }}>provável culpado — {l.motivo}</div>}
                       </td>
-                      {(() => { const cc = (l.centro_custo && l.centro_custo !== '-1') ? l.centro_custo : null; return (
+                      {(() => { const raw = (l.centro_custo && l.centro_custo !== '-1') ? String(l.centro_custo).trim() : null; const cc = raw ? nomeCentro(raw) : null; return (
                       <td style={{ ...td, whiteSpace: 'nowrap', fontSize: 11.5, fontWeight: (!cc && contaResultado) ? 700 : 400, color: cc ? theme.text : (contaResultado ? theme.yellow : theme.sub) }}>
                         {cc || (contaResultado ? 'sem CC' : '—')}
                       </td>) })()}
