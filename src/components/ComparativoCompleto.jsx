@@ -97,7 +97,7 @@ export default function ComparativoCompleto({ empresaId, empresaNome, competenci
         const { data: ccCarga } = await supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'centro_custo').order('created_at', { ascending: false }).limit(1).maybeSingle()
         if (!vivo) return
         const cadastro = Array.isArray(ccCarga?.dados) ? ccCarga.dados : []
-        if (cadastro.length && comps.length) {
+        if (comps.length) {
           const compMes = {}; for (const c of comps) compMes[c.id] = c.mes
           const kBy = (o, re) => { const k = Object.keys(o || {}).find(k => re.test(String(k).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, ''))); return k ? String(o[k] ?? '').trim() : '' }
           const nomeByCod = {}
@@ -115,11 +115,15 @@ export default function ComparativoCompleto({ empresaId, empresaNome, competenci
             movCC[conta][mes] = movCC[conta][mes] || {}
             movCC[conta][mes][codcc] = (movCC[conta][mes][codcc] || 0) + v
           }
-          // Lista: os centros CADASTRADOS + os que aparecem no razão (ex.: "(sem centro)").
-          const todos = new Set([...Object.keys(nomeByCod), ...presentes])
-          const centros = [...todos].sort((a, b) => String(a).localeCompare(String(b), 'pt-BR'))
-            .map(cod => ({ k: cod, nome: cod === '(sem centro)' ? '(sem centro)' : (nomeByCod[cod] ? `${cod} · ${nomeByCod[cod]}` : cod) }))
-          cc = { usaCC: true, centros, movCC }
+          // GATILHO robusto: mostra o filtro se há centros CADASTRADOS (carga) OU se o razão já traz
+          // centro de custo REAL (fonte de verdade). Só "(sem centro)" no razão e sem carga = sem filtro.
+          const centrosReais = [...presentes].filter(c => c !== '(sem centro)')
+          if (cadastro.length > 0 || centrosReais.length > 0) {
+            const todos = new Set([...Object.keys(nomeByCod), ...presentes])
+            const centros = [...todos].sort((a, b) => String(a).localeCompare(String(b), 'pt-BR'))
+              .map(cod => ({ k: cod, nome: cod === '(sem centro)' ? '(sem centro)' : (nomeByCod[cod] ? `${cod} · ${nomeByCod[cod]}` : cod) }))
+            cc = { usaCC: true, centros, movCC }
+          }
         }
         if (vivo) setDados({ meses, contas, mov, sf, si, ...cc })
       } finally {
