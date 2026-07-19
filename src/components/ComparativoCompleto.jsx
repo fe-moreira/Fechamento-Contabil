@@ -92,14 +92,16 @@ export default function ComparativoCompleto({ empresaId, empresaNome, competenci
         // Centro de custo: só para clientes que usam. Lê o razão (que tem o CC) das competências
         // do ano e monta o movimento por conta · mês · centro — para filtrar o RESULTADO por CC.
         let cc = { usaCC: false, centros: [], movCC: {} }
-        const { data: cliRow } = await supabase.from('clientes').select('usa_centro_custo').eq('id', empresaId).maybeSingle()
+        // GATILHO = o CADASTRO de centro de custo (a carga). Se o cliente tem centros cadastrados,
+        // o filtro aparece — independe do flag "usa centro de custo".
+        const { data: ccCarga } = await supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'centro_custo').order('created_at', { ascending: false }).limit(1).maybeSingle()
         if (!vivo) return
-        if (cliRow?.usa_centro_custo && comps.length) {
+        const cadastro = Array.isArray(ccCarga?.dados) ? ccCarga.dados : []
+        if (cadastro.length && comps.length) {
           const compMes = {}; for (const c of comps) compMes[c.id] = c.mes
-          const { data: ccCarga } = await supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'centro_custo').order('created_at', { ascending: false }).limit(1).maybeSingle()
           const kBy = (o, re) => { const k = Object.keys(o || {}).find(k => re.test(String(k).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, ''))); return k ? String(o[k] ?? '').trim() : '' }
           const nomeByCod = {}
-          for (const r of (Array.isArray(ccCarga?.dados) ? ccCarga.dados : [])) { const cod = kBy(r, /cod/); if (cod) nomeByCod[cod] = kBy(r, /nome|descri/) }
+          for (const r of cadastro) { const cod = kBy(r, /cod/); if (cod) nomeByCod[cod] = kBy(r, /nome|descri/) }
           const rz = await lerTudo(() => supabase.from('razao').select('conta, centro_custo, debito, credito, competencia_id').in('competencia_id', comps.map(c => c.id)))
           if (!vivo) return
           const movCC = {}, presentes = new Set()
@@ -113,7 +115,9 @@ export default function ComparativoCompleto({ empresaId, empresaNome, competenci
             movCC[conta][mes] = movCC[conta][mes] || {}
             movCC[conta][mes][codcc] = (movCC[conta][mes][codcc] || 0) + v
           }
-          const centros = [...presentes].sort((a, b) => String(a).localeCompare(String(b), 'pt-BR'))
+          // Lista: os centros CADASTRADOS + os que aparecem no razão (ex.: "(sem centro)").
+          const todos = new Set([...Object.keys(nomeByCod), ...presentes])
+          const centros = [...todos].sort((a, b) => String(a).localeCompare(String(b), 'pt-BR'))
             .map(cod => ({ k: cod, nome: cod === '(sem centro)' ? '(sem centro)' : (nomeByCod[cod] ? `${cod} · ${nomeByCod[cod]}` : cod) }))
           cc = { usaCC: true, centros, movCC }
         }
