@@ -113,6 +113,20 @@ function mesmoCliente(a, b) {
   if (inter.length === menor) return true
   return inter.length / menor >= 0.6 && inter.some(t => t.length >= 4)
 }
+// "Recorte" da correção: quando o nome novo é um pedaço do nome antigo, devolve o que foi
+// tirado no começo (prefixo) e/ou no fim (sufixo) — ex.: antigo "RECEITA DE SERVICOS –
+// MONTAGEM TRS 03 SPE", novo "TRS 03 SPE" → { prefixo: "RECEITA DE SERVICOS – MONTAGEM ", sufixo: "" }.
+// Serve para sugerir o MESMO corte em outros nomes que tenham o mesmo prefixo/sufixo.
+function recorteDe(old, neu) {
+  if (!old || !neu) return null
+  const o = String(old).trim(), n = String(neu).trim()
+  if (n.length < 3) return null
+  const idx = o.toLowerCase().indexOf(n.toLowerCase())
+  if (idx < 0) return null
+  const prefixo = o.slice(0, idx), sufixo = o.slice(idx + n.length)
+  if (prefixo.length < 4 && sufixo.length < 4) return null // recorte pequeno demais p/ ser padrão
+  return { prefixo, sufixo }
+}
 
 function lerHistorico(h) {
   const s = String(h || '').trim()
@@ -613,6 +627,8 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const [nomesConf, setNomesConf] = useState(new Set())   // nomes CONFIÁVEIS do cliente (não pede revisão)
   const [nomesIsolados, setNomesIsolados] = useState(new Set()) // nomes a NÃO unir com parecidos (desvincular)
   const [nomesAlias, setNomesAlias] = useState({}) // APELIDOS: nomeAntigoKey -> nome correto (renomeia em todo lugar)
+  const [ultimaCorrecao, setUltimaCorrecao] = useState(null) // { old, neu } da última correção de nome → alimenta as sugestões
+  const [sugDismiss, setSugDismiss] = useState(() => new Set()) // sugestões de nome descartadas (chaveNome do atual)
   const [aberturaAj, setAberturaAj] = useState({}) // ajustes por item de saldo inicial: {chave:{nf,entidade,historico}}
   const [acertoNomes, setAcertoNomes] = useState({}) // nome de fornecedor por lançamento de acerto: {uuid: nome}
   const [baixasReabertas, setBaixasReabertas] = useState(new Set()) // baixas por NF que o usuário PUXOU de volta p/ em aberto: {`conta·nfKey`} — não baixa de novo no automático
@@ -1012,6 +1028,36 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const ehResolvida = g => !g.unk && Math.abs(g.total) < 0.005 && g.lancs.length > 0 && g.lancs.every(l => l.acerto || jaTratada(l))
   const resolvidasEnt = listaTodas.filter(ehResolvida)
   const lista = listaTodas.filter(g => !ehResolvida(g))
+
+  // Sugestões de nome: depois que você corrige um nome (✎), procura OUTROS grupos com o
+  // mesmo padrão — mesmo cliente (tokens) ou mesmo recorte de prefixo/sufixo — e sugere a
+  // mesma correção (atual → sugerido), para você aprovar um a um ou todos.
+  const sugestoesNome = (() => {
+    if (!ultimaCorrecao?.neu) return []
+    const { old, neu } = ultimaCorrecao
+    const neuKey = chaveNome(neu)
+    const rec = recorteDe(old, neu)
+    const tkNeu = tokensNome(neu)
+    const out = [], vistos = new Set()
+    for (const g of lista) {
+      if (g.unk) continue
+      const gk = chaveNome(g.nome)
+      if (gk === neuKey || vistos.has(gk) || sugDismiss.has(gk)) continue
+      let sugerido = null, tipo = null
+      // Padrão de texto: o mesmo prefixo/sufixo recortado aparece neste nome → sugere o mesmo corte.
+      if (rec) {
+        let base = g.nome, hit = false
+        if (rec.prefixo.length >= 4 && base.toLowerCase().startsWith(rec.prefixo.toLowerCase())) { base = base.slice(rec.prefixo.length); hit = true }
+        if (rec.sufixo.length >= 4 && base.toLowerCase().endsWith(rec.sufixo.toLowerCase())) { base = base.slice(0, base.length - rec.sufixo.length); hit = true }
+        base = base.replace(/^[\s\-–·|]+|[\s\-–·|]+$/g, '').trim()
+        if (hit && base && chaveNome(base) !== gk) { sugerido = base; tipo = 'padrão' }
+      }
+      // Mesmo cliente que o corrigido (variações de escrita que não foram unidas sozinhas).
+      if (!sugerido && mesmoCliente(tokensNome(g.nome), tkNeu)) { sugerido = neu; tipo = 'cliente' }
+      if (sugerido) { vistos.add(gk); out.push({ atual: g.nome, sugerido, tipo, lancs: g.lancs }) }
+    }
+    return out
+  })()
 
   // Para os relatórios: o que está em aberto (compõe o saldo) e o que zerou (baixa/confirmação/resolvida).
   const ehEntidade = ehEntidadeConta
@@ -1508,6 +1554,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // lote): útil quando o sistema leu o nome errado em várias linhas do mesmo fornecedor.
   async function aplicarFornecedorLote(lines, nome, aprender) {
     const nm = String(nome || '').trim()
+    const nomeAtual = loteForn?.nomeAtual || ''  // nome que estava no card (p/ detectar o padrão da correção)
     if (!nm) { setLoteForn(null); return }
     const razaoLinhas = (lines || []).filter(l => !l.acerto) // razão + saldo anterior
     const acertoLinhas = (lines || []).filter(l => l.acerto)  // lançamentos gerados (sem nome de origem)
@@ -1529,7 +1576,37 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       await supabase.from('ajuste_leitura').upsert(razaoIds.map(rid => ({ competencia_id: id, razao_id: rid, entidade: nm, usuario })), { onConflict: 'razao_id' })
     }
     setNomesConf(conf); setNomesAlias(aliases); setAcertoNomes(acMap); setSelLin(new Set()); setLoteForn(null)
+    // Guarda a correção (nome antigo → novo) para SUGERIR o mesmo padrão nos outros grupos.
+    if (nomeAtual && chaveNome(nomeAtual) !== chaveNome(nm)) { setUltimaCorrecao({ old: nomeAtual, neu: nm }); setSugDismiss(new Set()) }
     setMsg(`Nome "${nm}" aplicado a ${lines.length} lançamento(s)${aprender ? ' e aprendido' : ''}.`)
+    carregarLanc()
+  }
+
+  // Aprova sugestões de nome (mesmo padrão da última correção): aplica o(s) nome(s) sugerido(s)
+  // em lote, num único salvamento (evita apelidos se sobrescreverem). aprender = vira confiável.
+  async function aprovarSugestoesNome(sugs, fecharPainel) {
+    if (!sugs || !sugs.length) return
+    const aliases = { ...nomesAlias }
+    const acMap = { ...acertoNomes }
+    const conf = new Set(nomesConf)
+    const ajustes = []
+    const id = await getCompetenciaId()
+    for (const s of sugs) {
+      const nm = String(s.sugerido || '').trim(); if (!nm) continue
+      for (const l of (s.lancs || [])) {
+        if (l.acerto) { const rid = String(l.id).replace(/^ac_/, ''); if (rid) acMap[rid] = nm }
+        else {
+          const k = chaveNome(l.leitura?.entidade || ''); if (k && k !== chaveNome(nm)) aliases[k] = nm
+          if (!l._abertura && l.id) ajustes.push({ competencia_id: id, razao_id: l.id, entidade: nm, usuario })
+        }
+      }
+      conf.add(chaveNome(nm))
+    }
+    await salvarNomes(conf, nomesIsolados, aliases, aberturaAj, acMap)
+    if (ajustes.length) await supabase.from('ajuste_leitura').upsert(ajustes, { onConflict: 'razao_id' })
+    setNomesConf(conf); setNomesAlias(aliases); setAcertoNomes(acMap)
+    if (fecharPainel) setUltimaCorrecao(null)
+    setMsg(`${sugs.length} nome(s) corrigido(s) pelo mesmo padrão.`)
     carregarLanc()
   }
 
@@ -1793,6 +1870,30 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         </div>
         )
       })()}
+      {sugestoesNome.length > 0 && (
+        <div style={{ padding: '10px 14px', marginBottom: 12, background: 'rgba(74,124,255,0.10)', border: `1px solid ${theme.accent}`, borderRadius: 12 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 8 }}>
+            <i className="ti ti-wand" style={{ color: theme.accent, fontSize: 18 }} />
+            <span style={{ color: theme.text, fontSize: 13, flex: 1, minWidth: 200 }}>Você corrigiu <b>{ultimaCorrecao.neu}</b>. Achei <b>{sugestoesNome.length}</b> nome(s) com o <b>mesmo padrão</b> — confira e aprove:</span>
+            <button className="btn" style={{ fontSize: 12.5, background: theme.accent, borderColor: theme.accent }} onClick={() => aprovarSugestoesNome(sugestoesNome, true)}><i className="ti ti-checks" /> Aprovar todos ({sugestoesNome.length})</button>
+            <button className="btn btn-ghost" style={{ fontSize: 12.5, color: theme.sub }} onClick={() => setUltimaCorrecao(null)} title="Fechar — não corrigir agora"><i className="ti ti-x" /></button>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {sugestoesNome.map((s, si) => (
+              <div key={si} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '7px 10px', background: theme.card, border: `1px solid ${theme.border}`, borderRadius: 8 }}>
+                <span style={{ flex: 1, minWidth: 220, fontSize: 12.5, color: theme.text }}>
+                  <span style={{ color: theme.sub, textDecoration: 'line-through' }}>{s.atual}</span>
+                  <i className="ti ti-arrow-right" style={{ margin: '0 7px', color: theme.accent }} />
+                  <b>{s.sugerido}</b>
+                  <span style={{ marginLeft: 8, fontSize: 10.5, fontWeight: 700, color: theme.sub, background: theme.input, borderRadius: 20, padding: '1px 7px', textTransform: 'uppercase', letterSpacing: .3 }}>{s.tipo === 'cliente' ? 'mesmo cliente' : 'mesmo padrão'}</span>
+                </span>
+                <button className="btn" style={{ fontSize: 12, padding: '4px 12px', background: theme.green, borderColor: theme.green }} onClick={() => aprovarSugestoesNome([s], false)}><i className="ti ti-check" /> Aprovar</button>
+                <button className="btn btn-ghost" style={{ fontSize: 12, padding: '4px 12px', color: theme.sub }} onClick={() => setSugDismiss(prev => new Set(prev).add(chaveNome(s.atual)))} title="Não é o mesmo — descartar esta sugestão"><i className="ti ti-x" /> Não</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       {sugeridosVinculo.length > 0 && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '10px 14px', marginBottom: 12, background: 'rgba(74,124,255,0.10)', border: `1px solid ${theme.accent}`, borderRadius: 12 }}>
           <i className="ti ti-link" style={{ color: theme.accent, fontSize: 18 }} />
@@ -1834,7 +1935,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
                 <span style={{ color: unk ? theme.yellow : theme.text, fontSize: 14, fontWeight: 600, fontStyle: unk ? 'italic' : 'normal' }}>{g.nome}</span>
                 {!unk && (
                   <button title="Corrigir/renomear este nome — vale para o cliente todo e é aprendido para os próximos meses. Para JUNTAR com outro grupo, digite exatamente o nome dele."
-                    onClick={e => { e.stopPropagation(); setLoteForn({ lines: grp }) }}
+                    onClick={e => { e.stopPropagation(); setLoteForn({ lines: grp, nomeAtual: g.nome }) }}
                     style={{ background: 'none', border: 'none', cursor: 'pointer', color: theme.sub, padding: 2, display: 'inline-flex' }}>
                     <i className="ti ti-pencil" style={{ fontSize: 14 }} />
                   </button>
