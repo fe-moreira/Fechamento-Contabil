@@ -6,6 +6,7 @@ import { normalizaCompetencia } from '../lib/balancete'
 import { theme } from '../lib/theme'
 import { gerarExcelTimbrado } from '../lib/excel'
 import { abrePdfTimbrado } from '../lib/pdf'
+import { MassaDistribuicao } from './ImportacaoMassa'
 
 const MES_C = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
 const byNome = (a, b) => String(a.razao_social).localeCompare(String(b.razao_social), 'pt-BR')
@@ -257,6 +258,11 @@ export default function RelatoriosMassa() {
           )}
         </div>
       )}
+
+      {/* Distribuição de Lucros — card próprio (período, saída zip/único, dois blocos). */}
+      <div style={{ marginTop: 22 }}>
+        <MassaDistribuicao competencia={competencia} />
+      </div>
     </div>
   )
 }
