@@ -188,6 +188,23 @@ export default function RelatoriosMassa() {
             </div>
           )
         })}
+        {(() => {
+          const ativo = sel === 'distribuicao'
+          return (
+            <div onClick={() => { setSel('distribuicao'); setRes(null); setErro('') }} style={{
+              background: theme.card, border: `${ativo ? 1 : 0.5}px solid ${ativo ? theme.accent : theme.cb}`, borderRadius: 12,
+              padding: '16px 16px', cursor: 'pointer', display: 'flex', gap: 12, alignItems: 'flex-start',
+            }}>
+              <div style={{ width: 40, height: 40, borderRadius: 10, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(74,124,255,0.12)', border: `0.5px solid ${theme.cb}` }}>
+                <i className="ti ti-file-invoice" style={{ fontSize: 19, color: theme.accent }} />
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <p style={{ fontSize: 13.5, fontWeight: 600, margin: 0 }}>Distribuição de Lucros</p>
+                <p style={{ fontSize: 12, color: theme.sub, margin: '3px 0 0' }}>Por sócio (Normal + Ata / lucros até 2025), em massa. Período e saída à sua escolha.</p>
+              </div>
+            </div>
+          )
+        })()}
       </div>
 
       {/* Painel do relatório selecionado */}
@@ -259,10 +276,8 @@ export default function RelatoriosMassa() {
         </div>
       )}
 
-      {/* Distribuição de Lucros — card próprio (período, saída zip/único, dois blocos). */}
-      <div style={{ marginTop: 22 }}>
-        <MassaDistribuicao competencia={competencia} />
-      </div>
+      {/* Distribuição de Lucros — abre ao clicar no bloco, igual aos demais relatórios. */}
+      {sel === 'distribuicao' && <MassaDistribuicao competencia={competencia} />}
     </div>
   )
 }
