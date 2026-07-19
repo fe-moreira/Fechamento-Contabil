@@ -173,9 +173,7 @@ export default function ImportacaoMassa() {
 
         {/* Folha em massa (um arquivo do Domínio com várias empresas → quebra por empresa) */}
         <MassaFolha competencias={competencias} competencia={competencia} recalcularPendencias={recalcularPendencias} />
-
-        {/* Relatório de Distribuição de Lucros / JCP de todas as empresas (zip com 1 PDF por empresa) */}
-        <MassaDistribuicao competencia={competencia} />
+        {/* O card de Distribuição de Lucros foi para a tela "Relatórios em massa" (é um relatório). */}
       </div>
 
       {/* Confirmação da importação */}
@@ -216,7 +214,7 @@ export default function ImportacaoMassa() {
 
 // ---- Card: Distribuição de Lucros / JCP em massa (um zip com 1 PDF por empresa) ----
 const PERIODOS = [['mensal', 'Mensal'], ['trimestral', 'Trimestral'], ['semestral', 'Semestral'], ['anual', 'Anual'], ['personalizado', 'Personalizado']]
-function MassaDistribuicao({ competencia }) {
+export function MassaDistribuicao({ competencia }) {
   const anoBase = Number((competencia || '').split('/')[1]) || 2026
   const mesBase = Number((competencia || '').split('/')[0]) || 1
   const [tipo, setTipo] = useState('trimestral')
