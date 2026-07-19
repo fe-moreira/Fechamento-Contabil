@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
 import { theme } from '../lib/theme'
+import InfoTela from '../components/InfoTela'
 import { gerarExcelTimbrado } from '../lib/excel'
 
 const fmt = (s) => {
@@ -84,7 +85,10 @@ export default function Timesheet() {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12, marginBottom: 18 }}>
         <div>
-          <h1 style={{ fontSize: 22, fontWeight: 500, marginBottom: 4 }}>Tempo por cliente (Timesheet)</h1>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+        <h1 style={{ fontSize: 22, fontWeight: 500, margin: 0 }}>Tempo por cliente (Timesheet)</h1>
+        <InfoTela titulo="Tempo por cliente (Timesheet)">Registra e acompanha o tempo dedicado a cada cliente — base para produtividade e custo por cliente.</InfoTela>
+      </div>
           <p style={{ color: theme.sub, fontSize: 13 }}>Tempo trabalhado na plataforma, registrado automaticamente enquanto a empresa está ativa.</p>
         </div>
         <button className="btn" onClick={exportar} disabled={!linhas.length} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>

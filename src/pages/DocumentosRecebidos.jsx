@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
 import { theme, money } from '../lib/theme'
+import InfoTela from '../components/InfoTela'
 import { receberArquivo, verArquivoImportado, excluirArquivoRecebido, tipoEfetivoDoc } from '../lib/importacaoMassa'
 import CampoConta from '../components/CampoConta'
 
@@ -370,7 +371,10 @@ async function herdarLista(empresaId, ano, mes) {
 function Wrapper({ children }) {
   return (
     <div>
-      <h1 style={{ fontSize: 22, fontWeight: 500, marginBottom: 4 }}>Documentos Recebidos</h1>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+        <h1 style={{ fontSize: 22, fontWeight: 500, margin: 0 }}>Documentos Recebidos</h1>
+        <InfoTela titulo="Documentos Recebidos">Documentos (notas, comprovantes) recebidos e vinculados ao fechamento. Servem de lastro na Conciliação — é aqui que o documento encontra o lançamento.</InfoTela>
+      </div>
       <p style={{ color: theme.sub, fontSize: 13, marginBottom: 22 }}>
         Lista de documentos esperados por cliente. Marque cada um como <b style={{ color: theme.green }}>Recebido</b>, <b style={{ color: theme.sub }}>Não tem</b> (não se aplica no mês) ou <b style={{ color: theme.red }}>Não enviou</b> (não bloqueia o fechamento, mas entra no relatório de pendências para cobrar o cliente). O que ficar <b style={{ color: theme.yellow }}>pendente</b> continua bloqueando. Alterações valem desta competência <b style={{ color: theme.text }}>em diante</b>.
       </p>

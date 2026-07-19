@@ -8,6 +8,7 @@ import { montarBalancete } from '../lib/balancete'
 import { extrairEntidade } from '../lib/financeiro'
 import { gerarExcelTimbrado } from '../lib/excel'
 import { theme, money } from '../lib/theme'
+import InfoTela from '../components/InfoTela'
 
 const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
 const num = v => Number(v) || 0
@@ -701,7 +702,10 @@ const card = { background: theme.card, border: `0.5px solid ${theme.cb}`, border
 function Wrapper({ children }) {
   return (
     <div>
-      <h1 style={{ fontSize: 22, fontWeight: 500, marginBottom: 4 }}>Cockpit Financeiro</h1>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+        <h1 style={{ fontSize: 22, fontWeight: 500, margin: 0 }}>Cockpit Financeiro</h1>
+        <InfoTela titulo="Cockpit Financeiro">A visão gerencial para conversar com o cliente: receita, custo, despesa e resultado do mês e acumulado, DRE e evolução no ano. Lê o <b>razão vivo</b> — mesma fonte da Conciliação e do Comparativo.</InfoTela>
+      </div>
       <p style={{ color: theme.sub, fontSize: 13, marginBottom: 22 }}>Visão para levar ao cliente — resultado, balanço, financeiro, impostos e principais clientes da competência.</p>
       {children}
     </div>

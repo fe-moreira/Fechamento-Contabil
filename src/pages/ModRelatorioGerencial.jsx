@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../components/AuthProvider'
 import { theme } from '../lib/theme'
+import InfoTela from '../components/InfoTela'
 
 // Biblioteca de modelos de relatório gerencial. Por enquanto o modelo é só um nome/rótulo;
 // depois ele é vinculado ao cliente (no cadastro) e libera o card "Relatório Gerencial"
@@ -47,7 +48,10 @@ export default function ModRelatorioGerencial() {
 
   return (
     <div>
-      <h1 style={{ fontSize: 22, fontWeight: 500, marginBottom: 4 }}>Mod. Relatório Gerencial</h1>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+        <h1 style={{ fontSize: 22, fontWeight: 500, margin: 0 }}>Mod. Relatório Gerencial</h1>
+        <InfoTela titulo="Mod. Relatório Gerencial">Modela o relatório gerencial (Cockpit): define os blocos e agrupamentos que o cliente vê. É a configuração da visão gerencial.</InfoTela>
+      </div>
       <p style={{ color: theme.sub, fontSize: 13, marginBottom: 22 }}>
         Cadastre os modelos de relatório gerencial. Depois, vincule um modelo ao cliente (no cadastro) para liberar o Relatório Gerencial em Relatórios.
       </p>

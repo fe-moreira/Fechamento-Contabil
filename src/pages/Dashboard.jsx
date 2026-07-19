@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
 import { theme, applyThemeMode, getThemeMode } from '../lib/theme'
+import InfoTela from '../components/InfoTela'
 import { normalizaCompetencia } from '../lib/balancete'
 import { fechaSozinho } from '../lib/clientes'
 
@@ -235,7 +236,10 @@ export default function Dashboard() {
       {/* topo */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
         <div>
-          <h1 style={{ fontSize: 20, fontWeight: 600, margin: 0 }}>Painel do escritório <span style={{ color: theme.sub, fontWeight: 400, fontSize: 14 }}>· visão global</span></h1>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <h1 style={{ fontSize: 20, fontWeight: 600, margin: 0 }}>Painel do escritório <span style={{ color: theme.sub, fontWeight: 400, fontSize: 14 }}>· visão global</span></h1>
+            <InfoTela titulo="Painel do escritório">Visão global do escritório: carteira de clientes, andamento dos fechamentos e pendências agregadas.</InfoTela>
+          </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <span style={{ color: theme.sub, fontSize: 13, fontVariantNumeric: 'tabular-nums' }}>{agora.toLocaleDateString('pt-BR')} · {agora.toLocaleTimeString('pt-BR').slice(0, 5)}</span>

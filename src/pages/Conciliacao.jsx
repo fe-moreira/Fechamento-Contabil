@@ -5,6 +5,7 @@ import { lerTudo } from '../lib/lerTudo'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { theme, money, moneyDC } from '../lib/theme'
+import InfoTela from '../components/InfoTela'
 import { montarBalancete, parsePlano, composicaoAbertura, difConciliacao, applyMask, erroContaSintetica, ehCompetenciaInicial, excluirLinhaAbertura, limparNomeEntidade } from '../lib/balancete'
 import { abrePdfTimbrado } from '../lib/pdf'
 import { gerarExcelTimbrado } from '../lib/excel'
@@ -3190,7 +3191,10 @@ function Tile({ label, v, cor, onClick, hint }) {
 function Wrapper({ children, nome, comp }) {
   return (
     <div>
-      <h1 style={{ fontSize: 22, fontWeight: 500, marginBottom: 4 }}>Conciliação de Contas</h1>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+        <h1 style={{ fontSize: 22, fontWeight: 500, margin: 0 }}>Conciliação de Contas</h1>
+        <InfoTela titulo="Conciliação de Contas">Fecha banco, clientes/fornecedores e impostos: casa cada lançamento com seu documento e aponta o que diverge. Justifique ou corrija — a correção vira <b>lançamento</b> (razão vivo) e reflete em todo o sistema.</InfoTela>
+      </div>
       <p style={{ color: theme.sub, fontSize: 13, marginBottom: 16 }}>
         {nome ? <>Estrutura de balancete (Ativo e Passivo) com contas sintéticas e analíticas. <b style={{ color: theme.text }}>{nome}</b> · {comp}. Clique numa conta analítica para ver a composição.</> : 'Estrutura de balancete (Ativo e Passivo).'}
       </p>

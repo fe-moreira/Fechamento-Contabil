@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../components/AuthProvider'
 import { theme } from '../lib/theme'
+import InfoTela from '../components/InfoTela'
 
 const dataPtBR = iso => iso ? new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'
 // Sugestão de senha simples e digitável.
@@ -53,7 +54,10 @@ export default function Usuarios() {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, flexWrap: 'wrap', gap: 10 }}>
         <div>
-          <h1 style={{ fontSize: 22, fontWeight: 500, margin: 0 }}>Usuários</h1>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <h1 style={{ fontSize: 22, fontWeight: 500, margin: 0 }}>Usuários</h1>
+            <InfoTela titulo="Usuários">Gerencia quem acessa a plataforma no escritório: convites, perfis e permissões.</InfoTela>
+          </div>
           <p style={{ color: theme.sub, fontSize: 13, marginTop: 2 }}>Acesso à plataforma · perfil único (ADM). {lista.length} usuário(s).</p>
         </div>
         <button className="btn" onClick={() => { setNovo(true); setErro('') }}><i className="ti ti-user-plus" /> Novo usuário</button>

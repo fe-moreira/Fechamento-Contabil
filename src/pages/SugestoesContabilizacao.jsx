@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { theme, money } from '../lib/theme'
+import InfoTela from '../components/InfoTela'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { gerarLancamento } from '../lib/outras'
@@ -58,7 +59,10 @@ export default function SugestoesContabilizacao() {
 
   return (
     <div>
-      <h1 style={{ fontSize: 22, fontWeight: 500, marginBottom: 4 }}>Sugestões de Contabilização</h1>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+        <h1 style={{ fontSize: 22, fontWeight: 500, margin: 0 }}>Sugestões de Contabilização</h1>
+        <InfoTela titulo="Sugestões de Contabilização">Lançamentos que a plataforma sugere a partir dos padrões do razão. Você revisa e <b>aprova</b>; ao aprovar, viram lançamentos confirmados (razão vivo).</InfoTela>
+      </div>
       <p style={{ color: theme.sub, fontSize: 13, marginBottom: 18, maxWidth: 820 }}>
 Ao importar o razão, a plataforma já sugere: <b style={{ color: theme.text }}>apropriações do mês</b> (seguro e despesas), <b style={{ color: theme.text }}>correções recorrentes</b> (conta já corrigida antes que reaparece com a mesma entidade), <b style={{ color: theme.text }}>desconto/juros</b> (diferença de título baixado pelo banco) e <b style={{ color: theme.text }}>baixa de adiantamento</b> (compensação contra o cliente/fornecedor). O que você confirmar vira lançamento e alimenta o Status → Domínio; a sugestão sozinha não muda nada.
         {empresaNome && <> · <b style={{ color: theme.text }}>{empresaNome}</b> · {competencia}</>}

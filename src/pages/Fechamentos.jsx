@@ -7,6 +7,7 @@ import { fechaSozinho } from '../lib/clientes'
 import { normalizaCompetencia } from '../lib/balancete'
 import { calcularProgresso } from '../lib/progresso'
 import { theme } from '../lib/theme'
+import InfoTela from '../components/InfoTela'
 
 const MESES = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
 const MESES_CURTO = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
@@ -311,7 +312,10 @@ function ResumoCard({ label, valor, icon, cor }) {
 function Wrapper({ children }) {
   return (
     <div>
-      <h1 style={{ fontSize: 22, fontWeight: 500, marginBottom: 4 }}>Fechamento Contábil</h1>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+        <h1 style={{ fontSize: 22, fontWeight: 500, margin: 0 }}>Fechamento Contábil</h1>
+        <InfoTela titulo="Fechamento Contábil">Abre e acompanha a competência de fechamento de cada cliente. É o <b>contexto</b> (mês/ano) em que as demais telas de fechamento operam.</InfoTela>
+      </div>
       {children}
     </div>
   )

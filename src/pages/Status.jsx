@@ -7,6 +7,7 @@ import { apurarBancoResultado } from '../lib/bancoResultado'
 import { apurarVariacoes } from '../lib/variacoes'
 import { contasConciliacaoAbertas, conferirBalanceteEncerramento, erroContaSintetica } from '../lib/balancete'
 import { theme, money } from '../lib/theme'
+import InfoTela from '../components/InfoTela'
 import { abrePdfTimbrado } from '../lib/pdf'
 import { gerarExcelTimbrado } from '../lib/excel'
 import { gerarDominioCSV } from '../lib/dominio'
@@ -1061,6 +1062,7 @@ function Wrapper({ children, nome, comp }) {
     <div>
       <h1 style={{ fontSize: 22, fontWeight: 500, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 9 }}>
         <i className="ti ti-traffic-lights" style={{ color: theme.accent }} /> Status do fechamento
+        <InfoTela titulo="Status do fechamento">O <b>gate</b> do fechamento: só libera quando as pendências zeram — banco × resultado, variações do Comparativo, LALUR e demais travas. Cada item mostra o que falta.</InfoTela>
       </h1>
       <p style={{ color: theme.sub, fontSize: 13, marginBottom: 18 }}>
         {nome
