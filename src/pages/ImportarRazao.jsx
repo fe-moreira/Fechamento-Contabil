@@ -18,7 +18,7 @@ const ALVOS = [
   { key: 'historico', label: 'Histórico', dicas: ['histor', 'complemento'] },
   { key: 'debito', label: 'Débito', dicas: ['débito', 'debito', 'valdeb', 'valor débito', 'vlr deb'] },
   { key: 'credito', label: 'Crédito', dicas: ['crédito', 'credito', 'valcre', 'valor crédito', 'vlr cred'] },
-  { key: 'centro_custo', label: 'Centro de custo (opcional)', dicas: ['centro de custo', 'centro custo', 'codi_ccu', 'ccu', 'cencus', 'c.custo', 'cto custo'] },
+  { key: 'centro_custo', label: 'Centro de custo (opcional)', dicas: ['centro', 'ccu', 'cencus', 'ccusto', 'c.custo', 'c custo', 'cto custo', 'cto. custo', 'nome_ccu', 'desc_ccu', 'nomccu', 'centrocusto', 'centro_custo'] },
 ]
 
 // Aplica a máscara do Domínio (ex.: "9.9.9.999.9999") a um código sem pontos.
@@ -82,6 +82,8 @@ function autoMapear(headers) {
       const hl = String(h || '').toLowerCase()
       if (alvo.key === 'conta') return hl === 'clasc' || (hl.includes('conta') && !hl.includes('contra') && !hl.includes('nome'))
       if (alvo.key === 'nome') return hl === 'nomec' || hl.includes('nome da conta') || hl.includes('nome conta')
+      // Centro de custo: casa sem acento (ex.: "Descrição C.Custo", "Centro de Custo").
+      if (alvo.key === 'centro_custo') { const n = hl.normalize('NFD').replace(/[̀-ͯ]/g, ''); return alvo.dicas.some(d => n.includes(d)) }
       return alvo.dicas.some(d => hl.includes(d))
     })
     map[alvo.key] = idx >= 0 ? String(idx) : ''
