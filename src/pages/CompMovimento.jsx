@@ -170,6 +170,37 @@ function MultiMesSelect({ meses, sel, onChange }) {
   )
 }
 
+// Dropdown com checkboxes (filtro por centro de custo: marcar todos / individual).
+function CheckDropdown({ icon, label, resumo, options, marcado, onToggle, onTodos }) {
+  const [aberto, setAberto] = useState(false)
+  const linha = { display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', fontSize: 12.5, cursor: 'pointer', borderRadius: 6 }
+  return (
+    <div style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+      <span style={{ fontSize: 12, color: theme.sub }}>{icon && <i className={`ti ${icon}`} />} {label}</span>
+      <button className="btn btn-ghost" onClick={() => setAberto(a => !a)} style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12, padding: '6px 12px' }}>
+        {resumo} <i className="ti ti-chevron-down" style={{ fontSize: 14 }} />
+      </button>
+      {aberto && (
+        <>
+          <div onClick={() => setAberto(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+          <div style={{ position: 'absolute', top: '100%', left: 0, marginTop: 6, background: theme.card, border: `1px solid ${theme.cb}`, borderRadius: 10, padding: 8, zIndex: 41, minWidth: 200, maxHeight: 320, overflow: 'auto', boxShadow: '0 8px 24px rgba(0,0,0,.28)' }}>
+            {options.length === 0 && <div style={{ ...linha, color: theme.sub, cursor: 'default' }}>Nenhum centro cadastrado nem no razão.</div>}
+            {options.length > 0 && onTodos && <>
+              <label style={{ ...linha, fontWeight: 600 }} onClick={onTodos}><input type="checkbox" readOnly checked={marcado.size === 0 || marcado.size === options.length} /> Todos</label>
+              <div style={{ height: 1, background: theme.border, margin: '6px 0' }} />
+            </>}
+            {options.map(o => (
+              <label key={o.k} style={linha} onClick={() => onToggle(o.k)}>
+                <input type="checkbox" readOnly checked={marcado.has(o.k)} /> {o.nome}
+              </label>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 export default function CompMovimento() {
   const { empresaId, empresaNome, getCompetenciaId, plano } = useAppData()
   const { user } = useAuth()
@@ -188,6 +219,10 @@ export default function CompMovimento() {
   const [impBusy, setImpBusy] = useState(false)
   const [impMsg, setImpMsg] = useState('')
   const [mesesSel, setMesesSel] = useState(() => new Set()) // vazio = todos os meses
+  const [usaCC, setUsaCC] = useState(false)                 // cliente usa centro de custo (cadastro)
+  const [centrosCC, setCentrosCC] = useState([])            // [{ k, nome }] centros (cadastro + razão)
+  const [movCC, setMovCC] = useState({})                    // { conta: { 'ano-mm': { cod: valor } } }
+  const [ccSel, setCcSel] = useState(() => new Set())       // centros marcados; vazio = todos (sem filtro)
 
   // Importa o razão dos MESES ANTERIORES (ex.: jan–abr) num único arquivo, agrupando por
   // mês (coluna de competência/mês ou o mês da data). Cria a competência de cada mês e
@@ -269,8 +304,11 @@ export default function CompMovimento() {
     setImpBusy(false)
   }
 
+  useEffect(() => { setCcSel(new Set()) }, [empresaId]) // troca de empresa → volta a "todos"
+
   useEffect(() => {
     setComps([]); setAnosMeses([]); setContas([]); setMatriz({}); setDetalhe(null); setJustificadas(new Set())
+    setUsaCC(false); setCentrosCC([]); setMovCC({})
     if (!empresaId) return
     let vivo = true
     ;(async () => {
@@ -329,6 +367,40 @@ export default function CompMovimento() {
         setContas(listaContas)
         setMatriz(m)
 
+        // ---- Centro de custo: o GATILHO é o CADASTRO do cliente ("Usa centro de custo? = Sim").
+        // Se ligado, o filtro SEMPRE aparece — mesmo com razão/carga vazios (é importante o
+        // usuário ver que está vazio). Lê o razão (que carrega o CC) de TODAS as competências e
+        // monta o movimento por conta · ano-mês · centro, para filtrar só o RESULTADO (3/4/5).
+        const { data: cliRow } = await supabase.from('clientes').select('usa_centro_custo').eq('id', empresaId).maybeSingle()
+        if (!vivo) return
+        if (cliRow?.usa_centro_custo) {
+          const compAM = {}; for (const c of competencias) compAM[c.id] = amKey(c.ano, c.mes)
+          const { data: ccCarga } = await supabase.from('cargas_cadastro').select('dados')
+            .eq('cliente_id', empresaId).eq('tipo', 'centro_custo').order('created_at', { ascending: false }).limit(1).maybeSingle()
+          if (!vivo) return
+          const kBy = (o, re) => { const k = Object.keys(o || {}).find(k => re.test(String(k).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, ''))); return k ? String(o[k] ?? '').trim() : '' }
+          const nomeByCod = {}
+          for (const r of (Array.isArray(ccCarga?.dados) ? ccCarga.dados : [])) { const cod = kBy(r, /cod/); if (cod) nomeByCod[cod] = kBy(r, /nome|descri/) }
+          const rz = await lerTudo(() => supabase.from('razao').select('conta, centro_custo, debito, credito, competencia_id').in('competencia_id', competencias.map(c => c.id)))
+          if (!vivo) return
+          const mcc = {}, presentes = new Set()
+          for (const l of rz) {
+            const am = compAM[l.competencia_id]; if (!am) continue
+            const codcc = String(l.centro_custo || '').trim() || '(sem centro)'
+            presentes.add(codcc)
+            const conta = String(l.conta || '').trim(); if (!conta) continue
+            const v = (Number(l.debito) || 0) - (Number(l.credito) || 0)
+            ;(mcc[conta] ||= {}); (mcc[conta][am] ||= {})
+            mcc[conta][am][codcc] = (mcc[conta][am][codcc] || 0) + v
+          }
+          // Lista = centros CADASTRADOS + os que aparecem no razão. Flag ligada → filtro sempre visível.
+          const todosCod = new Set([...Object.keys(nomeByCod), ...presentes])
+          const centros = [...todosCod].sort((a, b) => String(a).localeCompare(String(b), 'pt-BR'))
+            .map(cod => ({ k: cod, nome: cod === '(sem centro)' ? '(sem centro)' : (nomeByCod[cod] ? `${cod} · ${nomeByCod[cod]}` : cod) }))
+          if (!vivo) return
+          setUsaCC(true); setCentrosCC(centros); setMovCC(mcc)
+        }
+
         // Pré-carrega justificativas/correções já registradas na auditoria deste módulo,
         // para o contador refletir o que já foi tratado em sessões anteriores.
         const compIds = compsComDados.map(c => c.id)
@@ -363,13 +435,49 @@ export default function CompMovimento() {
     return () => { vivo = false }
   }, [empresaId, refresh])
 
+  // ---- Filtro por CENTRO DE CUSTO (afeta só o RESULTADO — 3/4/5 — que é onde há CC) ----
+  const filtroCC = usaCC && ccSel.size > 0                 // vazio = todos → sem filtro
+  const ehResult = c => c && ['3', '4', '5'].includes(String(c.classifRaw || c.classif)[0])
+  const toggleCC = k => setCcSel(prev => { const n = new Set(prev); n.has(k) ? n.delete(k) : n.add(k); return n })
+  const resumoCC = ccSel.size === 0 ? 'Todos' : (ccSel.size <= 2 ? [...ccSel].join(', ') : `${ccSel.size} centros`)
+  // Matriz efetiva: com filtro CC, recalcula o resultado usando só os centros marcados
+  // (analíticas somam os centros marcados; sintéticas somam as analíticas descendentes).
+  // O patrimonial (1/2) fica intacto — não tem centro de custo.
+  const matrizEff = (() => {
+    if (!filtroCC) return matriz
+    const out = { ...matriz }
+    const allAm = [...new Set(anosMeses.map(a => amKey(a.ano, a.mes)))]
+    const analitRes = contas.filter(c => !c.sintetica && ehResult(c))
+    for (const c of analitRes) {
+      const per = movCC[c.reduzido] || {}
+      const o = (out[c.key] = {})
+      for (const am of allAm) {
+        const byCc = per[am]
+        if (!byCc) continue
+        let s = 0, has = false
+        for (const cod of ccSel) { const val = byCc[cod]; if (val != null) { s += val; has = true } }
+        if (has) o[am] = s
+        else if (Object.keys(byCc).length) o[am] = 0
+      }
+    }
+    for (const sc of contas.filter(c => c.sintetica && ehResult(c))) {
+      const o = (out[sc.key] = {})
+      for (const am of allAm) {
+        let s = 0, has = false
+        for (const c of analitRes) if (String(c.classifRaw).startsWith(String(sc.classifRaw))) { const v = out['#' + c.reduzido]?.[am]; if (v != null) { s += v; has = true } }
+        if (has) o[am] = s
+      }
+    }
+    return out
+  })()
+
   // Uma célula desvia se difere mais de 10% do MÊS ANTERIOR (mês a mês: fev × jan,
   // mar × fev…). O primeiro mês nunca fica vermelho — não há com o que comparar.
   // Mês sem saldo conta como 0: sumir de um mês que tinha movimento é variação (justificar).
   function desviante(conta, mes) {
     const idx = comps.findIndex(c => c.mes === mes)
     if (idx <= 0) return false // primeiro mês (ou fora da lista) — sem mês anterior
-    const linha = matriz[conta] || {}
+    const linha = matrizEff[conta] || {}
     const a = linha[amKey(ANO, mes)] == null ? 0 : Number(linha[amKey(ANO, mes)]) || 0
     const p = linha[amKey(ANO, comps[idx - 1].mes)] == null ? 0 : Number(linha[amKey(ANO, comps[idx - 1].mes)]) || 0
     if (a === 0 && p === 0) return false // sem movimento nos dois meses
@@ -381,7 +489,7 @@ export default function CompMovimento() {
   // automática de justificativa no modal.
   function infoVariacao(classifRaw, mes) {
     const idx = comps.findIndex(c => c.mes === mes)
-    const linha = matriz[classifRaw] || {}
+    const linha = matrizEff[classifRaw] || {}
     const atual = Number(linha[amKey(ANO, mes)] || 0) || 0
     const mesAntObj = idx > 0 ? comps[idx - 1] : null
     const anterior = mesAntObj ? (Number(linha[amKey(ANO, mesAntObj.mes)] || 0) || 0) : null
@@ -454,7 +562,7 @@ export default function CompMovimento() {
   const mostraTotal = colunas.length > 1
   // Valor de uma conta numa coluna = soma dos meses da coluna (null se nenhum tem dado).
   const valorCol = (key, col) => {
-    const linha = matriz[key] || {}; let has = false, s = 0
+    const linha = matrizEff[key] || {}; let has = false, s = 0
     for (const a of col.meses) { const v = linha[amKey(a.ano, a.mes)]; if (v != null) { has = true; s += Number(v) || 0 } }
     return has ? s : null
   }
@@ -555,6 +663,10 @@ export default function CompMovimento() {
               <i className="ti ti-filter" /> Meses:
               <MultiMesSelect meses={mesesDisp} sel={mesesSel} onChange={setMesesSel} />
             </div>
+            {usaCC && (
+              <CheckDropdown icon="ti-sitemap" label="Centro de custo:" resumo={centrosCC.length ? resumoCC : 'nenhum'}
+                options={centrosCC} marcado={ccSel} onToggle={toggleCC} onTodos={() => setCcSel(new Set())} />
+            )}
           </div>
           <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'auto', maxWidth: '100%' }}>
             <table style={{ borderCollapse: 'collapse', width: '100%' }}>
