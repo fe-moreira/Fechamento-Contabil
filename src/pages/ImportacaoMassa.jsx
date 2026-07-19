@@ -46,6 +46,7 @@ function pendentesFolha(evs, idx, justif) {
 }
 import { parsePlano } from '../lib/balancete'
 import { theme, money } from '../lib/theme'
+import InfoTela from '../components/InfoTela'
 import CampoConta from '../components/CampoConta'
 import { parseNomeArquivo, anexarExtratoPdf, anexarExtratoExcel, alimentarIntegracaoFinanceira, lerIdentificacao, lerMemoriaContas, lembrarContaBancaria, chaveContaBanco, tipoEfetivoDoc } from '../lib/importacaoMassa'
 
@@ -143,7 +144,10 @@ export default function ImportacaoMassa() {
 
   return (
     <div>
-      <h1 style={{ fontSize: 22, fontWeight: 500, marginBottom: 4 }}>Ações em Massa</h1>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+        <h1 style={{ fontSize: 22, fontWeight: 500, margin: 0 }}>Ações em Massa</h1>
+        <InfoTela titulo="Ações em Massa">Executa uma ação para vários clientes de uma vez (importações e rotinas em lote), sem repetir tela a tela.</InfoTela>
+      </div>
       <p style={{ color: theme.sub, fontSize: 13, marginBottom: 20, maxWidth: 760 }}>
         Suba informações de vários clientes de uma vez, amarrando pelo <b style={{ color: theme.text }}>CNPJ</b>. Cada bloco tem o seu modelo de arquivo.
       </p>

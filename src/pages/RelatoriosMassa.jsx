@@ -4,6 +4,7 @@ import { useAppData } from '../lib/appData'
 import { fechaSozinho } from '../lib/clientes'
 import { normalizaCompetencia } from '../lib/balancete'
 import { theme } from '../lib/theme'
+import InfoTela from '../components/InfoTela'
 import { gerarExcelTimbrado } from '../lib/excel'
 import { abrePdfTimbrado } from '../lib/pdf'
 import { MassaDistribuicao } from './ImportacaoMassa'
@@ -164,6 +165,7 @@ export default function RelatoriosMassa() {
     <div>
       <h1 style={{ fontSize: 22, fontWeight: 500, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 9 }}>
         <i className="ti ti-report-analytics" style={{ color: theme.accent }} /> Relatórios em massa
+        <InfoTela titulo="Relatórios em massa">Gera relatórios de vários clientes num lote só — escolha o relatório, o período e os clientes e baixe tudo de uma vez.</InfoTela>
       </h1>
       <p style={{ color: theme.sub, fontSize: 13, marginBottom: 18 }}>
         Relatórios que varrem <b style={{ color: theme.text }}>todos os clientes</b> de uma vez. Clique num bloco para gerar.

@@ -5,6 +5,7 @@ import { useAppData } from '../lib/appData'
 import { checarArquivoEmpresa } from '../lib/validarArquivoEmpresa'
 import { useAuth } from '../components/AuthProvider'
 import { theme, money, moneyDC } from '../lib/theme'
+import InfoTela from '../components/InfoTela'
 import CampoConta from '../components/CampoConta'
 import CampoCentroCusto from '../components/CampoCentroCusto'
 import { normHist, casarHistorico, casarHistoricoNivel, aprender, parseValor, dataISO, aplicarPerfil, extrairEntidade, ehEmpresa, catByRowDeMerges, expandirMerges } from '../lib/financeiro'
@@ -3768,7 +3769,10 @@ function Metric({ label, valor, icon, cor, sub }) {
 function Wrapper({ children }) {
   return (
     <div>
-      <h1 style={{ fontSize: 22, fontWeight: 500, marginBottom: 4 }}>Integração</h1>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+        <h1 style={{ fontSize: 22, fontWeight: 500, margin: 0 }}>Integração</h1>
+        <InfoTela titulo="Integração">Traz dados de fontes externas (extratos, notas, planilhas) e prepara para o fechamento — o ponto de entrada dos dados que alimentam a Conciliação.</InfoTela>
+      </div>
       <p style={{ color: theme.sub, fontSize: 13, marginBottom: 22 }}>As quatro integrações para o contábil. Tem que dar zero.</p>
       {children}
     </div>

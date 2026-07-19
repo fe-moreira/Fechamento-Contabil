@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { theme, money } from '../lib/theme'
+import InfoTela from '../components/InfoTela'
 import CampoConta from '../components/CampoConta'
 import { gerarExcelTimbrado } from '../lib/excel'
 
@@ -398,7 +399,10 @@ const td = { padding: '11px 14px', fontSize: 13, color: theme.text, verticalAlig
 function Wrapper({ children }) {
   return (
     <div>
-      <h1 style={{ fontSize: 22, fontWeight: 500, marginBottom: 4 }}>Ajuda a Contabilizar</h1>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+        <h1 style={{ fontSize: 22, fontWeight: 500, margin: 0 }}>Ajuda a Contabilizar</h1>
+        <InfoTela titulo="Ajuda a Contabilizar">A fila dos lançamentos a gerar. Revise, ajuste as contas e <b>confirme</b> — cada confirmação vira lançamento (razão vivo) e sai da fila. Gera também o arquivo de importação do Domínio.</InfoTela>
+      </div>
       <p style={{ color: theme.sub, fontSize: 13, marginBottom: 18, maxWidth: 760 }}>
         Tem dúvida em como lançar algo? Escreva a partida com as contas do plano ou suba o documento. A plataforma também sugere lançamentos e, no fim, gera o arquivo de importação do Domínio.
       </p>

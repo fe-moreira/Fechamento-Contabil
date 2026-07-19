@@ -11,6 +11,7 @@ import { montarDRE, montarResumoBalancete } from '../lib/dre'
 import BookComposicoes from '../components/BookComposicoes'
 import ComparativoCompleto from '../components/ComparativoCompleto'
 import { theme, money, moneyDC } from '../lib/theme'
+import InfoTela from '../components/InfoTela'
 
 const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
 
@@ -771,7 +772,10 @@ function Secao({ titulo, onExportar, acoes, children }) {
 function Wrapper({ children }) {
   return (
     <div>
-      <h1 style={{ fontSize: 22, fontWeight: 500, marginBottom: 4 }}>Relatórios</h1>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+        <h1 style={{ fontSize: 22, fontWeight: 500, margin: 0 }}>Relatórios</h1>
+        <InfoTela titulo="Relatórios">A saída do fechamento: Book de Composições, DRE, Comparativo, Balanço, DFC, Balancete e Justificativas/Correções. Todos leem o <b>razão vivo</b>.</InfoTela>
+      </div>
       <p style={{ color: theme.sub, fontSize: 13, marginBottom: 22 }}>Relatórios da competência (a partir do balancete e da auditoria).</p>
       {children}
     </div>

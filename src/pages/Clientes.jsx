@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { theme } from '../lib/theme'
+import InfoTela from '../components/InfoTela'
 import { normalizaCompetencia } from '../lib/balancete'
 
 // Regimes tributários — nomenclatura padrão da carteira.
@@ -288,7 +289,10 @@ export default function Clientes() {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
         <div>
-          <h1 style={{ fontSize: 22 }}>Clientes</h1>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <h1 style={{ fontSize: 22, margin: 0 }}>Clientes</h1>
+            <InfoTela titulo="Clientes">Cadastro dos clientes do escritório: regime, CNPJ, contas e configurações (inclusive se o cliente <b>usa centro de custo</b>). O histórico é por <b>vigência</b> — nada é sobrescrito.</InfoTela>
+          </div>
           <p style={{ color: theme.sub, fontSize: 13, marginTop: 2 }}>{termo ? `${listaFiltrada.length} de ${lista.length}` : `${lista.length} cadastrado(s)`}</p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>

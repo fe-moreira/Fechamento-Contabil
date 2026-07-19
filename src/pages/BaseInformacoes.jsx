@@ -7,6 +7,7 @@ import DropZone from '../components/DropZone'
 import CampoConta from '../components/CampoConta'
 import ModalLalurConfig from '../components/ModalLalurConfig'
 import { theme, money } from '../lib/theme'
+import InfoTela from '../components/InfoTela'
 import { parsePlano, applyMask, normalizaCompetencia } from '../lib/balancete'
 import { gerarExcelTimbrado } from '../lib/excel'
 import { abrePdfTimbrado } from '../lib/pdf'
@@ -1656,7 +1657,10 @@ const badge = (bg, cor) => ({ background: bg, color: cor, fontSize: 11, fontWeig
 function Wrapper({ children, nome }) {
   return (
     <div>
-      <h1 style={{ fontSize: 22, fontWeight: 500, marginBottom: 4 }}>Base de Informações</h1>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+        <h1 style={{ fontSize: 22, fontWeight: 500, margin: 0 }}>Base de Informações</h1>
+        <InfoTela titulo="Base de Informações">Cadastros e parâmetros do cliente que abastecem o fechamento (contas, centros de custo, regras). É a base consultada pelas telas de fechamento.</InfoTela>
+      </div>
       <p style={{ color: theme.sub, fontSize: 13, marginBottom: 22 }}>
         Parâmetros do cliente{nome ? <> <b style={{ color: theme.text }}>{nome}</b></> : ''} — valem para todos os fechamentos.
       </p>

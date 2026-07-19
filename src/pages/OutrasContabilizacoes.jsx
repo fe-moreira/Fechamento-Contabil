@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { theme, money } from '../lib/theme'
+import InfoTela from '../components/InfoTela'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { apurarVariacoes } from '../lib/variacoes'
@@ -352,7 +353,10 @@ export default function OutrasContabilizacoes() {
 
   return (
     <div>
-      <h1 style={{ fontSize: 22, fontWeight: 500, marginBottom: 4 }}>Outras Contabilizações</h1>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+        <h1 style={{ fontSize: 22, fontWeight: 500, margin: 0 }}>Outras Contabilizações</h1>
+        <InfoTela titulo="Outras Contabilizações">Contabilizações recorrentes fora do razão: apropriações (seguros, contratos), PER/DCOMP, JSCP e receitas diferidas. Geram lançamentos que entram no <b>razão vivo</b> do mês.</InfoTela>
+      </div>
       <p style={{ color: theme.sub, fontSize: 13, marginBottom: 16, maxWidth: 820 }}>
         Cadastre os contratos/processos e gere os lançamentos do mês — tudo que você <b style={{ color: theme.text }}>gera</b> entra em <b style={{ color: theme.text }}>Lançamentos</b> e alimenta o Status → Domínio.
         {empresaNome && <> · <b style={{ color: theme.text }}>{empresaNome}</b> · {competencia}</>}
