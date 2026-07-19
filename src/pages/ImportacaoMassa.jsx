@@ -5,7 +5,7 @@ import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { fechaSozinho } from '../lib/clientes'
 import { folhaPorEmpresa, novoRotuloArq, marcarEventos, arquivosDoSlot } from '../lib/folha'
-import { periodoDistribuicao, montarDistribuicao, pdfDistribuicao, nomeArquivoDistribuicao } from '../lib/distribuicaoRelatorio'
+import { periodoDistribuicao, blocoNormal, blocoAta, pdfDistribuicaoEmpresa, renderEmpresaDistribuicao, criarDocDistribuicao, docBlob, nomeArquivoDistribuicao } from '../lib/distribuicaoRelatorio'
 
 const TIPOKEY_LABEL = { folha: 'Folha mensal', adiant: 'Adiantamento', decimo_adiant: '13º Adiantamento', complementar: 'Folha Complementar', plr: 'Participação de Lucros' }
 const TIPOS_FOLHA_KEYS = ['folha', 'adiant', 'decimo_adiant', 'complementar', 'plr']
@@ -215,70 +215,113 @@ export default function ImportacaoMassa() {
 }
 
 // ---- Card: Distribuição de Lucros / JCP em massa (um zip com 1 PDF por empresa) ----
-const PERIODOS = [['mensal', 'Mensal'], ['trimestral', 'Trimestral'], ['semestral', 'Semestral'], ['anual', 'Anual']]
+const PERIODOS = [['mensal', 'Mensal'], ['trimestral', 'Trimestral'], ['semestral', 'Semestral'], ['anual', 'Anual'], ['personalizado', 'Personalizado']]
 function MassaDistribuicao({ competencia }) {
   const anoBase = Number((competencia || '').split('/')[1]) || 2026
   const mesBase = Number((competencia || '').split('/')[0]) || 1
   const [tipo, setTipo] = useState('trimestral')
   const [ano, setAno] = useState(anoBase)
   const [n, setN] = useState(Math.ceil(mesBase / 3))   // trimestre/semestre/mês corrente
+  const [custIni, setCustIni] = useState(`${anoBase}-01-01`)
+  const [custFim, setCustFim] = useState(`${anoBase}-12-31`)
+  const [modo, setModo] = useState('zip')              // 'zip' = 1 PDF por cliente · 'unico' = tudo num PDF
   const [gerando, setGerando] = useState(false)
   const [msg, setMsg] = useState('')
   const [erro, setErro] = useState('')
 
-  const per = periodoDistribuicao(tipo, ano, n)
+  const per = periodoDistribuicao(tipo, ano, n, custIni, custFim)
   const opcoesN = tipo === 'mensal' ? Array.from({ length: 12 }, (_, i) => [i + 1, `${String(i + 1).padStart(2, '0')} (mês)`])
     : tipo === 'trimestral' ? [[1, '1º Trim.'], [2, '2º Trim.'], [3, '3º Trim.'], [4, '4º Trim.']]
       : tipo === 'semestral' ? [[1, '1º Sem.'], [2, '2º Sem.']] : null
 
+  function baixar(blob, nome) {
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = nome
+    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href)
+  }
+
   async function gerar() {
     setGerando(true); setMsg(''); setErro('')
     try {
-      const [{ data: clientes }, { data: cfgs }] = await Promise.all([
-        supabase.from('clientes').select('id, codigo_dominio, razao_social, cnpj').order('codigo_dominio'),
-        supabase.from('dist_lucros_config').select('cliente_id, ata, contas, created_at').order('created_at', { ascending: false }),
+      // Paginado (lerTudo): a lista de clientes, as configs e as competências podem passar de 1000.
+      const [clientes, cfgs, comps] = await Promise.all([
+        lerTudo(() => supabase.from('clientes').select('id, codigo_dominio, razao_social, cnpj').order('codigo_dominio')),
+        lerTudo(() => supabase.from('dist_lucros_config').select('cliente_id, ata, contas, socios, created_at').order('created_at', { ascending: false })),
+        lerTudo(() => supabase.from('competencias').select('id, cliente_id, ano, mes')),
       ])
       const cfgByCli = new Map()
       for (const c of (cfgs || [])) if (!cfgByCli.has(c.cliente_id)) cfgByCli.set(c.cliente_id, c)
-      const JSZip = (await import('jszip')).default
-      const zip = new JSZip()
-      let nEmp = 0
+      const compsByCli = new Map()
+      for (const cp of (comps || [])) { const arr = compsByCli.get(cp.cliente_id) || []; arr.push(cp); compsByCli.set(cp.cliente_id, arr) }
+      const chaveI = Number(per.ini.slice(0, 4)) * 100 + Number(per.ini.slice(5, 7))
+      const chaveF = Number(per.fim.slice(0, 4)) * 100 + Number(per.fim.slice(5, 7))
+      const noPeriodo = cp => { const k = Number(cp.ano) * 100 + Number(cp.mes); return k >= chaveI && k <= chaveF }
+
+      const unico = modo === 'unico'
+      const doc = unico ? criarDocDistribuicao() : null
+      const JSZip = unico ? null : (await import('jszip')).default
+      const zip = unico ? null : new JSZip()
+      let nEmp = 0, primeira = true
+
       for (const cli of (clientes || [])) {
         const cfg = cfgByCli.get(cli.id); if (!cfg) continue
         const nomeMap = Object.fromEntries((cfg.contas || []).map(c => [String(c.cod || '').trim(), c.nome]))
-        const dados = montarDistribuicao(cfg, nomeMap, per.ini, per.fim)
-        if (!dados.secoes.length) continue
-        const blob = pdfDistribuicao({ empresaCod: cli.codigo_dominio, empresaNome: cli.razao_social, cnpj: cli.cnpj, periodoTitulo: per.titulo, dados })
-        zip.file(nomeArquivoDistribuicao(cli.codigo_dominio, cli.razao_social, per.label), blob)
+        // Bloco NORMAL: razão das contas observadas nas competências do período (paginado).
+        const contasObs = (cfg.contas || []).map(c => String(c.cod || '').trim()).filter(Boolean)
+        const compIds = (compsByCli.get(cli.id) || []).filter(noPeriodo).map(cp => cp.id)
+        let razaoLancs = []
+        if (contasObs.length && compIds.length) {
+          razaoLancs = await lerTudo(() => supabase.from('razao').select('data, conta, historico, debito, credito').in('competencia_id', compIds).in('conta', contasObs))
+        }
+        const normal = blocoNormal(cfg, nomeMap, razaoLancs, per.ini, per.fim)
+        const ata = blocoAta(cfg, nomeMap, per.ini, per.fim)
+        if (!normal.socios.length && !ata.socios.length) continue
+        const params = { empresaCod: cli.codigo_dominio, empresaNome: cli.razao_social, cnpj: cli.cnpj, periodoTitulo: per.titulo, normal, ata }
+        if (unico) { renderEmpresaDistribuicao(doc, params, primeira); primeira = false }
+        else { zip.file(nomeArquivoDistribuicao(cli.codigo_dominio, cli.razao_social, per.label), pdfDistribuicaoEmpresa(params)) }
         nEmp++
       }
-      if (!nEmp) { setErro('Nenhuma empresa com distribuição de lucros paga no período selecionado.'); setGerando(false); return }
-      const out = await zip.generateAsync({ type: 'blob' })
-      const a = document.createElement('a'); a.href = URL.createObjectURL(out); a.download = `distribuicao-lucros-${per.label}.zip`
-      document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href)
-      setMsg(`Gerado: distribuicao-lucros-${per.label}.zip — ${nEmp} empresa(s).`)
+      if (!nEmp) { setErro('Nenhuma empresa com distribuição no período selecionado.'); setGerando(false); return }
+      if (unico) { baixar(docBlob(doc), `Distribuição de Lucros - ${per.label}.pdf`); setMsg(`Gerado: relatório único com ${nEmp} empresa(s).`) }
+      else { const out = await zip.generateAsync({ type: 'blob' }); baixar(out, `distribuicao-lucros-${per.label}.zip`); setMsg(`Gerado: distribuicao-lucros-${per.label}.zip — ${nEmp} empresa(s).`) }
     } catch (err) { setErro('Erro ao gerar: ' + err.message) } finally { setGerando(false) }
   }
 
   return (
-    <Bloco icon="ti-file-invoice" titulo="Distribuição de Lucros / JCP" desc="Gera o relatório de Distribuição de Lucros / JCP de TODAS as empresas de uma vez — um PDF por empresa (sócios separados por conta contábil, filtrados pela data do pagamento). Baixa tudo num único zip.">
+    <Bloco icon="ti-file-invoice" titulo="Distribuição de Lucros" desc="Gera o relatório de TODAS as empresas — dois blocos por empresa (Distribuição Normal do período + Distribuição da Ata / lucros até 2025), por sócio, com a data de cada distribuição. Escolha o período e se quer um PDF por empresa (zip) ou tudo num relatório só.">
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
         <span style={{ fontSize: 12.5, color: theme.sub }}>Período:</span>
         <select className="input" style={{ width: 'auto', padding: '6px 10px', fontSize: 13 }} value={tipo} onChange={e => { setTipo(e.target.value); setN(1) }}>
           {PERIODOS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
         </select>
-        {opcoesN && (
-          <select className="input" style={{ width: 'auto', padding: '6px 10px', fontSize: 13 }} value={n} onChange={e => setN(Number(e.target.value))}>
-            {opcoesN.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-          </select>
-        )}
-        <input className="input" type="number" style={{ width: 90, padding: '6px 10px', fontSize: 13 }} value={ano} onChange={e => setAno(Number(e.target.value))} />
+        {tipo === 'personalizado' ? (
+          <>
+            <input className="input" type="date" style={{ width: 'auto', padding: '6px 10px', fontSize: 13 }} value={custIni} onChange={e => setCustIni(e.target.value)} />
+            <span style={{ fontSize: 12.5, color: theme.sub }}>até</span>
+            <input className="input" type="date" style={{ width: 'auto', padding: '6px 10px', fontSize: 13 }} value={custFim} onChange={e => setCustFim(e.target.value)} />
+          </>
+        ) : (<>
+          {opcoesN && (
+            <select className="input" style={{ width: 'auto', padding: '6px 10px', fontSize: 13 }} value={n} onChange={e => setN(Number(e.target.value))}>
+              {opcoesN.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+          )}
+          <input className="input" type="number" style={{ width: 90, padding: '6px 10px', fontSize: 13 }} value={ano} onChange={e => setAno(Number(e.target.value))} />
+        </>)}
         <span style={{ fontSize: 12, color: theme.accent, fontWeight: 600 }}>→ {per.label}</span>
       </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 12, flexWrap: 'wrap', fontSize: 13 }}>
+        <span style={{ fontSize: 12.5, color: theme.sub }}>Saída:</span>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+          <input type="radio" name="modo-dist" checked={modo === 'zip'} onChange={() => setModo('zip')} /> Um PDF por empresa (zip)
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+          <input type="radio" name="modo-dist" checked={modo === 'unico'} onChange={() => setModo('unico')} /> Relatório único (todas juntas)
+        </label>
+      </div>
       <button className="btn" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13 }} onClick={gerar} disabled={gerando}>
-        <i className="ti ti-file-zip" /> {gerando ? 'Gerando…' : 'Gerar PDF (zip)'}
+        <i className={modo === 'unico' ? 'ti ti-file-text' : 'ti ti-file-zip'} /> {gerando ? 'Gerando…' : (modo === 'unico' ? 'Gerar relatório único (PDF)' : 'Gerar PDF (zip)')}
       </button>
-      <p style={{ fontSize: 11.5, color: theme.sub, margin: '10px 0 0' }}>Cada arquivo: <b style={{ color: theme.text }}>Código - Nome - {per.label} - Distribuição de Lucros_JCP.pdf</b></p>
+      <p style={{ fontSize: 11.5, color: theme.sub, margin: '10px 0 0' }}>{modo === 'unico' ? <>Um PDF só, uma empresa por página.</> : <>Cada arquivo: <b style={{ color: theme.text }}>Código - Nome - {per.label} - Distribuição de Lucros.pdf</b></>}</p>
       {erro && <p style={{ color: theme.red, fontSize: 12.5, margin: '8px 0 0' }}>{erro}</p>}
       {msg && <p style={{ color: theme.green, fontSize: 12.5, margin: '8px 0 0' }}><i className="ti ti-info-circle" /> {msg}</p>}
     </Bloco>
