@@ -709,6 +709,8 @@ function ModalCarga({ carga, historico, empresaId, usuario, onClose, onImportado
   const colCod = modelo.cols.find(c => /(c[oó]digo|conta)/i.test(c) && !/classific/i.test(c))
   const colNome = modelo.cols.find(c => /nome/i.test(c))
   const colClassif = modelo.cols.find(c => /classific/i.test(c))
+  // Centro de custo tem código e descritivo PRÓPRIOS (não vêm do plano de contas).
+  const semPlano = carga.tipo === 'centro_custo'
 
   async function baixarModelo() {
     const XLSX = await import('xlsx')
@@ -801,8 +803,8 @@ function ModalCarga({ carga, historico, empresaId, usuario, onClose, onImportado
     setLinhas(ls => ls.map((l, j) => {
       if (j !== i) return l
       const nova = { ...l, [col]: v }
-      // Ao informar o código, puxa nome e classificação do plano de contas.
-      if (col === colCod) {
+      // Ao informar o código, puxa nome e classificação do plano de contas (menos no centro de custo).
+      if (col === colCod && !semPlano) {
         const p = buscaConta(v)
         if (p) {
           if (colNome) nova[colNome] = p.nome
@@ -914,7 +916,7 @@ function ModalCarga({ carga, historico, empresaId, usuario, onClose, onImportado
         </>
       ) : (
         <>
-          <label>2. Linhas (uma conta por linha){colCod && colNome ? ' — digite o código que o nome é puxado do plano' : ''}</label>
+          <label>2. Linhas (uma por linha){semPlano ? ' — digite o código e o descritivo do centro' : (colCod && colNome ? ' — digite o código que o nome é puxado do plano' : '')}</label>
           <div style={{ overflowX: 'auto', border: `0.5px solid ${theme.cb}`, borderRadius: 10 }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 480 }}>
               <thead>
@@ -930,7 +932,7 @@ function ModalCarga({ carga, historico, empresaId, usuario, onClose, onImportado
                       <td key={c} style={{ padding: 4 }}>
                         {c === 'Tipo' && carga.tipo === 'bancoresult'
                           ? <select className="input" style={{ minWidth: 150 }} value={l[c]} onChange={setCel(i, c)}><option value="">—</option><option value="Banco">Banco</option><option value="Resultado liberado">Resultado liberado</option></select>
-                          : c === colCod
+                          : (c === colCod && !semPlano)
                             ? <CampoConta value={l[c]} onChange={v => setCelV(i, c, v)} onPick={p => setCelV(i, c, p.cod)} placeholder={`${c} (F4)`} style={{ minWidth: 160 }} />
                             : <input className="input" value={l[c]} onChange={setCel(i, c)} placeholder={c} />}
                       </td>
