@@ -119,11 +119,15 @@ function mesmoCliente(a, b) {
 // Serve para sugerir o MESMO corte em outros nomes que tenham o mesmo prefixo/sufixo.
 function recorteDe(old, neu) {
   if (!old || !neu) return null
+  const strip = s => String(s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
   const o = String(old).trim(), n = String(neu).trim()
   if (n.length < 3) return null
-  const idx = o.toLowerCase().indexOf(n.toLowerCase())
+  // Compara SEM acento (o razão vem sem acento, ex.: "INCORPORACOES", e o usuário digita
+  // "Incorporações"). O prefixo/sufixo recortado costuma ser sem acento, então os índices batem.
+  const nS = strip(n)
+  const idx = strip(o).indexOf(nS)
   if (idx < 0) return null
-  const prefixo = o.slice(0, idx), sufixo = o.slice(idx + n.length)
+  const prefixo = o.slice(0, idx), sufixo = o.slice(idx + nS.length)
   if (prefixo.length < 4 && sufixo.length < 4) return null // recorte pequeno demais p/ ser padrão
   return { prefixo, sufixo }
 }
@@ -1047,8 +1051,8 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       // Padrão de texto: o mesmo prefixo/sufixo recortado aparece neste nome → sugere o mesmo corte.
       if (rec) {
         let base = g.nome, hit = false
-        if (rec.prefixo.length >= 4 && base.toLowerCase().startsWith(rec.prefixo.toLowerCase())) { base = base.slice(rec.prefixo.length); hit = true }
-        if (rec.sufixo.length >= 4 && base.toLowerCase().endsWith(rec.sufixo.toLowerCase())) { base = base.slice(0, base.length - rec.sufixo.length); hit = true }
+        if (rec.prefixo.length >= 4 && baixaTxt(base).startsWith(baixaTxt(rec.prefixo))) { base = base.slice(rec.prefixo.length); hit = true }
+        if (rec.sufixo.length >= 4 && baixaTxt(base).endsWith(baixaTxt(rec.sufixo))) { base = base.slice(0, base.length - rec.sufixo.length); hit = true }
         base = base.replace(/^[\s\-–·|]+|[\s\-–·|]+$/g, '').trim()
         if (hit && base && chaveNome(base) !== gk) { sugerido = base; tipo = 'padrão' }
       }
@@ -1279,6 +1283,12 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         nf: aj.nf || null, entidade: aj.entidade || null, historico: aj.historico || null, usuario,
       }, { onConflict: 'razao_id' })
       ajustouLeitura = true
+    }
+    // Corrigiu o NOME de uma linha? Guarda (antigo → novo) para SUGERIR o mesmo padrão nos outros.
+    if (ajustouLeitura && aj?.entidade) {
+      const antigo = String(acao?._origEntidade || acao?.leitura?.entidade || '').trim()
+      const novoNome = String(aj.entidade).trim()
+      if (antigo && novoNome && chaveNome(antigo) !== chaveNome(novoNome)) { setUltimaCorrecao({ old: antigo, neu: novoNome }); setSugDismiss(new Set()) }
     }
     setMsg(ajustouLeitura ? 'Leitura ajustada — o sistema vai recruzar.' : virouLancamento ? 'Correção registrada — lançamento enviado para o painel Contabilizar.' : `${tipo} registrada na auditoria.`)
     if (ehAb) setTratadosAb(prev => new Set(prev).add(chaveAbertura(acao))) // abertura: marca pela chave
@@ -1554,7 +1564,10 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // lote): útil quando o sistema leu o nome errado em várias linhas do mesmo fornecedor.
   async function aplicarFornecedorLote(lines, nome, aprender) {
     const nm = String(nome || '').trim()
-    const nomeAtual = loteForn?.nomeAtual || ''  // nome que estava no card (p/ detectar o padrão da correção)
+    // Nome que estava antes (p/ detectar o padrão da correção): do card (pincel) ou, no lote da
+    // barra, o nome mais frequente entre as linhas selecionadas.
+    let nomeAtual = loteForn?.nomeAtual || ''
+    if (!nomeAtual) { const cnt = {}; for (const l of (lines || [])) { const e = String(l.leitura?.entidade || '').trim(); if (e) cnt[e] = (cnt[e] || 0) + 1 }; nomeAtual = Object.keys(cnt).sort((a, b) => cnt[b] - cnt[a])[0] || '' }
     if (!nm) { setLoteForn(null); return }
     const razaoLinhas = (lines || []).filter(l => !l.acerto) // razão + saldo anterior
     const acertoLinhas = (lines || []).filter(l => l.acerto)  // lançamentos gerados (sem nome de origem)
