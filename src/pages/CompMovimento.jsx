@@ -7,6 +7,7 @@ import { theme, money, moneyDC } from '../lib/theme'
 import { montarBalancete, normalizaCompetencia, applyMask, erroContaSintetica } from '../lib/balancete'
 import { aprenderDaCorrecao } from '../lib/sugestoesRazao'
 import CampoConta from '../components/CampoConta'
+import InfoTela from '../components/InfoTela'
 
 // Data (Date do Excel ou "dd/mm/aaaa") → ISO "aaaa-mm-dd".
 function toISO(v) {
@@ -529,9 +530,10 @@ export default function CompMovimento() {
             )}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
-            <p style={{ color: theme.sub, fontSize: 12.5, margin: 0, flex: 1, minWidth: 240 }}>
+            <InfoTela titulo="Comparativo de resultado">
               Contas de resultado. Valores em <b style={{ color: theme.red }}>vermelho</b> desviam mais de 10% do <b>mês anterior</b> (fev × jan, mar × fev…) — o primeiro mês não é comparado. Mês sem saldo aparece como <b>—</b>; fica vermelho quando o mês anterior tinha movimento. Clique num valor para ver o razão e o provável culpado.
-            </p>
+            </InfoTela>
+            <span style={{ flex: 1, minWidth: 20 }} />
             <label style={{ fontSize: 12, color: theme.sub, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
               <i className="ti ti-calendar-stats" /> Agrupar:
               <select className="input" style={{ width: 'auto', fontSize: 12, padding: '6px 10px' }} value={agrupar} onChange={e => setAgrupar(e.target.value)}>
