@@ -9,8 +9,8 @@ export default function InfoTela({ children, titulo, style }) {
   return (
     <span style={{ position: 'relative', display: 'inline-flex', ...style }}>
       <button type="button" onClick={() => setAberto(a => !a)} title="Sobre esta tela"
-        style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, display: 'inline-flex', color: aberto ? theme.accent : theme.sub }}>
-        <i className="ti ti-info-circle" style={{ fontSize: 18 }} />
+        style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, display: 'inline-flex', color: theme.accent }}>
+        <i className="ti ti-info-circle-filled" style={{ fontSize: 19 }} />
       </button>
       {aberto && (
         <>
