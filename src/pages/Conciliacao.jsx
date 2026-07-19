@@ -1832,6 +1832,13 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
                     style={{ cursor: 'pointer', width: 16, height: 16 }} />
                 )}
                 <span style={{ color: unk ? theme.yellow : theme.text, fontSize: 14, fontWeight: 600, fontStyle: unk ? 'italic' : 'normal' }}>{g.nome}</span>
+                {!unk && (
+                  <button title="Corrigir/renomear este nome — vale para o cliente todo e é aprendido para os próximos meses. Para JUNTAR com outro grupo, digite exatamente o nome dele."
+                    onClick={e => { e.stopPropagation(); setLoteForn({ lines: grp }) }}
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: theme.sub, padding: 2, display: 'inline-flex' }}>
+                    <i className="ti ti-pencil" style={{ fontSize: 14 }} />
+                  </button>
+                )}
                 {g.unido && <span title={`Nomes unidos: ${g.variacoes.join(' · ')}`} style={{ background: 'rgba(74,124,255,0.18)', color: theme.accent, fontSize: 10.5, fontWeight: 700, padding: '2px 8px', borderRadius: 20, textTransform: 'uppercase', letterSpacing: .3, cursor: 'help' }}><i className="ti ti-arrows-join" /> {g.variacoes.length} nomes unidos</span>}
                 {anom && <span style={{ background: 'rgba(229,72,77,0.18)', color: theme.red, fontSize: 10.5, fontWeight: 700, padding: '2px 8px', borderRadius: 20, textTransform: 'uppercase', letterSpacing: .3 }}><i className="ti ti-alert-octagon" /> saldo {natAnom}</span>}
               </span>
@@ -1847,9 +1854,18 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
               </span>
             </div>
             {g.unido && (
-              <div style={{ padding: '8px 16px', borderTop: `1px solid ${theme.border}`, background: 'rgba(74,124,255,0.05)', fontSize: 11.5, color: theme.sub }}>
-                <i className="ti ti-arrows-join" style={{ color: theme.accent, marginRight: 6 }} />
-                Unificado de: {g.variacoes.join(' · ')}
+              <div style={{ padding: '8px 16px', borderTop: `1px solid ${theme.border}`, background: 'rgba(74,124,255,0.05)', fontSize: 11.5, color: theme.sub, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <span style={{ whiteSpace: 'nowrap' }}><i className="ti ti-arrows-join" style={{ color: theme.accent, marginRight: 6 }} />Unificado de:</span>
+                {g.variacoes.map((v, vi) => (
+                  <span key={vi} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: theme.card, border: `1px solid ${theme.border}`, borderRadius: 20, padding: '2px 4px 2px 10px' }}>
+                    {v}
+                    <button title={`Separar "${v}" deste grupo — deixa de unir com os outros (vale para todos os meses)`}
+                      onClick={e => { e.stopPropagation(); marcarIsolado(v) }}
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: theme.yellow, padding: 2, display: 'inline-flex' }}>
+                      <i className="ti ti-unlink" style={{ fontSize: 13 }} />
+                    </button>
+                  </span>
+                ))}
               </div>
             )}
             {sugsCard.map((p, pi) => (
