@@ -9,6 +9,7 @@ import { aprenderDaCorrecao } from '../lib/sugestoesRazao'
 import CampoConta from '../components/CampoConta'
 import InfoTela from '../components/InfoTela'
 import { checarArquivoEmpresa } from '../lib/validarArquivoEmpresa'
+import { carregarResolverCC, resolverCC } from '../lib/centroCusto'
 
 // Data (Date do Excel ou "dd/mm/aaaa") → ISO "aaaa-mm-dd".
 function toISO(v) {
@@ -237,9 +238,13 @@ export default function CompMovimento() {
     try {
       // Trava de segurança: o arquivo tem que ser da EMPRESA selecionada (código Domínio /
       // matriz-filial / CNPJ no cabeçalho) — evita importar razão de outra empresa.
-      const { data: cli } = await supabase.from('clientes').select('competencia_inicio, codigo_dominio, codigo_matriz, cnpj, razao_social').eq('id', empresaId).maybeSingle()
+      const { data: cli } = await supabase.from('clientes').select('competencia_inicio, codigo_dominio, codigo_matriz, cnpj, razao_social, usa_centro_custo').eq('id', empresaId).maybeSingle()
       const errEmp = await checarArquivoEmpresa(file, cli || {})
       if (errEmp) { setImpMsg(errEmp); setImpBusy(false); return }
+      // Centro de custo: casa o valor do arquivo com o cadastro (por código/nome) e grava o CÓDIGO.
+      const usaCentro = !!cli?.usa_centro_custo
+      const resolverCentro = usaCentro ? await carregarResolverCC(empresaId) : null
+      const ccNaoCad = new Set()
       const XLSX = await import('xlsx')
       const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true })
       const arr = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' })
@@ -282,14 +287,27 @@ export default function CompMovimento() {
         if (col.comp >= 0) { const mm = String(r[col.comp] ?? '').match(/(\d{1,2})/); if (mm) mes = Number(mm[1]) }
         if (!mes) { const iso = toISO(r[col.data]); if (iso) mes = Number(iso.slice(5, 7)) }
         if (!mes || mes < 1 || mes > 12 || mes >= mesInicio) continue // só meses ANTERIORES ao início
+        let centro_custo = colCC >= 0 ? (String(r[colCC] ?? '').trim() || null) : null
+        if (usaCentro) {
+          const rc = resolverCC(centro_custo, resolverCentro)
+          if (rc.sem) centro_custo = null
+          else if (rc.cod) centro_custo = rc.cod
+          else { ccNaoCad.add(rc.naoCadastrado); centro_custo = rc.naoCadastrado }
+        }
         ;(porMes[mes] ||= []).push({
           data: toISO(r[col.data]), conta,
           nome: col.nome >= 0 ? String(r[col.nome] ?? '').trim() : null,
           contrapartida: col.contrapartida >= 0 ? limpaContra(r[col.contrapartida]) : null,
           historico: col.historico >= 0 ? String(r[col.historico] ?? '').trim() : '',
-          centro_custo: colCC >= 0 ? (String(r[colCC] ?? '').trim() || null) : null,
+          centro_custo,
           debito, credito,
         })
+      }
+      // Trava: cliente usa centro de custo mas o arquivo tem centro(s) fora do cadastro.
+      if (usaCentro && ccNaoCad.size) {
+        if (!resolverCentro?.temCadastro) { setImpMsg('Erro: este cliente usa centro de custo, mas não há centros cadastrados. Cadastre em Base de Informações → Centro de custo antes de importar.'); setImpBusy(false); return }
+        const lista = [...ccNaoCad].slice(0, 12).join(', ')
+        setImpMsg(`Erro: centro(s) de custo não cadastrado(s): ${lista}${ccNaoCad.size > 12 ? ` (+${ccNaoCad.size - 12})` : ''}. Cadastre-os em Base de Informações → Centro de custo antes de importar.`); setImpBusy(false); return
       }
       const meses = Object.keys(porMes).map(Number).sort((a, b) => a - b)
       if (!meses.length) { setImpMsg(`Nenhum mês anterior a ${mesInicio <= 12 ? MESES[mesInicio - 1] : 'início'} reconhecido no arquivo.`); setImpBusy(false); return }
