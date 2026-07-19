@@ -799,7 +799,9 @@ export default function CompMovimento() {
 }
 
 function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuario, jaJustificada, justTextoAtual, onJustificada, onDesfeita, onCorrigido, plano, onClose }) {
-  const { conta, nome, mes, compId, todos, compIds, mesPorComp } = detalhe
+  const { conta, nome, mes, compId, todos, compIds, mesPorComp, classif } = detalhe
+  // Conta de resultado (3/4/5) → precisa de centro de custo; sem CC aparece destacado.
+  const contaResultado = ['3', '4', '5'].includes(String(classif || '')[0])
   const [carregando, setCarregando] = useState(true)
   const [linhas, setLinhas] = useState([])
   const [movers, setMovers] = useState([]) // entidades que mais explicam a variação (mês × mês anterior)
@@ -820,7 +822,7 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
     setCarregando(true)
     const ids = todos ? compIds : [compId]
     const rows = await lerTudo(() => supabase
-      .from('razao').select('id, competencia_id, data, conta, contrapartida, historico, debito, credito')
+      .from('razao').select('id, competencia_id, data, conta, contrapartida, historico, debito, credito, centro_custo')
       .in('competencia_id', ids).eq('conta', conta)
       .order('data', { ascending: true }))
     // Correções já geradas para estes lançamentos (para marcar/desfazer).
@@ -876,6 +878,7 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
         historico: l.historico || 'Lançamento de ajuste',
         debito: ehDeb ? v : 0, credito: ehDeb ? 0 : v,
         suspeito: false, ehLancamento: true, origem: l.origem || 'lancamento',
+        centro_custo: null, // rateio dos lançamentos entra aqui quando a coluna existir
       }
     })
     setCorrecoes(corrMap)
@@ -1129,6 +1132,7 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
                   {todos && <th style={th}>Mês</th>}
                   <th style={th}>Data</th>
                   <th style={th}>Histórico</th>
+                  <th style={th}>C. Custo</th>
                   <th style={{ ...th, textAlign: 'right' }}>Débito</th>
                   <th style={{ ...th, textAlign: 'right' }}>Crédito</th>
                   <th style={{ ...th, textAlign: 'right' }}>Saldo</th>
@@ -1158,6 +1162,9 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
                         {corr && <div style={{ color: theme.green, fontSize: 11, marginTop: 2 }}>corrigido — {corr.conta_debito} (D) / {corr.conta_credito} (C) · {money(corr.valor)}</div>}
                         {l.suspeito && !corr && <div style={{ color: theme.yellow, fontSize: 11, marginTop: 2 }}>provável culpado — {l.motivo}</div>}
                       </td>
+                      <td style={{ ...td, whiteSpace: 'nowrap', fontSize: 11.5, fontWeight: (!l.centro_custo && contaResultado) ? 700 : 400, color: l.centro_custo ? theme.text : (contaResultado ? theme.yellow : theme.sub) }}>
+                        {l.centro_custo || (contaResultado ? 'sem CC' : '—')}
+                      </td>
                       <td style={{ ...td, textAlign: 'right' }}>{Number(l.debito) ? money(l.debito) : ''}</td>
                       <td style={{ ...td, textAlign: 'right' }}>{Number(l.credito) ? money(l.credito) : ''}</td>
                       <td style={{ ...td, textAlign: 'right', color: saldo < 0 ? theme.red : theme.text }}>{money(saldo)}</td>
@@ -1167,7 +1174,7 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
               </tbody>
               <tfoot>
                 <tr style={{ borderTop: `1px solid ${theme.border}`, background: theme.input }}>
-                  <td style={{ ...td, fontWeight: 700 }} colSpan={todos ? 4 : 3}>Total</td>
+                  <td style={{ ...td, fontWeight: 700 }} colSpan={todos ? 5 : 4}>Total</td>
                   <td style={{ ...td, textAlign: 'right', fontWeight: 700 }}>{money(totDeb)}</td>
                   <td style={{ ...td, textAlign: 'right', fontWeight: 700 }}>{money(totCred)}</td>
                   <td style={{ ...td, textAlign: 'right', fontWeight: 700 }}>{money(totDeb - totCred)}</td>
