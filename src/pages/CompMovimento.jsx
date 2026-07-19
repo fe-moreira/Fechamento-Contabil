@@ -451,7 +451,8 @@ export default function CompMovimento() {
     const allAm = [...new Set(anosMeses.map(a => amKey(a.ano, a.mes)))]
     const analitRes = contas.filter(c => !c.sintetica && ehResult(c))
     for (const c of analitRes) {
-      const per = movCC[c.reduzido] || {}
+      // O razão pode ter gravado a conta pelo código reduzido OU pela classificação — casa pelos dois.
+      const per = movCC[c.reduzido] || movCC[c.classifRaw] || movCC[c.classif] || {}
       const o = (out[c.key] = {})
       for (const am of allAm) {
         const byCc = per[am]
