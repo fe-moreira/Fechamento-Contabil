@@ -223,6 +223,7 @@ export default function CompMovimento() {
   const [centrosCC, setCentrosCC] = useState([])            // [{ k, nome }] centros (cadastro + razão)
   const [movCC, setMovCC] = useState({})                    // { conta: { 'ano-mm': { cod: valor } } }
   const [ccSel, setCcSel] = useState(() => new Set())       // centros marcados; vazio = todos (sem filtro)
+  const [ccTemDados, setCcTemDados] = useState(false)       // o razão tem centro de custo preenchido?
 
   // Importa o razão dos MESES ANTERIORES (ex.: jan–abr) num único arquivo, agrupando por
   // mês (coluna de competência/mês ou o mês da data). Cria a competência de cada mês e
@@ -308,7 +309,7 @@ export default function CompMovimento() {
 
   useEffect(() => {
     setComps([]); setAnosMeses([]); setContas([]); setMatriz({}); setDetalhe(null); setJustificadas(new Set())
-    setUsaCC(false); setCentrosCC([]); setMovCC({})
+    setUsaCC(false); setCentrosCC([]); setMovCC({}); setCcTemDados(false)
     if (!empresaId) return
     let vivo = true
     ;(async () => {
@@ -398,7 +399,8 @@ export default function CompMovimento() {
           const centros = [...todosCod].sort((a, b) => String(a).localeCompare(String(b), 'pt-BR'))
             .map(cod => ({ k: cod, nome: cod === '(sem centro)' ? '(sem centro)' : (nomeByCod[cod] ? `${cod} · ${nomeByCod[cod]}` : cod) }))
           if (!vivo) return
-          setUsaCC(true); setCentrosCC(centros); setMovCC(mcc)
+          const temCentroReal = [...presentes].some(c => c !== '(sem centro)')
+          setUsaCC(true); setCentrosCC(centros); setMovCC(mcc); setCcTemDados(temCentroReal)
         }
 
         // Pré-carrega justificativas/correções já registradas na auditoria deste módulo,
@@ -665,6 +667,12 @@ export default function CompMovimento() {
                 options={centrosCC} marcado={ccSel} onToggle={toggleCC} onTodos={() => setCcSel(new Set())} />
             )}
           </div>
+          {usaCC && !ccTemDados && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap', marginBottom: 14, padding: '9px 13px', background: 'rgba(240,180,41,0.12)', border: `0.5px solid ${theme.yellow}`, borderRadius: 10, fontSize: 12.5, color: theme.text }}>
+              <i className="ti ti-alert-triangle" style={{ color: theme.yellow, fontSize: 16 }} />
+              <span>Este cliente <b>usa centro de custo</b>, mas o razão importado <b>não tem centro preenchido</b> — por isso o filtro não traz valores. <b>Reimporte o razão</b> em <b>Importar Razão</b> apontando a coluna do centro de custo (ex.: coluna V) antes de filtrar.</span>
+            </div>
+          )}
           <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'auto', maxWidth: '100%' }}>
             <table style={{ borderCollapse: 'collapse', width: '100%' }}>
               <thead>

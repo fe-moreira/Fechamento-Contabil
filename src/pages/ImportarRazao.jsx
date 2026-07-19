@@ -114,6 +114,17 @@ export default function ImportarRazao() {
   const [arquivos, setArquivos] = useState([])   // [{ id, nome, path, linhas }]
   const [pend, setPend] = useState(null)          // { registros, file, nome } — pergunta substituir/complementar
   const [msg, setMsg] = useState('')
+  const [clienteUsaCC, setClienteUsaCC] = useState(false) // cliente usa centro de custo (cadastro)
+
+  // Flag "usa centro de custo" do cliente — para avisar se a coluna do centro não foi mapeada.
+  useEffect(() => {
+    setClienteUsaCC(false)
+    if (!empresaId) return
+    let vivo = true
+    supabase.from('clientes').select('usa_centro_custo').eq('id', empresaId).maybeSingle()
+      .then(({ data }) => { if (vivo) setClienteUsaCC(!!data?.usa_centro_custo) })
+    return () => { vivo = false }
+  }, [empresaId])
 
   // Carrega compId + a lista de arquivos do razão já importados na competência.
   useEffect(() => {
@@ -402,6 +413,12 @@ export default function ImportarRazao() {
           <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: 22, marginBottom: 18 }}>
             <h3 style={{ fontSize: 14, marginBottom: 4 }}>Mapeamento de colunas</h3>
             <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 16 }}>Confira a correspondência detectada automaticamente e ajuste se necessário.</p>
+            {clienteUsaCC && !map.centro_custo && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap', marginBottom: 16, padding: '9px 13px', background: 'rgba(240,180,41,0.12)', border: `0.5px solid ${theme.yellow}`, borderRadius: 10, fontSize: 12.5, color: theme.text }}>
+                <i className="ti ti-alert-triangle" style={{ color: theme.yellow, fontSize: 16 }} />
+                <span>Este cliente <b>usa centro de custo</b>, mas nenhuma coluna foi apontada para <b>Centro de custo</b>. Escolha a coluna do centro (ex.: <b>coluna V</b>) no campo abaixo, senão o filtro do Comparativo por centro fica sem valores.</span>
+              </div>
+            )}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(220px,1fr))', gap: 12 }}>
               {ALVOS.map(a => (
                 <div key={a.key}>
