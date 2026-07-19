@@ -384,22 +384,25 @@ export default function CompMovimento() {
           for (const r of (Array.isArray(ccCarga?.dados) ? ccCarga.dados : [])) { const cod = kBy(r, /cod/); if (cod) nomeByCod[cod] = kBy(r, /nome|descri/) }
           const rz = await lerTudo(() => supabase.from('razao').select('conta, centro_custo, debito, credito, competencia_id').in('competencia_id', competencias.map(c => c.id)))
           if (!vivo) return
+          const SEM = '(sem centro)'
+          // "Sem centro": vazio OU o texto "Sem Centro de Custo" caem todos na mesma opção.
+          const ehSem = s => { const n = String(s || '').trim(); return !n || /^sem\s*centro/i.test(n.normalize('NFD').replace(/[̀-ͯ]/g, '')) }
           const mcc = {}, presentes = new Set()
           for (const l of rz) {
             const am = compAM[l.competencia_id]; if (!am) continue
-            const codcc = String(l.centro_custo || '').trim() || '(sem centro)'
+            const codcc = ehSem(l.centro_custo) ? SEM : String(l.centro_custo).trim()
             presentes.add(codcc)
             const conta = String(l.conta || '').trim(); if (!conta) continue
             const v = (Number(l.debito) || 0) - (Number(l.credito) || 0)
             ;(mcc[conta] ||= {}); (mcc[conta][am] ||= {})
             mcc[conta][am][codcc] = (mcc[conta][am][codcc] || 0) + v
           }
-          // Lista = centros CADASTRADOS + os que aparecem no razão. Flag ligada → filtro sempre visível.
-          const todosCod = new Set([...Object.keys(nomeByCod), ...presentes])
-          const centros = [...todosCod].sort((a, b) => String(a).localeCompare(String(b), 'pt-BR'))
-            .map(cod => ({ k: cod, nome: cod === '(sem centro)' ? '(sem centro)' : (nomeByCod[cod] ? `${cod} · ${nomeByCod[cod]}` : cod) }))
+          // Lista = centros CADASTRADOS + os do razão + SEMPRE a opção "Sem centro de custo" (por último).
+          const todosCod = new Set([...Object.keys(nomeByCod), ...presentes, SEM])
+          const centros = [...todosCod].sort((a, b) => (a === SEM ? 1 : 0) - (b === SEM ? 1 : 0) || String(a).localeCompare(String(b), 'pt-BR'))
+            .map(cod => ({ k: cod, nome: cod === SEM ? 'Sem centro de custo' : (nomeByCod[cod] ? `${cod} · ${nomeByCod[cod]}` : cod) }))
           if (!vivo) return
-          const temCentroReal = [...presentes].some(c => c !== '(sem centro)')
+          const temCentroReal = [...presentes].some(c => c !== SEM)
           setUsaCC(true); setCentrosCC(centros); setMovCC(mcc); setCcTemDados(temCentroReal)
         }
 
@@ -570,6 +573,10 @@ export default function CompMovimento() {
     return has ? s : null
   }
   const totalConta = key => colunas.reduce((s, col) => s + (valorCol(key, col) || 0), 0)
+  // Conta "com movimento" = tem algum valor diferente de zero em alguma coluna visível.
+  // Linhas totalmente vazias (nenhum lançamento) somem, deixando o comparativo enxuto — e
+  // com o filtro de centro de custo ele se remodela (some quem não tem lançamento no centro).
+  const temMovimento = key => colunas.some(col => { const v = valorCol(key, col); return v != null && Number(v) !== 0 })
   // Lucro (ou prejuízo) do período = −(soma dos saldos das contas de resultado analíticas).
   const lucroCol = col => -contas.filter(c => !c.sintetica).reduce((s, c) => s + (valorCol(c.key, col) || 0), 0)
   const lucroTotal = colunas.reduce((s, col) => s + lucroCol(col), 0)
@@ -688,7 +695,7 @@ export default function CompMovimento() {
                 </tr>
               </thead>
               <tbody>
-                {contas.filter(c => nivel === 'tudo' ? true : (c.sintetica && c.grau <= nivel)).map(({ reduzido, classif, classifRaw, key, nome, sintetica, grau }) => {
+                {contas.filter(c => (nivel === 'tudo' ? true : (c.sintetica && c.grau <= nivel)) && temMovimento(c.key)).map(({ reduzido, classif, classifRaw, key, nome, sintetica, grau }) => {
                   const tot = totalConta(key)
                   // Destaque por nível: sintética de 1º nível mais forte; níveis mais fundos, mais leves.
                   const bgNivel = !sintetica ? 'transparent' : grau <= 1 ? theme.input : grau === 2 ? 'rgba(74,124,255,0.07)' : 'rgba(74,124,255,0.035)'
