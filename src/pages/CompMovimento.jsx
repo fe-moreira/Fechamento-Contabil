@@ -244,7 +244,7 @@ export default function CompMovimento() {
       // Centro de custo: casa o valor do arquivo com o cadastro (por código/nome) e grava o CÓDIGO.
       const usaCentro = !!cli?.usa_centro_custo
       const resolverCentro = usaCentro ? await carregarResolverCC(empresaId) : null
-      const ccNaoCad = new Set()
+      const ccNaoCad = new Map() // centro não cadastrado → rótulo (valor · descrição, quando há)
       const XLSX = await import('xlsx')
       const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true })
       const arr = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' })
@@ -270,6 +270,7 @@ export default function CompMovimento() {
       // Centro de custo: prefere a coluna de DESCRIÇÃO (descricao_ccu) ao código (codigo_ccu, que costuma vir vazio).
       const ccCols = headers.map((hd, i) => ({ n: norm(hd), i })).filter(x => /centro|ccu|cencus|ccusto|c\.custo|c custo|cto custo/.test(x.n))
       const colCC = (ccCols.find(x => /desc|nome/.test(x.n)) || ccCols[0] || { i: -1 }).i
+      const colCCsec = (ccCols.find(x => x.i !== colCC) || { i: -1 }).i // outra coluna de CC (p/ dizer qual é no aviso)
       if ((col.reduzido < 0 && col.clasc < 0) || (col.debito < 0 && col.credito < 0)) { setImpMsg('Não identifiquei as colunas (preciso do Código da conta e Débito/Crédito).'); setImpBusy(false); return }
       const iniM = String(normalizaCompetencia(cli?.competencia_inicio) || '').match(/^(\d{2})\/(\d{4})$/)
       const mesInicio = iniM ? Number(iniM[1]) : 99 // sem início definido → importa todos os meses do arquivo
@@ -292,7 +293,7 @@ export default function CompMovimento() {
           const rc = resolverCC(centro_custo, resolverCentro)
           if (rc.sem) centro_custo = null
           else if (rc.cod) centro_custo = rc.cod
-          else { ccNaoCad.add(rc.naoCadastrado); centro_custo = rc.naoCadastrado }
+          else { const sec = colCCsec >= 0 ? String(r[colCCsec] ?? '').trim() : ''; ccNaoCad.set(rc.naoCadastrado, (sec && sec !== rc.naoCadastrado) ? `${rc.naoCadastrado} · ${sec}` : rc.naoCadastrado); centro_custo = rc.naoCadastrado }
         }
         ;(porMes[mes] ||= []).push({
           data: toISO(r[col.data]), conta,
@@ -306,7 +307,7 @@ export default function CompMovimento() {
       // Trava: cliente usa centro de custo mas o arquivo tem centro(s) fora do cadastro.
       if (usaCentro && ccNaoCad.size) {
         if (!resolverCentro?.temCadastro) { setImpMsg('Erro: este cliente usa centro de custo, mas não há centros cadastrados. Cadastre em Base de Informações → Centro de custo antes de importar.'); setImpBusy(false); return }
-        const lista = [...ccNaoCad].slice(0, 12).join(', ')
+        const lista = [...ccNaoCad.values()].slice(0, 12).join(', ')
         setImpMsg(`Erro: centro(s) de custo não cadastrado(s): ${lista}${ccNaoCad.size > 12 ? ` (+${ccNaoCad.size - 12})` : ''}. Cadastre-os em Base de Informações → Centro de custo antes de importar.`); setImpBusy(false); return
       }
       const meses = Object.keys(porMes).map(Number).sort((a, b) => a - b)

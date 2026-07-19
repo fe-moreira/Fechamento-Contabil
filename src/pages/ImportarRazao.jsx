@@ -204,7 +204,11 @@ export default function ImportarRazao() {
 
   // Lê os registros normalizados do arquivo atual (mapeamento) e valida o mês.
   function lerRegistros(competencia_id) {
-    const naoCad = new Set() // centros de custo do arquivo que NÃO estão cadastrados
+    const naoCad = new Map() // centros do arquivo NÃO cadastrados → rótulo (código · descrição, quando há)
+    const normH = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+    const mappedCcIdx = (map.centro_custo !== '' && map.centro_custo != null) ? Number(map.centro_custo) : -1
+    // Coluna de DESCRIÇÃO do centro (para dizer no aviso QUAL é o centro), se houver outra.
+    const descCcIdx = headers.findIndex((h, i) => { const n = normH(h); return i !== mappedCcIdx && /(centro|ccu|cencus|ccusto)/.test(n) && /(desc|nome)/.test(n) })
     const registros = linhas.map(l => {
       let centro_custo = String(valorCol(l, 'centro_custo') ?? '').trim() || null
       // Cliente com centro de custo: casa o valor do arquivo com o CADASTRO (por código ou nome)
@@ -213,7 +217,11 @@ export default function ImportarRazao() {
         const r = resolverCC(centro_custo, resolverCentro)
         if (r.sem) centro_custo = null
         else if (r.cod) centro_custo = r.cod
-        else { naoCad.add(r.naoCadastrado); centro_custo = r.naoCadastrado }
+        else {
+          const desc = descCcIdx >= 0 ? String(l[descCcIdx] ?? '').trim() : ''
+          naoCad.set(r.naoCadastrado, (desc && normH(desc) !== normH(r.naoCadastrado)) ? `${r.naoCadastrado} · ${desc}` : r.naoCadastrado)
+          centro_custo = r.naoCadastrado
+        }
       }
       return {
         competencia_id,
@@ -231,7 +239,7 @@ export default function ImportarRazao() {
     // Trava: cliente usa centro de custo mas o arquivo tem centro(s) fora do cadastro.
     if (clienteUsaCC && naoCad.size) {
       if (!resolverCentro?.temCadastro) return { erro: 'Este cliente usa centro de custo, mas não há centros cadastrados. Cadastre em Base de Informações → Centro de custo antes de importar.' }
-      const lista = [...naoCad].slice(0, 12).join(', ')
+      const lista = [...naoCad.values()].slice(0, 12).join(', ')
       return { erro: `Centro(s) de custo não cadastrado(s) no arquivo: ${lista}${naoCad.size > 12 ? ` (+${naoCad.size - 12})` : ''}. Cadastre-os em Base de Informações → Centro de custo (ou corrija o arquivo) antes de importar.` }
     }
     // Validação: o mês dos lançamentos tem que ser o da competência selecionada.
