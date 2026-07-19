@@ -255,6 +255,9 @@ export default function CompMovimento() {
         comp: findCol('compet', 'mes', 'mês'),
         mascara: findCol('mascara', 'máscara'),
       }
+      // Centro de custo: prefere a coluna de DESCRIÇÃO (descricao_ccu) ao código (codigo_ccu, que costuma vir vazio).
+      const ccCols = headers.map((hd, i) => ({ n: norm(hd), i })).filter(x => /centro|ccu|cencus|ccusto|c\.custo|c custo|cto custo/.test(x.n))
+      const colCC = (ccCols.find(x => /desc|nome/.test(x.n)) || ccCols[0] || { i: -1 }).i
       if ((col.reduzido < 0 && col.clasc < 0) || (col.debito < 0 && col.credito < 0)) { setImpMsg('Não identifiquei as colunas (preciso do Código da conta e Débito/Crédito).'); setImpBusy(false); return }
       const { data: cli } = await supabase.from('clientes').select('competencia_inicio').eq('id', empresaId).maybeSingle()
       const iniM = String(normalizaCompetencia(cli?.competencia_inicio) || '').match(/^(\d{2})\/(\d{4})$/)
@@ -278,6 +281,7 @@ export default function CompMovimento() {
           nome: col.nome >= 0 ? String(r[col.nome] ?? '').trim() : null,
           contrapartida: col.contrapartida >= 0 ? limpaContra(r[col.contrapartida]) : null,
           historico: col.historico >= 0 ? String(r[col.historico] ?? '').trim() : '',
+          centro_custo: colCC >= 0 ? (String(r[colCC] ?? '').trim() || null) : null,
           debito, credito,
         })
       }
@@ -290,7 +294,7 @@ export default function CompMovimento() {
         else { const { data: cr, error } = await supabase.from('competencias').insert({ cliente_id: empresaId, ano: ANO, mes }).select('id').single(); if (error) throw error; compId = cr.id }
         const itens = porMes[mes]
         // A tabela `razao` NÃO tem coluna `nome` (igual à conciliação): grava sem o nome.
-        const paraRazao = itens.map(x => ({ competencia_id: compId, data: x.data, conta: x.conta, contrapartida: x.contrapartida, historico: x.historico, debito: x.debito, credito: x.credito }))
+        const paraRazao = itens.map(x => ({ competencia_id: compId, data: x.data, conta: x.conta, contrapartida: x.contrapartida, historico: x.historico, centro_custo: x.centro_custo, debito: x.debito, credito: x.credito }))
         await supabase.from('razao').delete().eq('competencia_id', compId)
         for (let i = 0; i < paraRazao.length; i += 500) { const { error } = await supabase.from('razao').insert(paraRazao.slice(i, i + 500)); if (error) throw error }
         const porConta = {}
