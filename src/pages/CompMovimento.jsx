@@ -638,9 +638,6 @@ export default function CompMovimento() {
             )}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
-            <InfoTela titulo="Comparativo de resultado">
-              Contas de resultado. Valores em <b style={{ color: theme.red }}>vermelho</b> desviam mais de 10% do <b>mês anterior</b> (fev × jan, mar × fev…) — o primeiro mês não é comparado. Mês sem saldo aparece como <b>—</b>; fica vermelho quando o mês anterior tinha movimento. Clique num valor para ver o razão e o provável culpado.
-            </InfoTela>
             <span style={{ flex: 1, minWidth: 20 }} />
             <label style={{ fontSize: 12, color: theme.sub, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
               <i className="ti ti-calendar-stats" /> Agrupar:
@@ -1512,7 +1509,12 @@ const td = { padding: '9px 14px', fontSize: 12.5, color: theme.text, whiteSpace:
 function Wrapper({ children }) {
   return (
     <div>
-      <h1 style={{ fontSize: 22, fontWeight: 500, marginBottom: 4 }}>Comp. Movimento</h1>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+        <h1 style={{ fontSize: 22, fontWeight: 500, margin: 0 }}>Comp. Movimento</h1>
+        <InfoTela titulo="Comp. Movimento">
+          Contas de resultado. Valores em <b style={{ color: theme.red }}>vermelho</b> desviam mais de 10% do <b>mês anterior</b> (fev × jan, mar × fev…) — o primeiro mês não é comparado. Mês sem saldo aparece como <b>—</b>; fica vermelho quando o mês anterior tinha movimento. Clique num valor para ver o razão e o provável culpado. Se o cliente <b>usa centro de custo</b>, aparece o filtro para ver o resultado por centro.
+        </InfoTela>
+      </div>
       <p style={{ color: theme.sub, fontSize: 13, marginBottom: 22 }}>
         Comparativo mês a mês do ano: saldos de cada conta ao longo das competências, destacando variações relevantes.
       </p>
