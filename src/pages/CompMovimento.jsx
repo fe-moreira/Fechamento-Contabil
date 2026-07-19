@@ -862,6 +862,8 @@ export default function CompMovimento() {
           onCorrigido={() => setRefresh(x => x + 1)}
           plano={plano}
           centrosCC={centrosCC}
+          ccSel={ccSel}
+          filtroCC={filtroCC}
           onClose={() => setDetalhe(null)}
         />
       )}
@@ -869,12 +871,19 @@ export default function CompMovimento() {
   )
 }
 
-function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuario, jaJustificada, justTextoAtual, onJustificada, onDesfeita, onCorrigido, plano, centrosCC = [], onClose }) {
+function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuario, jaJustificada, justTextoAtual, onJustificada, onDesfeita, onCorrigido, plano, centrosCC = [], ccSel = new Set(), filtroCC = false, onClose }) {
   const { conta, nome, mes, compId, todos, compIds, mesPorComp, classif } = detalhe
   // Conta de resultado (3/4/5) → precisa de centro de custo; sem CC aparece destacado.
   const contaResultado = ['3', '4', '5'].includes(String(classif || '')[0])
   // Centro de custo: mostra o NOME (o código guardado no razão vira o descritivo do cadastro).
   const nomeCentro = cod => centrosCC.find(c => String(c.k) === String(cod))?.nome || cod
+  // Resolve o valor do razão para a CHAVE do filtro (código, ou '(sem centro)') — para filtrar
+  // o drill-down pelos centros marcados, igual ao comparativo.
+  const normCC = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+  const ehSemCC = s => { const n = String(s || '').trim(); return !n || n === '-1' || /^sem\s*centro/i.test(normCC(n)) }
+  const codByNomeCC = {}; for (const c of centrosCC) if (c.nome) codByNomeCC[normCC(c.nome)] = c.k
+  const chaveCC = raw => { if (ehSemCC(raw)) return '(sem centro)'; const v = String(raw).trim(); return centrosCC.some(c => String(c.k) === v) ? v : (codByNomeCC[normCC(v)] || v) }
+  const passaCC = l => !filtroCC || ccSel.has(chaveCC(l.centro_custo))
   const [carregando, setCarregando] = useState(true)
   const [linhas, setLinhas] = useState([])
   const [movers, setMovers] = useState([]) // entidades que mais explicam a variação (mês × mês anterior)
@@ -957,7 +966,9 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
     setCorrecoes(corrMap)
     setDedut(dedutMap)
     setMovers(mv)
-    setLinhas([...analisarCulpados(rows, anteriores), ...lancRows])
+    // Respeita o filtro de centro de custo do comparativo: no drill-down mostra só as linhas
+    // dos centros marcados (assim o Total bate com a célula filtrada).
+    setLinhas([...analisarCulpados(rows, anteriores), ...lancRows].filter(passaCC))
     setCarregando(false)
   }
 
