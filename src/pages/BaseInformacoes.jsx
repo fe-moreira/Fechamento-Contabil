@@ -66,7 +66,7 @@ function gerarRelatorioDistribuicaoAta({ formato, ata, competencia, empresaNome,
       return gerarExcelTimbrado({ titulo, sub, colunas, secoes, totais: dados.length > 1 ? ['', 'TOTAL GERAL', gPago, gSaldo] : null, arquivo: arqBase + '.xlsx', aba: 'Distribuição' })
     }
     const secoes = dados.map(d => ({ titulo: d.titulo, linhas: d.linhas.map(l => [l[0], l[1], l[2] === '' ? '' : money(l[2]), money(l[3])]), totais: ['', 'Total pago / saldo a pagar', money(d.pago), money(d.saldo)] }))
-    return abrePdfTimbrado({ titulo, sub, colunas, secoes, totais: dados.length > 1 ? ['', 'TOTAL GERAL', money(gPago), money(gSaldo)] : null })
+    return abrePdfTimbrado({ titulo, sub, empresa: empresaNome, competencia, colunas, secoes, totais: dados.length > 1 ? ['', 'TOTAL GERAL', money(gPago), money(gSaldo)] : null })
   }
 
   // SÓ DO MÊS: resumo por conta (composição do saldo a pagar, com o pago no mês).
@@ -100,7 +100,7 @@ function gerarRelatorioDistribuicaoAta({ formato, ata, competencia, empresaNome,
     return gerarExcelTimbrado({ titulo, sub, colunas, secoes, totais: ['TOTAL GERAL', geral.inicial, '', geral.pago, geral.mes, geral.saldo], arquivo: arqBase + '.xlsx', aba: 'Distribuição' })
   }
   const secoes = arr.map(g => ({ titulo: contaLabel(g.conta), linhas: g.itens.map(it => [it.nome, money(it.inicial), String(it.qtd), money(it.pago), money(it.mes), money(it.saldo)]), totais: ['Subtotal', money(g.inicial), String(g.qtd), money(g.pago), money(g.mes), money(g.saldo)] }))
-  abrePdfTimbrado({ titulo, sub, colunas, secoes, totais: ['TOTAL GERAL', money(geral.inicial), '', money(geral.pago), money(geral.mes), money(geral.saldo)] })
+  abrePdfTimbrado({ titulo, sub, empresa: empresaNome, competencia, colunas, secoes, totais: ['TOTAL GERAL', money(geral.inicial), '', money(geral.pago), money(geral.mes), money(geral.saldo)] })
 }
 
 // Lê a 1ª planilha detectando a linha de cabeçalho (a 1ª com >=3 células de texto não vazias).

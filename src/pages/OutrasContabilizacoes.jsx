@@ -160,7 +160,7 @@ function gerarRelatorioApropriacao({ formato, origem, rows, competencia, empresa
     return gerarExcelTimbrado({ titulo, sub, colunas, secoes, totais: ['TOTAL GERAL', '', geral.total, geral.mes, geral.acum, geral.saldo], arquivo, aba: origem === 'seguro' ? 'Seguros' : 'Despesas' })
   }
   const secoes = grupos.map(g => ({ titulo: label(g), linhas: g.itens.map(it => [it.nome, it.vig, money(it.total), money(it.mes), money(it.acum), money(it.saldo)]), totais: ['Subtotal', '', money(g.total), money(g.mes), money(g.acum), money(g.saldo)] }))
-  abrePdfTimbrado({ titulo, sub, colunas, secoes, totais: ['TOTAL GERAL', '', money(geral.total), money(geral.mes), money(geral.acum), money(geral.saldo)] })
+  abrePdfTimbrado({ titulo, sub, empresa: empresaNome, competencia, colunas, secoes, totais: ['TOTAL GERAL', '', money(geral.total), money(geral.mes), money(geral.acum), money(geral.saldo)] })
 }
 
 // Botões de relatório (PDF/Excel) do saldo a apropriar — reaproveitados por seguro e despesa.

@@ -157,7 +157,7 @@ export default function RelatoriosMassa() {
     if (fmt === 'excel') {
       gerarExcelTimbrado({ titulo, sub: res.resumo, colunas: res.colunas, linhas: res.rows, totais: null, arquivo: `${rep.arquivo}${suf}.xlsx`, aba: 'Relatório' })
     } else {
-      abrePdfTimbrado({ titulo, sub: res.resumo, colunas: res.colunas.map(c => ({ nome: c.nome })), linhas: res.rows })
+      abrePdfTimbrado({ titulo, sub: res.resumo, competencia, colunas: res.colunas.map(c => ({ nome: c.nome })), linhas: res.rows })
     }
   }
 

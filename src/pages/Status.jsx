@@ -651,7 +651,7 @@ export default function Status() {
       })
     } else {
       abrePdfTimbrado({
-        titulo: tituloRel, sub,
+        titulo: tituloRel, sub, empresa: empresaNome, competencia,
         colunas: [{ nome: 'Situação' }, { nome: 'Item' }, { nome: 'Contas' }, { nome: 'Detalhe' }],
         linhas,
       })
