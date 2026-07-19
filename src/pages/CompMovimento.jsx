@@ -413,7 +413,7 @@ export default function CompMovimento() {
           if (!vivo) return
           const SEM = '(sem centro)'
           // "Sem centro": vazio OU o texto "Sem Centro de Custo" caem todos na mesma opção.
-          const ehSem = s => { const n = String(s || '').trim(); return !n || /^sem\s*centro/i.test(n.normalize('NFD').replace(/[̀-ͯ]/g, '')) }
+          const ehSem = s => { const n = String(s || '').trim(); return !n || n === '-1' || /^sem\s*centro/i.test(n.normalize('NFD').replace(/[̀-ͯ]/g, '')) }
           const mcc = {}, presentes = new Set()
           for (const l of rz) {
             const am = compAM[l.competencia_id]; if (!am) continue
@@ -1206,9 +1206,10 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
                         {corr && <div style={{ color: theme.green, fontSize: 11, marginTop: 2 }}>corrigido — {corr.conta_debito} (D) / {corr.conta_credito} (C) · {money(corr.valor)}</div>}
                         {l.suspeito && !corr && <div style={{ color: theme.yellow, fontSize: 11, marginTop: 2 }}>provável culpado — {l.motivo}</div>}
                       </td>
-                      <td style={{ ...td, whiteSpace: 'nowrap', fontSize: 11.5, fontWeight: (!l.centro_custo && contaResultado) ? 700 : 400, color: l.centro_custo ? theme.text : (contaResultado ? theme.yellow : theme.sub) }}>
-                        {l.centro_custo || (contaResultado ? 'sem CC' : '—')}
-                      </td>
+                      {(() => { const cc = (l.centro_custo && l.centro_custo !== '-1') ? l.centro_custo : null; return (
+                      <td style={{ ...td, whiteSpace: 'nowrap', fontSize: 11.5, fontWeight: (!cc && contaResultado) ? 700 : 400, color: cc ? theme.text : (contaResultado ? theme.yellow : theme.sub) }}>
+                        {cc || (contaResultado ? 'sem CC' : '—')}
+                      </td>) })()}
                       <td style={{ ...td, textAlign: 'right' }}>{Number(l.debito) ? money(l.debito) : ''}</td>
                       <td style={{ ...td, textAlign: 'right' }}>{Number(l.credito) ? money(l.credito) : ''}</td>
                       <td style={{ ...td, textAlign: 'right', color: saldo < 0 ? theme.red : theme.text }}>{money(saldo)}</td>
