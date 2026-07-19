@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
+import { lerTudo } from '../lib/lerTudo'
 import { montarBalancete } from '../lib/balancete'
 import { gerarExcelDominio } from '../lib/excel'
 import { abreComparativoDominio } from '../lib/pdf'
@@ -53,7 +54,9 @@ export default function ComparativoCompleto({ empresaId, empresaNome, competenci
   const [nivel, setNivel] = useState('tudo')
   const [gruposSel, setGruposSel] = useState(() => new Set(GRUPOS.map(g => g.k)))
   const [mesesSel, setMesesSel] = useState(() => new Set()) // vazio = todos
+  const [ccSel, setCcSel] = useState(() => new Set()) // centros de custo marcados; vazio = todos (sem filtro)
   const ano = Number((competencia || '').split('/')[1]) || new Date().getFullYear()
+  useEffect(() => { setCcSel(new Set()) }, [empresaId, ano]) // troca de empresa/ano → volta a "todos"
 
   useEffect(() => {
     setDados(null)
@@ -85,7 +88,36 @@ export default function ComparativoCompleto({ empresaId, empresaNome, competenci
         }
         meses.sort((a, b) => a - b)
         const contas = Object.values(meta).sort((a, b) => a.classifRaw < b.classifRaw ? -1 : a.classifRaw > b.classifRaw ? 1 : 0)
-        if (vivo) setDados({ meses, contas, mov, sf, si })
+
+        // Centro de custo: só para clientes que usam. Lê o razão (que tem o CC) das competências
+        // do ano e monta o movimento por conta · mês · centro — para filtrar o RESULTADO por CC.
+        let cc = { usaCC: false, centros: [], movCC: {} }
+        const { data: cliRow } = await supabase.from('clientes').select('usa_centro_custo').eq('id', empresaId).maybeSingle()
+        if (!vivo) return
+        if (cliRow?.usa_centro_custo && comps.length) {
+          const compMes = {}; for (const c of comps) compMes[c.id] = c.mes
+          const { data: ccCarga } = await supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'centro_custo').order('created_at', { ascending: false }).limit(1).maybeSingle()
+          const kBy = (o, re) => { const k = Object.keys(o || {}).find(k => re.test(String(k).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, ''))); return k ? String(o[k] ?? '').trim() : '' }
+          const nomeByCod = {}
+          for (const r of (Array.isArray(ccCarga?.dados) ? ccCarga.dados : [])) { const cod = kBy(r, /cod/); if (cod) nomeByCod[cod] = kBy(r, /nome|descri/) }
+          const rz = await lerTudo(() => supabase.from('razao').select('conta, centro_custo, debito, credito, competencia_id').in('competencia_id', comps.map(c => c.id)))
+          if (!vivo) return
+          const movCC = {}, presentes = new Set()
+          for (const l of rz) {
+            const mes = compMes[l.competencia_id]; if (!mes) continue
+            const codcc = String(l.centro_custo || '').trim() || '(sem centro)'
+            presentes.add(codcc)
+            const conta = String(l.conta || '').trim(); if (!conta) continue
+            const v = (Number(l.debito) || 0) - (Number(l.credito) || 0)
+            movCC[conta] = movCC[conta] || {}
+            movCC[conta][mes] = movCC[conta][mes] || {}
+            movCC[conta][mes][codcc] = (movCC[conta][mes][codcc] || 0) + v
+          }
+          const centros = [...presentes].sort((a, b) => String(a).localeCompare(String(b), 'pt-BR'))
+            .map(cod => ({ k: cod, nome: cod === '(sem centro)' ? '(sem centro)' : (nomeByCod[cod] ? `${cod} · ${nomeByCod[cod]}` : cod) }))
+          cc = { usaCC: true, centros, movCC }
+        }
+        if (vivo) setDados({ meses, contas, mov, sf, si, ...cc })
       } finally {
         if (vivo) setCarregando(false)
       }
@@ -105,6 +137,41 @@ export default function ComparativoCompleto({ empresaId, empresaNome, competenci
   const mesesVis = mesesSel.size ? meses.filter(m => mesesSel.has(m)) : meses
   const niveisSint = [...new Set(contas.filter(c => c.sintetica).map(c => c.grau))].sort((a, b) => a - b)
 
+  // ---- Filtro por CENTRO DE CUSTO (só afeta o RESULTADO — 3/4/5 — que é onde há CC) ----
+  const usaCC = !!dados.usaCC
+  const centrosCC = dados.centros || []
+  const movCC = dados.movCC || {}
+  const filtroCC = usaCC && ccSel.size > 0                // vazio = todos → sem filtro
+  const contaByKey = {}; for (const c of contas) contaByKey[c.key] = c
+  const ehResult = c => c && ['3', '4', '5'].includes(String(c.classifRaw)[0])
+  const toggleCC = k => setCcSel(prev => { const n = new Set(prev); n.has(k) ? n.delete(k) : n.add(k); return n })
+  // Recalcula o movimento das contas de resultado usando só os centros selecionados.
+  const movFilt = {}
+  if (filtroCC) {
+    const analitRes = contas.filter(c => !c.sintetica && ehResult(c))
+    for (const c of analitRes) {
+      const per = movCC[c.reduzido] || {}, o = (movFilt['#' + c.reduzido] = {})
+      for (const m of meses) {
+        const byCc = per[m]
+        if (!byCc) { o[m] = null; continue }
+        let s = 0, has = false
+        for (const cod of ccSel) { const val = byCc[cod]; if (val != null) { s += val; has = true } }
+        o[m] = has ? s : (Object.keys(byCc).length ? 0 : null)
+      }
+    }
+    for (const sc of contas.filter(c => c.sintetica && ehResult(c))) {
+      const o = (movFilt[sc.key] = {})
+      for (const m of meses) {
+        let s = 0, has = false
+        for (const c of analitRes) if (String(c.classifRaw).startsWith(String(sc.classifRaw))) { const v = movFilt['#' + c.reduzido]?.[m]; if (v != null) { s += v; has = true } }
+        o[m] = has ? s : null
+      }
+    }
+  }
+  // Movimento efetivo: resultado filtrado por CC quando há filtro; o resto (patrimonial) intacto.
+  const movEff = (key, mes) => (filtroCC && ehResult(contaByKey[key])) ? (movFilt[key]?.[mes] ?? null) : (mov[key]?.[mes] ?? null)
+  const resumoCC = ccSel.size === 0 ? 'Todos' : (ccSel.size <= 2 ? [...ccSel].join(', ') : `${ccSel.size} centros`)
+
   // Abertura = saldo inicial do 1º mês em que a conta tem saldo anterior (= saldo de 30/04,
   // o "balancete de abril" que é o saldo anterior de maio). Só as contas patrimoniais têm.
   const abertura = key => { for (const m of meses) { const v = si[key]?.[m]; if (v != null && Math.abs(v) > 0.005) return v } return null }
@@ -112,18 +179,18 @@ export default function ComparativoCompleto({ empresaId, empresaNome, competenci
 
   const valorMes = (key, mes) => {
     if (modo === 'saldo') { const v = sf[key]?.[mes]; return v == null ? null : v }
-    if (modo === 'movimento') { const v = mov[key]?.[mes]; return v == null ? null : v }
+    if (modo === 'movimento') { const v = movEff(key, mes); return v == null ? null : v }
     let has = false, s = 0
-    for (const m of meses) { if (m > mes) break; const v = mov[key]?.[m]; if (v != null) { has = true; s += v } }
+    for (const m of meses) { if (m > mes) break; const v = movEff(key, m); if (v != null) { has = true; s += v } }
     return has ? s : null
   }
   const total = key => {
     if (modo === 'saldo') { let last = null; for (const m of meses) { const v = sf[key]?.[m]; if (v != null) last = v } return last }
-    return meses.reduce((s, m) => s + (mov[key]?.[m] || 0), 0)
+    return meses.reduce((s, m) => s + (movEff(key, m) || 0), 0)
   }
 
   const resultAnalit = contas.filter(c => !c.sintetica && ['3', '4', '5'].includes(String(c.classifRaw)[0]))
-  const resMes = mes => resultAnalit.reduce((s, c) => s + (mov[c.key]?.[mes] || 0), 0)
+  const resMes = mes => resultAnalit.reduce((s, c) => s + (movEff(c.key, mes) || 0), 0)
   const resExerc = mes => meses.filter(m => m <= mes).reduce((s, m) => s + resMes(m), 0)
   const resMesTotal = meses.reduce((s, m) => s + resMes(m), 0)
 
@@ -184,6 +251,9 @@ export default function ComparativoCompleto({ empresaId, empresaNome, competenci
           </select>
         </label>
         <CheckDropdown icon="ti-calendar" label="Meses:" resumo={resumoMeses} options={meses.map(m => ({ k: m, nome: `${MES[m - 1]}/${ano}` }))} marcado={mesesSel} onToggle={toggleMes} onTodos={() => setMesesSel(new Set())} />
+        {usaCC && centrosCC.length > 0 && (
+          <CheckDropdown icon="ti-sitemap" label="Centro de custo:" resumo={resumoCC} options={centrosCC} marcado={ccSel} onToggle={toggleCC} onTodos={() => setCcSel(new Set())} />
+        )}
         <CheckDropdown icon="ti-filter" label="Grupos:" resumo={resumoGrupos} options={GRUPOS} marcado={gruposSel} onToggle={toggleGrupo} onTodos={() => setGruposSel(new Set(GRUPOS.map(g => g.k)))} />
         <label style={ctl}>
           <i className="ti ti-stack-2" /> Nível:
