@@ -8,6 +8,7 @@ import { montarBalancete, normalizaCompetencia, applyMask, erroContaSintetica } 
 import { aprenderDaCorrecao } from '../lib/sugestoesRazao'
 import CampoConta from '../components/CampoConta'
 import InfoTela from '../components/InfoTela'
+import { checarArquivoEmpresa } from '../lib/validarArquivoEmpresa'
 
 // Data (Date do Excel ou "dd/mm/aaaa") → ISO "aaaa-mm-dd".
 function toISO(v) {
@@ -218,6 +219,7 @@ export default function CompMovimento() {
   const [refresh, setRefresh] = useState(0)     // recarrega após importar meses anteriores
   const [impBusy, setImpBusy] = useState(false)
   const [impMsg, setImpMsg] = useState('')
+  const [pendMeses, setPendMeses] = useState(null)  // { porMes, meses } — pergunta substituir × complementar
   const [mesesSel, setMesesSel] = useState(() => new Set()) // vazio = todos os meses
   const [usaCC, setUsaCC] = useState(false)                 // cliente usa centro de custo (cadastro)
   const [centrosCC, setCentrosCC] = useState([])            // [{ k, nome }] centros (cadastro + razão)
@@ -233,6 +235,11 @@ export default function CompMovimento() {
     if (!file || !empresaId) return
     setImpBusy(true); setImpMsg('')
     try {
+      // Trava de segurança: o arquivo tem que ser da EMPRESA selecionada (código Domínio /
+      // matriz-filial / CNPJ no cabeçalho) — evita importar razão de outra empresa.
+      const { data: cli } = await supabase.from('clientes').select('competencia_inicio, codigo_dominio, codigo_matriz, cnpj, razao_social').eq('id', empresaId).maybeSingle()
+      const errEmp = await checarArquivoEmpresa(file, cli || {})
+      if (errEmp) { setImpMsg(errEmp); setImpBusy(false); return }
       const XLSX = await import('xlsx')
       const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true })
       const arr = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' })
@@ -259,7 +266,6 @@ export default function CompMovimento() {
       const ccCols = headers.map((hd, i) => ({ n: norm(hd), i })).filter(x => /centro|ccu|cencus|ccusto|c\.custo|c custo|cto custo/.test(x.n))
       const colCC = (ccCols.find(x => /desc|nome/.test(x.n)) || ccCols[0] || { i: -1 }).i
       if ((col.reduzido < 0 && col.clasc < 0) || (col.debito < 0 && col.credito < 0)) { setImpMsg('Não identifiquei as colunas (preciso do Código da conta e Débito/Crédito).'); setImpBusy(false); return }
-      const { data: cli } = await supabase.from('clientes').select('competencia_inicio').eq('id', empresaId).maybeSingle()
       const iniM = String(normalizaCompetencia(cli?.competencia_inicio) || '').match(/^(\d{2})\/(\d{4})$/)
       const mesInicio = iniM ? Number(iniM[1]) : 99 // sem início definido → importa todos os meses do arquivo
       const porMes = {}
@@ -287,6 +293,19 @@ export default function CompMovimento() {
       }
       const meses = Object.keys(porMes).map(Number).sort((a, b) => a - b)
       if (!meses.length) { setImpMsg(`Nenhum mês anterior a ${mesInicio <= 12 ? MESES[mesInicio - 1] : 'início'} reconhecido no arquivo.`); setImpBusy(false); return }
+      // SEMPRE pergunta: substituir (troca o razão do mês) ou complementar (soma matriz/filiais).
+      setPendMeses({ porMes, meses })
+    } catch (e) { setImpMsg('Erro ao importar: ' + (e.message || e)) }
+    setImpBusy(false)
+  }
+
+  // Aplica a importação dos meses anteriores conforme o modo escolhido no aviso.
+  // substituir = troca o razão de cada mês; complementar = soma ao que já existe (matriz + filiais).
+  async function aplicarMeses(modo) {
+    const porMes = pendMeses?.porMes; if (!porMes) return
+    setPendMeses(null); setImpBusy(true); setImpMsg('')
+    try {
+      const meses = Object.keys(porMes).map(Number).sort((a, b) => a - b)
       for (const mes of meses) {
         let compId
         const { data: ex } = await supabase.from('competencias').select('id').eq('cliente_id', empresaId).eq('ano', ANO).eq('mes', mes).maybeSingle()
@@ -295,15 +314,19 @@ export default function CompMovimento() {
         const itens = porMes[mes]
         // A tabela `razao` NÃO tem coluna `nome` (igual à conciliação): grava sem o nome.
         const paraRazao = itens.map(x => ({ competencia_id: compId, data: x.data, conta: x.conta, contrapartida: x.contrapartida, historico: x.historico, centro_custo: x.centro_custo, debito: x.debito, credito: x.credito }))
-        await supabase.from('razao').delete().eq('competencia_id', compId)
+        if (modo === 'substituir') await supabase.from('razao').delete().eq('competencia_id', compId)
         for (let i = 0; i < paraRazao.length; i += 500) { const { error } = await supabase.from('razao').insert(paraRazao.slice(i, i + 500)); if (error) throw error }
+        // Balancete = soma de TODAS as linhas do mês (no complementar, inclui o que já havia).
+        const base = modo === 'complementar'
+          ? await lerTudo(() => supabase.from('razao').select('conta, debito, credito').eq('competencia_id', compId))
+          : itens
         const porConta = {}
-        for (const r of itens) { const c = porConta[r.conta] || (porConta[r.conta] = { conta: r.conta, nome: r.nome || null, debito: 0, credito: 0 }); if (!c.nome && r.nome) c.nome = r.nome; c.debito += r.debito; c.credito += r.credito }
+        for (const r of base) { const cta = String(r.conta); const c = porConta[cta] || (porConta[cta] = { conta: cta, nome: r.nome || null, debito: 0, credito: 0 }); if (!c.nome && r.nome) c.nome = r.nome; c.debito += Number(r.debito) || 0; c.credito += Number(r.credito) || 0 }
         const bal = Object.values(porConta).map(c => ({ competencia_id: compId, conta: c.conta, nome: c.nome || null, saldo_inicial: 0, debito: c.debito, credito: c.credito, saldo_final: c.debito - c.credito }))
         await supabase.from('balancete').delete().eq('competencia_id', compId)
         for (let i = 0; i < bal.length; i += 500) { const { error } = await supabase.from('balancete').insert(bal.slice(i, i + 500)); if (error) throw error }
       }
-      setImpMsg(`Importado(s) ${meses.length} mês(es): ${meses.map(m => MESES[m - 1]).join(', ')}.`)
+      setImpMsg(`${modo === 'complementar' ? 'Complementado' : 'Importado'}(s) ${meses.length} mês(es): ${meses.map(m => MESES[m - 1]).join(', ')}.`)
       setRefresh(x => x + 1)
     } catch (e) { setImpMsg('Erro ao importar: ' + (e.message || e)) }
     setImpBusy(false)
@@ -614,6 +637,23 @@ export default function CompMovimento() {
         </label>
       </div>
       {impMsg && <p style={{ fontSize: 12.5, margin: '-8px 0 16px', color: impMsg.startsWith('Erro') ? theme.red : theme.green }}><i className={`ti ${impMsg.startsWith('Erro') ? 'ti-alert-triangle' : 'ti-circle-check'}`} /> {impMsg}</p>}
+
+      {pendMeses && (
+        <div onClick={() => setPendMeses(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 70 }}>
+          <div onClick={e => e.stopPropagation()} style={{ width: 'min(520px,96vw)', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 14, padding: '20px 22px' }}>
+            <h3 style={{ fontSize: 15, margin: '0 0 6px' }}><i className="ti ti-calendar-plus" style={{ color: theme.accent, marginRight: 7 }} />Importar meses anteriores</h3>
+            <p style={{ fontSize: 12.5, color: theme.sub, lineHeight: 1.55, margin: '0 0 14px' }}>
+              Reconheci <b style={{ color: theme.text }}>{pendMeses.meses.length} mês(es)</b>: {pendMeses.meses.map(m => MESES[m - 1]).join(', ')}.<br />
+              <b style={{ color: theme.text }}>Substituir</b> troca o razão desses meses. <b style={{ color: theme.text }}>Complementar</b> soma ao que já existe (matriz + filiais).
+            </p>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+              <button className="btn btn-ghost" onClick={() => setPendMeses(null)}>Cancelar</button>
+              <button className="btn btn-ghost" style={{ color: theme.red, borderColor: 'rgba(229,72,77,0.4)' }} onClick={() => aplicarMeses('substituir')}><i className="ti ti-refresh" /> Substituir</button>
+              <button className="btn" onClick={() => aplicarMeses('complementar')}><i className="ti ti-plus" /> Complementar</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {carregando && (
         <p style={{ color: theme.sub, fontSize: 13 }}><i className="ti ti-loader" /> Carregando balancetes…</p>
