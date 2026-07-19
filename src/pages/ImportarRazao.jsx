@@ -5,6 +5,7 @@ import { useAuth } from '../components/AuthProvider'
 import { gerarSugestoesDoRazao } from '../lib/sugestoesRazao'
 import { gerarSugestoesConciliacao } from '../lib/sugestoesConciliacao'
 import { checarArquivoEmpresa } from '../lib/validarArquivoEmpresa'
+import { carregarResolverCC, resolverCC } from '../lib/centroCusto'
 import DropZone from '../components/DropZone'
 import { theme } from '../lib/theme'
 import InfoTela from '../components/InfoTela'
@@ -122,14 +123,16 @@ export default function ImportarRazao() {
   const [pend, setPend] = useState(null)          // { registros, file, nome } — pergunta substituir/complementar
   const [msg, setMsg] = useState('')
   const [clienteUsaCC, setClienteUsaCC] = useState(false) // cliente usa centro de custo (cadastro)
+  const [resolverCentro, setResolverCentro] = useState(null) // resolver dos centros cadastrados
 
-  // Flag "usa centro de custo" do cliente — para avisar se a coluna do centro não foi mapeada.
+  // Flag "usa centro de custo" + centros cadastrados do cliente (para casar por código/nome).
   useEffect(() => {
-    setClienteUsaCC(false)
+    setClienteUsaCC(false); setResolverCentro(null)
     if (!empresaId) return
     let vivo = true
     supabase.from('clientes').select('usa_centro_custo').eq('id', empresaId).maybeSingle()
       .then(({ data }) => { if (vivo) setClienteUsaCC(!!data?.usa_centro_custo) })
+    carregarResolverCC(empresaId).then(r => { if (vivo) setResolverCentro(r) })
     return () => { vivo = false }
   }, [empresaId])
 
@@ -201,18 +204,36 @@ export default function ImportarRazao() {
 
   // Lê os registros normalizados do arquivo atual (mapeamento) e valida o mês.
   function lerRegistros(competencia_id) {
-    const registros = linhas.map(l => ({
-      competencia_id,
-      data: toISO(valorCol(l, 'data')),
-      conta: contaDe(l) || null,
-      contrapartida: limpaContra(valorCol(l, 'contrapartida')),
-      historico: String(valorCol(l, 'historico') ?? '').trim() || null,
-      debito: num(valorCol(l, 'debito')),
-      credito: num(valorCol(l, 'credito')),
-      centro_custo: String(valorCol(l, 'centro_custo') ?? '').trim() || null,
-      nome: String(valorCol(l, 'nome') ?? '').trim() || null,   // só para o balancete
-    })).filter(r => r.conta && (r.debito || r.credito))
+    const naoCad = new Set() // centros de custo do arquivo que NÃO estão cadastrados
+    const registros = linhas.map(l => {
+      let centro_custo = String(valorCol(l, 'centro_custo') ?? '').trim() || null
+      // Cliente com centro de custo: casa o valor do arquivo com o CADASTRO (por código ou nome)
+      // e grava o CÓDIGO. Sem centro/-1 → null. Não cadastrado → coleta para bloquear.
+      if (clienteUsaCC) {
+        const r = resolverCC(centro_custo, resolverCentro)
+        if (r.sem) centro_custo = null
+        else if (r.cod) centro_custo = r.cod
+        else { naoCad.add(r.naoCadastrado); centro_custo = r.naoCadastrado }
+      }
+      return {
+        competencia_id,
+        data: toISO(valorCol(l, 'data')),
+        conta: contaDe(l) || null,
+        contrapartida: limpaContra(valorCol(l, 'contrapartida')),
+        historico: String(valorCol(l, 'historico') ?? '').trim() || null,
+        debito: num(valorCol(l, 'debito')),
+        credito: num(valorCol(l, 'credito')),
+        centro_custo,
+        nome: String(valorCol(l, 'nome') ?? '').trim() || null,   // só para o balancete
+      }
+    }).filter(r => r.conta && (r.debito || r.credito))
     if (!registros.length) return { erro: 'Nenhuma linha válida (confira o mapeamento de Conta/Débito/Crédito).' }
+    // Trava: cliente usa centro de custo mas o arquivo tem centro(s) fora do cadastro.
+    if (clienteUsaCC && naoCad.size) {
+      if (!resolverCentro?.temCadastro) return { erro: 'Este cliente usa centro de custo, mas não há centros cadastrados. Cadastre em Base de Informações → Centro de custo antes de importar.' }
+      const lista = [...naoCad].slice(0, 12).join(', ')
+      return { erro: `Centro(s) de custo não cadastrado(s) no arquivo: ${lista}${naoCad.size > 12 ? ` (+${naoCad.size - 12})` : ''}. Cadastre-os em Base de Informações → Centro de custo (ou corrija o arquivo) antes de importar.` }
+    }
     // Validação: o mês dos lançamentos tem que ser o da competência selecionada.
     const [cmes, cano] = competencia.split('/').map(Number)
     const cont = {}
