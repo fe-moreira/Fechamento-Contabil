@@ -92,16 +92,16 @@ export default function ComparativoCompleto({ empresaId, empresaNome, competenci
         // Centro de custo: só para clientes que usam. Lê o razão (que tem o CC) das competências
         // do ano e monta o movimento por conta · mês · centro — para filtrar o RESULTADO por CC.
         let cc = { usaCC: false, centros: [], movCC: {} }
-        // GATILHO = o CADASTRO de centro de custo (a carga). Se o cliente tem centros cadastrados,
-        // o filtro aparece — independe do flag "usa centro de custo".
-        const { data: ccCarga } = await supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'centro_custo').order('created_at', { ascending: false }).limit(1).maybeSingle()
+        // GATILHO = o CADASTRO do cliente: "Usa centro de custo? = Sim". Se sim, o filtro SEMPRE
+        // aparece — mesmo que o razão/carga não tenham nada (é importante o usuário ver que está vazio).
+        const { data: cliRow } = await supabase.from('clientes').select('usa_centro_custo').eq('id', empresaId).maybeSingle()
         if (!vivo) return
-        const cadastro = Array.isArray(ccCarga?.dados) ? ccCarga.dados : []
-        if (comps.length) {
+        if (cliRow?.usa_centro_custo && comps.length) {
           const compMes = {}; for (const c of comps) compMes[c.id] = c.mes
+          const { data: ccCarga } = await supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'centro_custo').order('created_at', { ascending: false }).limit(1).maybeSingle()
           const kBy = (o, re) => { const k = Object.keys(o || {}).find(k => re.test(String(k).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, ''))); return k ? String(o[k] ?? '').trim() : '' }
           const nomeByCod = {}
-          for (const r of cadastro) { const cod = kBy(r, /cod/); if (cod) nomeByCod[cod] = kBy(r, /nome|descri/) }
+          for (const r of (Array.isArray(ccCarga?.dados) ? ccCarga.dados : [])) { const cod = kBy(r, /cod/); if (cod) nomeByCod[cod] = kBy(r, /nome|descri/) }
           const rz = await lerTudo(() => supabase.from('razao').select('conta, centro_custo, debito, credito, competencia_id').in('competencia_id', comps.map(c => c.id)))
           if (!vivo) return
           const movCC = {}, presentes = new Set()
@@ -115,15 +115,11 @@ export default function ComparativoCompleto({ empresaId, empresaNome, competenci
             movCC[conta][mes] = movCC[conta][mes] || {}
             movCC[conta][mes][codcc] = (movCC[conta][mes][codcc] || 0) + v
           }
-          // GATILHO robusto: mostra o filtro se há centros CADASTRADOS (carga) OU se o razão já traz
-          // centro de custo REAL (fonte de verdade). Só "(sem centro)" no razão e sem carga = sem filtro.
-          const centrosReais = [...presentes].filter(c => c !== '(sem centro)')
-          if (cadastro.length > 0 || centrosReais.length > 0) {
-            const todos = new Set([...Object.keys(nomeByCod), ...presentes])
-            const centros = [...todos].sort((a, b) => String(a).localeCompare(String(b), 'pt-BR'))
-              .map(cod => ({ k: cod, nome: cod === '(sem centro)' ? '(sem centro)' : (nomeByCod[cod] ? `${cod} · ${nomeByCod[cod]}` : cod) }))
-            cc = { usaCC: true, centros, movCC }
-          }
+          // Lista = centros CADASTRADOS + os que aparecem no razão. Flag ligada → filtro sempre visível.
+          const todos = new Set([...Object.keys(nomeByCod), ...presentes])
+          const centros = [...todos].sort((a, b) => String(a).localeCompare(String(b), 'pt-BR'))
+            .map(cod => ({ k: cod, nome: cod === '(sem centro)' ? '(sem centro)' : (nomeByCod[cod] ? `${cod} · ${nomeByCod[cod]}` : cod) }))
+          cc = { usaCC: true, centros, movCC }
         }
         if (vivo) setDados({ meses, contas, mov, sf, si, ...cc })
       } finally {
@@ -259,8 +255,8 @@ export default function ComparativoCompleto({ empresaId, empresaNome, competenci
           </select>
         </label>
         <CheckDropdown icon="ti-calendar" label="Meses:" resumo={resumoMeses} options={meses.map(m => ({ k: m, nome: `${MES[m - 1]}/${ano}` }))} marcado={mesesSel} onToggle={toggleMes} onTodos={() => setMesesSel(new Set())} />
-        {usaCC && centrosCC.length > 0 && (
-          <CheckDropdown icon="ti-sitemap" label="Centro de custo:" resumo={resumoCC} options={centrosCC} marcado={ccSel} onToggle={toggleCC} onTodos={() => setCcSel(new Set())} />
+        {usaCC && (
+          <CheckDropdown icon="ti-sitemap" label="Centro de custo:" resumo={centrosCC.length ? resumoCC : 'nenhum'} options={centrosCC} marcado={ccSel} onToggle={toggleCC} onTodos={() => setCcSel(new Set())} />
         )}
         <CheckDropdown icon="ti-filter" label="Grupos:" resumo={resumoGrupos} options={GRUPOS} marcado={gruposSel} onToggle={toggleGrupo} onTodos={() => setGruposSel(new Set(GRUPOS.map(g => g.k)))} />
         <label style={ctl}>
