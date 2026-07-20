@@ -251,11 +251,20 @@ function totaisResumoPdf(texto) {
   const pos = {}
   for (const [k, re] of secs) { const m = re.exec(t); if (m) pos[k] = m.index }
   const keys = Object.keys(pos).sort((a, b) => pos[a] - pos[b])
+  const VAL = /-?\d{1,3}(?:\.\d{3})*,\d{2}/
+  const parse = s => parseFloat(String(s).replace(/\./g, '').replace(',', '.'))
   const out = {}
   for (let i = 0; i < keys.length; i++) {
     const tr = t.slice(pos[keys[i]], i + 1 < keys.length ? pos[keys[i + 1]] : t.length)
-    const m = /total[^0-9-]*(-?\d{1,3}(?:\.\d{3})*,\d{2})/i.exec(tr)
-    if (m) out[keys[i]] = parseFloat(m[1].replace(/\./g, '').replace(',', '.'))
+    const linhas = tr.split('\n')
+    const li = linhas.findIndex(l => /total/i.test(l))
+    if (li < 0) continue
+    // 1) valor na MESMA linha, depois de "Total" (Entradas/Saídas vêm assim: "Total: 1.060.943,30 …")
+    let m = VAL.exec(linhas[li].slice(linhas[li].search(/total/i)).replace(/total/i, ''))
+    // 2) senão, o "Total:" veio SOZINHO numa linha (Serviços tem mais colunas e o rótulo cai
+    //    embaixo) → o Vlr Contábil é o 1º valor da linha ANTERIOR (a linha de totais).
+    if (!m && li > 0) m = VAL.exec(linhas[li - 1])
+    if (m) out[keys[i]] = parse(m[0])
   }
   return out
 }
