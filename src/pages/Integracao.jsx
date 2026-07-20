@@ -143,10 +143,14 @@ function filesResumo(rp) {
   if (rp?.totais && Object.keys(rp.totais).length) return [{ id: '__legado', doc: rp.doc || 'resumo.pdf', path: rp.path || '', totais: rp.totais }]
   return []
 }
-// Soma os totais por seção (entradas/saidas/servicos) de todos os arquivos do resumo.
+// Soma os totais por seção (entradas/saidas/servicos) dos arquivos do resumo. Regra: o
+// EXCEL é a fonte lida; se houver Excel, o total vem só dele — o(s) PDF(s) ficam como
+// conferência do analista (não entram na soma). Sem Excel, cai nos PDFs (compatibilidade).
 function somarTotaisResumo(files) {
+  const excel = files.filter(f => f.tipo === 'excel')
+  const fonte = excel.length ? excel : files
   const out = {}
-  for (const f of files) for (const [k, v] of Object.entries(f.totais || {})) {
+  for (const f of fonte) for (const [k, v] of Object.entries(f.totais || {})) {
     if (v == null) continue
     out[k] = Math.round(((out[k] || 0) + v) * 100) / 100
   }
@@ -274,6 +278,21 @@ function valorDepreciacaoPdf(texto) {
   const nums = bloco.match(/-?\d{1,3}(?:\.\d{3})*,\d{2}/g)
   if (!nums || !nums.length) return null
   return parseFloat(nums[nums.length - 1].replace(/\./g, '').replace(',', '.'))
+}
+
+// Lê os totais por seção do "Resumo por Acumulador" exportado em EXCEL (cabeçalho nomeado —
+// o mesmo formato do parseResumoNomeado). É a fonte que o sistema LÊ; o PDF fica só p/ conferência.
+async function totaisResumoXls(file) {
+  const XLSX = await import('xlsx')
+  const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true })
+  const arr = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' })
+  const hdr = (arr[0] || []).map(h => String(h).toLowerCase().trim())
+  const out = {}
+  for (const sub of ['entradas', 'saidas', 'servicos']) {
+    const tot = parseResumoNomeado(arr, hdr, sub).reduce((s, r) => s + (Number(r.valor) || 0), 0)
+    if (tot) out[sub] = Math.round(tot * 100) / 100
+  }
+  return out
 }
 
 // Lê os totais por seção (Entradas/Saídas/Serviços) do "Resumo por Acumulador" (PDF com
@@ -783,21 +802,33 @@ function Fiscal({ competencia, empresaId, cliente, user, est, onEstado }) {
     if (errCod) { setErro(errCod); return }
     setErro(''); setBusy(true)
     try {
-      if (!/\.pdf$/i.test(file.name)) { setErro('Envie o "Resumo por Acumulador" do Domínio em PDF (com texto).'); setBusy(false); return }
-      const { extrairTextoPdf } = await import('../lib/pdfText')
-      const texto = await extrairTextoPdf(file)
-      const totais = totaisResumoPdf(texto)
-      if (!Object.keys(totais).length) { setErro('Não identifiquei os totais (Entradas/Saídas/Serviços) no resumo. Confira se o PDF tem texto (não é imagem).'); setBusy(false); return }
+      const ehXls = /\.xls[xm]?$/i.test(file.name)
+      const ehPdf = /\.pdf$/i.test(file.name)
+      if (!ehXls && !ehPdf) { setErro('Envie o "Resumo por Acumulador" em Excel (.xls/.xlsx) — que o sistema lê — ou em PDF (só conferência do analista).'); setBusy(false); return }
+      // Excel = fonte lida. PDF = complementar (conferência) — só lê os totais para servir de
+      // fallback quando NÃO há Excel; havendo Excel, o total vem do Excel (ver somarTotaisResumo).
+      let totais = {}
+      if (ehXls) {
+        totais = await totaisResumoXls(file)
+        if (!Object.keys(totais).length) { setErro('Não identifiquei os totais (Entradas/Saídas/Serviços) no Excel. Confira se é o "Resumo por Acumulador" exportado em Excel.'); setBusy(false); return }
+      } else {
+        const { extrairTextoPdf } = await import('../lib/pdfText')
+        totais = totaisResumoPdf(await extrairTextoPdf(file))
+      }
       const id = Math.random().toString(36).slice(2, 8)
       let path = ''
       if (compId) {
-        path = `fiscal/${compId}/resumo_${id}.pdf`
-        const { error: eUp } = await supabase.storage.from('extratos').upload(path, file, { upsert: true, contentType: file.type || 'application/pdf' })
+        const ext = ehXls ? (/\.xlsx$/i.test(file.name) ? '.xlsx' : '.xls') : '.pdf'
+        path = `fiscal/${compId}/resumo_${id}${ext}`
+        const { error: eUp } = await supabase.storage.from('extratos').upload(path, file, { upsert: true, contentType: file.type || (ehXls ? 'application/vnd.ms-excel' : 'application/pdf') })
         if (eUp) { setErro('Li o resumo, mas não consegui guardá-lo p/ extrair depois: ' + eUp.message); path = '' }
       }
-      const pack = { id, totais, path, nome: file.name }
-      // Já tem resumo? Pergunta substituir × complementar (matriz/filiais). Senão, aplica direto.
-      if (filesResumo(est.resumoPdf).length) setPendResumo(pack)
+      const pack = { id, totais, path, nome: file.name, tipo: ehXls ? 'excel' : 'pdf' }
+      const jaTem = filesResumo(est.resumoPdf)
+      // Mesmo tipo já existe (ex.: 2º Excel = matriz+filial) → pergunta substituir × complementar.
+      // Tipo diferente (é o PAR Excel+PDF) → anexa direto (o PDF não altera o total, é conferência).
+      if (jaTem.length && jaTem.some(f => (f.tipo || 'pdf') === pack.tipo)) setPendResumo(pack)
+      else if (jaTem.length) await aplicarResumo(pack, 'complementar')
       else await aplicarResumo(pack, 'substituir')
     } catch (e) { setErro('Não consegui ler o resumo: ' + e.message) }
     setBusy(false)
@@ -805,7 +836,7 @@ function Fiscal({ competencia, empresaId, cliente, user, est, onEstado }) {
   // Aplica o resumo lido: substituir (troca) ou complementar (SOMA os totais por seção).
   async function aplicarResumo(pend, modo) {
     const juntar = modo === 'complementar' && filesResumo(est.resumoPdf).length
-    const fileMeta = { id: pend.id, doc: pend.nome, path: pend.path, totais: pend.totais }
+    const fileMeta = { id: pend.id, doc: pend.nome, path: pend.path, totais: pend.totais, tipo: pend.tipo || 'pdf' }
     const files = juntar ? [...filesResumo(est.resumoPdf), fileMeta] : [fileMeta]
     await gravarResumo(files)
     setPendResumo(null)
@@ -1057,21 +1088,23 @@ function ResumoFinal({ est, totalImportado, onImport, onExtrair, onExcluir, busy
   return (
     <>
       <ImpCard titulo="Importar Resumo por Acumulador (Domínio)"
-        desc={'PDF (com texto) do "Resumo por Acumulador". Leio os totais de Entradas, Saídas e Serviços e confiro com o que foi importado. Vários arquivos (matriz + filiais) somam.'}
+        desc={'Suba o "Resumo por Acumulador" em EXCEL (.xls/.xlsx) — é o que o sistema LÊ os totais de Entradas, Saídas e Serviços. O PDF é opcional, entra como CONFERÊNCIA do analista (não é lido). Vários arquivos Excel (matriz + filiais) somam.'}
         onImport={onImport} nome={temResumo ? est?.resumoPdf?.doc : undefined} qtd={arquivos.length} unidade="arquivo"
-        accept=".pdf" label={temResumo ? 'Subir outro' : 'Importar'} />
+        accept=".xlsx,.xls,.pdf" label={temResumo ? 'Subir outro' : 'Importar'} />
       {arquivos.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, margin: '10px 0 0' }}>
-          {arquivos.length > 1 && <span style={{ fontSize: 11.5, color: theme.sub }}>{arquivos.length} arquivos (matriz + filiais) — totais somados por seção:</span>}
-          {arquivos.map((f, fi) => (
+          {arquivos.length > 1 && <span style={{ fontSize: 11.5, color: theme.sub }}>Excel(s) somam os totais; PDF fica só para conferência do analista.</span>}
+          {arquivos.map((f, fi) => {
+            const ehExcel = (f.tipo || (/\.pdf$/i.test(f.doc || '') ? 'pdf' : 'excel')) === 'excel'
+            return (
             <div key={(f.id || 'x') + fi} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, background: theme.input, border: `1px solid ${theme.border}`, borderRadius: 8, padding: '4px 8px' }}>
-              <i className="ti ti-file-typography" style={{ color: theme.sub, flexShrink: 0 }} />
+              <i className={`ti ${ehExcel ? 'ti-file-spreadsheet' : 'ti-file-typography'}`} style={{ color: ehExcel ? theme.green : theme.sub, flexShrink: 0 }} />
               <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={f.doc}>{f.doc}</span>
-              <span style={{ color: theme.sub, flexShrink: 0 }}>{Object.keys(f.totais || {}).length} seção(ões)</span>
+              <span style={{ color: ehExcel ? theme.green : theme.sub, flexShrink: 0, fontWeight: ehExcel ? 700 : 400 }}>{ehExcel ? 'lido' : 'conferência'}</span>
               {f.path && <i className="ti ti-download" title="Baixar este arquivo" onClick={() => onExtrair(f.path, f.doc)} style={{ color: theme.sub, cursor: 'pointer', flexShrink: 0 }} />}
-              <i className="ti ti-trash" title="Excluir só este arquivo (os totais dele saem da soma)" onClick={() => onExcluir(f.id)} style={{ color: theme.red, cursor: 'pointer', flexShrink: 0 }} />
+              <i className="ti ti-trash" title="Excluir só este arquivo" onClick={() => onExcluir(f.id)} style={{ color: theme.red, cursor: 'pointer', flexShrink: 0 }} />
             </div>
-          ))}
+          )})}
         </div>
       )}
       <div style={{ display: 'flex', gap: 12, margin: '10px 0 0', flexWrap: 'wrap' }}>
