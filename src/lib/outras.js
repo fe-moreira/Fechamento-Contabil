@@ -1,5 +1,6 @@
 import { supabase } from './supabase'
 import { normalizaCompetencia } from './balancete'
+import { saldoAApropriarNaAbertura } from './apropriacao'
 
 // CRUD genérico das tabelas de Outras Contabilizações (todas por cliente_id).
 export async function listar(tabela, clienteId) {
@@ -49,17 +50,10 @@ export async function lerDocumento(tipo, file) {
 // Saldo que falta apropriar de um contrato (seguro/despesa a apropriar) na
 // ABERTURA — isto é, no início da competência inicial do cliente. É o valor total
 // menos as apropriações mensais já reconhecidas ANTES da competência de início.
+// Delega para o cronograma compartilhado (lib/apropriacao) — que respeita o
+// "por dia" e bate com o valor mostrado no modal de apropriações.
 export function saldoApropriarNaAbertura(c, compIni) {
-  const total = Number(c.premio_total ?? c.valor_total) || 0
-  const nParc = Number(c.num_parcelas) || 0
-  const mensal = Number(c.valor_parcela) || (nParc ? total / nParc : 0)
-  if (!total || !mensal) return 0
-  const mi = String(compIni || '').match(/^(\d{2})\/(\d{4})$/)
-  const vi = String(c.vigencia_inicio || '').match(/^(\d{4})-(\d{2})/)
-  if (!mi || !vi) return Math.round(total * 100) / 100 // sem datas, assume tudo a apropriar
-  const mesesAntes = (Number(mi[2]) * 12 + Number(mi[1])) - (Number(vi[1]) * 12 + Number(vi[2]))
-  const apropriadas = Math.max(0, Math.min(mesesAntes, nParc || mesesAntes))
-  return Math.max(0, Math.round((total - apropriadas * mensal) * 100) / 100)
+  return saldoAApropriarNaAbertura(c, compIni)
 }
 
 // Data (último dia do mês ANTERIOR à competência de início) em "DD/MM/AAAA".
@@ -149,6 +143,33 @@ export async function apropriacoesDoMes(clienteId, competencia, origem) {
   const { data } = await supabase.from('lancamentos')
     .select('documento, historico, valor, conta_debito, conta_credito').eq('competencia_id', comp.id).eq('origem', origem)
   return (data || []).filter(l => /apropria/i.test(l.historico || ''))
+}
+
+// Estorna (exclui) a apropriação já lançada de UM contrato nesta competência.
+// Casa os lançamentos de apropriação daquele contrato — pelo documento (apólice/doc)
+// e, sem documento, pelo identificador no histórico — e apaga. Devolve quantos saíram.
+export async function estornarApropriacao({ clienteId, competencia, origem, contrato }) {
+  const [m, a] = String(competencia || '').split('/').map(Number)
+  if (!m || !a) return 0
+  const { data: comp } = await supabase.from('competencias').select('id')
+    .eq('cliente_id', clienteId).eq('ano', a).eq('mes', m).maybeSingle()
+  if (!comp) return 0
+  const { data } = await supabase.from('lancamentos')
+    .select('id, documento, historico').eq('competencia_id', comp.id).eq('origem', origem)
+  const doc = String((origem === 'seguro' ? contrato.apolice : contrato.documento) || '').trim()
+  const chave = String((origem === 'seguro' ? contrato.seguradora : contrato.tipo) || '').trim().toLowerCase()
+  const aux = String((origem === 'seguro' ? contrato.apolice : contrato.descricao) || '').trim().toLowerCase()
+  const ids = (data || []).filter(l => {
+    if (!/apropria/i.test(l.historico || '')) return false
+    if (doc && String(l.documento || '').trim() === doc) return true
+    const h = String(l.historico || '').toLowerCase()
+    if (!chave) return false
+    return h.includes(chave) && (!aux || h.includes(aux))
+  }).map(l => l.id)
+  if (!ids.length) return 0
+  const { error } = await supabase.from('lancamentos').delete().in('id', ids)
+  if (error) throw error
+  return ids.length
 }
 
 // Lista os lançamentos gerados na competência (para ver/excluir em Outras Contabilizações).
