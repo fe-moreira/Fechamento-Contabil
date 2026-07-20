@@ -1,6 +1,7 @@
 import { supabase } from './supabase'
 import { lerTudo } from './lerTudo'
 import { extrairEntidade, tokensHist, aprender } from './financeiro'
+import { cronogramaContrato } from './apropriacao'
 
 // ============================================================================
 // Sugestões geradas AO IMPORTAR O RAZÃO, que caem no Painel de Sugestões:
@@ -26,45 +27,7 @@ export function decodePartida(detalhe) {
   return { humano, partida: { conta_debito: p.D || '', conta_credito: p.C || '', valor: Number(p.V) || 0, data: p.DT || '' } }
 }
 
-// --- Cronograma de apropriação (espelha src/pages/OutrasContabilizacoes.jsx; manter em sincronia) ---
-const r2 = v => Math.round((v || 0) * 100) / 100
-function parseISO(s) { const m = String(s || '').match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : null }
-function cronogramaContrato(c, metodo) {
-  const total = Number(c.premio_total ?? c.valor_total) || 0
-  const vi = parseISO(c.vigencia_inicio)
-  if (metodo === 'dia') {
-    const vf = parseISO(c.vigencia_fim)
-    if (!vi || !vf || vf < vi || !total) return []
-    const totalDias = Math.round((vf - vi) / 86400000) + 1
-    const linhas = []
-    let cursor = new Date(vi.getFullYear(), vi.getMonth(), vi.getDate()), acum = 0
-    while (cursor <= vf) {
-      const ano = cursor.getFullYear(), mes = cursor.getMonth()
-      const fimMes = new Date(ano, mes + 1, 0)
-      const ate = fimMes < vf ? fimMes : vf
-      const dias = Math.round((ate - cursor) / 86400000) + 1
-      const prox = new Date(ano, mes + 1, 1)
-      const valor = prox > vf ? r2(total - acum) : r2(total * dias / totalDias)
-      acum = r2(acum + valor)
-      linhas.push({ comp: `${String(mes + 1).padStart(2, '0')}/${ano}`, valor })
-      cursor = prox
-    }
-    return linhas
-  }
-  const nParc = Number(c.num_parcelas) || 0
-  const mensal = Number(c.valor_parcela) || (nParc ? total / nParc : 0)
-  const linhas = []
-  if (vi && mensal > 0 && nParc > 0) {
-    let ym = vi.getFullYear() * 12 + vi.getMonth()
-    for (let i = 0; i < nParc; i++) {
-      const ano = Math.floor(ym / 12), mes = (ym % 12) + 1
-      const valor = i === nParc - 1 ? r2(total - mensal * (nParc - 1)) : r2(mensal)
-      linhas.push({ comp: `${String(mes).padStart(2, '0')}/${ano}`, valor })
-      ym++
-    }
-  }
-  return linhas
-}
+// --- Cronograma de apropriação: fonte única em src/lib/apropriacao.js ---
 function valorApropriacaoMes(c, competencia) {
   const l = cronogramaContrato(c, c.por_dia ? 'dia' : 'igual').find(x => x.comp === competencia)
   return l ? l.valor : 0

@@ -5,7 +5,8 @@ import InfoTela from '../components/InfoTela'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { apurarVariacoes } from '../lib/variacoes'
-import { listar, inserir, remover, atualizar, gerarLancamento, enviarSaldoInicialContrato, anexarArquivoContrato, urlArquivoContrato, removerArquivoContrato, competenciaInicioCliente, apropriacoesDoMes, listarLancamentos, excluirLancamento } from '../lib/outras'
+import { listar, inserir, remover, atualizar, gerarLancamento, enviarSaldoInicialContrato, anexarArquivoContrato, urlArquivoContrato, removerArquivoContrato, competenciaInicioCliente, apropriacoesDoMes, listarLancamentos, excluirLancamento, estornarApropriacao } from '../lib/outras'
+import { cronogramaContrato, parseISO, r2 } from '../lib/apropriacao'
 import { gerarExcelTimbrado } from '../lib/excel'
 import { abrePdfTimbrado } from '../lib/pdf'
 import { carregarCartoes, salvarCartoes, carregarMemoriaCartao, salvarMemoriaCartao, aprender, carregarDraftCartao, salvarDraftCartao, autoMapaFatura, lerFaturaArr, classificarFatura } from '../lib/cartao'
@@ -75,50 +76,8 @@ function num(v) {
   return isNaN(n) ? 0 : n
 }
 
-function parseISO(s) { const m = String(s || '').match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : null }
-const r2 = v => Math.round((v || 0) * 100) / 100
+// cronogramaContrato / parseISO / r2 vêm de ../lib/apropriacao (fonte única).
 
-// Cronograma de apropriação de um contrato: lista [{comp:'MM/AAAA', valor, dias?}].
-// metodo 'dia' = proporcional aos dias de cada mês dentro da vigência (oscila mês a
-// mês); metodo 'igual' = parcelas iguais (a última absorve o arredondamento).
-function cronogramaContrato(c, metodo) {
-  const total = Number(c.premio_total ?? c.valor_total) || 0
-  const vi = parseISO(c.vigencia_inicio)
-  if (metodo === 'dia') {
-    const vf = parseISO(c.vigencia_fim)
-    if (!vi || !vf || vf < vi || !total) return []
-    const totalDias = Math.round((vf - vi) / 86400000) + 1
-    const linhas = []
-    let cursor = new Date(vi.getFullYear(), vi.getMonth(), vi.getDate()), acum = 0
-    while (cursor <= vf) {
-      const ano = cursor.getFullYear(), mes = cursor.getMonth()
-      const fimMes = new Date(ano, mes + 1, 0)
-      const ate = fimMes < vf ? fimMes : vf
-      const dias = Math.round((ate - cursor) / 86400000) + 1
-      const prox = new Date(ano, mes + 1, 1)
-      const valor = prox > vf ? r2(total - acum) : r2(total * dias / totalDias)
-      acum = r2(acum + valor)
-      linhas.push({ comp: `${String(mes + 1).padStart(2, '0')}/${ano}`, valor, dias })
-      cursor = prox
-    }
-    return linhas
-  }
-  // parcelas iguais
-  const nParc = Number(c.num_parcelas) || 0
-  const mensal = Number(c.valor_parcela) || (nParc ? total / nParc : 0)
-  const linhas = []
-  if (vi && mensal > 0 && nParc > 0) {
-    let ym = vi.getFullYear() * 12 + vi.getMonth(), acum = 0
-    for (let i = 0; i < nParc; i++) {
-      const ano = Math.floor(ym / 12), mes = (ym % 12) + 1
-      const valor = i === nParc - 1 ? r2(total - mensal * (nParc - 1)) : r2(mensal)
-      acum = r2(acum + valor)
-      linhas.push({ comp: `${String(mes).padStart(2, '0')}/${ano}`, valor })
-      ym++
-    }
-  }
-  return linhas
-}
 // Valor da apropriação do contrato na competência informada (MM/AAAA).
 function valorApropriacaoMes(c, competencia) {
   const l = cronogramaContrato(c, c.por_dia ? 'dia' : 'igual').find(x => x.comp === competencia)
@@ -321,11 +280,32 @@ export default function OutrasContabilizacoes() {
       }
       const eSint = erroContaSintetica(plano, g.conta_debito, g.conta_credito)
       if (eSint) { setMsg(eSint); return }
+      // Trava anti-duplicidade: a apropriação de um contrato só pode ser lançada UMA
+      // vez no mês. Se já existe (mesmo documento/apólice), bloqueia — para relançar,
+      // estorne antes.
+      if (['seguro', 'despesa'].includes(g.origem) && /apropria/i.test(g.historico || '')) {
+        const jaFeitas = await apropriacoesDoMes(empresaId, competencia, g.origem)
+        const doc = String(g.documento || '').trim()
+        const hist = String(g.historico || '').trim().toLowerCase()
+        const dup = jaFeitas.some(l => (doc && String(l.documento || '').trim() === doc) || String(l.historico || '').trim().toLowerCase() === hist)
+        if (dup) { setGerar(null); setVersao(v => v + 1); setMsg('Este contrato já foi apropriado neste mês. Estorne a apropriação antes de lançar de novo.'); setTimeout(() => setMsg(''), 6000); return }
+      }
       const competencia_id = await getCompetenciaId()
       if (!competencia_id) { setMsg('Selecione uma empresa e abra um fechamento.'); return }
       await gerarLancamento({ competencia_id, ...g, usuario: user?.email })
       setGerar(null); setVersao(v => v + 1); setMsg('Lançamento gerado e enviado ao Status → Domínio.')
       setTimeout(() => setMsg(''), 4000)
+    } catch (e) { setMsg('Erro: ' + e.message) }
+  }
+
+  // Estorna a apropriação já lançada de um contrato neste mês (exclui o lançamento).
+  async function estornar(origem, contrato) {
+    if (!confirm('Estornar a apropriação deste mês? O lançamento gerado será excluído do Status → Domínio.')) return
+    try {
+      const n = await estornarApropriacao({ clienteId: empresaId, competencia, origem, contrato })
+      setVersao(v => v + 1)
+      setMsg(n ? `Apropriação estornada — ${n} lançamento${n > 1 ? 's' : ''} excluído${n > 1 ? 's' : ''}.` : 'Não havia apropriação lançada neste mês para estornar.')
+      setTimeout(() => setMsg(''), 5000)
     } catch (e) { setMsg('Erro: ' + e.message) }
   }
 
@@ -343,7 +323,7 @@ export default function OutrasContabilizacoes() {
 
   if (!empresaId) return <Aviso texto="Selecione uma empresa no menu lateral." />
 
-  const props = { clienteId: empresaId, user, competencia, getCompetenciaId, abrirGerar, enviarSaldoInicial, compInicio, empresaNome, planoMap, versao, regime }
+  const props = { clienteId: empresaId, user, competencia, getCompetenciaId, abrirGerar, enviarSaldoInicial, estornar, compInicio, empresaNome, planoMap, versao, regime }
   // "Outros Lançamentos" fica SEMPRE por último (o LALUR, quando Lucro Real, entra antes dele).
   const semOutros = BLOCOS.filter(b => b.key !== 'outros')
   const blocoOutros = BLOCOS.find(b => b.key === 'outros')
@@ -426,6 +406,7 @@ function useLista(tabela, clienteId) {
 
 function GerarBtn({ onClick, children = 'Gerar lançamento' }) { return <button className="btn" style={{ fontSize: 12, padding: '5px 10px' }} onClick={onClick}><i className="ti ti-file-plus" /> {children}</button> }
 function SaldoIniBtn({ onClick }) { return <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={onClick} title="Calcula o que falta apropriar na abertura e envia à carga inicial"><i className="ti ti-arrow-bar-to-up" /> Saldo inicial</button> }
+function EstornarBtn({ onClick }) { return <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', color: theme.red, borderColor: theme.red }} onClick={onClick} title="Estornar a apropriação lançada neste mês (exclui o lançamento)"><i className="ti ti-arrow-back-up" /> Estornar</button> }
 function DelBtn({ onClick }) { return <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={onClick}>excluir</button> }
 // Anexar/ver/excluir o documento do contrato (apólice, carnê…), salvo no Storage.
 function AnexoContrato({ tabela, row, onChange }) {
@@ -754,7 +735,7 @@ function PaneCartao({ clienteId, user, competencia, getCompetenciaId, planoMap }
 }
 
 // ================= SEGURO =================
-function PaneSeguro({ clienteId, user, competencia, abrirGerar, enviarSaldoInicial, compInicio, empresaNome, planoMap, versao }) {
+function PaneSeguro({ clienteId, user, competencia, abrirGerar, enviarSaldoInicial, estornar, compInicio, empresaNome, planoMap, versao }) {
   const { rows, loading, erro, recarregar, excluir } = useLista('seguros', clienteId)
   const aprops = useApropriacoes(clienteId, competencia, 'seguro', versao)
   const [cron, setCron] = useState(null)
@@ -819,7 +800,9 @@ function PaneSeguro({ clienteId, user, competencia, abrirGerar, enviarSaldoInici
               <td style={{ ...td, whiteSpace: 'nowrap', textAlign: 'right' }} onClick={e => e.stopPropagation()}>
                 <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => editar(r)} title="Editar contrato"><i className="ti ti-pencil" /> Editar</button>{' '}
                 <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => setCron(r)} title="Ver o cronograma de apropriações"><i className="ti ti-list-check" /> Apropriações</button>{' '}
-                <GerarBtn onClick={() => abrirGerar({ data: dataComp(competencia), conta_debito: r.conta_despesa, conta_credito: r.conta_apropriar, valor: valorApropriacaoMes(r, competencia), historico: `${`Apropriação seguro ${r.seguradora} ${r.apolice || ''}`.trim()}${sufixoParcela(r, competencia)}`, origem: 'seguro', documento: r.apolice }, `Apropriação — ${r.seguradora}`)}>{apropriado ? 'Apropriar de novo' : 'Apropriação do mês'}</GerarBtn>{' '}
+                {apropriado
+                  ? <EstornarBtn onClick={() => estornar('seguro', r)} />
+                  : <GerarBtn onClick={() => abrirGerar({ data: dataComp(competencia), conta_debito: r.conta_despesa, conta_credito: r.conta_apropriar, valor: valorApropriacaoMes(r, competencia), historico: `${`Apropriação seguro ${r.seguradora} ${r.apolice || ''}`.trim()}${sufixoParcela(r, competencia)}`, origem: 'seguro', documento: r.apolice }, `Apropriação — ${r.seguradora}`)}>Apropriação do mês</GerarBtn>}{' '}
                 {r.saldo_inicial
                   ? <SaldoIniBtn onClick={() => enviarSaldoInicial('seguro', r)} />
                   : <GerarBtn onClick={() => abrirGerar({ data: dataComp(competencia), conta_debito: r.conta_apropriar, conta_credito: r.conta_pagar, valor: r.premio_total, historico: `Contrato seguro ${r.seguradora} ${r.apolice || ''}`.trim(), origem: 'seguro', documento: r.apolice }, `Contrato — ${r.seguradora}`)}>Contabilizar contrato</GerarBtn>}{' '}
@@ -837,7 +820,7 @@ function PaneSeguro({ clienteId, user, competencia, abrirGerar, enviarSaldoInici
 
 // ================= DESPESA A APROPRIAR =================
 // Funciona como o seguro, mas genérico: IPVA, IPTU, aluguel antecipado, etc.
-function PaneDespesaApropriar({ clienteId, user, competencia, abrirGerar, enviarSaldoInicial, compInicio, empresaNome, planoMap, versao }) {
+function PaneDespesaApropriar({ clienteId, user, competencia, abrirGerar, enviarSaldoInicial, estornar, compInicio, empresaNome, planoMap, versao }) {
   const { rows, loading, erro, recarregar, excluir } = useLista('despesas_apropriar', clienteId)
   const aprops = useApropriacoes(clienteId, competencia, 'despesa', versao)
   const [cron, setCron] = useState(null)
@@ -900,7 +883,9 @@ function PaneDespesaApropriar({ clienteId, user, competencia, abrirGerar, enviar
               <td style={{ ...td, whiteSpace: 'nowrap', textAlign: 'right' }} onClick={e => e.stopPropagation()}>
                 <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => editar(r)} title="Editar despesa"><i className="ti ti-pencil" /> Editar</button>{' '}
                 <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => setCron(r)} title="Ver o cronograma de apropriações"><i className="ti ti-list-check" /> Apropriações</button>{' '}
-                <GerarBtn onClick={() => abrirGerar({ data: dataComp(competencia), conta_debito: r.conta_despesa, conta_credito: r.conta_apropriar, valor: valorApropriacaoMes(r, competencia), historico: `${`Apropriação ${r.tipo} ${r.descricao || ''}`.trim()}${sufixoParcela(r, competencia)}`, origem: 'despesa', documento: r.documento }, `Apropriação — ${r.tipo}`)}>{apropriado ? 'Apropriar de novo' : 'Apropriação do mês'}</GerarBtn>{' '}
+                {apropriado
+                  ? <EstornarBtn onClick={() => estornar('despesa', r)} />
+                  : <GerarBtn onClick={() => abrirGerar({ data: dataComp(competencia), conta_debito: r.conta_despesa, conta_credito: r.conta_apropriar, valor: valorApropriacaoMes(r, competencia), historico: `${`Apropriação ${r.tipo} ${r.descricao || ''}`.trim()}${sufixoParcela(r, competencia)}`, origem: 'despesa', documento: r.documento }, `Apropriação — ${r.tipo}`)}>Apropriação do mês</GerarBtn>}{' '}
                 {r.saldo_inicial
                   ? <SaldoIniBtn onClick={() => enviarSaldoInicial('despesa', r)} />
                   : <GerarBtn onClick={() => abrirGerar({ data: dataComp(competencia), conta_debito: r.conta_apropriar, conta_credito: r.conta_pagar, valor: r.valor_total, historico: `Contrato ${r.tipo} ${r.descricao || ''}`.trim(), origem: 'despesa', documento: r.documento }, `Contrato — ${r.tipo}`)}>Contabilizar contrato</GerarBtn>}{' '}
