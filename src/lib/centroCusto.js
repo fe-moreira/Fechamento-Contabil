@@ -34,3 +34,29 @@ export function resolverCC(raw, resolver) {
   if (cod) return { cod }
   return { naoCadastrado: String(raw).trim() }
 }
+
+// Uma conta é de RESULTADO quando a classificação começa em 3, 4 ou 5 (receita/custo/
+// despesa). `plano` = [{cod, nome, classif}] (o do contexto já traz a classificação).
+export function ehContaResultado(plano, cod) {
+  const c = String(cod ?? '').trim()
+  if (!c) return false
+  const p = (plano || []).find(x => String(x.cod) === c)
+  const d = String(p?.classif ?? '').trim()[0]
+  return d === '3' || d === '4' || d === '5'
+}
+
+// O lançamento EXIGE centro de custo quando o cliente usa CC e a partida toca (no débito OU
+// no crédito) uma conta de RESULTADO. Regra do produto: só conta de resultado precisa de CC.
+export function lancamentoExigeCC(plano, usaCC, contaDebito, contaCredito) {
+  if (!usaCC) return false
+  return ehContaResultado(plano, contaDebito) || ehContaResultado(plano, contaCredito)
+}
+
+// Rateio válido: pelo menos um centro, todos com código, e a soma dos valores dos centros
+// bate com o valor do lançamento (tolerância de meio centavo). Um centro = valor cheio.
+export function rateioValido(rateio, valorTotal) {
+  const arr = Array.isArray(rateio) ? rateio : []
+  if (!arr.length || arr.some(r => !String(r?.cod ?? '').trim())) return false
+  const soma = arr.reduce((s, r) => s + (Number(r?.valor) || 0), 0)
+  return Math.abs(soma - (Number(valorTotal) || 0)) < 0.005
+}

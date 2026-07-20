@@ -422,6 +422,7 @@ const HTML = `
 <section id="m-contabilizar">
   <h2 class="m-sec">15 · Contabilizar</h2>
   <p>A fila central de lançamentos <span class="m-code">{data, débito, crédito, valor, histórico, origem, doc}</span>. Reúne o que veio das sugestões, das correções e do que você lança à mão (partida pelos selects do plano, ou subindo documento). O relatório de lançamentos é a auditoria do analista — <b>não há etapa de aprovação</b>.</p>
+  <div class="m-rule stop"><span class="k">Centro de custo obrigatório (clientes que usam CC)</span> Quando o cliente <b>usa centro de custo</b> (ex.: Metroform) e o lançamento toca uma <b>conta de resultado</b> (classificação 3/4/5), a plataforma <b>obriga informar o centro de custo</b> — tanto ao <b>criar um lançamento manual</b> quanto ao <b>editar</b> um lançamento (no modal <b>Editar lançamento</b> do Status). Escolha o centro na lista dos <b>cadastrados</b> do cliente; um lançamento pode ter <b>um</b> centro (valor cheio) ou ser <b>rateado</b> em <b>vários</b> — nesse caso a <b>soma dos centros tem que bater com o valor</b> do lançamento. Sem o centro, o botão <b>Salvar</b> fica bloqueado. Contas patrimoniais (1/2) não pedem CC.</div>
   <div class="m-rule"><span class="k">Entrega final</span> O botão <b>Gerar arquivo Domínio</b> baixa o CSV no layout exato (separador <span class="m-code">;</span>, BOM UTF-8, valor em pt-BR) pronto para importar.</div>
 </section>
 

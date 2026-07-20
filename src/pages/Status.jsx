@@ -13,6 +13,8 @@ import { gerarExcelTimbrado } from '../lib/excel'
 import { gerarDominioCSV } from '../lib/dominio'
 import { anexarArquivoContrato } from '../lib/outras'
 import CampoConta from '../components/CampoConta'
+import RateioCC from '../components/RateioCC'
+import { carregarResolverCC, lancamentoExigeCC, rateioValido } from '../lib/centroCusto'
 
 const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
 const th = { textAlign: 'left', padding: '10px 12px', fontSize: 11, color: theme.sub, textTransform: 'uppercase', letterSpacing: .3, whiteSpace: 'nowrap' }
@@ -25,10 +27,18 @@ const INTEGRACOES = [
 ]
 
 export default function Status() {
-  const { empresaId, empresaNome, competencia, getCompetenciaId, plano, refreshStatusCompetencia } = useAppData()
+  const { empresaId, empresaNome, competencia, getCompetenciaId, plano, empresas, refreshStatusCompetencia } = useAppData()
   const { user } = useAuth()
   const planoMap = Object.fromEntries((plano || []).map(p => [String(p.cod), p]))
   const contaInfo = c => { const p = planoMap[String(c)]; return { cod: String(c), classif: p?.classif || '', nome: p?.nome || '' } }
+  // Cliente usa centro de custo? (Metroform usa.) Carrega os centros cadastrados para o
+  // rateio obrigatório ao editar um lançamento de conta de resultado.
+  const usaCC = !!(empresas || []).find(e => e.id === empresaId)?.usa_centro_custo
+  const [centrosCC, setCentrosCC] = useState([])
+  useEffect(() => {
+    if (!empresaId || !usaCC) { setCentrosCC([]); return }
+    carregarResolverCC(empresaId).then(r => setCentrosCC(r.centros || [])).catch(() => setCentrosCC([]))
+  }, [empresaId, usaCC])
 
   const [compId, setCompId] = useState(null)
   const [status, setStatus] = useState(null) // 'andamento' | 'fechado' | 'pendente'
@@ -481,9 +491,16 @@ export default function Status() {
 
   // Edita um lançamento gerado pela plataforma (data, débito, crédito, valor, histórico).
   async function salvarEdicaoLancamento(campos) {
+    // Conta de resultado + cliente usa CC → o centro de custo (rateio) é obrigatório.
+    const exige = lancamentoExigeCC(plano, usaCC, campos.conta_debito, campos.conta_credito)
+    if (exige && !rateioValido(campos.rateio, campos.valor)) {
+      setMsg('Informe o centro de custo — a soma do rateio precisa bater com o valor do lançamento.'); return
+    }
     const { error } = await supabase.from('lancamentos').update({
       data: campos.data || null, conta_debito: campos.conta_debito || null, conta_credito: campos.conta_credito || null,
       valor: Number(campos.valor) || 0, historico: campos.historico || null, usuario: user?.email,
+      // Só toca a coluna `rateio` quando há CC obrigatório — edições comuns não dependem dela.
+      ...(exige ? { rateio: campos.rateio || null } : {}),
     }).eq('id', editLanc.id)
     if (error) { setMsg('Erro ao editar: ' + error.message); return }
     setEditLanc(null); await carregar(); setMsg('Lançamento editado.')
@@ -776,7 +793,7 @@ export default function Status() {
       )}
 
       {editLanc && (
-        <ModalEditarLancamento lanc={editLanc} competencia={competencia} onClose={() => setEditLanc(null)} onSalvar={salvarEdicaoLancamento} />
+        <ModalEditarLancamento lanc={editLanc} competencia={competencia} plano={plano} usaCC={usaCC} centros={centrosCC} onClose={() => setEditLanc(null)} onSalvar={salvarEdicaoLancamento} />
       )}
     </Wrapper>
   )
@@ -935,16 +952,19 @@ function PainelGate({ gate, onClose, onJustificar, onCorrigir, onSemMovimento, o
 
 // Editar um lançamento já gerado (arquivo do Domínio). Só permite data dentro da
 // competência do fechamento em andamento.
-function ModalEditarLancamento({ lanc, competencia, onClose, onSalvar }) {
+function ModalEditarLancamento({ lanc, competencia, plano, usaCC, centros, onClose, onSalvar }) {
   const [form, setForm] = useState({
     data: lanc.data || '', valor: lanc.valor ?? '',
     conta_debito: lanc.conta_debito || '', conta_credito: lanc.conta_credito || '',
-    historico: lanc.historico || '',
+    historico: lanc.historico || '', rateio: lanc.rateio || null,
   })
   const set = k => v => setForm(f => ({ ...f, [k]: v }))
   const [mm, yyyy] = String(competencia || '').split('/')
   const dataOk = (() => { const m = /^(\d{4})-(\d{2})/.exec(String(form.data || '')); return !m || !mm || (m[1] === yyyy && m[2] === mm.padStart(2, '0')) })()
-  const ok = form.conta_debito && form.conta_credito && Number(form.valor) > 0 && dataOk
+  // Conta de resultado (3/4/5) num cliente que usa CC → centro de custo obrigatório.
+  const exigeCC = lancamentoExigeCC(plano, usaCC, form.conta_debito, form.conta_credito)
+  const ccOk = !exigeCC || rateioValido(form.rateio, form.valor)
+  const ok = form.conta_debito && form.conta_credito && Number(form.valor) > 0 && dataOk && ccOk
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 60 }}>
       <div onClick={e => e.stopPropagation()} style={{ width: 'min(560px,96vw)', maxHeight: '90vh', overflow: 'auto', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
@@ -956,8 +976,10 @@ function ModalEditarLancamento({ lanc, competencia, onClose, onSalvar }) {
           <div><label>Conta débito</label><CampoConta value={form.conta_debito} onChange={set('conta_debito')} /></div>
           <div><label>Conta crédito</label><CampoConta value={form.conta_credito} onChange={set('conta_credito')} /></div>
           <div style={{ gridColumn: '1 / -1' }}><label>Histórico</label><textarea className="input" rows={2} value={form.historico} onChange={e => set('historico')(e.target.value)} /></div>
+          {exigeCC && <RateioCC valor={form.valor} value={form.rateio} onChange={set('rateio')} centros={centros} />}
         </div>
         {!dataOk && <p style={{ color: theme.red, fontSize: 12.5, marginTop: 10, fontWeight: 600 }}><i className="ti ti-alert-triangle" /> A data precisa ser de {competencia}.</p>}
+        {exigeCC && !ccOk && <p style={{ color: theme.red, fontSize: 12.5, marginTop: 10, fontWeight: 600 }}><i className="ti ti-alert-triangle" /> Conta de resultado: informe o centro de custo (a soma do rateio precisa bater com o valor).</p>}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 16 }}>
           <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
           <button className="btn" disabled={!ok} onClick={() => onSalvar(form)}>Salvar</button>
