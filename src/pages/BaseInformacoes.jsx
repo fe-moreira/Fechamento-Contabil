@@ -236,6 +236,54 @@ function extrairConta(obj) {
   }
 }
 
+// --- Mapeamento de colunas do PLANO DE CONTAS (o "Ajustar colunas") ---------------------
+// Nomes canônicos: ao gravar, o plano é convertido para estas colunas, então o parsePlano e
+// todo o resto lêem sempre igual, independente de como o arquivo do cliente nomeou as colunas.
+const CANON_PLANO = { classif: 'Classificacao', reduzido: 'Codigo Reduzido', nome: 'Nome Conta', tipo: 'Tipo Conta', mascara: 'Mascara' }
+// Sugere qual coluna do arquivo é cada campo (mesma heurística do parsePlano/colKeys). Quando
+// não acha a classificação pelo cabeçalho, detecta pela COLUNA com mais códigos hierárquicos.
+function sugerirMapaPlano(dados) {
+  const rows = Array.isArray(dados) ? dados : []
+  const keys = Object.keys(rows[0] || {})
+  const { kCod, kNome, kTipo, kClass } = colKeys(rows[0] || {})
+  let classif = kClass
+  if (!classif) {
+    let melhor = '', score = -1
+    for (const k of keys) {
+      if (k === kCod) continue
+      let hier = 0, num = 0
+      for (const r of rows) { const v = String(r[k] ?? '').trim(); if (/^\d/.test(v)) { num++; if (/[.\-/]/.test(v)) hier++ } }
+      const s = hier * 3 + num
+      if (num >= Math.max(3, rows.length * 0.4) && s > score) { score = s; melhor = k }
+    }
+    classif = melhor
+  }
+  const mascara = keys.find(k => /mascara/.test(normK(k))) || ''
+  return { classif: classif || '', reduzido: kCod || '', nome: kNome || '', tipo: kTipo || '', mascara }
+}
+// Converte as linhas para as colunas canônicas usando o MAPA (colunas do arquivo escolhidas).
+function normalizarComMapa(dados, mapa) {
+  if (!mapa) return dados
+  const pega = (r, k) => (k ? String(r[k] ?? '').trim() : '')
+  return (dados || []).map(r => ({
+    [CANON_PLANO.classif]: pega(r, mapa.classif), [CANON_PLANO.reduzido]: pega(r, mapa.reduzido),
+    [CANON_PLANO.nome]: pega(r, mapa.nome), [CANON_PLANO.tipo]: pega(r, mapa.tipo), [CANON_PLANO.mascara]: pega(r, mapa.mascara),
+  }))
+}
+// Converte QUALQUER linha de plano (colunas originais OU canônicas) para as canônicas — usado
+// no resultado final da mesclagem, para o array ficar todo com as mesmas colunas.
+function paraCanonicoPlano(dados) {
+  return (dados || []).map(r => {
+    const { kCod, kNome, kTipo, kClass } = colKeys(r)
+    const kMask = Object.keys(r).find(k => /mascara/.test(normK(k)))
+    return {
+      [CANON_PLANO.classif]: String(r[kClass] ?? '').trim(), [CANON_PLANO.reduzido]: String(r[kCod] ?? '').trim(),
+      [CANON_PLANO.nome]: String(r[kNome] ?? '').trim(), [CANON_PLANO.tipo]: String(r[kTipo] ?? '').trim(),
+      [CANON_PLANO.mascara]: String(r[kMask] ?? '').trim(),
+    }
+  })
+}
+
 export default function BaseInformacoes() {
   const { empresaId, empresaNome, competencia, plano, empresas, recalcularPendencias, recarregarPlano } = useAppData()
   const cliente = (empresas || []).find(e => e.id === empresaId)
@@ -617,7 +665,9 @@ function ModalCarga({ carga, historico, empresaId, cliente, usuario, onClose, on
   const [planoIdx, setPlanoIdx] = useState(null) // { porRed, porNum, mascara } p/ puxar nome pelo código
   const [hist, setHist] = useState(historico || []) // cargas (vigências) já salvas — recarrega ao salvar
   const [msgOk, setMsgOk] = useState('')
-  const [pendente, setPendente] = useState(null) // { dados, nome, diff? } aguardando confirmação
+  const [pendente, setPendente] = useState(null) // { dados, nome } aguardando confirmação
+  const [mapaCols, setMapaCols] = useState(null) // { classif, reduzido, nome, tipo, mascara } (plano)
+  const [ajusteAberto, setAjusteAberto] = useState(false) // "Ajustar colunas" aberto?
   const [planoRaw, setPlanoRaw] = useState([])   // linhas cruas do plano atual (p/ diff e mesclagem)
   const [editConta, setEditConta] = useState(null) // { idx, codigo, classif, nome, tipo } conta em edição
   const ehPlano = carga.tipo === 'plano'
@@ -743,27 +793,38 @@ function ModalCarga({ carga, historico, empresaId, cliente, usuario, onClose, on
       const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' })
       const dados = lerPlanilha(XLSX, wb.Sheets[wb.SheetNames[0]])
       if (!dados.length) { setErro('Planilha vazia.'); return }
-      // No plano de contas, mostra o que é novo/alterado vs o plano atual.
-      const diff = (ehPlano && planoRaw.length) ? diffPlano(dados) : null
-      setPendente({ dados, nome: file.name, diff }) // aguarda confirmação (conferir antes de gravar)
+      // Plano de contas: sugere o mapeamento das colunas. Se ficar em dúvida (não achou a
+      // Classificação, ou reconheceu poucas contas), já abre o "Ajustar colunas".
+      if (ehPlano) {
+        const mapa = sugerirMapaPlano(dados)
+        const reconhec = parsePlano(normalizarComMapa(dados, mapa)).length
+        setMapaCols(mapa)
+        setAjusteAberto(!mapa.classif || reconhec < Math.max(1, Math.floor(dados.length * 0.3)))
+      } else { setMapaCols(null); setAjusteAberto(false) }
+      setPendente({ dados, nome: file.name }) // aguarda confirmação (conferir antes de gravar)
     } catch (err) { setErro('Erro ao ler o arquivo: ' + err.message) }
   }
 
   // Confirma a importação lida (grava de fato).
   async function confirmarImport() {
     if (!pendente) return
+    if (ehPlano && (!mapaCols || !mapaCols.classif)) { setErro('Escolha a coluna de Classificação em “Ajustar colunas”.'); setAjusteAberto(true); return }
     setErro(''); setSalvando(true)
     try {
       if (!(await sobreporSeMesma())) { setSalvando(false); return }
-      // Plano: mescla com o atual (mantém as contas existentes, inclui/atualiza as novas).
-      const dadosFinal = (ehPlano && planoRaw.length) ? mesclarPlano(pendente.dados) : pendente.dados
+      let dadosFinal
+      if (ehPlano) {
+        // Aplica o mapa (converte p/ colunas canônicas), mescla com o plano atual e normaliza
+        // TUDO p/ as mesmas colunas — assim o parsePlano lê consistente independente do formato.
+        const norm = normalizarComMapa(pendente.dados, mapaCols)
+        dadosFinal = paraCanonicoPlano(planoRaw.length ? mesclarPlano(norm) : norm)
+      } else dadosFinal = pendente.dados
       const { error } = await supabase.from('cargas_cadastro').insert({
         cliente_id: empresaId, tipo: carga.tipo, vigencia, dados: dadosFinal, usuario, obs: pendente.nome,
       })
       if (error) throw error
       await recarregar(); onImportado(); setSalvando(false)
-      const resumo = pendente.diff ? ` · ${pendente.diff.novas.length} nova(s), ${pendente.diff.alteradas.length} alterada(s)` : ''
-      setMsgOk(`Importado · vigência ${vigencia} (${dadosFinal.length} conta(s)${resumo}).`); setPendente(null)
+      setMsgOk(`Importado · vigência ${vigencia} (${dadosFinal.length} conta(s)).`); setPendente(null); setMapaCols(null); setAjusteAberto(false)
     } catch (err) { setErro('Erro ao importar: ' + err.message); setSalvando(false) }
   }
 
@@ -842,6 +903,24 @@ function ModalCarga({ carga, historico, empresaId, cliente, usuario, onClose, on
   )
   const SubTit = ({ children }) => <p style={{ color: theme.sub, fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: .4, margin: '14px 0 2px' }}>{children}</p>
 
+  // Prévia do plano com o mapa atual: linhas normalizadas, diff e nº de contas reconhecidas —
+  // recalcula sozinho quando você troca uma coluna no "Ajustar colunas".
+  const colsArq = pendente ? Object.keys(pendente.dados[0] || {}) : []
+  const planoNorm = (pendente && ehPlano && mapaCols) ? normalizarComMapa(pendente.dados, mapaCols) : (pendente?.dados || [])
+  const planoDiff = (pendente && ehPlano && planoRaw.length) ? diffPlano(planoNorm) : null
+  const planoRecon = (pendente && ehPlano) ? parsePlano(planoNorm).length : null
+  const setCol = campo => e => setMapaCols(m => ({ ...(m || {}), [campo]: e.target.value }))
+  // Função (não componente) p/ não remontar o <select> a cada tecla (perderia o foco).
+  const selCol = (label, campo, req) => (
+    <div key={campo} style={{ minWidth: 150 }}>
+      <label style={{ fontSize: 11.5 }}>{label} {req && <span style={{ color: theme.red }}>*</span>}</label>
+      <select className="input" value={(mapaCols || {})[campo] || ''} onChange={setCol(campo)}>
+        <option value="">{req ? '— escolha —' : '(nenhuma)'}</option>
+        {colsArq.map(c => <option key={c} value={c}>{c}</option>)}
+      </select>
+    </div>
+  )
+
   return (
     <Modal titulo={carga.title} sub={carga.sub} onClose={onClose} largura={680}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 12 }}>
@@ -876,26 +955,51 @@ function ModalCarga({ carga, historico, empresaId, cliente, usuario, onClose, on
             <div style={{ border: `1px solid ${theme.accent}`, borderRadius: 10, padding: 14, marginTop: 4 }}>
               <p style={{ fontSize: 13, fontWeight: 600, margin: '0 0 4px' }}><i className="ti ti-eye" style={{ color: theme.accent }} /> Confira antes de importar</p>
               <p style={{ fontSize: 12.5, color: theme.sub, margin: '0 0 10px' }}>{pendente.nome} · <b style={{ color: theme.text }}>{pendente.dados.length}</b> linha(s) · vigência {vigencia}</p>
-              {pendente.diff && (
+              {ehPlano && (
+                <div style={{ background: theme.input, borderRadius: 8, padding: '10px 12px', marginBottom: 10 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 12.5, color: planoRecon ? theme.green : theme.red, fontWeight: 600 }}>
+                      <i className={`ti ${planoRecon ? 'ti-circle-check' : 'ti-alert-triangle'}`} /> {planoRecon} conta(s) reconhecida(s)
+                    </span>
+                    <button className="btn btn-ghost" style={{ fontSize: 12, padding: '3px 10px', marginLeft: 'auto' }} onClick={() => setAjusteAberto(a => !a)}>
+                      <i className="ti ti-columns" /> {ajusteAberto ? 'Ocultar colunas' : 'Ajustar colunas'}
+                    </button>
+                  </div>
+                  {!ajusteAberto && !planoRecon && <p style={{ fontSize: 11.5, color: theme.red, margin: '6px 0 0' }}>Não reconheci as contas — clique em <b>Ajustar colunas</b> e indique qual coluna é a Classificação.</p>}
+                  {ajusteAberto && (
+                    <div style={{ marginTop: 10 }}>
+                      <p style={{ fontSize: 11.5, color: theme.sub, margin: '0 0 8px' }}>Diga qual coluna do seu arquivo é cada informação (a <b>Classificação</b> é obrigatória):</p>
+                      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                        {selCol('Classificação', 'classif', true)}
+                        {selCol('Código reduzido', 'reduzido')}
+                        {selCol('Nome da conta', 'nome')}
+                        {selCol('Tipo (S/A)', 'tipo')}
+                        {selCol('Máscara', 'mascara')}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+              {planoDiff && (
                 <div style={{ background: theme.input, borderRadius: 8, padding: '10px 12px', marginBottom: 10, fontSize: 12.5 }}>
                   <p style={{ margin: '0 0 6px', color: theme.text, fontWeight: 600 }}><i className="ti ti-git-compare" style={{ color: theme.accent, marginRight: 5 }} />Comparação com o plano atual — será incluído só o que é novo ou mudou; o resto é mantido.</p>
                   <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-                    <span style={{ color: theme.green }}><b>{pendente.diff.novas.length}</b> nova(s)</span>
-                    <span style={{ color: theme.yellow }}><b>{pendente.diff.alteradas.length}</b> alterada(s)</span>
-                    <span style={{ color: theme.sub }}><b>{pendente.diff.mantidas}</b> mantida(s) (não vieram no arquivo)</span>
+                    <span style={{ color: theme.green }}><b>{planoDiff.novas.length}</b> nova(s)</span>
+                    <span style={{ color: theme.yellow }}><b>{planoDiff.alteradas.length}</b> alterada(s)</span>
+                    <span style={{ color: theme.sub }}><b>{planoDiff.mantidas}</b> mantida(s) (não vieram no arquivo)</span>
                   </div>
-                  {(pendente.diff.novas.length + pendente.diff.alteradas.length) > 0 && (
+                  {(planoDiff.novas.length + planoDiff.alteradas.length) > 0 && (
                     <div style={{ marginTop: 8, maxHeight: 130, overflowY: 'auto' }}>
-                      {pendente.diff.novas.slice(0, 12).map((c, i) => (
+                      {planoDiff.novas.slice(0, 12).map((c, i) => (
                         <div key={'n' + i} style={{ fontSize: 12, padding: '3px 0', color: theme.text }}><span style={{ color: theme.green, fontSize: 11, marginRight: 6 }}>NOVA</span><span style={{ color: theme.sub }}>{c.codigo}</span> {c.nome}</div>
                       ))}
-                      {pendente.diff.alteradas.slice(0, 12).map((c, i) => (
+                      {planoDiff.alteradas.slice(0, 12).map((c, i) => (
                         <div key={'a' + i} style={{ fontSize: 12, padding: '3px 0', color: theme.text }}><span style={{ color: theme.yellow, fontSize: 11, marginRight: 6 }}>ALTEROU</span><span style={{ color: theme.sub }}>{c.para.codigo}</span> {c.de.nome} → {c.para.nome}</div>
                       ))}
-                      {(pendente.diff.novas.length + pendente.diff.alteradas.length) > 24 && <p style={{ fontSize: 11, color: theme.sub, margin: '4px 0 0' }}>… e mais.</p>}
+                      {(planoDiff.novas.length + planoDiff.alteradas.length) > 24 && <p style={{ fontSize: 11, color: theme.sub, margin: '4px 0 0' }}>… e mais.</p>}
                     </div>
                   )}
-                  {pendente.diff.novas.length + pendente.diff.alteradas.length === 0 && <p style={{ fontSize: 12, color: theme.sub, margin: '6px 0 0' }}>Nada novo ou alterado em relação ao plano atual.</p>}
+                  {planoDiff.novas.length + planoDiff.alteradas.length === 0 && <p style={{ fontSize: 12, color: theme.sub, margin: '6px 0 0' }}>Nada novo ou alterado em relação ao plano atual.</p>}
                 </div>
               )}
               <div style={{ overflowX: 'auto', border: `0.5px solid ${theme.cb}`, borderRadius: 8, maxHeight: 240 }}>
