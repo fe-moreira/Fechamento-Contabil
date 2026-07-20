@@ -500,7 +500,7 @@ export default function BaseInformacoes() {
 
       {/* Modais */}
       {modal?.tipo === 'carga' && (
-        <ModalCarga carga={modal.carga} historico={cargas[modal.carga.tipo] || []} empresaId={empresaId} usuario={user?.email}
+        <ModalCarga carga={modal.carga} historico={cargas[modal.carga.tipo] || []} empresaId={empresaId} cliente={cliente} usuario={user?.email}
           onClose={() => setModal(null)} onImportado={() => { carregarCargas(); recarregarPlano() }} />
       )}
       {modal?.tipo === 'partic' && (
@@ -515,7 +515,7 @@ export default function BaseInformacoes() {
           onClose={() => setModal(null)} onSalvar={salvarPeriodo} onFazerCarga={abrirCargaInicial} />
       )}
       {modal?.tipo === 'cargaInicial' && (
-        <ModalCargaInicial vigencia={modal.vigencia} empresaId={empresaId} onClose={() => setModal(null)} onConcluir={concluirCargaInicial} />
+        <ModalCargaInicial vigencia={modal.vigencia} empresaId={empresaId} cliente={cliente} onClose={() => setModal(null)} onConcluir={concluirCargaInicial} />
       )}
       {modal?.tipo === 'dist' && (
         <ModalDist inicial={dist} empresaId={empresaId} competencia={competencia} empresaNome={empresaNome} planoMap={planoMap} onClose={() => setModal(null)} onSalvar={salvarDist} />
@@ -606,7 +606,7 @@ function Acoes({ onEdit, onDel }) {
 }
 
 /* ---------- Modais ---------- */
-function ModalCarga({ carga, historico, empresaId, usuario, onClose, onImportado }) {
+function ModalCarga({ carga, historico, empresaId, cliente, usuario, onClose, onImportado }) {
   const modelo = MODELOS[carga.tipo] || { cols: ['Código', 'Nome'], ex: [], dica: '' }
   const linhaVazia = () => Object.fromEntries(modelo.cols.map(c => [c, '']))
   const [vigencia, setVigencia] = useState('')
@@ -734,11 +734,11 @@ function ModalCarga({ carga, historico, empresaId, usuario, onClose, onImportado
   // Escolher/arrastar o arquivo faz a LEITURA e mostra a prévia; só grava ao confirmar.
   async function importarArquivo(file) {
     if (!file) return
-    const errCod = await checarArquivoEmpresa(file, cliente)
-    if (errCod) { setErro(errCod); return }
     if (!vigOk) { setErro('Informe a vigência (MM/AAAA) antes de escolher o arquivo.'); return }
     setErro(''); setMsgOk('')
     try {
+      const errCod = await checarArquivoEmpresa(file, cliente)
+      if (errCod) { setErro(errCod); return }
       const XLSX = await import('xlsx')
       const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' })
       const dados = lerPlanilha(XLSX, wb.Sheets[wb.SheetNames[0]])
@@ -1160,7 +1160,7 @@ function GradeManual({ cols, linhas, onChange, planoNomes }) {
   )
 }
 
-function ModalCargaInicial({ vigencia, empresaId, onClose, onConcluir }) {
+function ModalCargaInicial({ vigencia, empresaId, cliente, onClose, onConcluir }) {
   const [saldos, setSaldos] = useState(null)        // { nome, dados:[...] } — só saldo
   const [comp, setComp] = useState(null)            // clientes e fornecedores (com NF)
   const [outras, setOutras] = useState(null)        // outras contas com composição (sem NF)
@@ -1217,10 +1217,10 @@ function ModalCargaInicial({ vigencia, empresaId, onClose, onConcluir }) {
   }
   async function lerArquivo(file, setter, atual) {
     if (!file) return
-    const errCod = await checarArquivoEmpresa(file, cliente)
-    if (errCod) { setErro(errCod); return }
     setErro('')
     try {
+      const errCod = await checarArquivoEmpresa(file, cliente)
+      if (errCod) { setErro(errCod); return }
       const XLSX = await import('xlsx')
       const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' })
       const brutos = lerPlanilha(XLSX, wb.Sheets[wb.SheetNames[0]])
