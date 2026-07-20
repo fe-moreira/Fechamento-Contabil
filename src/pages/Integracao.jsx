@@ -211,21 +211,35 @@ function cruzarFiscal(rows, idx, chave) {
 // Entradas/Saídas/Serviços no MESMO arquivo. Lê por NOME de coluna e filtra pela seção do
 // `sub`. Acumulador/valor de bens = codi_acu/valor_contabil; de serviço = codi_acu_ser/
 // valor_contabil_ser. (Foi o caso da PRIME: o parser posicional pegava a coluna errada.)
+// Acha a LINHA do cabeçalho nomeado (pode ter uma linha de título antes). Devolve { hi, hdr }
+// ou null. O cabeçalho é reconhecido por conter codi_acu / valor_contabil / titulo_tipo_nota.
+function acharHdrNomeado(arr) {
+  const ok = row => { const s = (row || []).map(h => String(h).toLowerCase().trim()); return s.includes('codi_acu') || s.includes('valor_contabil') || s.includes('titulo_tipo_nota') }
+  const hi = (arr || []).findIndex(ok)
+  return hi >= 0 ? { hi, hdr: arr[hi].map(h => String(h).toLowerCase().trim()) } : null
+}
+
 function parseResumoNomeado(arr, hdr, sub) {
   const idx = nome => hdr.indexOf(nome)
   const cTit = idx('titulo_tipo_nota')
   const cAcuG = idx('codi_acu'), cValG = idx('valor_contabil')
   const cAcuS = idx('codi_acu_ser'), cValS = idx('valor_contabil_ser')
+  if (cAcuG < 0 && cAcuS < 0) return [] // sem coluna de acumulador nomeada → não é este formato
   const norm = s => String(s ?? '').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim()
   const alvo = sub === 'entradas' ? 'ENTRADAS' : sub === 'saidas' ? 'SAIDAS' : 'SERVICOS'
+  // O arquivo é COMBINADO (Entradas/Saídas/Serviços juntos, com marcadores de seção) ou de um
+  // tipo SÓ? Sem marcadores, todas as linhas são do tipo que está sendo importado (a aba diz qual).
+  const temSecoes = cTit >= 0 && arr.some(r => /ENTRADAS|SAIDAS|SERVI[CÇ]OS/.test(norm(r[cTit])))
   const rows = []
   let secao = ''
   for (const r of arr) {
-    const tit = norm(cTit >= 0 ? r[cTit] : '')
-    if (/ENTRADAS/.test(tit)) secao = 'ENTRADAS'
-    else if (/SAIDAS/.test(tit)) secao = 'SAIDAS'
-    else if (/SERVI[CÇ]OS/.test(tit)) secao = 'SERVICOS'
-    if (secao !== alvo) continue
+    if (temSecoes) {
+      const tit = norm(cTit >= 0 ? r[cTit] : '')
+      if (/ENTRADAS/.test(tit)) secao = 'ENTRADAS'
+      else if (/SAIDAS/.test(tit)) secao = 'SAIDAS'
+      else if (/SERVI[CÇ]OS/.test(tit)) secao = 'SERVICOS'
+      if (secao !== alvo) continue
+    }
     const acum = normAcum(cAcuG >= 0 ? r[cAcuG] : '') || normAcum(cAcuS >= 0 ? r[cAcuS] : '')
     const valor = numFis(cValG >= 0 ? r[cValG] : 0) || numFis(cValS >= 0 ? r[cValS] : 0)
     if (!acum || !valor) continue // pula cabeçalhos e a linha "Total:" (sem acumulador)
@@ -238,10 +252,12 @@ async function parseAcumulador(file, sub) {
   const XLSX = await import('xlsx')
   const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true })
   const arr = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' })
-  // Detecta o "Resumo por Acumulador" com cabeçalho nomeado e lê por nome (formato próprio).
-  const hdr = (arr[0] || []).map(h => String(h).toLowerCase().trim())
-  if (hdr.includes('codi_acu') || hdr.includes('valor_contabil') || hdr.includes('titulo_tipo_nota')) {
-    return parseResumoNomeado(arr, hdr, sub)
+  // "Resumo por Acumulador" com cabeçalho nomeado → lê por nome. Se NÃO achar linhas, cai no
+  // formato posicional abaixo (garante que nunca fica pior do que antes — sem regressão).
+  const h = acharHdrNomeado(arr)
+  if (h) {
+    const nomeadas = parseResumoNomeado(arr.slice(h.hi), h.hdr, sub)
+    if (nomeadas.length) return nomeadas
   }
   const c = COLS_FISCAL[sub] || COLS_FISCAL.entradas
   const col = {
@@ -286,10 +302,12 @@ async function totaisResumoXls(file) {
   const XLSX = await import('xlsx')
   const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true })
   const arr = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' })
-  const hdr = (arr[0] || []).map(h => String(h).toLowerCase().trim())
+  const h = acharHdrNomeado(arr)
+  if (!h) return {}
+  const dados = arr.slice(h.hi)
   const out = {}
   for (const sub of ['entradas', 'saidas', 'servicos']) {
-    const tot = parseResumoNomeado(arr, hdr, sub).reduce((s, r) => s + (Number(r.valor) || 0), 0)
+    const tot = parseResumoNomeado(dados, h.hdr, sub).reduce((s, r) => s + (Number(r.valor) || 0), 0)
     if (tot) out[sub] = Math.round(tot * 100) / 100
   }
   return out
