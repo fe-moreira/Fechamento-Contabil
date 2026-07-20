@@ -157,17 +157,30 @@ export function parsePlano(dados) {
     }
     kClass = melhor
   }
+  // Aplica a máscara à classificação ACHATADA (só dígitos), virando "1.1.1.001.0001". Mantém o
+  // resto se a conta for mais funda que a máscara (não perde dígito). Se já vier com pontos, não mexe.
+  const mascararClassif = (code, mask) => {
+    const c = String(code ?? '').replace(/\D/g, '')
+    if (!c || !mask) return String(code ?? '').trim()
+    const tams = String(mask).split('.').map(s => s.length)
+    const parts = []; let i = 0
+    for (const t of tams) { if (i >= c.length) break; parts.push(c.slice(i, i + t)); i += t }
+    if (i < c.length) parts.push(c.slice(i))
+    return parts.join('.')
+  }
   const out = []
   for (const r of rows) {
-    const classif = String((kClass != null ? r[kClass] : '') ?? '').trim()
-    if (!classif || !/^\d/.test(classif)) continue
+    const rawClassif = String((kClass != null ? r[kClass] : '') ?? '').trim()
+    if (!rawClassif || !/^\d/.test(rawClassif)) continue
+    const mascara = String((kMask != null ? r[kMask] : '') ?? '').trim()
+    const classif = (mascara && /^\d+$/.test(rawClassif)) ? mascararClassif(rawClassif, mascara) : rawClassif
     const tipo = String((kTipo != null ? r[kTipo] : '') ?? '').trim().toUpperCase().slice(0, 1)
     out.push({
       reduzido: String((kRed != null ? r[kRed] : '') ?? '').trim(),
       classif,
       nome: String((kNome != null ? r[kNome] : '') ?? '').trim(),
       sintetica: tipo === 'S',
-      mascara: String((kMask != null ? r[kMask] : '') ?? '').trim(),
+      mascara,
     })
   }
   // Robustez entre formatos: além da coluna "tipo", uma conta é SINTÉTICA (conta-mãe) se
