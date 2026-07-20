@@ -1087,10 +1087,23 @@ function ResumoFinal({ est, totalImportado, onImport, onExtrair, onExcluir, busy
   const tudoOk = temResumo && linhas.every(l => l.dif != null && Math.abs(l.dif) < 0.005)
   return (
     <>
-      <ImpCard titulo="Importar Resumo por Acumulador (Domínio)"
-        desc={'Suba o "Resumo por Acumulador" em EXCEL (.xls/.xlsx) — é o que o sistema LÊ os totais de Entradas, Saídas e Serviços. O PDF é opcional, entra como CONFERÊNCIA do analista (não é lido). Vários arquivos Excel (matriz + filiais) somam.'}
-        onImport={onImport} nome={temResumo ? est?.resumoPdf?.doc : undefined} qtd={arquivos.length} unidade="arquivo"
-        accept=".xlsx,.xls,.pdf" label={temResumo ? 'Subir outro' : 'Importar'} />
+      <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: 18, display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+        <span style={{ background: 'rgba(74,124,255,0.15)', borderRadius: 10, width: 42, height: 42, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+          <i className="ti ti-cloud-upload" style={{ color: theme.accent, fontSize: 20 }} />
+        </span>
+        <div style={{ flex: 1, minWidth: 180 }}>
+          <p style={{ color: theme.text, fontSize: 14, fontWeight: 600, margin: 0 }}>Importar Resumo por Acumulador (Domínio)</p>
+          <p style={{ color: theme.sub, fontSize: 12.5, margin: '2px 0 0' }}>O <b style={{ color: theme.green }}>Excel</b> é o que o sistema <b>lê</b> (totais de Entradas/Saídas/Serviços). O <b>PDF</b> é só <b>conferência</b> do analista.</p>
+        </div>
+        <label className="btn" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }} title="O Excel é lido pelo sistema (fonte dos totais)">
+          <i className="ti ti-file-spreadsheet" /> Importar Excel
+          <input type="file" accept=".xlsx,.xls" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; onImport(f) }} />
+        </label>
+        <label className="btn btn-ghost" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }} title="O PDF fica anexado só para conferência do analista (não é lido)">
+          <i className="ti ti-file-typography" /> Anexar PDF
+          <input type="file" accept=".pdf" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; onImport(f) }} />
+        </label>
+      </div>
       {arquivos.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, margin: '10px 0 0' }}>
           {arquivos.length > 1 && <span style={{ fontSize: 11.5, color: theme.sub }}>Excel(s) somam os totais; PDF fica só para conferência do analista.</span>}
