@@ -138,11 +138,25 @@ export function parsePlano(dados) {
   if (!rows.length) return []
   const keys = Object.keys(rows[0])
   const find = (...res) => { for (const re of res) { const k = keys.find(k => re.test(baixa(k))); if (k) return k } return null }
-  const kClass = find(/classifica/, /classif/)
+  let kClass = find(/classifica/, /classif/, /estrutural/, /estrut/)
   const kRed = find(/codigo.?conta/, /codigo|reduz/, /^cod/)
   const kNome = find(/nome.?conta/, /nome|descri/)
   const kTipo = find(/tipo.?conta/) || keys.find(k => baixa(k) === 't') || find(/^tipo$/)
   const kMask = find(/mascara.?relat/, /mascara/)
+  // Sem cabeçalho de classificação reconhecido (ex.: "Estrutural", "Conta", "Máscara"): detecta
+  // a coluna pelos VALORES — a que tem mais códigos HIERÁRQUICOS ("1.1.01.001", com separador),
+  // evitando a coluna do reduzido (número "solto"). Assim o plano carrega em qualquer formato.
+  if (!kClass) {
+    let melhor = null, score = -1
+    for (const k of keys) {
+      if (k === kRed) continue
+      let hier = 0, num = 0
+      for (const r of rows) { const v = String(r[k] ?? '').trim(); if (/^\d/.test(v)) { num++; if (/[.\-/]/.test(v)) hier++ } }
+      const s = hier * 3 + num
+      if (num >= Math.max(3, rows.length * 0.4) && s > score) { score = s; melhor = k }
+    }
+    kClass = melhor
+  }
   const out = []
   for (const r of rows) {
     const classif = String((kClass != null ? r[kClass] : '') ?? '').trim()
