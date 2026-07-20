@@ -510,7 +510,7 @@ export default function Status() {
       }
       return 'Erro ao editar: ' + error.message
     }
-    setEditLanc(null); await carregar(); setMsg('Lançamento editado.'); return null
+    await carregar(); setMsg('Lançamento editado.'); return null // o modal mostra "Salvo!" e fecha
   }
 
   // Corrigir banco × resultado: grava a partida de acerto (vai para o Contabilizar) + auditoria.
@@ -968,6 +968,7 @@ function ModalEditarLancamento({ lanc, competencia, plano, usaCC, centros, onClo
   const set = k => v => setForm(f => ({ ...f, [k]: v }))
   const [erroSalvar, setErroSalvar] = useState('')
   const [salvando, setSalvando] = useState(false)
+  const [salvo, setSalvo] = useState(false)
   const [mm, yyyy] = String(competencia || '').split('/')
   const dataOk = (() => { const m = /^(\d{4})-(\d{2})/.exec(String(form.data || '')); return !m || !mm || (m[1] === yyyy && m[2] === mm.padStart(2, '0')) })()
   // Conta de resultado (3/4/5) num cliente que usa CC → centro de custo obrigatório.
@@ -978,7 +979,8 @@ function ModalEditarLancamento({ lanc, competencia, plano, usaCC, centros, onClo
     setErroSalvar(''); setSalvando(true)
     const e = await onSalvar(form)
     setSalvando(false)
-    if (e) setErroSalvar(e) // sucesso fecha o modal no pai; erro aparece aqui
+    if (e) { setErroSalvar(e); return } // erro aparece aqui no modal
+    setSalvo(true); setTimeout(() => onClose(), 1000) // confirma "Salvo!" e fecha
   }
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 60 }}>
@@ -996,9 +998,10 @@ function ModalEditarLancamento({ lanc, competencia, plano, usaCC, centros, onClo
         {!dataOk && <p style={{ color: theme.red, fontSize: 12.5, marginTop: 10, fontWeight: 600 }}><i className="ti ti-alert-triangle" /> A data precisa ser de {competencia}.</p>}
         {exigeCC && !ccOk && <p style={{ color: theme.red, fontSize: 12.5, marginTop: 10, fontWeight: 600 }}><i className="ti ti-alert-triangle" /> Conta de resultado: informe o centro de custo (a soma do rateio precisa bater com o valor).</p>}
         {erroSalvar && <p style={{ color: theme.red, fontSize: 12.5, marginTop: 10, fontWeight: 600 }}><i className="ti ti-alert-triangle" /> {erroSalvar}</p>}
+        {salvo && <p style={{ color: theme.green, fontSize: 13, marginTop: 10, fontWeight: 700 }}><i className="ti ti-circle-check" /> Lançamento salvo!</p>}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 16 }}>
-          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
-          <button className="btn" disabled={!ok || salvando} onClick={salvar}>{salvando ? 'Salvando…' : 'Salvar'}</button>
+          <button className="btn btn-ghost" onClick={onClose} disabled={salvando || salvo}>Cancelar</button>
+          <button className="btn" disabled={!ok || salvando || salvo} onClick={salvar}>{salvo ? 'Salvo ✓' : salvando ? 'Salvando…' : 'Salvar'}</button>
         </div>
       </div>
     </div>
