@@ -20,14 +20,20 @@ function textoTemCodigo(texto, codigos) {
 }
 
 // Códigos aceitos para a empresa: o próprio (codigo_dominio), o da matriz (se for filial) e,
-// se ESTE cliente for uma matriz, os códigos das filiais dele (consolidado importa na matriz).
+// se ESTE cliente for uma matriz, os códigos das FILIAIS marcadas como CONSOLIDADO que apontam
+// para o código dela — o fechamento consolidado da filial é importado na matriz. Filial
+// INDIVIDUALIZADA fecha sozinha e NÃO libera o arquivo na matriz.
 async function codigosAceitos(cliente) {
   const set = new Set([cliente.codigo_dominio, cliente.codigo_matriz].map(soDig).filter(Boolean))
-  const cod = String(cliente.codigo_dominio || '').trim()
+  const cod = soDig(cliente.codigo_dominio) // compara por dígitos (ignora zeros à esquerda/formatação)
   if (cod) {
     try {
-      const { data } = await supabase.from('clientes').select('codigo_dominio').eq('codigo_matriz', cod)
-      for (const f of (data || [])) { const d = soDig(f.codigo_dominio); if (d) set.add(d) }
+      const { data } = await supabase.from('clientes').select('codigo_dominio, codigo_matriz, tipo_fechamento').eq('tipo', 'Filial')
+      for (const f of (data || [])) {
+        if (soDig(f.codigo_matriz) !== cod) continue                     // filial desta matriz?
+        if (!/consolidad/i.test(String(f.tipo_fechamento || ''))) continue // só consolidado importa na matriz
+        const d = soDig(f.codigo_dominio); if (d) set.add(d)
+      }
     } catch { /* sem rede: fica só com os códigos locais */ }
   }
   return [...set]
