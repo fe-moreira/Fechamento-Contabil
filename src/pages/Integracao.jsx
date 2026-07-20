@@ -53,9 +53,10 @@ function nfsDoHistorico(h) {
   for (const m of String(h || '').matchAll(/nf[\s.ºn°o:_-]*(\d{1,})/gi)) { const d = m[1].replace(/^0+/, ''); if (d) out.add(d) }
   return out
 }
-// Acumulador citado no histórico (vem depois de "Acum.").
+// Acumulador citado no histórico (vem depois de "Acum." OU "Acumulador"). Antes só pegava a
+// abreviação "Acum."; se o razão escrever o nome por extenso ("Acumulador 6") ficava de fora.
 function acumDoHistorico(h) {
-  const m = /acum[\s.ºn°o:_-]*(\d{1,})/i.exec(String(h || ''))
+  const m = /acum(?:ulador)?[\s.ºn°o:_-]*(\d{1,})/i.exec(String(h || ''))
   return m ? m[1].replace(/^0+/, '') : ''
 }
 const normNome = s => String(s || '').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim()
@@ -853,7 +854,7 @@ function Fiscal({ competencia, empresaId, cliente, user, est, onEstado }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '10px 0 0', flexWrap: 'wrap' }}>
         {atual?.path && filesFiscal(atual).length <= 1 && <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={() => extrairArquivo()} title="Baixar o arquivo do acumulador importado"><i className="ti ti-download" /> Extrair arquivo</button>}
         {!semMov && !atual?.resumo && <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={marcarSemMovTipo} title="Este cliente não tem esse tipo de movimento no período"><i className="ti ti-circle-minus" /> Marcar sem movimento</button>}
-        {sub === 'saidas' && !tipos.saidas?.justificativa && <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={() => { setJustTxt(''); setJustAberto(true) }} title="Só Saídas: justificar valor de operação interna (ex.: rendimento). Entradas/Serviços têm que corrigir."><i className="ti ti-flag" /> Justificar</button>}
+        {sub === 'saidas' && !tipos.saidas?.justificativa && Math.abs(totDif) < 0.005 && <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={() => { setJustTxt(''); setJustAberto(true) }} title="Só Saídas: justificar valor de operação interna (ex.: rendimento). Entradas/Serviços têm que corrigir."><i className="ti ti-flag" /> Justificar</button>}
         {busy && <span style={{ color: theme.sub, fontSize: 12.5 }}><i className="ti ti-loader" /> Cruzando com razão + lançamentos + ajustes…</span>}
       </div>
 
@@ -884,6 +885,16 @@ function Fiscal({ competencia, empresaId, cliente, user, est, onEstado }) {
           <Metric label="Razão / contabilidade" valor={money(totId)} icon="ti-checks" cor={theme.green} />
           <Metric label="Diferença" valor={money(totDif)} icon="ti-arrows-diff" cor={Math.abs(totDif) < 0.005 ? theme.green : theme.red} sub={Math.abs(totDif) < 0.005 ? 'tudo identificado' : 'clique no acumulador p/ ver'} />
         </div>
+
+        {/* Só Saídas: justificar a diferença (ex.: operação interna / rendimento). Entradas e
+            Serviços não têm justificar — a diferença tem que ser corrigida. */}
+        {sub === 'saidas' && !tipos.saidas?.justificativa && Math.abs(totDif) >= 0.005 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', background: 'rgba(245,166,35,0.10)', border: `1px solid ${theme.yellow}`, borderRadius: 10, padding: '10px 14px', margin: '0 0 16px' }}>
+            <i className="ti ti-flag" style={{ color: theme.yellow, fontSize: 18 }} />
+            <span style={{ fontSize: 12.5, color: theme.text, flex: 1, minWidth: 180 }}>Diferença de <b>{money(totDif)}</b> nas Saídas. Se for <b>operação interna</b> (ex.: rendimento de aplicação, transferência), você pode <b>justificar a diferença</b> e a Saída fica validada.</span>
+            <button className="btn" style={{ fontSize: 12.5 }} onClick={() => { setJustTxt(''); setJustAberto(true) }}><i className="ti ti-flag" /> Justificar diferença</button>
+          </div>
+        )}
 
         <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'auto' }}>
           <table style={{ width: '100%', minWidth: 640, borderCollapse: 'collapse' }}>
