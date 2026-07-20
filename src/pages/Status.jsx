@@ -481,6 +481,18 @@ export default function Status() {
     setMsg(`${tipo} registrada${pend ? ' · pendência do cliente enviada ao relatório' : ''}.`)
   }
 
+  // Aplica um centro de custo em LOTE aos lançamentos selecionados (só os de resultado).
+  // Cada lançamento recebe o centro com o SEU valor cheio (rateio de 1 centro).
+  async function aplicarCCLote(ids, cod, nome) {
+    const alvo = (dados?.lancamentos || []).filter(l => ids.includes(l.id) && lancamentoExigeCC(plano, usaCC, l.conta_debito, l.conta_credito))
+    if (!alvo.length) { setMsg('Nenhum lançamento de resultado selecionado para aplicar centro de custo.'); return }
+    for (const l of alvo) {
+      const { error } = await supabase.from('lancamentos').update({ rateio: [{ cod, nome, valor: Number(l.valor) || 0 }] }).eq('id', l.id)
+      if (error) { setMsg('Erro ao aplicar centro de custo: ' + error.message); return }
+    }
+    await carregar(); setMsg(`Centro de custo aplicado em ${alvo.length} lançamento(s).`)
+  }
+
   // Desfaz (remove) um lançamento gerado pela plataforma — sai do arquivo do Domínio.
   async function desfazerLancamento(id) {
     if (!window.confirm('Desfazer este lançamento? Ele será removido e não entra no arquivo do Domínio.')) return
@@ -790,11 +802,15 @@ export default function Status() {
         <ModalLancamentosDominio
           lancamentos={dados.lancamentos}
           planoMap={planoMap}
+          plano={plano}
+          usaCC={usaCC}
+          centros={centrosCC}
           pronto={pronto}
           totalPendencias={totalPendencias}
           onGerar={() => gerarDominioCSV(dados.lancamentos, `dominio_${competencia.replace('/', '-')}.csv`)}
           onDesfazer={desfazerLancamento}
           onEditar={l => setEditLanc(l)}
+          onAplicarCCLote={aplicarCCLote}
           onClose={() => setVerDominio(false)}
         />
       )}
@@ -808,36 +824,85 @@ export default function Status() {
 
 // Lista os lançamentos que a plataforma já gerou (estornos/correções) — para o
 // usuário acompanhar — e permite gerar o arquivo do Domínio só quando pronto.
-function ModalLancamentosDominio({ lancamentos, planoMap, pronto, totalPendencias, onGerar, onDesfazer, onEditar, onClose }) {
+function ModalLancamentosDominio({ lancamentos, planoMap, plano, usaCC, centros, pronto, totalPendencias, onGerar, onDesfazer, onEditar, onAplicarCCLote, onClose }) {
+  const [q, setQ] = useState('')
+  const [sel, setSel] = useState(() => new Set())
+  const [ccBulk, setCcBulk] = useState('')
+  const [aplicando, setAplicando] = useState(false)
   const nomeConta = c => { const p = planoMap[String(c)]; return `${c || '—'}${p?.nome ? ' · ' + p.nome : ''}` }
   const origemLabel = { correcao: 'Correção/Estorno', sugestao: 'Sugestão', documento: 'Documento', manual: 'Manual' }
-  const total = lancamentos.reduce((s, l) => s + (Number(l.valor) || 0), 0)
+  const norm = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+  const termo = norm(q)
+  // Pesquisa por conta (código ou nome, débito/crédito), histórico ou valor.
+  const casa = l => !termo || [l.conta_debito, l.conta_credito, planoMap[String(l.conta_debito)]?.nome, planoMap[String(l.conta_credito)]?.nome, l.historico, String(l.valor), money(l.valor)].some(c => norm(c).includes(termo))
+  const lista = lancamentos.filter(casa)
+  const total = lista.reduce((s, l) => s + (Number(l.valor) || 0), 0)
+  const nomeCentro = cod => centros?.find(c => String(c.cod) === String(cod))?.nome || cod
+  const ehResult = l => lancamentoExigeCC(plano, usaCC, l.conta_debito, l.conta_credito) // só resultado recebe CC
+  const ccDe = l => (Array.isArray(l.rateio) ? l.rateio.filter(x => x && x.cod) : [])
+  const ccCel = l => { const r = ccDe(l); if (r.length) return r.map(x => nomeCentro(x.cod)).join(', '); return ehResult(l) ? <span style={{ color: theme.yellow }}>sem CC</span> : <span style={{ color: theme.sub }}>—</span> }
+  const idsResult = lista.filter(ehResult).map(l => l.id)     // selecionáveis (visíveis no filtro)
+  const todosSel = idsResult.length > 0 && idsResult.every(id => sel.has(id))
+  const toggle = id => setSel(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n })
+  const toggleTodos = () => setSel(p => { const n = new Set(p); if (todosSel) idsResult.forEach(id => n.delete(id)); else idsResult.forEach(id => n.add(id)); return n })
+  const selResult = [...sel].filter(id => lancamentos.find(l => l.id === id && ehResult(l)))
+  async function aplicar() {
+    if (!ccBulk || !selResult.length) return
+    setAplicando(true)
+    await onAplicarCCLote(selResult, ccBulk, nomeCentro(ccBulk))
+    setAplicando(false); setSel(new Set()); setCcBulk('')
+  }
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 60 }}>
-      <div onClick={e => e.stopPropagation()} style={{ width: 'min(760px,96vw)', maxHeight: '88vh', overflow: 'auto', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 'min(860px,96vw)', maxHeight: '88vh', overflow: 'auto', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
           <h2 style={{ fontSize: 17, margin: 0, display: 'flex', alignItems: 'center', gap: 9 }}><i className="ti ti-file-download" style={{ color: theme.accent }} /> Lançamentos para o Domínio</h2>
           <span onClick={onClose} style={{ cursor: 'pointer', color: theme.sub, fontSize: 20, lineHeight: 1 }}><i className="ti ti-x" /></span>
         </div>
-        <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 14px' }}>
+        <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 12px' }}>
           {lancamentos.length} lançamento(s) gerado(s) pela plataforma nesta competência (débito, crédito e histórico). Ao importar no Domínio, entram na contabilidade.
         </p>
 
+        {/* Busca */}
+        <div style={{ position: 'relative', marginBottom: 10 }}>
+          <i className="ti ti-search" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: theme.sub, fontSize: 15 }} />
+          <input className="input" value={q} onChange={e => setQ(e.target.value)} placeholder="Buscar por conta (código ou nome), histórico ou valor…" style={{ paddingLeft: 32 }} />
+        </div>
+
+        {/* Barra de ação em lote — centro de custo */}
+        {usaCC && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', background: theme.input, border: `1px solid ${theme.cb}`, borderRadius: 10, padding: '8px 12px', marginBottom: 10 }}>
+            <span style={{ fontSize: 12.5, color: theme.sub }}><b style={{ color: theme.text }}>{selResult.length}</b> selecionado(s)</span>
+            <select className="input" value={ccBulk} onChange={e => setCcBulk(e.target.value)} style={{ flex: 1, minWidth: 180, maxWidth: 320 }} disabled={!selResult.length}>
+              <option value="">Centro de custo para aplicar…</option>
+              {(centros || []).map(c => <option key={c.cod} value={c.cod}>{c.cod} · {c.nome || 'sem nome'}</option>)}
+            </select>
+            <button className="btn" disabled={!ccBulk || !selResult.length || aplicando} onClick={aplicar}>
+              <i className="ti ti-checkbox" /> {aplicando ? 'Aplicando…' : `Aplicar CC aos ${selResult.length}`}
+            </button>
+          </div>
+        )}
+
         <div style={{ overflowX: 'auto', border: `0.5px solid ${theme.cb}`, borderRadius: 10 }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 640 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }}>
             <thead>
               <tr style={{ background: theme.input }}>
+                {usaCC && <th style={{ ...th, width: 30 }}><input type="checkbox" checked={todosSel} onChange={toggleTodos} title="Selecionar todos (de resultado)" disabled={!idsResult.length} /></th>}
                 <th style={th}>Data</th><th style={th}>Débito</th><th style={th}>Crédito</th>
-                <th style={{ ...th, textAlign: 'right' }}>Valor</th><th style={th}>Histórico</th><th style={th}>Origem</th><th style={th} />
+                <th style={{ ...th, textAlign: 'right' }}>Valor</th>{usaCC && <th style={th}>C. Custo</th>}<th style={th}>Histórico</th><th style={th}>Origem</th><th style={th} />
               </tr>
             </thead>
             <tbody>
-              {lancamentos.map(l => (
-                <tr key={l.id} style={{ borderTop: `1px solid ${theme.border}` }}>
+              {lista.map(l => {
+                const res = ehResult(l)
+                return (
+                <tr key={l.id} style={{ borderTop: `1px solid ${theme.border}`, background: sel.has(l.id) ? 'rgba(74,124,255,0.08)' : undefined }}>
+                  {usaCC && <td style={{ ...td, textAlign: 'center' }}>{res ? <input type="checkbox" checked={sel.has(l.id)} onChange={() => toggle(l.id)} /> : null}</td>}
                   <td style={{ ...td, color: theme.sub, fontSize: 11.5, whiteSpace: 'nowrap' }}>{l.data ? l.data.split('-').reverse().join('/') : '—'}</td>
                   <td style={{ ...td, fontSize: 12 }}>{nomeConta(l.conta_debito)}</td>
                   <td style={{ ...td, fontSize: 12 }}>{nomeConta(l.conta_credito)}</td>
                   <td style={{ ...td, textAlign: 'right', whiteSpace: 'nowrap', fontWeight: 600 }}>{money(l.valor)}</td>
+                  {usaCC && <td style={{ ...td, fontSize: 11.5 }}>{ccCel(l)}</td>}
                   <td style={{ ...td, color: theme.sub, fontSize: 11.5, maxWidth: 240 }}>{l.historico}</td>
                   <td style={{ ...td, fontSize: 11.5 }}><span style={{ color: theme.accent }}>{origemLabel[l.origem] || l.origem || '—'}</span></td>
                   <td style={{ ...td, whiteSpace: 'nowrap', textAlign: 'right' }}>
@@ -845,11 +910,12 @@ function ModalLancamentosDominio({ lancamentos, planoMap, pronto, totalPendencia
                     {onDesfazer && <button className="btn btn-ghost" style={{ fontSize: 11.5, padding: '3px 8px', color: theme.red, borderColor: theme.red }} onClick={() => onDesfazer(l.id)} title="Remover este lançamento"><i className="ti ti-arrow-back-up" /> Desfazer</button>}
                   </td>
                 </tr>
-              ))}
+              )})}
+              {!lista.length && <tr><td colSpan={usaCC ? 9 : 7} style={{ ...td, textAlign: 'center', color: theme.sub, padding: '18px 12px' }}>Nenhum lançamento encontrado para “{q}”.</td></tr>}
             </tbody>
           </table>
         </div>
-        <p style={{ textAlign: 'right', fontSize: 12.5, color: theme.sub, margin: '8px 2px 0' }}>Total: <b style={{ color: theme.text }}>{money(total)}</b></p>
+        <p style={{ textAlign: 'right', fontSize: 12.5, color: theme.sub, margin: '8px 2px 0' }}>{lista.length} de {lancamentos.length} · Total: <b style={{ color: theme.text }}>{money(total)}</b></p>
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 18 }}>
           <p style={{ fontSize: 12, color: pronto ? theme.green : theme.yellow, margin: 0 }}>
