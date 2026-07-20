@@ -211,9 +211,19 @@ async function parseAcumulador(file, sub) {
     nf: c.nf ? XLSX.utils.decode_col(c.nf) : -1, data: c.data ? XLSX.utils.decode_col(c.data) : -1,
   }
   const rows = []
+  // O acumulador (coluna AC/R/Q) costuma vir só na 1ª linha de cada NF; as linhas de item/
+  // continuação da MESMA NF trazem valor (AE/AH/AG) mas o acumulador EM BRANCO. Antes essas
+  // linhas caíam fora (`if (!acum) continue`) e o total do acumulador vinha CURTO. Agora
+  // arrastamos o último acumulador visto ("vigente") para essas linhas — sem somar as linhas
+  // de Total/Subtotal do relatório (que também vêm sem acumulador), senão duplicaria.
+  let acumVig = ''
   for (const r of arr) {
-    const valor = numFis(r[col.valor]); const acum = normAcum(r[col.acum])
-    if (!acum || !valor) continue // pula cabeçalho e linhas sem acumulador/valor
+    const valor = numFis(r[col.valor]); const acumLido = normAcum(r[col.acum])
+    if (acumLido) acumVig = acumLido // atualiza o acumulador vigente sempre que a coluna traz um
+    if (!valor) continue // cabeçalho / linha vazia / separadora — sem valor, ignora
+    if (r.some(cel => /total/i.test(String(cel ?? '')))) continue // linha de "Total"/"Subtotal" — não é lançamento
+    const acum = acumLido || acumVig // arrasta o acumulador vigente quando a linha vem sem ele
+    if (!acum) continue // ainda não vimos nenhum acumulador (topo do arquivo) — ignora
     rows.push({ nf: col.nf >= 0 ? String(r[col.nf] ?? '').trim() : '', data: col.data >= 0 ? dataISO(r[col.data]) : '', acum, forn: String(r[col.forn] ?? '').trim(), valor })
   }
   return rows
