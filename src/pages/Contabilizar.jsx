@@ -5,17 +5,27 @@ import { useAuth } from '../components/AuthProvider'
 import { theme, money } from '../lib/theme'
 import InfoTela from '../components/InfoTela'
 import CampoConta from '../components/CampoConta'
+import RateioCC from '../components/RateioCC'
+import { carregarResolverCC, lancamentoExigeCC, rateioValido } from '../lib/centroCusto'
 import { gerarExcelTimbrado } from '../lib/excel'
 
-const vazio = { data: '', conta_debito: '', conta_credito: '', valor: '', historico: '', documento: '' }
+const vazio = { data: '', conta_debito: '', conta_credito: '', valor: '', historico: '', documento: '', rateio: null }
 const MODULOS_SUGESTAO = ['Conciliação', 'Comparativo', 'Status']
 const norm = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
 
 export default function Contabilizar() {
-  const { empresaId, empresaNome, competencia, getCompetenciaId } = useAppData()
+  const { empresaId, empresaNome, competencia, getCompetenciaId, plano: planoCtx, empresas } = useAppData()
   const { user } = useAuth()
   const [lista, setLista] = useState([])
   const [plano, setPlano] = useState([])      // [{cod, nome}]
+  // Cliente usa centro de custo? Carrega os centros cadastrados para o rateio obrigatório
+  // ao criar um lançamento manual que toque conta de resultado. `planoCtx` traz a classif.
+  const usaCC = !!(empresas || []).find(e => e.id === empresaId)?.usa_centro_custo
+  const [centrosCC, setCentrosCC] = useState([])
+  useEffect(() => {
+    if (!empresaId || !usaCC) { setCentrosCC([]); return }
+    carregarResolverCC(empresaId).then(r => setCentrosCC(r.centros || [])).catch(() => setCentrosCC([]))
+  }, [empresaId, usaCC])
   const [status, setStatus] = useState(null)  // status da competência
   const [loading, setLoading] = useState(true)
   const [erro, setErro] = useState('')
@@ -121,6 +131,14 @@ export default function Contabilizar() {
         origem = 'correcao'
       }
 
+      // Lançamento manual (escrever/subir documento): conta de resultado + cliente usa CC →
+      // centro de custo (rateio) obrigatório. Reclassificação/estorno não pedem CC aqui.
+      const ehManual = modo === 'escrever' || modo === 'documento'
+      const exige = ehManual && lancamentoExigeCC(planoCtx, usaCC, deb, cred)
+      if (exige && !rateioValido(form.rateio, form.valor)) {
+        setErro('Informe o centro de custo — a soma do rateio precisa bater com o valor do lançamento.'); setSalvando(false); return
+      }
+
       const { error } = await supabase.from('lancamentos').insert({
         competencia_id,
         data: form.data || null,
@@ -130,6 +148,9 @@ export default function Contabilizar() {
         historico,
         documento: form.documento.trim() || null,
         origem,
+        // Só envia a coluna quando há CC obrigatório — assim lançamentos comuns não dependem
+        // da coluna `rateio` existir (clientes sem CC seguem funcionando de qualquer jeito).
+        ...(exige ? { rateio: form.rateio || null } : {}),
         usuario: user?.email || null,
       })
       if (error) throw error
@@ -184,6 +205,8 @@ export default function Contabilizar() {
 
   const total = lista.reduce((s, l) => s + (Number(l.valor) || 0), 0)
   const sugestoesAtivas = sugestoes.filter(s => !tratadas.has(s.id))
+  // Exige CC no lançamento manual quando o cliente usa CC e a partida toca conta de resultado.
+  const exigeCC = (modo === 'escrever' || modo === 'documento') && lancamentoExigeCC(planoCtx, usaCC, form.conta_debito, form.conta_credito)
 
   return (
     <Wrapper>
@@ -348,11 +371,15 @@ export default function Contabilizar() {
                 <Campo label="Conta débito"><CampoConta value={form.conta_debito} onChange={v => setForm(f => ({ ...f, conta_debito: v }))} /></Campo>
                 <Campo label="Conta crédito"><CampoConta value={form.conta_credito} onChange={v => setForm(f => ({ ...f, conta_credito: v }))} /></Campo>
                 <Campo label="Histórico" full><textarea className="input" rows={2} value={form.historico} onChange={set('historico')} /></Campo>
+                {exigeCC && <RateioCC valor={form.valor} value={form.rateio} onChange={r => setForm(f => ({ ...f, rateio: r }))} centros={centrosCC} />}
               </div>
+            )}
+            {exigeCC && !rateioValido(form.rateio, form.valor) && (
+              <p style={{ color: theme.red, fontSize: 12.5, marginTop: 10, fontWeight: 600 }}><i className="ti ti-alert-triangle" /> Conta de resultado: informe o centro de custo (a soma do rateio precisa bater com o valor).</p>
             )}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
               <button type="button" className="btn btn-ghost" onClick={() => setAberto(false)}>Cancelar</button>
-              <button className="btn" disabled={salvando}>{salvando ? 'Salvando…' : 'Salvar'}</button>
+              <button className="btn" disabled={salvando || (exigeCC && !rateioValido(form.rateio, form.valor))}>{salvando ? 'Salvando…' : 'Salvar'}</button>
             </div>
           </form>
         </div>
