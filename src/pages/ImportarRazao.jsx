@@ -13,7 +13,7 @@ import { money } from '../lib/theme'
 
 const ALVOS = [
   { key: 'data', label: 'Data', dicas: ['data', 'datalan'] },
-  { key: 'conta', label: 'Conta', dicas: ['conta', 'clasc', 'cód conta', 'codigo conta', 'reduzido'] },
+  { key: 'conta', label: 'Conta', dicas: ['reduzido', 'codic', 'cód conta', 'codigo conta', 'conta', 'clasc'] },
   { key: 'nome', label: 'Nome da conta', dicas: ['nomec', 'nome da conta', 'nome conta'] },
   { key: 'contrapartida', label: 'Contrapartida', dicas: ['contrapartida', 'contra partida', 'c.partida', 'cont. partida', 'contrap'] },
   { key: 'historico', label: 'Histórico', dicas: ['histor', 'complemento'] },
@@ -81,9 +81,27 @@ function autoMapear(headers) {
   const map = {}
   for (const alvo of ALVOS) {
     if (alvo.key === 'centro_custo') continue // tratado depois (prioriza a DESCRIÇÃO do centro)
+    if (alvo.key === 'conta') {
+      // A CONTA do razão tem que ser o CÓDIGO REDUZIDO (é a chave que casa com o plano de
+      // contas e com a conciliação). Muitos arquivos trazem DUAS colunas: a classificação
+      // (clasc, ex.: 1120010001) e o reduzido (codic, ex.: 26). Preferimos SEMPRE o reduzido;
+      // só caímos na classificação quando o arquivo não tiver coluna de reduzido.
+      const ehReduzido = h => {
+        const n = semAcento(h)
+        return n === 'codic' || n.includes('reduzido') || n.includes('cod conta') ||
+          n.includes('codigo conta') || n.includes('cod. conta') || n === 'codcta' || n === 'codconta' || n === 'codigo'
+      }
+      const ehClassif = h => {
+        const n = semAcento(h)
+        return n === 'clasc' || n.includes('classif') || (n.includes('conta') && !n.includes('contra') && !n.includes('nome'))
+      }
+      let idx = headers.findIndex(ehReduzido)
+      if (idx < 0) idx = headers.findIndex(ehClassif)
+      map[alvo.key] = idx >= 0 ? String(idx) : ''
+      continue
+    }
     const idx = headers.findIndex(h => {
       const hl = String(h || '').toLowerCase()
-      if (alvo.key === 'conta') return hl === 'clasc' || (hl.includes('conta') && !hl.includes('contra') && !hl.includes('nome'))
       if (alvo.key === 'nome') return hl === 'nomec' || hl.includes('nome da conta') || hl.includes('nome conta')
       return alvo.dicas.some(d => hl.includes(d))
     })
