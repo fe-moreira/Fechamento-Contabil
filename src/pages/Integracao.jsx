@@ -202,10 +202,43 @@ function cruzarFiscal(rows, idx, chave) {
 
 // Lê o arquivo do acumulador (colunas conforme o tipo) → linhas normalizadas. NF/Data são
 // opcionais (Saídas não tem) — só entram se a coluna estiver definida no tipo.
+// Formato "Resumo por Acumulador" exportado com CABEÇALHO NOMEADO (colunas codi_acu,
+// valor_contabil, titulo_tipo_nota…): já vem AGREGADO por acumulador, com as seções
+// Entradas/Saídas/Serviços no MESMO arquivo. Lê por NOME de coluna e filtra pela seção do
+// `sub`. Acumulador/valor de bens = codi_acu/valor_contabil; de serviço = codi_acu_ser/
+// valor_contabil_ser. (Foi o caso da PRIME: o parser posicional pegava a coluna errada.)
+function parseResumoNomeado(arr, hdr, sub) {
+  const idx = nome => hdr.indexOf(nome)
+  const cTit = idx('titulo_tipo_nota')
+  const cAcuG = idx('codi_acu'), cValG = idx('valor_contabil')
+  const cAcuS = idx('codi_acu_ser'), cValS = idx('valor_contabil_ser')
+  const norm = s => String(s ?? '').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim()
+  const alvo = sub === 'entradas' ? 'ENTRADAS' : sub === 'saidas' ? 'SAIDAS' : 'SERVICOS'
+  const rows = []
+  let secao = ''
+  for (const r of arr) {
+    const tit = norm(cTit >= 0 ? r[cTit] : '')
+    if (/ENTRADAS/.test(tit)) secao = 'ENTRADAS'
+    else if (/SAIDAS/.test(tit)) secao = 'SAIDAS'
+    else if (/SERVI[CÇ]OS/.test(tit)) secao = 'SERVICOS'
+    if (secao !== alvo) continue
+    const acum = normAcum(cAcuG >= 0 ? r[cAcuG] : '') || normAcum(cAcuS >= 0 ? r[cAcuS] : '')
+    const valor = numFis(cValG >= 0 ? r[cValG] : 0) || numFis(cValS >= 0 ? r[cValS] : 0)
+    if (!acum || !valor) continue // pula cabeçalhos e a linha "Total:" (sem acumulador)
+    rows.push({ nf: '', data: '', acum, forn: '', valor })
+  }
+  return rows
+}
+
 async function parseAcumulador(file, sub) {
   const XLSX = await import('xlsx')
   const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true })
   const arr = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' })
+  // Detecta o "Resumo por Acumulador" com cabeçalho nomeado e lê por nome (formato próprio).
+  const hdr = (arr[0] || []).map(h => String(h).toLowerCase().trim())
+  if (hdr.includes('codi_acu') || hdr.includes('valor_contabil') || hdr.includes('titulo_tipo_nota')) {
+    return parseResumoNomeado(arr, hdr, sub)
+  }
   const c = COLS_FISCAL[sub] || COLS_FISCAL.entradas
   const col = {
     acum: XLSX.utils.decode_col(c.acum), forn: XLSX.utils.decode_col(c.forn), valor: XLSX.utils.decode_col(c.valor),
