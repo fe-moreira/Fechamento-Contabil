@@ -246,24 +246,27 @@ function valorDepreciacaoPdf(texto) {
 // Lê os totais por seção (Entradas/Saídas/Serviços) do "Resumo por Acumulador" (PDF com
 // texto): acha cada cabeçalho e pega o "Total:" da seção (Vlr Contábil).
 function totaisResumoPdf(texto) {
-  const t = String(texto || '')
-  const secs = [['entradas', /entradas/i], ['saidas', /sa[ií]das/i], ['servicos', /servi[cç]os/i]]
+  const linhas = String(texto || '').split('\n')
+  // Cabeçalho de seção = uma LINHA que é só o nome (com possível nº de página na frente). Isso
+  // evita casar "SERVICOS" DENTRO do rodapé "…CONTABILIDADE E SERVICOS S/S LTDA" (nome da
+  // empresa licenciada), que criava uma seção "Serviços" fantasma quando não havia serviço.
+  const secs = [['entradas', /^\s*\d*\s*entradas\s*$/i], ['saidas', /^\s*\d*\s*sa[ií]das\s*$/i], ['servicos', /^\s*\d*\s*servi[cç]os\s*$/i]]
   const pos = {}
-  for (const [k, re] of secs) { const m = re.exec(t); if (m) pos[k] = m.index }
+  for (const [k, re] of secs) { const i = linhas.findIndex(l => re.test(l)); if (i >= 0) pos[k] = i }
   const keys = Object.keys(pos).sort((a, b) => pos[a] - pos[b])
   const VAL = /-?\d{1,3}(?:\.\d{3})*,\d{2}/
   const parse = s => parseFloat(String(s).replace(/\./g, '').replace(',', '.'))
   const out = {}
   for (let i = 0; i < keys.length; i++) {
-    const tr = t.slice(pos[keys[i]], i + 1 < keys.length ? pos[keys[i + 1]] : t.length)
-    const linhas = tr.split('\n')
-    const li = linhas.findIndex(l => /total/i.test(l))
+    const ini = pos[keys[i]], fim = i + 1 < keys.length ? pos[keys[i + 1]] : linhas.length
+    const bloco = linhas.slice(ini, fim)
+    const li = bloco.findIndex(l => /total/i.test(l))
     if (li < 0) continue
     // 1) valor na MESMA linha, depois de "Total" (Entradas/Saídas vêm assim: "Total: 1.060.943,30 …")
-    let m = VAL.exec(linhas[li].slice(linhas[li].search(/total/i)).replace(/total/i, ''))
+    let m = VAL.exec(bloco[li].slice(bloco[li].search(/total/i)).replace(/total/i, ''))
     // 2) senão, o "Total:" veio SOZINHO numa linha (Serviços tem mais colunas e o rótulo cai
     //    embaixo) → o Vlr Contábil é o 1º valor da linha ANTERIOR (a linha de totais).
-    if (!m && li > 0) m = VAL.exec(linhas[li - 1])
+    if (!m && li > 0) m = VAL.exec(bloco[li - 1])
     if (m) out[keys[i]] = parse(m[0])
   }
   return out
