@@ -637,6 +637,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const [acertoNomes, setAcertoNomes] = useState({}) // nome de fornecedor por lançamento de acerto: {uuid: nome}
   const [baixasReabertas, setBaixasReabertas] = useState(new Set()) // baixas por NF que o usuário PUXOU de volta p/ em aberto: {`conta·nfKey`} — não baixa de novo no automático
   const [sugestoesRejeitadas, setSugestoesRejeitadas] = useState(new Set()) // sugestões de vínculo que o usuário NÃO aprovou: {chaveSug} — não sugere de novo
+  const [modoPorNome, setModoPorNome] = useState({}) // por conta: força "conciliar por nome" ligado/desligado {conta: true|false} — sobrepõe a detecção pelo nome
   // Chave ESTÁVEL de um item de saldo inicial (não muda ao editar NF/nome/histórico): conta +
   // valor + nome ORIGINAL da carga. Usa _origEntidade quando já foi ajustado antes.
   const chaveAberturaAj = l => `${conta.conta}·${Math.round(((Number(l.debito) || 0) - (Number(l.credito) || 0)) * 100)}·${chaveNome(l._origEntidade || l.leitura?.entidade || '')}`
@@ -654,12 +655,13 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     setAcertoNomes(d.acertoNomes && typeof d.acertoNomes === 'object' ? d.acertoNomes : {})
     setBaixasReabertas(new Set(Array.isArray(d.baixasReabertas) ? d.baixasReabertas : []))
     setSugestoesRejeitadas(new Set(Array.isArray(d.sugestoesRejeitadas) ? d.sugestoesRejeitadas : []))
+    setModoPorNome(d.modoPorNome && typeof d.modoPorNome === 'object' ? d.modoPorNome : {})
   }
   useEffect(() => { if (empresaId) carregarNomes() }, [empresaId]) // eslint-disable-line react-hooks/exhaustive-deps
-  async function salvarNomes(conf, iso, aliases = nomesAlias, aberAj = aberturaAj, acNomes = acertoNomes, baixasReab = baixasReabertas, sugRej = sugestoesRejeitadas) {
+  async function salvarNomes(conf, iso, aliases = nomesAlias, aberAj = aberturaAj, acNomes = acertoNomes, baixasReab = baixasReabertas, sugRej = sugestoesRejeitadas, modoPN = modoPorNome) {
     await supabase.from('cargas_cadastro').delete().eq('cliente_id', empresaId).eq('tipo', 'conciliacao_nomes')
     // vigencia é NOT NULL — usa a competência atual (o registro é único por cliente, lido sempre o mais recente).
-    const { error } = await supabase.from('cargas_cadastro').insert({ cliente_id: empresaId, tipo: 'conciliacao_nomes', vigencia: competencia || '00/0000', dados: { confiaveis: [...conf], isolados: [...iso], aliases: aliases || {}, aberturaAjustes: aberAj || {}, acertoNomes: acNomes || {}, baixasReabertas: [...baixasReab], sugestoesRejeitadas: [...sugRej] }, usuario })
+    const { error } = await supabase.from('cargas_cadastro').insert({ cliente_id: empresaId, tipo: 'conciliacao_nomes', vigencia: competencia || '00/0000', dados: { confiaveis: [...conf], isolados: [...iso], aliases: aliases || {}, aberturaAjustes: aberAj || {}, acertoNomes: acNomes || {}, baixasReabertas: [...baixasReab], sugestoesRejeitadas: [...sugRej], modoPorNome: modoPN || {} }, usuario })
     if (error) { setMsg('Não consegui salvar: ' + error.message); return error }
   }
   async function marcarConfiavel(nome) {
@@ -970,7 +972,17 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   }
 
   // Conciliação por NF + cliente: tira do "em aberto" o que já se baixou (mesma NF, cliente bate).
-  const ehEntidadeConta = ehPorEntidade(conta.nome) && tipoCta !== 'saldo'
+  // Modo "por nome": automático quando o nome indica cliente/fornecedor/adiantamento, OU forçado
+  // pelo usuário nesta conta (modoPorNome). Contas amarradas por saldo (banco) não entram.
+  const forcadoPN = modoPorNome[conta.conta]
+  const ehEntidadeConta = (forcadoPN != null ? forcadoPN : ehPorEntidade(conta.nome)) && tipoCta !== 'saldo'
+  async function alternarPorNome() {
+    const atual = forcadoPN != null ? forcadoPN : ehPorEntidade(conta.nome)
+    const novo = { ...modoPorNome, [conta.conta]: !atual }
+    setModoPorNome(novo)
+    await salvarNomes(nomesConf, nomesIsolados, nomesAlias, aberturaAj, acertoNomes, baixasReabertas, sugestoesRejeitadas, novo)
+    carregarLanc()
+  }
   // NFs que o usuário reabriu (puxou de volta para o em aberto) NESTA conta — não baixa de novo.
   const pref = `${conta.conta}·`
   const nfsReabertas = new Set([...baixasReabertas].filter(k => k.startsWith(pref)).map(k => k.slice(pref.length)))
@@ -1065,7 +1077,10 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
 
   // Para os relatórios: o que está em aberto (compõe o saldo) e o que zerou (baixa/confirmação/resolvida).
   const ehEntidade = ehEntidadeConta
-  const emAbertoTodos = ehEntidade ? lista.flatMap(g => g.lancs) : lanc.filter(l => Math.abs(ov(l)) >= 0.005 && !autoConc.has(l))
+  // Em aberto = o que compõe o saldo. Nas contas normais também tira o que foi CONFIRMADO em
+  // lote (conexão manual que zerou) — assim, igual a clientes/fornecedores, some o que zerou e
+  // fica só o que compõe o saldo.
+  const emAbertoTodos = ehEntidade ? lista.flatMap(g => g.lancs) : lanc.filter(l => Math.abs(ov(l)) >= 0.005 && !autoConc.has(l) && !foiConfirmado(l))
   // Conciliados (saíram do em aberto): confirmados em lote + entidades que zeraram e foram
   // tratadas + pares de correção que se anularam com a origem. Ficam numa seção colapsável.
   const confirmadosLancs = lanc.filter(l => foiConfirmado(l) && Math.abs(ov(l)) >= 0.005)
@@ -1725,6 +1740,13 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
           <span style={{ color: theme.sub, fontSize: 12 }}><i className="ti ti-click" /> Clique num lançamento para justificar ou corrigir.</span>
+          {tipoCta !== 'saldo' && (
+            <button className="btn btn-ghost" style={{ fontSize: 12.5, padding: '6px 12px', borderColor: ehEntidadeConta ? theme.accent : theme.cb, color: ehEntidadeConta ? theme.accent : undefined }}
+              onClick={alternarPorNome}
+              title={ehEntidadeConta ? 'Está agrupando por nome (cliente/fornecedor). Clique para desligar.' : 'Agrupar esta conta por nome (cliente/fornecedor/adiantamento): casa débito × crédito do mesmo nome e o que zera some.'}>
+              <i className={`ti ${ehEntidadeConta ? 'ti-users' : 'ti-users-plus'}`} /> Por nome: {ehEntidadeConta ? 'ligado' : 'desligado'}
+            </button>
+          )}
           <button className="btn" style={{ fontSize: 12.5, padding: '6px 12px' }} onClick={() => setNovoLanc(true)}
             title="Incluir um lançamento novo nesta conta (ex.: tarifa/ajuste que faltou no razão)">
             <i className="ti ti-file-plus" /> Novo lançamento
@@ -1771,7 +1793,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       {/* Impostos: baixa do mês anterior + memória de cálculo */}
       {tipoConta(conta.nome) === 'Imposto' && <ImpostoCards conta={conta} />}
 
-      {(ehPorEntidade(conta.nome) && tipoCta !== 'saldo') ? (
+      {ehEntidadeConta ? (
       <>
       {/* Composição agrupada por cliente/fornecedor */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', margin: '4px 0 10px' }}>
