@@ -481,16 +481,28 @@ export default function Status() {
     setMsg(`${tipo} registrada${pend ? ' · pendência do cliente enviada ao relatório' : ''}.`)
   }
 
-  // Aplica um centro de custo em LOTE aos lançamentos selecionados (só os de resultado).
-  // Cada lançamento recebe o centro com o SEU valor cheio (rateio de 1 centro).
-  async function aplicarCCLote(ids, cod, nome) {
-    const alvo = (dados?.lancamentos || []).filter(l => ids.includes(l.id) && lancamentoExigeCC(plano, usaCC, l.conta_debito, l.conta_credito))
-    if (!alvo.length) { setMsg('Nenhum lançamento de resultado selecionado para aplicar centro de custo.'); return }
+  // Aplica UMA alteração em LOTE aos lançamentos selecionados. `campo`:
+  //   'rateio'        → centro de custo (só entra em conta de resultado); valor = {cod, nome}
+  //   'conta_debito'  → troca a conta de débito;  valor = código da conta
+  //   'conta_credito' → troca a conta de crédito; valor = código da conta
+  //   'historico'     → reescreve o histórico;    valor = texto
+  async function aplicarLote(ids, campo, valor) {
+    const alvo = (dados?.lancamentos || []).filter(l => ids.includes(l.id))
+    let n = 0
     for (const l of alvo) {
-      const { error } = await supabase.from('lancamentos').update({ rateio: [{ cod, nome, valor: Number(l.valor) || 0 }] }).eq('id', l.id)
-      if (error) { setMsg('Erro ao aplicar centro de custo: ' + error.message); return }
+      let patch = null
+      if (campo === 'rateio') {
+        if (!lancamentoExigeCC(plano, usaCC, l.conta_debito, l.conta_credito)) continue // CC só em conta de resultado
+        patch = { rateio: [{ cod: valor.cod, nome: valor.nome, valor: Number(l.valor) || 0 }] }
+      } else if (campo === 'conta_debito' || campo === 'conta_credito') patch = { [campo]: String(valor).trim() || null }
+      else if (campo === 'historico') patch = { historico: String(valor).trim() || null }
+      if (!patch) continue
+      const { error } = await supabase.from('lancamentos').update({ ...patch, usuario: user?.email }).eq('id', l.id)
+      if (error) { setMsg('Erro ao aplicar em lote: ' + error.message); return }
+      n++
     }
-    await carregar(); setMsg(`Centro de custo aplicado em ${alvo.length} lançamento(s).`)
+    await carregar()
+    setMsg(n ? `Alteração aplicada em ${n} lançamento(s).` : 'Nada aplicado — para centro de custo, selecione lançamentos de conta de resultado.')
   }
 
   // Desfaz (remove) um lançamento gerado pela plataforma — sai do arquivo do Domínio.
@@ -810,7 +822,7 @@ export default function Status() {
           onGerar={() => gerarDominioCSV(dados.lancamentos, `dominio_${competencia.replace('/', '-')}.csv`)}
           onDesfazer={desfazerLancamento}
           onEditar={l => setEditLanc(l)}
-          onAplicarCCLote={aplicarCCLote}
+          onAplicarLote={aplicarLote}
           onClose={() => setVerDominio(false)}
         />
       )}
@@ -824,10 +836,11 @@ export default function Status() {
 
 // Lista os lançamentos que a plataforma já gerou (estornos/correções) — para o
 // usuário acompanhar — e permite gerar o arquivo do Domínio só quando pronto.
-function ModalLancamentosDominio({ lancamentos, planoMap, plano, usaCC, centros, pronto, totalPendencias, onGerar, onDesfazer, onEditar, onAplicarCCLote, onClose }) {
+function ModalLancamentosDominio({ lancamentos, planoMap, plano, usaCC, centros, pronto, totalPendencias, onGerar, onDesfazer, onEditar, onAplicarLote, onClose }) {
   const [q, setQ] = useState('')
   const [sel, setSel] = useState(() => new Set())
-  const [ccBulk, setCcBulk] = useState('')
+  const [bulkCampo, setBulkCampo] = useState('') // '' | 'rateio' | 'conta_debito' | 'conta_credito' | 'historico'
+  const [bulkVal, setBulkVal] = useState('')
   const [aplicando, setAplicando] = useState(false)
   const nomeConta = c => { const p = planoMap[String(c)]; return `${c || '—'}${p?.nome ? ' · ' + p.nome : ''}` }
   const origemLabel = { correcao: 'Correção/Estorno', sugestao: 'Sugestão', documento: 'Documento', manual: 'Manual' }
@@ -841,16 +854,21 @@ function ModalLancamentosDominio({ lancamentos, planoMap, plano, usaCC, centros,
   const ehResult = l => lancamentoExigeCC(plano, usaCC, l.conta_debito, l.conta_credito) // só resultado recebe CC
   const ccDe = l => (Array.isArray(l.rateio) ? l.rateio.filter(x => x && x.cod) : [])
   const ccCel = l => { const r = ccDe(l); if (r.length) return r.map(x => nomeCentro(x.cod)).join(', '); return ehResult(l) ? <span style={{ color: theme.yellow }}>sem CC</span> : <span style={{ color: theme.sub }}>—</span> }
-  const idsResult = lista.filter(ehResult).map(l => l.id)     // selecionáveis (visíveis no filtro)
-  const todosSel = idsResult.length > 0 && idsResult.every(id => sel.has(id))
+  // Seleção em lote em QUALQUER lançamento — dá para trocar conta, arrumar histórico, além do
+  // CC. Marque quantos quiser (checkbox) ou todos (do filtro atual). O CC entra só nos de resultado.
+  const idsFiltrados = lista.map(l => l.id)
+  const todosSel = idsFiltrados.length > 0 && idsFiltrados.every(id => sel.has(id))
   const toggle = id => setSel(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n })
-  const toggleTodos = () => setSel(p => { const n = new Set(p); if (todosSel) idsResult.forEach(id => n.delete(id)); else idsResult.forEach(id => n.add(id)); return n })
-  const selResult = [...sel].filter(id => lancamentos.find(l => l.id === id && ehResult(l)))
+  const toggleTodos = () => setSel(p => { const n = new Set(p); if (todosSel) idsFiltrados.forEach(id => n.delete(id)); else idsFiltrados.forEach(id => n.add(id)); return n })
+  const selArr = [...sel]
+  const selResultN = selArr.filter(id => lancamentos.find(l => l.id === id && ehResult(l))).length
+  const valorOk = bulkCampo === 'rateio' ? !!bulkVal : (['conta_debito', 'conta_credito', 'historico'].includes(bulkCampo) ? !!String(bulkVal).trim() : false)
   async function aplicar() {
-    if (!ccBulk || !selResult.length) return
+    if (!sel.size || !valorOk) return
+    const valor = bulkCampo === 'rateio' ? { cod: bulkVal, nome: nomeCentro(bulkVal) } : bulkVal
     setAplicando(true)
-    await onAplicarCCLote(selResult, ccBulk, nomeCentro(ccBulk))
-    setAplicando(false); setSel(new Set()); setCcBulk('')
+    await onAplicarLote(selArr, bulkCampo, valor)
+    setAplicando(false); setSel(new Set()); setBulkCampo(''); setBulkVal('')
   }
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 60 }}>
@@ -869,17 +887,34 @@ function ModalLancamentosDominio({ lancamentos, planoMap, plano, usaCC, centros,
           <input className="input" value={q} onChange={e => setQ(e.target.value)} placeholder="Buscar por conta (código ou nome), histórico ou valor…" style={{ paddingLeft: 32 }} />
         </div>
 
-        {/* Barra de ação em lote — centro de custo */}
-        {usaCC && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', background: theme.input, border: `1px solid ${theme.cb}`, borderRadius: 10, padding: '8px 12px', marginBottom: 10 }}>
-            <span style={{ fontSize: 12.5, color: theme.sub }}><b style={{ color: theme.text }}>{selResult.length}</b> selecionado(s)</span>
-            <select className="input" value={ccBulk} onChange={e => setCcBulk(e.target.value)} style={{ flex: 1, minWidth: 180, maxWidth: 320 }} disabled={!selResult.length}>
-              <option value="">Centro de custo para aplicar…</option>
-              {(centros || []).map(c => <option key={c.cod} value={c.cod}>{c.cod} · {c.nome || 'sem nome'}</option>)}
+        {/* Edição em lote: marque os lançamentos e escolha O QUE corrigir nos selecionados. */}
+        {sel.size > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', background: theme.input, border: `1px solid ${theme.accent}`, borderRadius: 10, padding: '8px 12px', marginBottom: 10 }}>
+            <span style={{ fontSize: 12.5, color: theme.sub, whiteSpace: 'nowrap' }}><b style={{ color: theme.text }}>{sel.size}</b> selecionado(s) · corrigir:</span>
+            <select className="input" value={bulkCampo} onChange={e => { setBulkCampo(e.target.value); setBulkVal('') }} style={{ width: 160 }}>
+              <option value="">o que corrigir?</option>
+              {usaCC && <option value="rateio">Centro de custo</option>}
+              <option value="conta_debito">Conta débito</option>
+              <option value="conta_credito">Conta crédito</option>
+              <option value="historico">Histórico</option>
             </select>
-            <button className="btn" disabled={!ccBulk || !selResult.length || aplicando} onClick={aplicar}>
-              <i className="ti ti-checkbox" /> {aplicando ? 'Aplicando…' : `Aplicar CC aos ${selResult.length}`}
+            {bulkCampo === 'rateio' && (
+              <select className="input" value={bulkVal} onChange={e => setBulkVal(e.target.value)} style={{ flex: 1, minWidth: 160 }}>
+                <option value="">centro de custo…</option>
+                {(centros || []).map(c => <option key={c.cod} value={c.cod}>{c.cod} · {c.nome || 'sem nome'}</option>)}
+              </select>
+            )}
+            {(bulkCampo === 'conta_debito' || bulkCampo === 'conta_credito') && (
+              <div style={{ flex: 1, minWidth: 160 }}><CampoConta value={bulkVal} onChange={setBulkVal} plano={plano} /></div>
+            )}
+            {bulkCampo === 'historico' && (
+              <input className="input" value={bulkVal} onChange={e => setBulkVal(e.target.value)} placeholder="novo histórico…" style={{ flex: 1, minWidth: 160 }} />
+            )}
+            <button className="btn" disabled={!valorOk || aplicando} onClick={aplicar}>
+              <i className="ti ti-checkbox" /> {aplicando ? 'Aplicando…' : `Aplicar aos ${sel.size}`}
             </button>
+            <button className="btn btn-ghost" style={{ fontSize: 12 }} onClick={() => setSel(new Set())}>Limpar</button>
+            {bulkCampo === 'rateio' && selResultN < sel.size && <span style={{ fontSize: 11, color: theme.yellow, width: '100%' }}><i className="ti ti-info-circle" /> O centro de custo entra só nas contas de resultado ({selResultN} de {sel.size} selecionados).</span>}
           </div>
         )}
 
@@ -887,17 +922,15 @@ function ModalLancamentosDominio({ lancamentos, planoMap, plano, usaCC, centros,
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }}>
             <thead>
               <tr style={{ background: theme.input }}>
-                {usaCC && <th style={{ ...th, width: 30 }}><input type="checkbox" checked={todosSel} onChange={toggleTodos} title="Selecionar todos (de resultado)" disabled={!idsResult.length} /></th>}
+                <th style={{ ...th, width: 30 }}><input type="checkbox" checked={todosSel} onChange={toggleTodos} title="Selecionar todos (do filtro)" disabled={!idsFiltrados.length} /></th>
                 <th style={th}>Data</th><th style={th}>Débito</th><th style={th}>Crédito</th>
                 <th style={{ ...th, textAlign: 'right' }}>Valor</th>{usaCC && <th style={th}>C. Custo</th>}<th style={th}>Histórico</th><th style={th}>Origem</th><th style={th} />
               </tr>
             </thead>
             <tbody>
-              {lista.map(l => {
-                const res = ehResult(l)
-                return (
+              {lista.map(l => (
                 <tr key={l.id} style={{ borderTop: `1px solid ${theme.border}`, background: sel.has(l.id) ? 'rgba(74,124,255,0.08)' : undefined }}>
-                  {usaCC && <td style={{ ...td, textAlign: 'center' }}>{res ? <input type="checkbox" checked={sel.has(l.id)} onChange={() => toggle(l.id)} /> : null}</td>}
+                  <td style={{ ...td, textAlign: 'center' }}><input type="checkbox" checked={sel.has(l.id)} onChange={() => toggle(l.id)} /></td>
                   <td style={{ ...td, color: theme.sub, fontSize: 11.5, whiteSpace: 'nowrap' }}>{l.data ? l.data.split('-').reverse().join('/') : '—'}</td>
                   <td style={{ ...td, fontSize: 12 }}>{nomeConta(l.conta_debito)}</td>
                   <td style={{ ...td, fontSize: 12 }}>{nomeConta(l.conta_credito)}</td>
@@ -910,8 +943,8 @@ function ModalLancamentosDominio({ lancamentos, planoMap, plano, usaCC, centros,
                     {onDesfazer && <button className="btn btn-ghost" style={{ fontSize: 11.5, padding: '3px 8px', color: theme.red, borderColor: theme.red }} onClick={() => onDesfazer(l.id)} title="Remover este lançamento"><i className="ti ti-arrow-back-up" /> Desfazer</button>}
                   </td>
                 </tr>
-              )})}
-              {!lista.length && <tr><td colSpan={usaCC ? 9 : 7} style={{ ...td, textAlign: 'center', color: theme.sub, padding: '18px 12px' }}>Nenhum lançamento encontrado para “{q}”.</td></tr>}
+              ))}
+              {!lista.length && <tr><td colSpan={usaCC ? 9 : 8} style={{ ...td, textAlign: 'center', color: theme.sub, padding: '18px 12px' }}>Nenhum lançamento encontrado para “{q}”.</td></tr>}
             </tbody>
           </table>
         </div>
