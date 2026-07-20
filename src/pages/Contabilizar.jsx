@@ -29,6 +29,7 @@ export default function Contabilizar() {
   const [status, setStatus] = useState(null)  // status da competência
   const [loading, setLoading] = useState(true)
   const [erro, setErro] = useState('')
+  const [okMsg, setOkMsg] = useState('')
   const [form, setForm] = useState(vazio)
   const [modo, setModo] = useState('escrever') // 'escrever' | 'reclassificar' | 'documento'
   const [rec, setRec] = useState({ errada: '', certa: '', lado: 'debito' }) // reclassificação de conta
@@ -92,7 +93,7 @@ export default function Contabilizar() {
   }, [empresaId, competencia])
 
   const set = k => e => setForm(f => ({ ...f, [k]: e.target.value }))
-  function abrirNovo() { setForm(vazio); setModo('escrever'); setRec({ errada: '', certa: '', lado: 'debito' }); setSugConfirmando(null); setAberto(true) }
+  function abrirNovo() { setForm(vazio); setModo('escrever'); setRec({ errada: '', certa: '', lado: 'debito' }); setSugConfirmando(null); setErro(''); setOkMsg(''); setAberto(true) }
   function confirmarSugestao(s) {
     setForm({ ...vazio, historico: s.detalhe || `${s.modulo} · ${s.item}` })
     setModo('escrever'); setSugConfirmando(s.id); setAberto(true)
@@ -155,7 +156,7 @@ export default function Contabilizar() {
       })
       if (error) throw error
       if (sugConfirmando) setTratadas(prev => new Set(prev).add(sugConfirmando))
-      setAberto(false); setSugConfirmando(null); carregar()
+      setAberto(false); setSugConfirmando(null); setOkMsg('Lançamento salvo.'); carregar()
     } catch (err) { setErro(err.message) } finally { setSalvando(false) }
   }
 
@@ -216,6 +217,7 @@ export default function Contabilizar() {
       </p>
 
       {erro && <p style={{ color: theme.red, fontSize: 13, marginBottom: 14 }}>Erro: {erro}</p>}
+      {okMsg && <p style={{ color: theme.green, fontSize: 13, marginBottom: 14 }}><i className="ti ti-circle-check" /> {okMsg}</p>}
 
       {/* Botões */}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 18 }}>

@@ -490,11 +490,12 @@ export default function Status() {
   }
 
   // Edita um lançamento gerado pela plataforma (data, débito, crédito, valor, histórico).
+  // Retorna uma mensagem de erro (string) para o modal mostrar, ou null em caso de sucesso.
   async function salvarEdicaoLancamento(campos) {
     // Conta de resultado + cliente usa CC → o centro de custo (rateio) é obrigatório.
     const exige = lancamentoExigeCC(plano, usaCC, campos.conta_debito, campos.conta_credito)
     if (exige && !rateioValido(campos.rateio, campos.valor)) {
-      setMsg('Informe o centro de custo — a soma do rateio precisa bater com o valor do lançamento.'); return
+      return 'Informe o centro de custo — a soma do rateio precisa bater com o valor do lançamento.'
     }
     const { error } = await supabase.from('lancamentos').update({
       data: campos.data || null, conta_debito: campos.conta_debito || null, conta_credito: campos.conta_credito || null,
@@ -502,8 +503,14 @@ export default function Status() {
       // Só toca a coluna `rateio` quando há CC obrigatório — edições comuns não dependem dela.
       ...(exige ? { rateio: campos.rateio || null } : {}),
     }).eq('id', editLanc.id)
-    if (error) { setMsg('Erro ao editar: ' + error.message); return }
-    setEditLanc(null); await carregar(); setMsg('Lançamento editado.')
+    if (error) {
+      // Coluna ainda não criada no Supabase → mensagem clara em vez de erro cru.
+      if (/rateio/i.test(error.message) && /column|coluna|schema/i.test(error.message)) {
+        return 'A coluna de centro de custo ainda não existe no banco. Rode no Supabase: alter table public.lancamentos add column if not exists rateio jsonb;'
+      }
+      return 'Erro ao editar: ' + error.message
+    }
+    await carregar(); setMsg('Lançamento editado.'); return null // o modal mostra "Salvo!" e fecha
   }
 
   // Corrigir banco × resultado: grava a partida de acerto (vai para o Contabilizar) + auditoria.
@@ -959,12 +966,22 @@ function ModalEditarLancamento({ lanc, competencia, plano, usaCC, centros, onClo
     historico: lanc.historico || '', rateio: lanc.rateio || null,
   })
   const set = k => v => setForm(f => ({ ...f, [k]: v }))
+  const [erroSalvar, setErroSalvar] = useState('')
+  const [salvando, setSalvando] = useState(false)
+  const [salvo, setSalvo] = useState(false)
   const [mm, yyyy] = String(competencia || '').split('/')
   const dataOk = (() => { const m = /^(\d{4})-(\d{2})/.exec(String(form.data || '')); return !m || !mm || (m[1] === yyyy && m[2] === mm.padStart(2, '0')) })()
   // Conta de resultado (3/4/5) num cliente que usa CC → centro de custo obrigatório.
   const exigeCC = lancamentoExigeCC(plano, usaCC, form.conta_debito, form.conta_credito)
   const ccOk = !exigeCC || rateioValido(form.rateio, form.valor)
   const ok = form.conta_debito && form.conta_credito && Number(form.valor) > 0 && dataOk && ccOk
+  async function salvar() {
+    setErroSalvar(''); setSalvando(true)
+    const e = await onSalvar(form)
+    setSalvando(false)
+    if (e) { setErroSalvar(e); return } // erro aparece aqui no modal
+    setSalvo(true); setTimeout(() => onClose(), 1000) // confirma "Salvo!" e fecha
+  }
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 60 }}>
       <div onClick={e => e.stopPropagation()} style={{ width: 'min(560px,96vw)', maxHeight: '90vh', overflow: 'auto', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
@@ -980,9 +997,11 @@ function ModalEditarLancamento({ lanc, competencia, plano, usaCC, centros, onClo
         </div>
         {!dataOk && <p style={{ color: theme.red, fontSize: 12.5, marginTop: 10, fontWeight: 600 }}><i className="ti ti-alert-triangle" /> A data precisa ser de {competencia}.</p>}
         {exigeCC && !ccOk && <p style={{ color: theme.red, fontSize: 12.5, marginTop: 10, fontWeight: 600 }}><i className="ti ti-alert-triangle" /> Conta de resultado: informe o centro de custo (a soma do rateio precisa bater com o valor).</p>}
+        {erroSalvar && <p style={{ color: theme.red, fontSize: 12.5, marginTop: 10, fontWeight: 600 }}><i className="ti ti-alert-triangle" /> {erroSalvar}</p>}
+        {salvo && <p style={{ color: theme.green, fontSize: 13, marginTop: 10, fontWeight: 700 }}><i className="ti ti-circle-check" /> Lançamento salvo!</p>}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 16 }}>
-          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
-          <button className="btn" disabled={!ok} onClick={() => onSalvar(form)}>Salvar</button>
+          <button className="btn btn-ghost" onClick={onClose} disabled={salvando || salvo}>Cancelar</button>
+          <button className="btn" disabled={!ok || salvando || salvo} onClick={salvar}>{salvo ? 'Salvo ✓' : salvando ? 'Salvando…' : 'Salvar'}</button>
         </div>
       </div>
     </div>

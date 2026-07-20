@@ -447,6 +447,36 @@ export default function CompMovimento() {
             ;(mcc[conta] ||= {}); (mcc[conta][am] ||= {})
             mcc[conta][am][codcc] = (mcc[conta][am][codcc] || 0) + v
           }
+          // Razão VIVO do CC: os LANÇAMENTOS (correções/estornos/manuais) também entram no
+          // movimento por centro — o centro vem do `rateio` do lançamento (só conta de resultado
+          // tem CC). Assim, o CC que você lança no Editar/Contabilizar aparece no filtro na hora.
+          // select('*') para não quebrar caso a coluna `rateio` ainda não exista no banco.
+          const resRed = new Set((listaContas || []).filter(c => c.reduzido).map(c => String(c.reduzido).trim()))
+          const lancsCC = await lerTudo(() => supabase.from('lancamentos').select('*').in('competencia_id', competencias.map(c => c.id)))
+          if (!vivo) return
+          for (const l of (lancsCC || [])) {
+            const am = compAM[l.competencia_id]; if (!am) continue
+            const val = Number(l.valor) || 0; if (!val) continue
+            const rateio = Array.isArray(l.rateio) ? l.rateio.filter(r => r && String(r.cod ?? '').trim()) : []
+            // Aplica em cada lado que é conta de RESULTADO (débito = +, crédito = −).
+            for (const [contaRaw, sinal] of [[l.conta_debito, 1], [l.conta_credito, -1]]) {
+              const conta = String(contaRaw || '').trim()
+              if (!conta || !resRed.has(conta)) continue
+              ;(mcc[conta] ||= {}); (mcc[conta][am] ||= {})
+              if (rateio.length) {
+                for (const r of rateio) {
+                  const raw = String(r.cod).trim()
+                  const cod = nomeByCod[raw] ? raw : (codByNome[norm(raw)] || raw)
+                  presentes.add(cod)
+                  mcc[conta][am][cod] = (mcc[conta][am][cod] || 0) + sinal * (Number(r.valor) || 0)
+                }
+              } else {
+                // Lançamento de resultado SEM centro → cai em "Sem centro de custo" (achar e lançar).
+                presentes.add(SEM)
+                mcc[conta][am][SEM] = (mcc[conta][am][SEM] || 0) + sinal * val
+              }
+            }
+          }
           // Lista = centros CADASTRADOS + os do razão + SEMPRE a opção "Sem centro de custo" (por último).
           // Agrupa por código (chave k), mas MOSTRA só o nome. Ordena por nome, "Sem centro" no fim.
           const todosCod = new Set([...Object.keys(nomeByCod), ...presentes, SEM])
@@ -947,21 +977,29 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
     // conta (correções/estornos da Conciliação, apropriações, contabilizações) como linhas
     // próprias — o estorno aparece no lado que zera a duplicidade e o Total fecha no valor
     // certo. É o que faz este drill-down bater com a célula do comparativo (razão vivo).
+    // select('*') p/ trazer o `rateio` sem quebrar caso a coluna ainda não exista no banco.
     const { data: lancs } = await supabase.from('lancamentos')
-      .select('id, competencia_id, data, conta_debito, conta_credito, valor, historico, origem')
+      .select('*')
       .in('competencia_id', ids)
       .or(`conta_debito.eq.${conta},conta_credito.eq.${conta}`)
-    const lancRows = (lancs || []).map(l => {
+    const lancRows = (lancs || []).flatMap(l => {
       const ehDeb = String(l.conta_debito || '').trim() === String(conta)
       const v = Number(l.valor) || 0
-      return {
-        id: `lanc-${l.id}`, competencia_id: l.competencia_id, data: l.data || '',
+      const base = {
+        competencia_id: l.competencia_id, data: l.data || '',
         conta, contrapartida: ehDeb ? (l.conta_credito || '') : (l.conta_debito || ''),
         historico: l.historico || 'Lançamento de ajuste',
-        debito: ehDeb ? v : 0, credito: ehDeb ? 0 : v,
         suspeito: false, ehLancamento: true, origem: l.origem || 'lancamento',
-        centro_custo: null, // rateio dos lançamentos entra aqui quando a coluna existir
       }
+      // Rateio: uma linha por centro (com o valor do centro), mostrando o CC na coluna C. Custo.
+      const rateio = Array.isArray(l.rateio) ? l.rateio.filter(r => r && String(r.cod ?? '').trim()) : []
+      if (rateio.length) {
+        return rateio.map((r, i) => {
+          const rv = Number(r.valor) || 0
+          return { ...base, id: `lanc-${l.id}-${i}`, debito: ehDeb ? rv : 0, credito: ehDeb ? 0 : rv, centro_custo: String(r.cod).trim() }
+        })
+      }
+      return [{ ...base, id: `lanc-${l.id}`, debito: ehDeb ? v : 0, credito: ehDeb ? 0 : v, centro_custo: null }]
     })
     setCorrecoes(corrMap)
     setDedut(dedutMap)
