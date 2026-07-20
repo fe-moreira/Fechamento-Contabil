@@ -125,9 +125,11 @@ export default function Relatorios() {
 
   const compSlug = competencia.replace('/', '-')
 
-  // Totais do balancete.
-  const totDeb = linhas.reduce((s, l) => s + (Number(l.debito) || 0), 0)
-  const totCred = linhas.reduce((s, l) => s + (Number(l.credito) || 0), 0)
+  // Totais do balancete: soma das ANALÍTICAS do balancete VIVO (hier, com lançamentos), para
+  // bater SEMPRE com o corpo — as sintéticas são agregados e não entram na soma. Sem hier
+  // (fallback), soma o balancete cru, que é o que o corpo mostra nesse caso.
+  const totDeb = hier.length ? hier.reduce((s, l) => s + (l.folha ? (Number(l.debito) || 0) : 0), 0) : linhas.reduce((s, l) => s + (Number(l.debito) || 0), 0)
+  const totCred = hier.length ? hier.reduce((s, l) => s + (l.folha ? (Number(l.credito) || 0) : 0), 0) : linhas.reduce((s, l) => s + (Number(l.credito) || 0), 0)
 
   // DRE estruturada (Receita Bruta → Líquida → Lucro Bruto → EBITDA → LAIR → Lucro Líquido),
   // montada da hierarquia do balancete (mesma estrutura do Domínio).
