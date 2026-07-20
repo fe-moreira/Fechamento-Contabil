@@ -94,7 +94,7 @@ export default function Status() {
         .select('modulo, item, detalhe, created_at').eq('competencia_id', comp.id)
         .eq('tipo', 'Justificativa').order('created_at', { ascending: false })
       const { data: lancs } = await supabase.from('lancamentos')
-        .select('id, data, conta_debito, conta_credito, valor, historico, origem').eq('competencia_id', comp.id).order('data')
+        .select('*').eq('competencia_id', comp.id).order('data') // '*' p/ trazer o `rateio` (CC) e reabrir o lançamento com o centro já preenchido
       const docs = Array.isArray(comp.documentos) ? comp.documentos : []
       temRazao = (razaoCount || 0) > 0
       // Só documento indeciso (pendente) bloqueia. "Não tem" e "Não enviou" não
@@ -965,10 +965,11 @@ function ModalEditarLancamento({ lanc, competencia, plano, usaCC, centros, onClo
     conta_debito: lanc.conta_debito || '', conta_credito: lanc.conta_credito || '',
     historico: lanc.historico || '', rateio: lanc.rateio || null,
   })
-  const set = k => v => setForm(f => ({ ...f, [k]: v }))
   const [erroSalvar, setErroSalvar] = useState('')
   const [salvando, setSalvando] = useState(false)
   const [salvo, setSalvo] = useState(false)
+  // Ao mexer em qualquer campo depois de salvo, volta a permitir salvar de novo.
+  const set = k => v => { setForm(f => ({ ...f, [k]: v })); setSalvo(false); setErroSalvar('') }
   const [mm, yyyy] = String(competencia || '').split('/')
   const dataOk = (() => { const m = /^(\d{4})-(\d{2})/.exec(String(form.data || '')); return !m || !mm || (m[1] === yyyy && m[2] === mm.padStart(2, '0')) })()
   // Conta de resultado (3/4/5) num cliente que usa CC → centro de custo obrigatório.
@@ -980,7 +981,7 @@ function ModalEditarLancamento({ lanc, competencia, plano, usaCC, centros, onClo
     const e = await onSalvar(form)
     setSalvando(false)
     if (e) { setErroSalvar(e); return } // erro aparece aqui no modal
-    setSalvo(true); setTimeout(() => onClose(), 1000) // confirma "Salvo!" e fecha
+    setSalvo(true) // fica na tela mostrando "Salvo!" — você fecha quando quiser
   }
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 60 }}>
@@ -998,9 +999,9 @@ function ModalEditarLancamento({ lanc, competencia, plano, usaCC, centros, onClo
         {!dataOk && <p style={{ color: theme.red, fontSize: 12.5, marginTop: 10, fontWeight: 600 }}><i className="ti ti-alert-triangle" /> A data precisa ser de {competencia}.</p>}
         {exigeCC && !ccOk && <p style={{ color: theme.red, fontSize: 12.5, marginTop: 10, fontWeight: 600 }}><i className="ti ti-alert-triangle" /> Conta de resultado: informe o centro de custo (a soma do rateio precisa bater com o valor).</p>}
         {erroSalvar && <p style={{ color: theme.red, fontSize: 12.5, marginTop: 10, fontWeight: 600 }}><i className="ti ti-alert-triangle" /> {erroSalvar}</p>}
-        {salvo && <p style={{ color: theme.green, fontSize: 13, marginTop: 10, fontWeight: 700 }}><i className="ti ti-circle-check" /> Lançamento salvo!</p>}
+        {salvo && <p style={{ color: theme.green, fontSize: 13, marginTop: 10, fontWeight: 700 }}><i className="ti ti-circle-check" /> Lançamento salvo! Você pode continuar editando ou fechar.</p>}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 16 }}>
-          <button className="btn btn-ghost" onClick={onClose} disabled={salvando || salvo}>Cancelar</button>
+          <button className="btn btn-ghost" onClick={onClose} disabled={salvando}>{salvo ? 'Fechar' : 'Cancelar'}</button>
           <button className="btn" disabled={!ok || salvando || salvo} onClick={salvar}>{salvo ? 'Salvo ✓' : salvando ? 'Salvando…' : 'Salvar'}</button>
         </div>
       </div>
