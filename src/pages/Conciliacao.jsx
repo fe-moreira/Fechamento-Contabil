@@ -682,7 +682,13 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // apelido que remapeava esse nome e marca o nome próprio como isolado.
   async function desvincularLinha(alvo, nomeDigitado) {
     if (!alvo) return
-    const proprio = String(nomeDigitado || (alvo.historico ? lerHistorico(alvo.historico).entidade : '') || alvo.leitura?.entidade || '').trim()
+    // O nome EXIBIDO da linha pode ser o nome MESCLADO (apelido do outro fornecedor). Para
+    // separar de verdade, o "nome próprio" tem que ser o do HISTÓRICO (pré-apelido). Só usamos
+    // o nome digitado se ele for DIFERENTE do exibido (aí o usuário quis mesmo aquele nome).
+    const raw = (alvo.historico ? lerHistorico(alvo.historico).entidade : '') || ''
+    const exibido = String(alvo.leitura?.entidade || '').trim()
+    const digitado = String(nomeDigitado || '').trim()
+    const proprio = ((digitado && chaveNome(digitado) !== chaveNome(exibido)) ? digitado : raw) || digitado || exibido
     const k = chaveNome(proprio); if (!k) return
     const aliases = { ...nomesAlias }; delete aliases[k]         // deixa de remapear este nome
     const iso = new Set(nomesIsolados); iso.add(k)               // não unir com parecidos
