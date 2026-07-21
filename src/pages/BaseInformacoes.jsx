@@ -1439,7 +1439,7 @@ function ModalCargaInicial({ vigencia, empresaId, cliente, onClose, onConcluir }
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10, marginBottom: 10 }}>
           <div style={{ flex: 1 }}>
             <p style={{ color: theme.text, fontSize: 14, fontWeight: 600, margin: 0, display: 'flex', alignItems: 'center', gap: 6 }}><i className={`ti ${icon}`} style={{ color: theme.accent }} />{titulo}{info && <InfoTela titulo={titulo.replace(/^\d+\.\s*/, '')}>{info}</InfoTela>}</p>
-            <p style={{ color: theme.sub, fontSize: 12, margin: '4px 0 0', lineHeight: 1.5 }}>{dica}</p>
+            {!info && <p style={{ color: theme.sub, fontSize: 12, margin: '4px 0 0', lineHeight: 1.5 }}>{dica}</p>}
           </div>
           <button className="btn btn-ghost" style={{ fontSize: 12, whiteSpace: 'nowrap' }} onClick={() => baixarModelo(modelo, arquivo)}><i className="ti ti-download" /> Modelo</button>
         </div>
