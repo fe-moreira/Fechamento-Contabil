@@ -1312,6 +1312,16 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         competencia_id: id, razao_id: acao.id,
         nf: aj.nf || null, entidade: aj.entidade || null, historico: aj.historico || null, usuario,
       }, { onConflict: 'razao_id' })
+      // Renomear CARREGA o desvínculo: se o nome antigo estava desvinculado (não unir com
+      // parecidos), o novo herda — mantém separados dois fornecedores parecidos ao renomear.
+      if (aj.entidade) {
+        const kAnt = chaveNome(acao?._origEntidade || acao?.leitura?.entidade || '')
+        if (kAnt && nomesIsolados.has(kAnt) && chaveNome(aj.entidade) !== kAnt) {
+          const iso = new Set(nomesIsolados); iso.add(chaveNome(aj.entidade))
+          setNomesIsolados(iso)
+          await salvarNomes(nomesConf, iso, nomesAlias, aberturaAj, acertoNomes)
+        }
+      }
       ajustouLeitura = true
     }
     // Corrigiu o NOME de uma linha? Guarda (antigo → novo) para SUGERIR o mesmo padrão nos outros.
@@ -1605,9 +1615,14 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     // saldo inicial E razão, e em todos os meses. Precisão por linha (razão) via ajuste_leitura.
     const aliases = { ...nomesAlias }
     const aberAjNovo = { ...aberturaAj }
-    const iso = new Set(nomesIsolados); iso.delete(chaveNome(nm)) // ao unir, o destino não fica desvinculado
+    const iso = new Set(nomesIsolados)
     for (const l of razaoLinhas) {
-      const k = chaveNome(l.leitura?.entidade || ''); if (k && k !== chaveNome(nm)) { aliases[k] = nm; iso.delete(k) }
+      const k = chaveNome(l.leitura?.entidade || '')
+      // Renomear CARREGA o desvínculo: se o nome antigo estava desvinculado (não unir com
+      // parecidos), o nome novo herda esse desvínculo — assim renomear para diferenciar dois
+      // fornecedores parecidos mantém eles SEPARADOS. (No merge, todos recebem o MESMO nome →
+      // caem no mesmo grupo pela string exata, então continuar desvinculado não atrapalha.)
+      if (k && k !== chaveNome(nm)) { aliases[k] = nm; if (iso.has(k)) iso.add(chaveNome(nm)) }
       // Saldo inicial: além do apelido, fixa o nome no PRÓPRIO título (por item) — garante que
       // todos os saldos iniciais do grupo caiam num grupo só (mesmo desvinculados/escrita diferente).
       if (l._abertura) { const key = chaveAberturaAj(l); aberAjNovo[key] = { ...(aberAjNovo[key] || {}), entidade: nm } }
@@ -1645,11 +1660,12 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     const id = await getCompetenciaId()
     for (const s of sugs) {
       const nm = String(s.sugerido || '').trim(); if (!nm) continue
-      iso.delete(chaveNome(nm)) // ao unir, o destino não fica desvinculado
       for (const l of (s.lancs || [])) {
         if (l.acerto) { const rid = String(l.id).replace(/^ac_/, ''); if (rid) acMap[rid] = nm }
         else {
-          const k = chaveNome(l.leitura?.entidade || ''); if (k && k !== chaveNome(nm)) { aliases[k] = nm; iso.delete(k) }
+          // Renomear carrega o desvínculo (ver aplicarFornecedorLote): o nome novo herda o
+          // desvínculo do antigo, mantendo separados os fornecedores parecidos.
+          const k = chaveNome(l.leitura?.entidade || ''); if (k && k !== chaveNome(nm)) { aliases[k] = nm; if (iso.has(k)) iso.add(chaveNome(nm)) }
           // Saldo inicial: além do apelido, fixa o nome no PRÓPRIO título (por item) — garante
           // que todos os saldos iniciais do grupo fiquem com o MESMO nome e caiam num grupo só,
           // mesmo se estiverem desvinculados ou com pequenas diferenças de escrita.
