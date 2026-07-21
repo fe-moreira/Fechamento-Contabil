@@ -2864,12 +2864,15 @@ function CardConferencia({ conta, reg, compId, usuario, saldoAjuste = 0, composi
 
 // Relatórios da composição (em aberto / conciliados) em Excel ou PDF.
 function RelatoriosComposicao({ conta, emAberto, zerados, contraDe }) {
-  const cols = ['Data', 'NF', 'Histórico', 'Contrapartida', 'Débito', 'Crédito']
-  const linhaArr = l => [l.data || '', l.leitura?.nf || '', l.historico || '', contraDe(l).join(', '), Number(l.debito) || 0, Number(l.credito) || 0]
-  const linhaTxt = l => [l.data || '', l.leitura?.nf || '', l.historico || '', contraDe(l).join(', '), Number(l.debito) ? money(l.debito) : '', Number(l.credito) ? money(l.credito) : '']
+  // Linhas com uma coluna SALDO (D−C) no fim: por lançamento fica em branco (o valor está em
+  // Débito/Crédito); o saldo aparece no Subtotal de cada grupo e no Total — R$ 0,00 quando o
+  // grupo zerou (título e baixa se compensam) e o saldo em aberto no que sobrou.
+  const linhaArr = l => [l.data || '', l.leitura?.nf || '', l.historico || '', contraDe(l).join(', '), Number(l.debito) || 0, Number(l.credito) || 0, '']
+  const linhaTxt = l => [l.data || '', l.leitura?.nf || '', l.historico || '', contraDe(l).join(', '), Number(l.debito) ? money(l.debito) : '', Number(l.credito) ? money(l.credito) : '', '']
   const titulo = sub => `Conciliação · ${conta.conta} · ${conta.nome} — ${sub}`
   const somaDeb = ls => ls.reduce((s, l) => s + (Number(l.debito) || 0), 0)
   const somaCred = ls => ls.reduce((s, l) => s + (Number(l.credito) || 0), 0)
+  const netDe = ls => somaDeb(ls) - somaCred(ls) // saldo do grupo (0 quando zerou)
 
   // Em blocos por cliente/fornecedor, no papel timbrado da Attentive.
   async function excel(linhas, sub) {
@@ -2880,13 +2883,14 @@ function RelatoriosComposicao({ conta, emAberto, zerados, contraDe }) {
       colunas: [
         { nome: 'Data', largura: 12 }, { nome: 'NF', largura: 12 }, { nome: 'Histórico', largura: 60, wrap: true },
         { nome: 'Contrapartida', largura: 26 }, { nome: 'Débito', alinhar: 'right', moeda: true }, { nome: 'Crédito', alinhar: 'right', moeda: true },
+        { nome: 'Saldo', largura: 16, alinhar: 'right' },
       ],
       secoes: blocos.map(b => ({
         titulo: b.cliente,
         linhas: b.lancs.map(linhaArr),
-        totais: ['', '', '', 'Subtotal', somaDeb(b.lancs), somaCred(b.lancs)],
+        totais: ['', '', '', 'Subtotal', somaDeb(b.lancs), somaCred(b.lancs), moneyDC(netDe(b.lancs))],
       })),
-      totais: ['', '', '', 'TOTAL GERAL', somaDeb(linhas), somaCred(linhas)],
+      totais: ['', '', '', 'TOTAL GERAL', somaDeb(linhas), somaCred(linhas), moneyDC(netDe(linhas))],
       arquivo: `conciliacao_${conta.conta}_${sub.replace(/\s+/g, '-').toLowerCase()}.xlsx`,
       aba: sub,
     })
@@ -2897,13 +2901,13 @@ function RelatoriosComposicao({ conta, emAberto, zerados, contraDe }) {
     abrePdfTimbrado({
       titulo: titulo(sub),
       sub: `${blocos.length} ${blocos.length === 1 ? 'cliente/fornecedor' : 'clientes/fornecedores'} · ${linhas.length} lançamento(s)`,
-      colunas: [{ nome: 'Data' }, { nome: 'NF' }, { nome: 'Histórico' }, { nome: 'Contrapartida' }, { nome: 'Débito', alinhar: 'right' }, { nome: 'Crédito', alinhar: 'right' }],
+      colunas: [{ nome: 'Data' }, { nome: 'NF' }, { nome: 'Histórico' }, { nome: 'Contrapartida' }, { nome: 'Débito', alinhar: 'right' }, { nome: 'Crédito', alinhar: 'right' }, { nome: 'Saldo', alinhar: 'right' }],
       secoes: blocos.map(b => ({
         titulo: b.cliente,
         linhas: b.lancs.map(linhaTxt),
-        totais: ['Subtotal', '', '', '', money(somaDeb(b.lancs)), money(somaCred(b.lancs))],
+        totais: ['Subtotal', '', '', '', money(somaDeb(b.lancs)), money(somaCred(b.lancs)), moneyDC(netDe(b.lancs))],
       })),
-      totais: ['TOTAL GERAL', '', '', '', money(somaDeb(linhas)), money(somaCred(linhas))],
+      totais: ['TOTAL GERAL', '', '', '', money(somaDeb(linhas)), money(somaCred(linhas)), moneyDC(netDe(linhas))],
     })
   }
 
