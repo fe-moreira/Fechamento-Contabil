@@ -700,7 +700,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       const id = await getCompetenciaId()
       await supabase.from('ajuste_leitura').upsert({ competencia_id: id, razao_id: alvo.id, entidade: proprio, usuario }, { onConflict: 'razao_id' })
     } else if (alvo.acerto) {
-      const rid = String(alvo.id).replace(/^ac_/, '')
+      const rid = String(alvo._acertoId || alvo.id).replace(/^ac_/, '')
       if (rid) { const acMap = { ...acertoNomes, [rid]: proprio }; setAcertoNomes(acMap); await salvarNomes(nomesConf, iso, aliases, aberAj, acMap); setNomesAlias(aliases); setNomesIsolados(iso); carregarLanc(); return }
     }
     setNomesAlias(aliases); setNomesIsolados(iso)
@@ -2323,7 +2323,8 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       {verCorr && (
         <ModalCorrigido linha={verCorr} conta={conta} compId={compId} planoMap={planoMap} lab={lab}
           onClose={() => setVerCorr(null)} onDesfazer={() => desfazerCorrecao(verCorr)}
-          onCorrigirNome={corrigirNomeAcerto} />
+          onCorrigirNome={corrigirNomeAcerto}
+          onDesvincular={async () => { const alvo = verCorr; setVerCorr(null); await desvincularLinha(alvo); setMsg(`Desvinculado — separado dos nomes parecidos.`) }} />
       )}
       {verComposic && (
         <ModalComposicao titulo={verComposic.titulo} itens={verComposic.itens} onClose={() => setVerComposic(null)} />
@@ -2560,7 +2561,7 @@ function SugestoesDiferenca({ conta, compId, dif }) {
 //            (marcando "pendência do cliente", entra no Relatório de Pendências).
 // Lançamento JÁ TRATADO: mostra o que foi feito (correção/estorno/justificativa)
 // e o lançamento de acerto gerado — e permite DESFAZER. Não reabre a tela de tratar.
-function ModalCorrigido({ linha, compId, planoMap = {}, lab = 'fornecedor', onClose, onDesfazer, onCorrigirNome }) {
+function ModalCorrigido({ linha, compId, planoMap = {}, lab = 'fornecedor', onClose, onDesfazer, onCorrigirNome, onDesvincular }) {
   const [dados, setDados] = useState(null)
   const [busy, setBusy] = useState(false)
   const [nomeAcerto, setNomeAcerto] = useState(String(linha.leitura?.entidade || '').trim())
@@ -2622,8 +2623,13 @@ function ModalCorrigido({ linha, compId, planoMap = {}, lab = 'fornecedor', onCl
           </div>
         )}
 
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginTop: 18 }}>
-          <button className="btn btn-ghost" style={{ color: theme.red, borderColor: theme.red }} disabled={busy} onClick={async () => { setBusy(true); await onDesfazer() }}><i className="ti ti-rotate-2" /> Desfazer correção</button>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginTop: 18, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button className="btn btn-ghost" style={{ color: theme.red, borderColor: theme.red }} disabled={busy} onClick={async () => { setBusy(true); await onDesfazer() }}><i className="ti ti-rotate-2" /> Desfazer correção</button>
+            {onDesvincular && (linha.leitura?.entidade || linha.historico) && (
+              <button className="btn btn-ghost" style={{ color: theme.yellow, borderColor: theme.yellow }} disabled={busy} onClick={async () => { setBusy(true); await onDesvincular() }} title="Este fornecedor/cliente é diferente — separar dos nomes parecidos (e desfazer união por apelido, se houver)"><i className="ti ti-arrows-split" /> Desvincular</button>
+            )}
+          </div>
           <button className="btn" onClick={onClose}>Fechar</button>
         </div>
       </div>
