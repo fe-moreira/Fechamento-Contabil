@@ -92,9 +92,13 @@ function baixadosPorNF(lancs) {
 // composição de abertura do mês seguinte. `aberturaPrevia` = composição de abertura DA
 // PRÓPRIA competência (recursiva) — junto com o razão e as correções do mês forma o total,
 // e o que casa por NF (título × baixa) sai; o que sobra é o saldo que segue em aberto.
-// Só contas de entidade (cliente/fornecedor); nas demais o saldo já arrasta pelo número.
+// - Contas de ENTIDADE (cliente/fornecedor): o que sobra vira vários "saldo anterior" por
+//   título (casamento por NF).
+// - Contas de SALDO (ex.: seguro/despesa a apropriar): não há NF a casar; o saldo que resta
+//   (abertura anterior + movimento + acertos) arrasta como UMA linha de "saldo anterior" —
+//   é o saldo inicial do mês seguinte, para aparecer também no razão da Conciliação.
 export async function itensAbertosConta(compId, contaCod, contaNome, classifRaw, aberturaPrevia) {
-  if (!ehPorEntidade(contaNome)) return []
+  const porEntidade = ehPorEntidade(contaNome)
   const [{ data: rz }, { data: aj }, { data: acs }] = await Promise.all([
     supabase.from('razao').select('id, data, contrapartida, historico, debito, credito').eq('competencia_id', compId).eq('conta', contaCod).order('data'),
     supabase.from('ajuste_leitura').select('razao_id, nf, entidade, historico').eq('competencia_id', compId),
@@ -112,6 +116,22 @@ export async function itensAbertosConta(compId, contaCod, contaNome, classifRaw,
       }, null)
     })
   const lanc = [...(aberturaPrevia || []), ...(rz || []).map(l => aplicarAjuste(l, ajById[l.id])), ...acertoLancs]
+  // Conta de saldo (não é cliente/fornecedor): arrasta o SALDO líquido como uma única linha.
+  if (!porEntidade) {
+    const net = lanc.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
+    if (Math.abs(net) < 0.005) return []
+    const rotulo = String(contaNome || '').trim()
+    return [{
+      id: `arr-${compId}-saldo`,
+      data: 'abertura',
+      contrapartida: '',
+      historico: `Saldo anterior${rotulo ? ' · ' + rotulo : ''}`,
+      debito: net > 0 ? net : 0,
+      credito: net < 0 ? -net : 0,
+      abertura: true,
+      leitura: { nf: '', entidade: '', ident: false, conf: 'baixa', abertura: true },
+    }]
+  }
   const baixados = baixadosPorNF(lanc)
   const abertos = lanc.filter(l => !baixados.has(l) && Math.abs((Number(l.debito) || 0) - (Number(l.credito) || 0)) >= 0.005)
   // Vira "saldo anterior" para o mês seguinte, preservando NF/entidade p/ casar as baixas.
