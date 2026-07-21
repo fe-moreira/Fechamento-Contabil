@@ -333,6 +333,11 @@ export function limparNomeEntidade(nome) {
   const pref = /^\s*(?:ADIANTAMENTOS?\s+(?:DE\s+|A\s+|AO\s+|AOS\s+)?(?:FORNECEDOR(?:ES)?|CLIENTE(?:S)?)|PIS\s*\/?\s*COFINS|COFINS|PIS|ICMS(?:\s+ST)?|ISS(?:QN)?|IRPJ|CSLL|IRRF|INSS|IPI|DARF|DAS|SIMPLES)\b[\s.\-/]*/i
   let prev
   do { prev = s; s = s.replace(pref, '') } while (s !== prev && s)
+  // Histórico de baixa/adiantamento: "PAGAMENTO/RECEBIMENTO/BAIXA/QUITAÇÃO" (+ NF/NOTA/
+  // DUPLICATA/TÍTULO/DOC/PARCELA + número) colado no começo. O fornecedor/cliente é o que
+  // vem DEPOIS. Ex.: "PAGAMENTO NF 970 MAESTRO ABM LTDA" → "MAESTRO ABM LTDA".
+  const prefPgto = /^\s*(?:PAGAMENTOS?|PGTOS?|RECEBIMENTOS?|RECEB|BAIXAS?|LIQUIDA[CÇ][AÃ]O|QUITA[CÇ][AÃ]O)\b[\s.\-/:]*(?:(?:NFE?|NOTAS?(?:\s+FISCAIS?)?|DUPLICATAS?|DUPL?|DP|BOLETOS?|T[IÍ]TULOS?|DOC(?:UMENTOS?)?|PARCELAS?)\b[\s.\-/nº°:]*)*\d*[\s.\-/:]*/i
+  do { prev = s; s = s.replace(prefPgto, '') } while (s !== prev && s)
   s = s.replace(/\s+\d{3,}\s*$/, '') // código no fim (ex.: "... SOLUCOES 003881")
   return s.trim() || String(nome || '').trim()
 }
