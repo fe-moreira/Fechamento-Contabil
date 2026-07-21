@@ -1290,7 +1290,17 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       if (aj.historico) novo.historico = String(aj.historico).trim()
       const map = { ...aberturaAj, [key]: novo }
       setAberturaAj(map)
-      await salvarNomes(nomesConf, nomesIsolados, nomesAlias, map)
+      // Renomear o NOME de um saldo inicial vale como APELIDO do fornecedor: passa a valer
+      // para TODOS os títulos daquele nome (qualquer valor) e nos próximos meses — é o que
+      // permite JUNTAR num grupo só os vários saldos iniciais do mesmo fornecedor. (O ajuste
+      // por item continua cuidando de NF/histórico, que são específicos de cada título.)
+      let aliasNovo = nomesAlias
+      const antigoNome = String(acao?._origEntidade || acao?.leitura?.entidade || '').trim()
+      if (aj.entidade && antigoNome && chaveNome(antigoNome) !== chaveNome(aj.entidade)) {
+        aliasNovo = { ...nomesAlias, [chaveNome(antigoNome)]: String(aj.entidade).trim() }
+        setNomesAlias(aliasNovo)
+      }
+      await salvarNomes(nomesConf, nomesIsolados, aliasNovo, map)
       ajustouLeitura = true
     } else if (aj && acao?.id && !ehAb && (aj.nf || aj.entidade || aj.historico)) {
       await supabase.from('ajuste_leitura').upsert({
