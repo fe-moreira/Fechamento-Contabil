@@ -1599,21 +1599,28 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     // Renomeia por APELIDO: cada nome atual dos selecionados vira o nome correto — vale para
     // saldo inicial E razão, e em todos os meses. Precisão por linha (razão) via ajuste_leitura.
     const aliases = { ...nomesAlias }
-    for (const l of razaoLinhas) { const k = chaveNome(l.leitura?.entidade || ''); if (k && k !== chaveNome(nm)) aliases[k] = nm }
+    const aberAjNovo = { ...aberturaAj }
+    const iso = new Set(nomesIsolados); iso.delete(chaveNome(nm)) // ao unir, o destino não fica desvinculado
+    for (const l of razaoLinhas) {
+      const k = chaveNome(l.leitura?.entidade || ''); if (k && k !== chaveNome(nm)) { aliases[k] = nm; iso.delete(k) }
+      // Saldo inicial: além do apelido, fixa o nome no PRÓPRIO título (por item) — garante que
+      // todos os saldos iniciais do grupo caiam num grupo só (mesmo desvinculados/escrita diferente).
+      if (l._abertura) { const key = chaveAberturaAj(l); aberAjNovo[key] = { ...(aberAjNovo[key] || {}), entidade: nm } }
+    }
     // Acerto (lançamento gerado): não tem nome de origem para apelido → guarda o nome por
     // uuid do lançamento (aplicado ao recarregar). Assim a linha "não identificada" passa a
     // aparecer com o fornecedor.
     const acMap = { ...acertoNomes }
     for (const l of acertoLinhas) { const rid = String(l.id).replace(/^ac_/, ''); if (rid) acMap[rid] = nm }
     const conf = new Set(nomesConf); if (aprender) conf.add(chaveNome(nm))
-    await salvarNomes(conf, nomesIsolados, aliases, aberturaAj, acMap)
+    await salvarNomes(conf, iso, aliases, aberAjNovo, acMap)
     // Razão: também grava ajuste_leitura (força o nome na linha, mesmo "não identificada").
     const razaoIds = razaoLinhas.filter(l => !l._abertura && l.id).map(l => l.id)
     if (razaoIds.length) {
       const id = await getCompetenciaId()
       await supabase.from('ajuste_leitura').upsert(razaoIds.map(rid => ({ competencia_id: id, razao_id: rid, entidade: nm, usuario })), { onConflict: 'razao_id' })
     }
-    setNomesConf(conf); setNomesAlias(aliases); setAcertoNomes(acMap); setSelLin(new Set()); setLoteForn(null)
+    setNomesConf(conf); setNomesIsolados(iso); setNomesAlias(aliases); setAberturaAj(aberAjNovo); setAcertoNomes(acMap); setSelLin(new Set()); setLoteForn(null)
     // Guarda a correção (nome antigo → novo) para SUGERIR o mesmo padrão nos outros grupos.
     if (nomeAtual && chaveNome(nomeAtual) !== chaveNome(nm)) { setUltimaCorrecao({ old: nomeAtual, neu: nm }); setSugDismiss(new Set()) }
     setMsg(`Nome "${nm}" aplicado a ${lines.length} lançamento(s)${aprender ? ' e aprendido' : ''}.`)
@@ -1626,23 +1633,30 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     if (!sugs || !sugs.length) return
     const aliases = { ...nomesAlias }
     const acMap = { ...acertoNomes }
+    const aberAjNovo = { ...aberturaAj }
+    const iso = new Set(nomesIsolados)
     const conf = new Set(nomesConf)
     const ajustes = []
     const id = await getCompetenciaId()
     for (const s of sugs) {
       const nm = String(s.sugerido || '').trim(); if (!nm) continue
+      iso.delete(chaveNome(nm)) // ao unir, o destino não fica desvinculado
       for (const l of (s.lancs || [])) {
         if (l.acerto) { const rid = String(l.id).replace(/^ac_/, ''); if (rid) acMap[rid] = nm }
         else {
-          const k = chaveNome(l.leitura?.entidade || ''); if (k && k !== chaveNome(nm)) aliases[k] = nm
-          if (!l._abertura && l.id) ajustes.push({ competencia_id: id, razao_id: l.id, entidade: nm, usuario })
+          const k = chaveNome(l.leitura?.entidade || ''); if (k && k !== chaveNome(nm)) { aliases[k] = nm; iso.delete(k) }
+          // Saldo inicial: além do apelido, fixa o nome no PRÓPRIO título (por item) — garante
+          // que todos os saldos iniciais do grupo fiquem com o MESMO nome e caiam num grupo só,
+          // mesmo se estiverem desvinculados ou com pequenas diferenças de escrita.
+          if (l._abertura) { const key = chaveAberturaAj(l); aberAjNovo[key] = { ...(aberAjNovo[key] || {}), entidade: nm } }
+          else if (l.id) ajustes.push({ competencia_id: id, razao_id: l.id, entidade: nm, usuario })
         }
       }
       conf.add(chaveNome(nm))
     }
-    await salvarNomes(conf, nomesIsolados, aliases, aberturaAj, acMap)
+    await salvarNomes(conf, iso, aliases, aberAjNovo, acMap)
     if (ajustes.length) await supabase.from('ajuste_leitura').upsert(ajustes, { onConflict: 'razao_id' })
-    setNomesConf(conf); setNomesAlias(aliases); setAcertoNomes(acMap)
+    setNomesConf(conf); setNomesIsolados(iso); setNomesAlias(aliases); setAberturaAj(aberAjNovo); setAcertoNomes(acMap)
     if (fecharPainel) setUltimaCorrecao(null)
     setMsg(`${sugs.length} nome(s) corrigido(s) pelo mesmo padrão.`)
     carregarLanc()
