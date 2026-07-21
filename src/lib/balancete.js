@@ -531,10 +531,15 @@ export async function montarBalancete(empresaId, compId, _depth = 0, opts = {}) 
   // cujo saldo não veio já no balancete importado (evita duplicar).
   if (await ehCompetenciaInicial(empresaId, compId)) {
     const { saldos, composicoes } = await carregarCargaInicial(empresaId)
-    // Saldo de abertura por conta (código): o bloco de saldos; e, para as contas de
-    // COMPOSIÇÃO (clientes, fornecedores, IRRF…), a SOMA dos itens (D − C) — que É o
-    // saldo da conta. Se a conta veio nos dois, o bloco de saldos manda (a composição
-    // apenas confere), para não somar em dobro.
+    // Saldo de abertura por conta (código). Para as contas de COMPOSIÇÃO (clientes,
+    // fornecedores, IRRF, seguro/despesa a apropriar…), a SOMA dos itens (D − C) É o saldo
+    // da conta — e é a fonte AUTORITATIVA, porque é onde entram os itens completos
+    // (contrato + complementos + correções). Se a conta veio NOS DOIS blocos, manda a
+    // COMPOSIÇÃO (o bloco de saldos costuma ser só o espelho/lump inicial, que fica defasado
+    // quando se acrescenta um complemento à composição — ex.: seguro). O bloco de saldos só
+    // é usado como fallback para contas que vieram SÓ como saldo (sem composição itemizada).
+    // Como, num carregamento correto, a soma da composição = o saldo, isso não muda nada nas
+    // contas consistentes; só corrige as que divergem (onde a composição é a verdade).
     const saldoBloco = {}, compBloco = {}
     for (const r of (saldos || [])) {
       const cod = String(codConta(r) || '').trim(); if (!cod) continue
@@ -546,7 +551,7 @@ export async function montarBalancete(empresaId, compId, _depth = 0, opts = {}) 
     }
     const saldoPorCod = {}
     for (const cod of new Set([...Object.keys(saldoBloco), ...Object.keys(compBloco)])) {
-      saldoPorCod[cod] = (cod in saldoBloco) ? saldoBloco[cod] : compBloco[cod]
+      saldoPorCod[cod] = (cod in compBloco) ? compBloco[cod] : saldoBloco[cod]
     }
     if (Object.keys(saldoPorCod).length) {
       const byRedDig = {}, byClsDig = {}, byMask = {}
