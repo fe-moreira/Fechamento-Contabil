@@ -208,6 +208,12 @@ function SeloApropriado({ competencia }) {
   return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700, color: theme.green, background: 'rgba(48,164,108,0.12)', border: `1px solid ${theme.green}`, borderRadius: 20, padding: '2px 9px', whiteSpace: 'nowrap' }}><i className="ti ti-circle-check" /> Apropriado {competencia}</span>
 }
 
+// Aviso quando falta a CONTA A APROPRIAR / ATIVO no cadastro — sem ela a apropriação
+// do mês e o SALDO INICIAL não sobem (é a conta que recebe o saldo de abertura).
+function AvisoSemContaApropriar() {
+  return <span title="Edite o contrato e preencha a Conta a apropriar / ativo (F4). Sem ela, a apropriação e o Saldo inicial não sobem." style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700, color: theme.red, background: 'rgba(212,106,106,0.12)', border: `1px solid ${theme.red}`, borderRadius: 20, padding: '2px 9px', whiteSpace: 'nowrap' }}><i className="ti ti-alert-triangle" /> Falta a conta a apropriar</span>
+}
+
 // Data do último dia da competência (MM/AAAA) em ISO.
 function dataComp(competencia) {
   const [m, a] = (competencia || '').split('/').map(Number)
@@ -795,7 +801,7 @@ function PaneSeguro({ clienteId, user, competencia, abrirGerar, enviarSaldoInici
             const apropriado = contratoApropriado(r, aprops, 'seguro')
             return (
             <tr key={r.id} onClick={() => editar(r)} style={{ cursor: 'pointer' }} title="Clique para ver/editar o cadastro">
-              <td style={td}><b>{r.seguradora}</b>{apropriado && <div style={{ marginTop: 4 }}><SeloApropriado competencia={competencia} /></div>}</td><td style={td}>{r.apolice}</td><td style={td}>{r.ramo}</td>
+              <td style={td}><b>{r.seguradora}</b>{apropriado && <div style={{ marginTop: 4 }}><SeloApropriado competencia={competencia} /></div>}{!String(r.conta_apropriar || '').trim() && <div style={{ marginTop: 4 }}><AvisoSemContaApropriar /></div>}</td><td style={td}>{r.apolice}</td><td style={td}>{r.ramo}</td>
               <td style={{ ...td, textAlign: 'right' }}>{money(r.premio_total)}</td><td style={{ ...td, textAlign: 'right' }}>{money(r.valor_parcela)}</td>
               <td style={{ ...td, whiteSpace: 'nowrap', textAlign: 'right' }} onClick={e => e.stopPropagation()}>
                 <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => editar(r)} title="Editar contrato"><i className="ti ti-pencil" /> Editar</button>{' '}
@@ -878,7 +884,7 @@ function PaneDespesaApropriar({ clienteId, user, competencia, abrirGerar, enviar
             const apropriado = contratoApropriado(r, aprops, 'despesa')
             return (
             <tr key={r.id} onClick={() => editar(r)} style={{ cursor: 'pointer' }} title="Clique para ver/editar o cadastro">
-              <td style={td}><b>{r.tipo}</b>{apropriado && <div style={{ marginTop: 4 }}><SeloApropriado competencia={competencia} /></div>}</td><td style={td}>{r.descricao}</td>
+              <td style={td}><b>{r.tipo}</b>{apropriado && <div style={{ marginTop: 4 }}><SeloApropriado competencia={competencia} /></div>}{!String(r.conta_apropriar || '').trim() && <div style={{ marginTop: 4 }}><AvisoSemContaApropriar /></div>}</td><td style={td}>{r.descricao}</td>
               <td style={{ ...td, textAlign: 'right' }}>{money(r.valor_total)}</td><td style={{ ...td, textAlign: 'right' }}>{money(r.valor_parcela)}</td>
               <td style={{ ...td, whiteSpace: 'nowrap', textAlign: 'right' }} onClick={e => e.stopPropagation()}>
                 <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => editar(r)} title="Editar despesa"><i className="ti ti-pencil" /> Editar</button>{' '}
