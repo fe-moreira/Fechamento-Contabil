@@ -937,7 +937,12 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
 
   // Natureza pela classificação: Ativo (1) é devedora (clientes); Passivo (2) credora (fornecedores).
   const natCredito = String(conta.classifRaw || conta.classif || '').replace(/\D/g, '')[0] === '2'
-  const lab = natCredito ? 'fornecedor' : 'cliente'
+  // Rótulo (cliente/fornecedor) pelo NOME da conta — não pela natureza. "Adiantamento a
+  // fornecedor" é ATIVO (devedor), mas é conta de FORNECEDOR; "adiantamento de clientes" é
+  // passivo, mas é de CLIENTE. Só cai na natureza quando o nome não deixa claro.
+  const nomeCtaLab = baixaTxt(conta.nome || '')
+  const ehFornLab = /fornecedor|a pagar/.test(nomeCtaLab), ehCliLab = /client|a receber|duplicata/.test(nomeCtaLab)
+  const lab = (ehFornLab && !ehCliLab) ? 'fornecedor' : (ehCliLab && !ehFornLab) ? 'cliente' : (natCredito ? 'fornecedor' : 'cliente')
   const ov = l => natCredito ? ((Number(l.credito) || 0) - (Number(l.debito) || 0)) : ((Number(l.debito) || 0) - (Number(l.credito) || 0))
 
   // Contrapartida de um lançamento: usa a informada no razão (quando preenchida);
