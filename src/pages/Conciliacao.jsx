@@ -675,6 +675,32 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     await salvarNomes(nomesConf, iso)
     carregarLanc()
   }
+  // Desvincular UMA linha (este fornecedor é diferente): não basta marcar "isolado" — se a
+  // linha foi UNIDA por apelido (rename anterior) a outro nome, ela está no MESMO grupo pela
+  // string exata e o isolado (etapa de "nomes parecidos") não separa. Então aqui a gente
+  // DESFAZ a união: dá à linha o seu nome PRÓPRIO (o digitado, senão o do histórico), remove o
+  // apelido que remapeava esse nome e marca o nome próprio como isolado.
+  async function desvincularLinha(alvo, nomeDigitado) {
+    if (!alvo) return
+    const proprio = String(nomeDigitado || (alvo.historico ? lerHistorico(alvo.historico).entidade : '') || alvo.leitura?.entidade || '').trim()
+    const k = chaveNome(proprio); if (!k) return
+    const aliases = { ...nomesAlias }; delete aliases[k]         // deixa de remapear este nome
+    const iso = new Set(nomesIsolados); iso.add(k)               // não unir com parecidos
+    let aberAj = aberturaAj
+    if (alvo._abertura) {
+      const key = chaveAberturaAj(alvo); aberAj = { ...aberturaAj, [key]: { ...(aberturaAj[key] || {}), entidade: proprio } }
+      setAberturaAj(aberAj)
+    } else if (alvo.id && !alvo.acerto) {
+      const id = await getCompetenciaId()
+      await supabase.from('ajuste_leitura').upsert({ competencia_id: id, razao_id: alvo.id, entidade: proprio, usuario }, { onConflict: 'razao_id' })
+    } else if (alvo.acerto) {
+      const rid = String(alvo.id).replace(/^ac_/, '')
+      if (rid) { const acMap = { ...acertoNomes, [rid]: proprio }; setAcertoNomes(acMap); await salvarNomes(nomesConf, iso, aliases, aberAj, acMap); setNomesAlias(aliases); setNomesIsolados(iso); carregarLanc(); return }
+    }
+    setNomesAlias(aliases); setNomesIsolados(iso)
+    await salvarNomes(nomesConf, iso, aliases, aberAj, acertoNomes)
+    carregarLanc()
+  }
   const [filtroSit, setFiltroSit] = useState('') // filtro por situação: ''|devedor|semtitulo|unificados|incerta|confirmaveis
   const [selEnt, setSelEnt] = useState(() => new Set()) // entidades marcadas p/ baixa em lote (por nome)
 
@@ -1589,14 +1615,26 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // Desvincula EM LOTE os nomes dos lançamentos selecionados (não unir com parecidos) —
   // vale para todos os meses. Útil quando o sistema juntou vários nomes distintos por engano.
   async function desvincularLote(lines) {
-    const nomes = [...new Set((lines || []).filter(l => !l.acerto && (l.leitura?.entidade || '').trim()).map(l => l.leitura.entidade.trim()))]
-    if (!nomes.length) { setMsg('Marque linhas com nome identificado para desvincular.'); return }
+    const alvos = (lines || []).filter(l => !l.acerto && (l.leitura?.entidade || '').trim())
+    if (!alvos.length) { setMsg('Marque linhas com nome identificado para desvincular.'); return }
     const iso = new Set(nomesIsolados)
-    for (const n of nomes) { const k = chaveNome(n); if (k) iso.add(k) }
-    setNomesIsolados(iso)
-    await salvarNomes(nomesConf, iso)
+    const aliases = { ...nomesAlias }
+    let aberAj = { ...aberturaAj }
+    const ajustes = []
+    const id = await getCompetenciaId()
+    for (const l of alvos) {
+      // Nome PRÓPRIO da linha (o do histórico, pré-apelido) — desfaz uma união por apelido.
+      const proprio = String((l.historico ? lerHistorico(l.historico).entidade : '') || l.leitura?.entidade || '').trim()
+      const k = chaveNome(proprio); if (!k) continue
+      delete aliases[k]; iso.add(k)
+      if (l._abertura) { const key = chaveAberturaAj(l); aberAj[key] = { ...(aberAj[key] || {}), entidade: proprio } }
+      else if (l.id && id) ajustes.push({ competencia_id: id, razao_id: l.id, entidade: proprio, usuario })
+    }
+    setNomesIsolados(iso); setNomesAlias(aliases); setAberturaAj(aberAj)
+    await salvarNomes(nomesConf, iso, aliases, aberAj, acertoNomes)
+    if (ajustes.length) await supabase.from('ajuste_leitura').upsert(ajustes, { onConflict: 'razao_id' })
     setSelLin(new Set())
-    setMsg(`${nomes.length} ${lab}(s) desvinculado(s) — não vou mais unir com nomes parecidos.`)
+    setMsg(`${alvos.length} ${lab}(s) desvinculado(s) — separados dos nomes parecidos.`)
     carregarLanc()
   }
 
@@ -2274,7 +2312,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         <ModalLancamento lanc={acao} conta={conta} lab={lab} plano={plano} natCredito={natCredito}
           residuo={ehEntidadeConta ? residuoNF(acao) : 0}
           onClose={() => setAcao(null)} onRegistrar={registrar}
-          onDesvincular={async nome => { setAcao(null); await marcarIsolado(nome); setMsg(`"${nome}" desvinculado — não vou mais unir com nomes parecidos.`) }} />
+          onDesvincular={async nome => { const alvo = acao; setAcao(null); await desvincularLinha(alvo, nome); setMsg(`"${String(nome || '').trim()}" desvinculado — separado dos nomes parecidos.`) }} />
       )}
       {verCorr && (
         <ModalCorrigido linha={verCorr} conta={conta} compId={compId} planoMap={planoMap} lab={lab}
