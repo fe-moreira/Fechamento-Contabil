@@ -630,6 +630,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const [reclassLote, setReclassLote] = useState(null)  // { lines } — reclassificar conta em lote
   const [nomesConf, setNomesConf] = useState(new Set())   // nomes CONFIÁVEIS do cliente (não pede revisão)
   const [nomesIsolados, setNomesIsolados] = useState(new Set()) // nomes a NÃO unir com parecidos (desvincular)
+  const [separados, setSeparados] = useState(new Set()) // linhas (por id) forçadas a ficar no PRÓPRIO grupo (desvincular determinístico)
   const [nomesAlias, setNomesAlias] = useState({}) // APELIDOS: nomeAntigoKey -> nome correto (renomeia em todo lugar)
   const [ultimaCorrecao, setUltimaCorrecao] = useState(null) // { old, neu } da última correção de nome → alimenta as sugestões
   const [sugDismiss, setSugDismiss] = useState(() => new Set()) // sugestões de nome descartadas (chaveNome do atual)
@@ -656,14 +657,18 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     setBaixasReabertas(new Set(Array.isArray(d.baixasReabertas) ? d.baixasReabertas : []))
     setSugestoesRejeitadas(new Set(Array.isArray(d.sugestoesRejeitadas) ? d.sugestoesRejeitadas : []))
     setModoPorNome(d.modoPorNome && typeof d.modoPorNome === 'object' ? d.modoPorNome : {})
+    setSeparados(new Set(Array.isArray(d.separados) ? d.separados : []))
   }
   useEffect(() => { if (empresaId) carregarNomes() }, [empresaId]) // eslint-disable-line react-hooks/exhaustive-deps
-  async function salvarNomes(conf, iso, aliases = nomesAlias, aberAj = aberturaAj, acNomes = acertoNomes, baixasReab = baixasReabertas, sugRej = sugestoesRejeitadas, modoPN = modoPorNome) {
+  async function salvarNomes(conf, iso, aliases = nomesAlias, aberAj = aberturaAj, acNomes = acertoNomes, baixasReab = baixasReabertas, sugRej = sugestoesRejeitadas, modoPN = modoPorNome, sep = separados) {
     await supabase.from('cargas_cadastro').delete().eq('cliente_id', empresaId).eq('tipo', 'conciliacao_nomes')
     // vigencia é NOT NULL — usa a competência atual (o registro é único por cliente, lido sempre o mais recente).
-    const { error } = await supabase.from('cargas_cadastro').insert({ cliente_id: empresaId, tipo: 'conciliacao_nomes', vigencia: competencia || '00/0000', dados: { confiaveis: [...conf], isolados: [...iso], aliases: aliases || {}, aberturaAjustes: aberAj || {}, acertoNomes: acNomes || {}, baixasReabertas: [...baixasReab], sugestoesRejeitadas: [...sugRej], modoPorNome: modoPN || {} }, usuario })
+    const { error } = await supabase.from('cargas_cadastro').insert({ cliente_id: empresaId, tipo: 'conciliacao_nomes', vigencia: competencia || '00/0000', dados: { confiaveis: [...conf], isolados: [...iso], aliases: aliases || {}, aberturaAjustes: aberAj || {}, acertoNomes: acNomes || {}, baixasReabertas: [...baixasReab], sugestoesRejeitadas: [...sugRej], modoPorNome: modoPN || {}, separados: [...(sep || [])] }, usuario })
     if (error) { setMsg('Não consegui salvar: ' + error.message); return error }
   }
+  // Chave estável de uma linha (para "separar" determinístico): razão pelo id, abertura pela
+  // chave de abertura, acerto pelo uuid.
+  const sepKey = l => l?._abertura ? 'ab:' + chaveAberturaAj(l) : l?.acerto ? 'ac:' + String(l.id).replace(/^ac_/, '') : 'rz:' + (l?.id ?? '')
   async function marcarConfiavel(nome) {
     const k = chaveNome(nome); if (!k) return
     const conf = new Set(nomesConf); conf.add(k); setNomesConf(conf)
@@ -692,7 +697,9 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     const k = chaveNome(proprio); if (!k) return
     const aliases = { ...nomesAlias }; delete aliases[k]         // deixa de remapear este nome
     const iso = new Set(nomesIsolados); iso.add(k)               // não unir com parecidos
-    let aberAj = aberturaAj
+    // SEPARAÇÃO DETERMINÍSTICA: esta linha fica no seu PRÓPRIO grupo, seja qual for o nome.
+    const sep = new Set(separados); sep.add(sepKey(alvo)); setSeparados(sep)
+    let aberAj = aberturaAj, acMap = acertoNomes
     if (alvo._abertura) {
       const key = chaveAberturaAj(alvo); aberAj = { ...aberturaAj, [key]: { ...(aberturaAj[key] || {}), entidade: proprio } }
       setAberturaAj(aberAj)
@@ -701,10 +708,10 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       await supabase.from('ajuste_leitura').upsert({ competencia_id: id, razao_id: alvo.id, entidade: proprio, usuario }, { onConflict: 'razao_id' })
     } else if (alvo.acerto) {
       const rid = String(alvo._acertoId || alvo.id).replace(/^ac_/, '')
-      if (rid) { const acMap = { ...acertoNomes, [rid]: proprio }; setAcertoNomes(acMap); await salvarNomes(nomesConf, iso, aliases, aberAj, acMap); setNomesAlias(aliases); setNomesIsolados(iso); carregarLanc(); return }
+      if (rid) { acMap = { ...acertoNomes, [rid]: proprio }; setAcertoNomes(acMap) }
     }
     setNomesAlias(aliases); setNomesIsolados(iso)
-    await salvarNomes(nomesConf, iso, aliases, aberAj, acertoNomes)
+    await salvarNomes(nomesConf, iso, aliases, aberAj, acMap, baixasReabertas, sugestoesRejeitadas, modoPorNome, sep)
     carregarLanc()
   }
   const [filtroSit, setFiltroSit] = useState('') // filtro por situação: ''|devedor|semtitulo|unificados|incerta|confirmaveis
@@ -1047,29 +1054,36 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     return /cartao\s+de\s+credito/.test(semAcento(`${l.historico || ''} ${contras}`))
   }
   // Agrupa só o que está EM ABERTO (não baixado) por nome; incerto cai em "(não identificado)".
-  const grupos = {}, nomes = []
+  const grupos = {}, nomes = [], nomeExib = {}, sepKeys = new Set()
   for (const l of lanc) {
     if (baixados.has(l) || foiConfirmado(l) || autoConc.has(l)) continue // baixado por NF, confirmado em lote ou correção que anulou a origem → saiu
     if (Math.abs(ov(l)) < 0.005) continue
-    const key = l.leitura.ident && l.leitura.entidade ? l.leitura.entidade
+    const ent = l.leitura.ident && l.leitura.entidade ? l.leitura.entidade
       : ehCartaoCredito(l) ? 'Cartão de crédito' : '(não identificado)'
+    // Linha DESVINCULADA (separada): fica SEMPRE no seu próprio grupo, seja qual for o nome/
+    // apelido — chave única (nome + id da linha); o nome exibido é só o nome.
+    const sep = ent !== '(não identificado)' && separados.has(sepKey(l))
+    const key = sep ? `${ent} · ${sepKey(l)}` : ent
+    if (sep) sepKeys.add(key)
+    nomeExib[key] = ent
     if (!grupos[key]) { grupos[key] = []; nomes.push(key) }
     grupos[key].push(l)
   }
   // Unifica nomes parecidos (mesmo cliente escrito de formas diferentes) em um cluster.
-  const idents = nomes.filter(k => k !== '(não identificado)')
-  const tk = Object.fromEntries(idents.map(k => [k, tokensNome(k)]))
+  const ehSep = k => sepKeys.has(k)
+  const idents = nomes.filter(k => nomeExib[k] !== '(não identificado)')
+  const tk = Object.fromEntries(idents.map(k => [k, tokensNome(nomeExib[k])]))
   const clusters = []
   for (const k of idents) {
-    // Nome ISOLADO (o usuário desvinculou): nunca une com outro — fica no seu próprio grupo.
-    const isoladoK = nomesIsolados.has(chaveNome(k))
+    // Nome ISOLADO (desvinculou) ou linha SEPARADA: nunca une — fica no seu próprio grupo.
+    const isoladoK = ehSep(k) || nomesIsolados.has(chaveNome(nomeExib[k]))
     const alvo = isoladoK ? null : clusters.find(cl => !cl.isolado && cl.membros.some(m => mesmoCliente(tk[k], tk[m])))
     if (alvo) alvo.membros.push(k); else clusters.push({ membros: [k], isolado: isoladoK })
   }
   const listaTodas = clusters.map(cl => {
     const membros = cl.membros.slice().sort((a, b) => b.length - a.length)
     const lancs = cl.membros.flatMap(m => grupos[m])
-    return { nome: membros[0], variacoes: membros, lancs, total: lancs.reduce((s, l) => s + ov(l), 0), unido: membros.length > 1, unk: false }
+    return { nome: nomeExib[membros[0]], variacoes: membros.map(m => nomeExib[m]), lancs, total: lancs.reduce((s, l) => s + ov(l), 0), unido: membros.length > 1, unk: false }
   })
   if (grupos['(não identificado)']) {
     const lancs = grupos['(não identificado)']
@@ -1124,9 +1138,16 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const autoConcLancs = lanc.filter(l => autoConc.has(l) && Math.abs(ov(l)) >= 0.005)
   const conferidosLancs = [...new Set([...confirmadosLancs, ...resolvidasEnt.flatMap(g => g.lancs).filter(l => Math.abs(ov(l)) >= 0.005), ...autoConcLancs])]
   const zerados = [...new Set([...baixados, ...conferidosLancs])] // sem repetir (uma linha pode ser baixada E confirmada)
-  const conferidosPorNome = {}
-  for (const l of conferidosLancs) { const k = autoConc.has(l) ? 'Correções conciliadas (estorno ↔ origem)' : (l.leitura?.entidade || '(sem nome)'); (conferidosPorNome[k] = conferidosPorNome[k] || []).push(l) }
-  const conferidosGrupos = Object.entries(conferidosPorNome).map(([nome, lancs]) => ({ nome, lancs }))
+  const conferidosPorNome = {}, confExib = {}
+  for (const l of conferidosLancs) {
+    const base = autoConc.has(l) ? 'Correções conciliadas (estorno ↔ origem)' : (l.leitura?.entidade || '(sem nome)')
+    // Linha desvinculada (separada) fica no seu próprio grupo também nos Conciliados.
+    const sep = !autoConc.has(l) && base !== '(sem nome)' && separados.has(sepKey(l))
+    const k = sep ? `${base} · ${sepKey(l)}` : base
+    confExib[k] = base
+    ;(conferidosPorNome[k] = conferidosPorNome[k] || []).push(l)
+  }
+  const conferidosGrupos = Object.entries(conferidosPorNome).map(([nome, lancs]) => ({ nome: confExib[nome] || nome, lancs }))
   // Baixados AUTOMATICAMENTE por NF (par título + pagamento com a mesma NF). Também podem ser
   // REABERTOS: o usuário puxa a NF de volta para o em aberto para vincular do jeito certo à mão.
   const baixadosPorNome = {}
@@ -1626,18 +1647,19 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     const iso = new Set(nomesIsolados)
     const aliases = { ...nomesAlias }
     let aberAj = { ...aberturaAj }
+    const sep = new Set(separados)
     const ajustes = []
     const id = await getCompetenciaId()
     for (const l of alvos) {
       // Nome PRÓPRIO da linha (o do histórico, pré-apelido) — desfaz uma união por apelido.
       const proprio = String((l.historico ? lerHistorico(l.historico).entidade : '') || l.leitura?.entidade || '').trim()
       const k = chaveNome(proprio); if (!k) continue
-      delete aliases[k]; iso.add(k)
+      delete aliases[k]; iso.add(k); sep.add(sepKey(l)) // separação determinística por linha
       if (l._abertura) { const key = chaveAberturaAj(l); aberAj[key] = { ...(aberAj[key] || {}), entidade: proprio } }
       else if (l.id && id) ajustes.push({ competencia_id: id, razao_id: l.id, entidade: proprio, usuario })
     }
-    setNomesIsolados(iso); setNomesAlias(aliases); setAberturaAj(aberAj)
-    await salvarNomes(nomesConf, iso, aliases, aberAj, acertoNomes)
+    setNomesIsolados(iso); setNomesAlias(aliases); setAberturaAj(aberAj); setSeparados(sep)
+    await salvarNomes(nomesConf, iso, aliases, aberAj, acertoNomes, baixasReabertas, sugestoesRejeitadas, modoPorNome, sep)
     if (ajustes.length) await supabase.from('ajuste_leitura').upsert(ajustes, { onConflict: 'razao_id' })
     setSelLin(new Set())
     setMsg(`${alvos.length} ${lab}(s) desvinculado(s) — separados dos nomes parecidos.`)
