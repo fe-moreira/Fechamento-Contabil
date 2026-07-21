@@ -1412,7 +1412,7 @@ function ModalCargaInicial({ vigencia, empresaId, cliente, onClose, onConcluir }
     finally { setSalvando(false) }
   }
 
-  const Bloco = ({ id, icon, titulo, dica, modelo, arquivo, estado, setter }) => {
+  const Bloco = ({ id, icon, titulo, dica, info, modelo, arquivo, estado, setter }) => {
     const modo = modoBloco[id] || 'arquivo'
     const setModo = m => setModoBloco(s => ({ ...s, [id]: m }))
     const segBtn = (m, ic, txt) => (
@@ -1438,7 +1438,7 @@ function ModalCargaInicial({ vigencia, empresaId, cliente, onClose, onConcluir }
       <div style={{ background: theme.input, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: 16, marginBottom: 14 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10, marginBottom: 10 }}>
           <div style={{ flex: 1 }}>
-            <p style={{ color: theme.text, fontSize: 14, fontWeight: 600, margin: 0 }}><i className={`ti ${icon}`} style={{ color: theme.accent, marginRight: 6 }} />{titulo}</p>
+            <p style={{ color: theme.text, fontSize: 14, fontWeight: 600, margin: 0, display: 'flex', alignItems: 'center', gap: 6 }}><i className={`ti ${icon}`} style={{ color: theme.accent }} />{titulo}{info && <InfoTela titulo={titulo.replace(/^\d+\.\s*/, '')}>{info}</InfoTela>}</p>
             <p style={{ color: theme.sub, fontSize: 12, margin: '4px 0 0', lineHeight: 1.5 }}>{dica}</p>
           </div>
           <button className="btn btn-ghost" style={{ fontSize: 12, whiteSpace: 'nowrap' }} onClick={() => baixarModelo(modelo, arquivo)}><i className="ti ti-download" /> Modelo</button>
@@ -1483,12 +1483,15 @@ function ModalCargaInicial({ vigencia, empresaId, cliente, onClose, onConcluir }
       )}
 
       {Bloco({ id: 'saldos', icon: 'ti-scale', titulo: '1. Saldos de abertura', dica: MODELO_SALDOS.dica,
+        info: <>Contas que <b>só precisam do saldo</b> — não têm composição por título/nome. Ex.: <b>bancos, aplicações financeiras, capital social, reservas de lucro/capital, empréstimos, financiamentos, impostos a recolher, imobilizado, patrimônio líquido</b>. Uma linha por conta, com o saldo e o D/C.</>,
         modelo: MODELO_SALDOS, arquivo: 'modelo_saldos_abertura.xlsx', estado: saldos, setter: setSaldos })}
 
       {Bloco({ id: 'comp', icon: 'ti-users', titulo: '2. Clientes e fornecedores', dica: MODELO_CLIFOR.dica,
+        info: <>Contas <b>por entidade, com nota fiscal</b>: <b>clientes, fornecedores, adiantamento de clientes, adiantamento de fornecedores</b> e <b>venda futura</b>. Um <b>título em aberto por linha</b> (data, conta, cliente/fornecedor, NF, valor e D/C) — é o que casa com as baixas na conciliação.</>,
         modelo: MODELO_CLIFOR, arquivo: 'modelo_clientes_fornecedores.xlsx', estado: comp, setter: setComp })}
 
       {Bloco({ id: 'outras', icon: 'ti-list-details', titulo: '3. Outras contas com composição', dica: MODELO_OUTRAS.dica,
+        info: <><b>Todas as demais contas</b> que não são do item 1 nem do item 2 — as que têm <b>composição SEM nota fiscal</b> (adiantamentos diversos, provisões, empréstimos a sócios, contas transitórias…). O <b>“quem”</b> é o <b>histórico</b> (você sobe direto do seu sistema). Uma linha por item: data, conta, histórico, competência, valor e D/C.</>,
         modelo: MODELO_OUTRAS, arquivo: 'modelo_outras_composicoes.xlsx', estado: outras, setter: setOutras })}
 
       {/* Conferência composição × saldo */}
