@@ -2337,11 +2337,30 @@ function ModalComposicao({ titulo, itens, onClose }) {
 function ListaLancamentos({ lanc, carregando, contraDe, planoMap, tratados = new Set(), onTratar, selLin, onToggleSel, onSelTodos, onExcluirAbertura, podeExcluirAbertura, aberturaFechada }) {
   const selectable = !!onToggleSel // permite marcar linhas p/ conectar (baixa manual)
   const nCols = selectable ? 7 : 6
-  const selecionaveis = lanc.filter(l => l.id != null)
+  // Filtro/busca (em TODA conta, como clientes/fornecedores): casa por histórico,
+  // contrapartida (código + nome), valor ou data — sem acento.
+  const [q, setQ] = useState('')
+  const norm = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+  const termo = norm(q.trim())
+  const filtr = !termo ? lanc : lanc.filter(l => {
+    const contras = contraDe(l)
+    const contraTxt = contras.map(c => `${c} ${planoMap[c] || ''}`).join(' ')
+    const valTxt = `${Number(l.debito) ? money(l.debito) : ''} ${Number(l.credito) ? money(l.credito) : ''}`
+    return norm(`${l.data || ''} ${l.historico || ''} ${contraTxt} ${valTxt}`).includes(termo)
+  })
+  const selecionaveis = filtr.filter(l => l.id != null)
   const todosMarcados = selecionaveis.length > 0 && selecionaveis.every(l => selLin?.has(l.id))
   return (
     <>
-      <p style={{ color: theme.sub, fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: .5, margin: '4px 0 10px' }}>Lançamentos da conta</p>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', margin: '4px 0 10px' }}>
+        <p style={{ color: theme.sub, fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: .5, margin: 0 }}>Lançamentos da conta</p>
+        <div style={{ position: 'relative', flex: 1, minWidth: 200, maxWidth: 420 }}>
+          <i className="ti ti-search" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: theme.sub, fontSize: 13 }} />
+          <input className="input" value={q} onChange={e => setQ(e.target.value)} placeholder="Filtrar por histórico, contrapartida, valor ou data…" style={{ paddingLeft: 30, fontSize: 12.5, height: 34, width: '100%' }} />
+          {q && <button onClick={() => setQ('')} title="Limpar filtro" style={{ position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: theme.sub, cursor: 'pointer', fontSize: 14 }}><i className="ti ti-x" /></button>}
+        </div>
+        {termo && <span style={{ color: theme.sub, fontSize: 11.5 }}>{filtr.length} de {lanc.length}</span>}
+      </div>
       <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 680 }}>
           <thead>
@@ -2356,7 +2375,9 @@ function ListaLancamentos({ lanc, carregando, contraDe, planoMap, tratados = new
               <tr><td colSpan={nCols} style={{ ...td, color: theme.sub }}>Carregando…</td></tr>
             ) : lanc.length === 0 ? (
               <tr><td colSpan={nCols} style={{ ...td, color: theme.sub }}>Sem lançamentos nesta conta.</td></tr>
-            ) : lanc.map((l, i) => {
+            ) : filtr.length === 0 ? (
+              <tr><td colSpan={nCols} style={{ ...td, color: theme.sub }}>Nenhum lançamento corresponde ao filtro.</td></tr>
+            ) : filtr.map((l, i) => {
               const contras = contraDe(l)
               return (
                 <tr key={i} onClick={() => onTratar(l)} style={{ borderTop: `1px solid ${theme.border}`, cursor: 'pointer', opacity: (l.acerto || tratados.has(l.id)) ? 0.7 : 1, background: (l.acerto || tratados.has(l.id)) ? 'rgba(48,164,108,0.08)' : 'transparent' }} title={l.acerto ? `${tagAcertoLanc(l).titulo} — clique para ver ou desfazer` : tratados.has(l.id) ? 'Já tratado — clique para ver ou desfazer' : 'Justificar ou corrigir este lançamento'}>
