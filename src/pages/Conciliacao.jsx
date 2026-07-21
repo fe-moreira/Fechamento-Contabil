@@ -2581,6 +2581,9 @@ function CardConferencia({ conta, reg, compId, usuario, saldoAjuste = 0, composi
   const bate = bateSaldo && !!path
   const cor = bate ? theme.green : (conciliada && just.trim()) ? theme.yellow : theme.red
   const statusTxt = bate ? 'Verde — documento armazenado e bate com o saldo' : (conciliada && just.trim()) ? 'Amarelo — conferida e justificada (sem documento)' : 'Vermelho — pendente'
+  // Recolhível para a tela ficar limpa: começa ABERTO quando está pendente (vermelho, precisa
+  // de ação) e RECOLHIDO quando a conta já está conferida (verde/amarelo).
+  const [aberto, setAberto] = useState(cor === theme.red)
 
   async function lerArquivo(file) {
     if (!file) return; setErro(''); setMsg('')
@@ -2743,11 +2746,17 @@ function CardConferencia({ conta, reg, compId, usuario, saldoAjuste = 0, composi
 
   return (
     <div style={{ marginBottom: 16 }}>
+      {/* Cabeçalho recolhível: quando fechado, mostra só o status (tela limpa). */}
+      <div onClick={() => setAberto(a => !a)} title={aberto ? 'Recolher a conferência' : 'Expandir a conferência'}
+        style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', userSelect: 'none', background: theme.card, border: `1px solid ${cor}`, borderRadius: 12, padding: '11px 14px', marginBottom: aberto ? 12 : 0 }}>
+        <Dot c={cor} /><p style={{ fontSize: 14, fontWeight: 600, margin: 0 }}>Conferência da conta</p>
+        <span style={{ color: cor, fontSize: 12, fontWeight: 600 }}>· {statusTxt}</span>
+        <span className="btn-ghost" style={{ marginLeft: 'auto', flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, padding: '4px 10px' }}>
+          <i className={`ti ${aberto ? 'ti-chevrons-up' : 'ti-chevrons-down'}`} /> {aberto ? 'Recolher' : 'Expandir'}
+        </span>
+      </div>
+      {aberto && <>
       <div style={{ background: theme.card, border: `1px solid ${cor}`, borderRadius: 12, padding: 16, marginBottom: 12 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-          <Dot c={cor} /><p style={{ fontSize: 14, fontWeight: 600, margin: 0 }}>Conferência da conta</p>
-          <span style={{ color: cor, fontSize: 12, fontWeight: 600 }}>· {statusTxt}</span>
-        </div>
         <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 14px' }}>{composicao
           ? 'Importe o documento suporte (ex.: relatório de aberto) e confira com o saldo. Sem documento, confirme que está certo e justifique.'
           : 'Conta de saldo (sem composição). Importe o extrato e confira com o saldo. Sem documento, confirme que está certo e justifique.'}</p>
@@ -2796,6 +2805,7 @@ function CardConferencia({ conta, reg, compId, usuario, saldoAjuste = 0, composi
       </div>
 
       <ComentariosConta clienteId={empresaId} conta={conta.conta} usuario={usuario} />
+      </>}
     </div>
   )
 }
