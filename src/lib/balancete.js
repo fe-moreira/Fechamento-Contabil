@@ -263,16 +263,25 @@ export function normalizaCompetencia(v) {
   return ''
 }
 
-// Carga inicial mais recente do cliente (saldos de abertura + composições de abertura).
+// Carga inicial do cliente (saldos + composições de abertura). SOMA TODAS as cargas iniciais:
+// a carga pode estar espalhada em VÁRIAS linhas (formato { saldos, composicoes }) — ex.: o
+// saldo inicial que veio do contrato de seguro (Outras Contabilizações) + um COMPLEMENTO
+// digitado na Base de Informações + matriz/filiais. Antes a função pegava só a MAIS RECENTE e
+// parava, então o complemento (ou o contrato) ficava de fora e o saldo inicial vinha errado.
+// A carga mensal de financeiro é um ARRAY (não { saldos, composicoes }), então fica de fora.
 export async function carregarCargaInicial(empresaId) {
   const { data } = await supabase.from('cargas_cadastro').select('dados, vigencia, created_at')
     .eq('cliente_id', empresaId).eq('tipo', 'financeiro').order('created_at', { ascending: false })
+  const saldos = [], composicoes = []
+  let vigencia = null
   for (const c of (data || [])) {
     const d = c?.dados
-    if (d && !Array.isArray(d) && (Array.isArray(d.saldos) || Array.isArray(d.composicoes)))
-      return { saldos: d.saldos || [], composicoes: d.composicoes || [], vigencia: c.vigencia }
+    if (!d || Array.isArray(d) || (!Array.isArray(d.saldos) && !Array.isArray(d.composicoes))) continue
+    if (Array.isArray(d.saldos)) saldos.push(...d.saldos)
+    if (Array.isArray(d.composicoes)) composicoes.push(...d.composicoes)
+    if (!vigencia) vigencia = c.vigencia
   }
-  return { saldos: [], composicoes: [], vigencia: null }
+  return { saldos, composicoes, vigencia }
 }
 
 // A competência informada é a de ABERTURA do cliente (== competencia_inicio)?
