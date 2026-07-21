@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { lerTudo } from '../lib/lerTudo'
@@ -2606,6 +2606,19 @@ function CardConferencia({ conta, reg, compId, usuario, saldoAjuste = 0, composi
   // de ação) e RECOLHIDO quando a conta já está conferida (verde/amarelo).
   const [aberto, setAberto] = useState(cor === theme.red)
 
+  // Saldo conforme o documento DIGITADO À MÃO manda: a leitura automática do documento
+  // (upload/reler) NÃO sobrescreve um valor que a pessoa digitou. Um valor já salvo também
+  // é tratado como manual (não é clobberado ao reler). Limpar o campo reabilita a leitura.
+  const [saldoDocManual, setSaldoDocManual] = useState(reg?.saldo_documento != null && String(reg?.saldo_documento).trim() !== '')
+  const manualRef = useRef(saldoDocManual); useEffect(() => { manualRef.current = saldoDocManual }, [saldoDocManual])
+  const saldoDocRef = useRef(saldoDoc); useEffect(() => { saldoDocRef.current = saldoDoc }, [saldoDoc])
+  const setSaldoDocManualInput = v => { setSaldoDoc(v); setSaldoDocManual(String(v).trim() !== '') }
+  // Aplica o saldo LIDO do documento só quando não há valor digitado à mão.
+  const aplicaSaldoLido = (v, msgLido) => {
+    if (manualRef.current) { setMsg('Mantive o saldo digitado à mão. Para ler o do documento, limpe o campo e reimporte/releia.'); return }
+    setSaldoDoc(String(v)); if (msgLido) setMsg(msgLido)
+  }
+
   async function lerArquivo(file) {
     if (!file) return; setErro(''); setMsg('')
     const ehPdf = /\.pdf$/i.test(file.name) || file.type === 'application/pdf'
@@ -2622,21 +2635,20 @@ function CardConferencia({ conta, reg, compId, usuario, saldoAjuste = 0, composi
         let s = null
         if (destaque && destaque.valores.length) {
           s = destaque.soma
-          setSaldoDoc(String(s))
-          setMsg(destaque.valores.length > 1
+          aplicaSaldoLido(s, destaque.valores.length > 1
             ? `Saldo = soma de ${destaque.valores.length} valores destacados em amarelo = ${money(s)}. Confira.`
             : 'Saldo lido do valor destacado em amarelo — confira se está correto.')
         } else {
           const texto = await extrairTextoPdf(file)
           s = palpiteSaldo(texto, saldo)
-          if (s != null) { setSaldoDoc(String(s)) }
+          if (s != null) { aplicaSaldoLido(s) }
           else if (texto.replace(/\s/g, '').length < 20) {
             // PDF sem texto (imagem/print) → tenta ler por OCR (reconhecimento de imagem).
             setOcr({ ativo: true, pct: 0 })
             try {
               const textoOcr = await ocrPdf(file, pct => setOcr({ ativo: true, pct }))
               s = palpiteSaldo(textoOcr, saldo)
-              if (s != null) { setSaldoDoc(String(s)); setMsg('Saldo lido por reconhecimento de imagem (OCR) — confira se está correto.') }
+              if (s != null) { aplicaSaldoLido(s, 'Saldo lido por reconhecimento de imagem (OCR) — confira se está correto.') }
               else setErro('Este PDF é uma imagem e o reconhecimento (OCR) não achou o saldo. Baixe o extrato digital direto do banco — ou digite o saldo abaixo.')
             } catch (eo) {
               setErro('Não consegui ler a imagem por OCR (' + eo.message + '). Baixe o extrato digital do banco ou digite o saldo abaixo.')
@@ -2654,16 +2666,19 @@ function CardConferencia({ conta, reg, compId, usuario, saldoAjuste = 0, composi
         setDoc(file.name)
         const amarelo = saldoCelulaAmarela(ws, XLSX)
         const comentario = amarelo == null ? saldoCelulaComentario(ws, XLSX) : null
-        if (amarelo != null) { setSaldoDoc(String(amarelo)); setMsg('Saldo lido da célula destacada em amarelo — confira se está correto.'); saldoLido = amarelo }
-        else if (comentario != null) { setSaldoDoc(String(comentario)); setMsg('Saldo lido da célula com comentário — confira se está correto.'); saldoLido = comentario }
+        if (amarelo != null) { aplicaSaldoLido(amarelo, 'Saldo lido da célula destacada em amarelo — confira se está correto.'); saldoLido = amarelo }
+        else if (comentario != null) { aplicaSaldoLido(comentario, 'Saldo lido da célula com comentário — confira se está correto.'); saldoLido = comentario }
         else {
           const r = lerSaldoDocumento(arr, saldo)
-          if (r) { setSaldoDoc(String(r.valor)); setMsg(`Saldo lido: ${r.via} — confira se está correto.`); saldoLido = r.valor }
+          if (r) { aplicaSaldoLido(r.valor, `Saldo lido: ${r.via} — confira se está correto.`); saldoLido = r.valor }
           else setErro('Não identifiquei o saldo. Destaque a célula do saldo em amarelo, coloque um comentário nela, use uma célula escrita "SALDO", ou digite o saldo abaixo.')
         }
       }
       setArquivo(file)
-      await armazenar(file, saldoLido) // grava na hora — não perde ao atualizar a página
+      // Grava na hora. Se há saldo DIGITADO à mão, é ele que vai para o banco (não o lido) —
+      // assim o valor digitado nunca é trocado pela leitura automática.
+      const saldoGravar = manualRef.current ? Number(saldoDocRef.current) : saldoLido
+      await armazenar(file, Number.isFinite(saldoGravar) ? saldoGravar : saldoLido)
     } catch (e) { setErro('Não consegui ler: ' + e.message) }
   }
 
@@ -2794,7 +2809,7 @@ function CardConferencia({ conta, reg, compId, usuario, saldoAjuste = 0, composi
         </p>}
         <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
           <div><label>Documento suporte <span style={{ color: theme.sub, fontWeight: 400 }}>{validadoPatrimonio ? '(ou troque pelo extrato próprio)' : '(Excel ou PDF do extrato)'}</span></label><input type="file" accept=".xlsx,.xls,.csv,.pdf" onChange={e => lerArquivo(e.target.files?.[0])} style={{ fontSize: 13, color: theme.sub, display: 'block' }} /></div>
-          <div><label>Saldo conforme o documento</label><input className="input" type="number" step="0.01" style={{ maxWidth: 200 }} value={saldoDoc} onChange={e => setSaldoDoc(e.target.value)} placeholder="0,00" /></div>
+          <div><label>Saldo conforme o documento</label><input className="input" type="number" step="0.01" style={{ maxWidth: 200 }} value={saldoDoc} onChange={e => setSaldoDocManualInput(e.target.value)} placeholder="0,00" title="Se você digitar aqui, este valor é mantido — a leitura do documento não sobrescreve. Limpe o campo para voltar a ler do documento." /></div>
         </div>
         {ocr.ativo && <p style={{ color: theme.sub, fontSize: 12.5, margin: '10px 0 0', fontWeight: 500 }}>
           <i className="ti ti-scan" /> Lendo a imagem do extrato (OCR){ocr.pct ? ` — ${Math.round(ocr.pct * 100)}%` : '…'} — pode levar alguns segundos.
