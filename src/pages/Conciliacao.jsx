@@ -1750,8 +1750,25 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // tratada → ver/desfazer; senão → tela de justificar/corrigir.
   function abrirLinha(l) {
     setMsg('')
-    if (l.acerto) { if (l.razaoRef) setVerCorr({ ...l, id: l.razaoRef }); return }
+    // Acerto (estorno/reclassificação): abre o modal para VER/DESFAZER e também CORRIGIR o
+    // nome do fornecedor/cliente — guarda o uuid do próprio acerto (_acertoId) para salvar o
+    // nome por lançamento, mesmo quando não há origem no razão (razaoRef) para herdar o nome.
+    if (l.acerto) { setVerCorr({ ...l, id: l.razaoRef || String(l.id).replace(/^ac_/, ''), _acertoId: String(l.id).replace(/^ac_/, '') }); return }
     jaTratada(l) ? setVerCorr(l) : setAcao(l)
+  }
+  // Define o nome do fornecedor/cliente de um lançamento de ACERTO (estorno/reclassificação),
+  // salvo por uuid (acertoNomes) — assim ele passa a agrupar pelo fornecedor certo na conta
+  // de destino, mesmo sem razão de origem nesta conta para herdar o nome.
+  async function corrigirNomeAcerto(linha, nome) {
+    const rid = linha?._acertoId || String(linha?.id || '').replace(/^ac_/, '')
+    if (!rid) return
+    const nm = String(nome || '').trim()
+    const acMap = { ...acertoNomes, [rid]: nm }
+    setAcertoNomes(acMap)
+    await salvarNomes(nomesConf, nomesIsolados, nomesAlias, aberturaAj, acMap)
+    setVerCorr(null)
+    setMsg(nm ? `Fornecedor "${nm}" definido para o lançamento de acerto.` : 'Nome do acerto removido.')
+    carregarLanc()
   }
 
   return (
@@ -2239,8 +2256,9 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
           onDesvincular={async nome => { setAcao(null); await marcarIsolado(nome); setMsg(`"${nome}" desvinculado — não vou mais unir com nomes parecidos.`) }} />
       )}
       {verCorr && (
-        <ModalCorrigido linha={verCorr} conta={conta} compId={compId} planoMap={planoMap}
-          onClose={() => setVerCorr(null)} onDesfazer={() => desfazerCorrecao(verCorr)} />
+        <ModalCorrigido linha={verCorr} conta={conta} compId={compId} planoMap={planoMap} lab={lab}
+          onClose={() => setVerCorr(null)} onDesfazer={() => desfazerCorrecao(verCorr)}
+          onCorrigirNome={corrigirNomeAcerto} />
       )}
       {verComposic && (
         <ModalComposicao titulo={verComposic.titulo} itens={verComposic.itens} onClose={() => setVerComposic(null)} />
@@ -2456,9 +2474,10 @@ function SugestoesDiferenca({ conta, compId, dif }) {
 //            (marcando "pendência do cliente", entra no Relatório de Pendências).
 // Lançamento JÁ TRATADO: mostra o que foi feito (correção/estorno/justificativa)
 // e o lançamento de acerto gerado — e permite DESFAZER. Não reabre a tela de tratar.
-function ModalCorrigido({ linha, compId, planoMap = {}, onClose, onDesfazer }) {
+function ModalCorrigido({ linha, compId, planoMap = {}, lab = 'fornecedor', onClose, onDesfazer, onCorrigirNome }) {
   const [dados, setDados] = useState(null)
   const [busy, setBusy] = useState(false)
+  const [nomeAcerto, setNomeAcerto] = useState(String(linha.leitura?.entidade || '').trim())
   useEffect(() => {
     let vivo = true
     ;(async () => {
@@ -2503,6 +2522,19 @@ function ModalCorrigido({ linha, compId, planoMap = {}, onClose, onDesfazer }) {
           </div>}
           {dados.aud.length === 0 && dados.lan.length === 0 && <p style={{ color: theme.sub, fontSize: 12.5 }}>Sem detalhes registrados para esta linha.</p>}
         </>}
+
+        {/* Acerto (estorno/reclassificação): corrigir o NOME do fornecedor/cliente para ele
+            agrupar certo na conta de destino (ex.: reclassificado para adiantamento). */}
+        {onCorrigirNome && linha.acerto && (
+          <div style={{ borderTop: `1px solid ${theme.border}`, paddingTop: 12, marginTop: 12 }}>
+            <label style={{ fontSize: 12, color: theme.sub }}>Nome do {lab} deste acerto</label>
+            <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+              <input className="input" value={nomeAcerto} onChange={e => setNomeAcerto(e.target.value)} placeholder={`Nome do ${lab}`} style={{ flex: 1 }} />
+              <button className="btn" disabled={busy} onClick={async () => { setBusy(true); await onCorrigirNome(linha, nomeAcerto) }}><i className="ti ti-user-check" /> Salvar nome</button>
+            </div>
+            <p style={{ color: theme.sub, fontSize: 11, margin: '6px 0 0' }}>Define o {lab} deste lançamento de acerto — ele passa a agrupar por esse nome na conta.</p>
+          </div>
+        )}
 
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginTop: 18 }}>
           <button className="btn btn-ghost" style={{ color: theme.red, borderColor: theme.red }} disabled={busy} onClick={async () => { setBusy(true); await onDesfazer() }}><i className="ti ti-rotate-2" /> Desfazer correção</button>
