@@ -275,7 +275,10 @@ async function parseAcumulador(file, sub) {
     const valor = numFis(r[col.valor]); const acumLido = normAcum(r[col.acum])
     if (acumLido) acumVig = acumLido // atualiza o acumulador vigente sempre que a coluna traz um
     if (!valor) continue // cabeçalho / linha vazia / separadora — sem valor, ignora
-    if (r.some(cel => /total/i.test(String(cel ?? '')))) continue // linha de "Total"/"Subtotal" — não é lançamento
+    // Linha de "Total"/"Subtotal" do relatório — não é lançamento. IGNORA a coluna do
+    // FORNECEDOR nessa checagem: o NOME do fornecedor pode conter "TOTAL" (ex.: "TOTAL PASS
+    // PARTICIPAÇÕES LTDA"), o que antes fazia a nota real ser descartada e o acumulador vir curto.
+    if (r.some((cel, j) => j !== col.forn && /total/i.test(String(cel ?? '')))) continue
     const acum = acumLido || acumVig // arrasta o acumulador vigente quando a linha vem sem ele
     if (!acum) continue // ainda não vimos nenhum acumulador (topo do arquivo) — ignora
     rows.push({ nf: col.nf >= 0 ? String(r[col.nf] ?? '').trim() : '', data: col.data >= 0 ? dataISO(r[col.data]) : '', acum, forn: String(r[col.forn] ?? '').trim(), valor })
