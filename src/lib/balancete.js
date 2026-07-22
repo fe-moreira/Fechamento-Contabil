@@ -72,6 +72,27 @@ export async function contasConciliacaoAbertas(empresaId, compId) {
 // Ativo/Passivo. Casa cada conta pelo código reduzido OU pela classificação (tanto faz) e
 // compara em MÓDULO (não depende do sinal/convenção D-C do arquivo). Retorna as divergências.
 // `importado`: [{ cod, classif, saldo }] lido do arquivo do balancete.
+// Balancete EFETIVO (razão VIVO = balancete importado + lançamentos/correções) das contas
+// analíticas — para EXPORTAR e conferir com o Domínio. Devolve [{conta, classif, nome, saldo}].
+export async function balanceteEfetivo(empresaId, compId) {
+  const { linhas } = await montarBalancete(empresaId, compId)
+  const { data: lancs } = await supabase.from('lancamentos').select('conta_debito, conta_credito, valor').eq('competencia_id', compId)
+  const aj = {}
+  for (const l of (lancs || [])) {
+    const v = Number(l.valor) || 0
+    if (l.conta_debito) aj[String(l.conta_debito)] = (aj[String(l.conta_debito)] || 0) + v
+    if (l.conta_credito) aj[String(l.conta_credito)] = (aj[String(l.conta_credito)] || 0) - v
+  }
+  const out = []
+  for (const l of linhas) {
+    if (l.sintetica) continue
+    const efetivo = Math.round(((Number(l.saldo_final) || 0) + (aj[String(l.reduzido)] || 0)) * 100) / 100
+    if (Math.abs(efetivo) < 0.005) continue
+    out.push({ conta: l.reduzido, classif: l.classifRaw || l.classif || '', nome: l.nome || '', saldo: efetivo })
+  }
+  return out.sort((a, b) => String(a.classif).localeCompare(String(b.classif), 'pt-BR', { numeric: true }))
+}
+
 export async function conferirBalanceteEncerramento(empresaId, compId, importado) {
   const { linhas } = await montarBalancete(empresaId, compId)
   const { data: lancs } = await supabase.from('lancamentos').select('conta_debito, conta_credito, valor').eq('competencia_id', compId)
