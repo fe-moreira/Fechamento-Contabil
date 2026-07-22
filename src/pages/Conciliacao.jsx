@@ -740,7 +740,14 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     setTratados(rz); setTratadosAb(ab); setConfirmados(conf)
   }
   // Chave estável de uma linha de abertura (saldo inicial) e testes de "já tratada"/"confirmada".
-  const chaveAbertura = l => `AB·${conta.conta}·${nfKey(l.leitura?.nf)}·${baixaTxt(l.leitura?.entidade || '')}·${Math.round(((Number(l.debito) || 0) - (Number(l.credito) || 0)) * 100)}`
+  // Inclui a DATA do título para NÃO confundir dois títulos iguais em valor/entidade e SEM NF
+  // (ex.: duas mensalidades de R$ 154,90 do mesmo fornecedor em datas diferentes): tratar,
+  // reclassificar ou conferir UM não pode marcar o outro. Cada linha é sempre individual.
+  const dataAb = l => (l.data && l.data !== 'abertura') ? String(l.data) : ''
+  const chaveAbertura = l => `AB·${conta.conta}·${dataAb(l)}·${nfKey(l.leitura?.nf)}·${baixaTxt(l.leitura?.entidade || '')}·${Math.round(((Number(l.debito) || 0) - (Number(l.credito) || 0)) * 100)}`
+  // Formato ANTIGO (sem data) — só para reconhecer conferências gravadas ANTES desta mudança,
+  // e apenas quando a linha é ÚNICA por esse formato (senão marcaria o gêmeo de novo).
+  const chaveAberturaLegacy = l => `AB·${conta.conta}·${nfKey(l.leitura?.nf)}·${baixaTxt(l.leitura?.entidade || '')}·${Math.round(((Number(l.debito) || 0) - (Number(l.credito) || 0)) * 100)}`
   // Chave estável de uma linha de razão pelo `item` (conta·data·NF) — igual à gravada na
   // auditoria por registrar()/baixarConexao(). Casa mesmo após reimportar o razão.
   const itemConc = l => `${conta.conta} · ${l.data || ''} · NF ${l.leitura?.nf || '—'}`
@@ -750,9 +757,15 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const itemCount = {}
   for (const l of lanc) { if (!l._abertura && !l.acerto) { const k = itemConc(l); itemCount[k] = (itemCount[k] || 0) + 1 } }
   const itemUnico = l => itemCount[itemConc(l)] === 1
+  // Conferências no formato ANTIGO (sem data) só valem quando a linha é ÚNICA por esse formato —
+  // senão marcar uma marcaria a gêmea. Quando há gêmeas, cada uma passa a valer pela chave NOVA.
+  const abLegacyCount = {}
+  for (const l of lanc) { if (l._abertura) { const k = chaveAberturaLegacy(l); abLegacyCount[k] = (abLegacyCount[k] || 0) + 1 } }
+  const legacyAbUnico = l => abLegacyCount[chaveAberturaLegacy(l)] === 1
+  const trataAbLegacy = l => legacyAbUnico(l) && tratadosAb.has(chaveAberturaLegacy(l))
   const chaveTrat = l => l.acerto ? String(l.id).replace(/^ac_/, '') : (l._abertura ? chaveAbertura(l) : l.id)
-  const jaTratada = l => l._abertura ? tratadosAb.has(chaveAbertura(l)) : tratados.has(l.id)
-  const foiConfirmado = l => confirmados.has(chaveTrat(l)) || (!l._abertura && !l.acerto && itemUnico(l) && confirmados.has(itemConc(l))) // saiu do em aberto (conciliado)
+  const jaTratada = l => l._abertura ? (tratadosAb.has(chaveAbertura(l)) || trataAbLegacy(l)) : tratados.has(l.id)
+  const foiConfirmado = l => confirmados.has(chaveTrat(l)) || (l._abertura && legacyAbUnico(l) && confirmados.has(chaveAberturaLegacy(l))) || (!l._abertura && !l.acerto && itemUnico(l) && confirmados.has(itemConc(l))) // saiu do em aberto (conciliado)
   useEffect(() => { carregarTratados() }, [compId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Contas cujo razão compõe esta linha: a própria conta e — quando ela é SINTÉTICA — todas
@@ -1784,9 +1797,15 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         continue
       }
       // Remove o registro que fez a linha sair (confirmação em lote OU conferência individual).
-      let q = supabase.from('auditoria').delete().eq('competencia_id', compId).eq('modulo', 'Conciliação')
-      q = l._abertura ? q.eq('item', chaveAbertura(l)) : (l.acerto ? q.eq('razao_id', String(l.id).replace(/^ac_/, '')) : q.eq('razao_id', l.id))
-      await q
+      if (l._abertura) {
+        const chaves = [chaveAbertura(l)]
+        if (legacyAbUnico(l)) chaves.push(chaveAberturaLegacy(l)) // limpa também o registro no formato antigo
+        await supabase.from('auditoria').delete().eq('competencia_id', compId).eq('modulo', 'Conciliação').in('item', chaves)
+      } else {
+        let q = supabase.from('auditoria').delete().eq('competencia_id', compId).eq('modulo', 'Conciliação')
+        q = l.acerto ? q.eq('razao_id', String(l.id).replace(/^ac_/, '')) : q.eq('razao_id', l.id)
+        await q
+      }
       // A confirmação em lote SOBREVIVE à reimportação do razão pela chave ESTÁVEL (conta·data·
       // NF, no campo `item`) — o razao_id novo não acha o registro antigo. Então, para linhas de
       // razão com item ÚNICO, apaga também por essa chave; senão o "Reabrir" não surtia efeito.
@@ -1816,9 +1835,10 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     const linha = (alvo && typeof alvo === 'object') ? alvo : null
     // Linha de ABERTURA: a conferência está na auditoria pela chave "AB·…" (sem razao_id).
     if (linha && linha._abertura) {
-      const chave = chaveAbertura(linha)
-      await supabase.from('auditoria').delete().eq('competencia_id', compId).eq('modulo', 'Conciliação').eq('item', chave)
-      setTratadosAb(prev => { const s = new Set(prev); s.delete(chave); return s })
+      const chaves = [chaveAbertura(linha)]
+      if (legacyAbUnico(linha)) chaves.push(chaveAberturaLegacy(linha)) // limpa também o formato antigo
+      await supabase.from('auditoria').delete().eq('competencia_id', compId).eq('modulo', 'Conciliação').in('item', chaves)
+      setTratadosAb(prev => { const s = new Set(prev); chaves.forEach(c => s.delete(c)); return s })
       setVerCorr(null); setMsg('Conferência desfeita — a linha voltou a ficar pendente.')
       carregarTratados(); carregarLanc(); return
     }
