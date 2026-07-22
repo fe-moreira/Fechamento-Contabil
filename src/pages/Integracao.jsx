@@ -536,13 +536,38 @@ export default function Integracao() {
   const [estado, setEstado] = useState({}) // integrações validadas/sem movimento salvas na competência
   const [erro, setErro] = useState('')
 
-  // Carrega o estado das integrações já salvas nesta competência.
+  // Carrega o estado das integrações já salvas nesta competência. Além disso, ARRASTA o
+  // CADASTRO (lista de contas) de PATRIMÔNIO e FINANCEIRO-VIA-SISTEMA do mês anterior mais
+  // recente quando o mês atual ainda não tem — o cadastro vale para o CLIENTE, não só o mês.
+  // Só a LISTA de contas é herdada; a validação/documento do mês (bancos, valorDoc, doc,
+  // path, estado) continua por competência. Editar no mês atual salva só no mês atual
+  // (salvarPatrimonio/salvarFinanceira gravam na competência corrente) — não mexe nos anteriores.
   useEffect(() => {
     if (!empresaId) { setEstado({}); return }
+    let ativo = true
     const [mes, ano] = (competencia || '').split('/').map(Number)
-    supabase.from('competencias').select('integracoes')
-      .eq('cliente_id', empresaId).eq('ano', ano).eq('mes', mes).maybeSingle()
-      .then(({ data }) => setEstado(data?.integracoes || {}))
+    const ordAtual = (ano || 0) * 12 + (mes || 0)
+    ;(async () => {
+      const { data } = await supabase.from('competencias').select('ano, mes, integracoes')
+        .eq('cliente_id', empresaId)
+      if (!ativo) return
+      const comps = (data || []).filter(c => c.integracoes && typeof c.integracoes === 'object')
+      const atual = comps.find(c => c.ano === ano && c.mes === mes)
+      let est = (atual?.integracoes && typeof atual.integracoes === 'object') ? { ...atual.integracoes } : {}
+      // Mês anterior mais recente que TENHA a lista de contas (herda o cadastro).
+      const anteriores = comps.filter(c => (c.ano * 12 + c.mes) < ordAtual)
+        .sort((a, b) => (b.ano * 12 + b.mes) - (a.ano * 12 + a.mes))
+      const herdarContas = sec => { for (const c of anteriores) { const arr = c.integracoes?.[sec]?.contas; if (Array.isArray(arr) && arr.length) return arr } return null }
+      for (const sec of ['patrimonio', 'financeira']) {
+        const cur = (est[sec] && typeof est[sec] === 'object') ? est[sec] : {}
+        if (!Array.isArray(cur.contas) || cur.contas.length === 0) {
+          const herd = herdarContas(sec)
+          if (herd) est = { ...est, [sec]: { ...cur, contas: [...herd], _herdadoContas: true } }
+        }
+      }
+      if (ativo) setEstado(est)
+    })()
+    return () => { ativo = false }
   }, [empresaId, competencia])
 
   // Marca uma integração (folha/patrimônio) como sem movimento no período.
@@ -3631,7 +3656,7 @@ function Patrimonio({ empresaId, competencia, cliente, planoMap = {}, est, onEst
   }
   const saldoTotal = (linhas && contas.length) ? contas.reduce((s, c) => { const v = saldoDe(c); return s + (v == null ? 0 : v) }, 0) : null
 
-  function persistContas(cs) { const e = { ...(est || {}), contas: cs }; delete e.conta; onEstado(e) }
+  function persistContas(cs) { const e = { ...(est || {}), contas: cs }; delete e.conta; delete e._herdadoContas; onEstado(e) }
   const addConta = () => { const c = novo.trim(); if (!c || contas.includes(c)) { setNovo(''); return } persistContas([...contas, c]); setNovo('') }
   const removeConta = i => persistContas(contas.filter((_, j) => j !== i))
 
@@ -3649,7 +3674,7 @@ function Patrimonio({ empresaId, competencia, cliente, planoMap = {}, est, onEst
       const [mes, ano] = (competencia || '').split('/').map(Number)
       const { data: comp } = await supabase.from('competencias').select('id').eq('cliente_id', empresaId).eq('ano', ano).eq('mes', mes).maybeSingle()
       if (comp) { path = `integracao/${comp.id}/patrimonio.pdf`; try { await supabase.storage.from('extratos').upload(path, file, { upsert: true, contentType: 'application/pdf' }) } catch { path = '' } }
-      onEstado({ ...(est || {}), contas, valorDoc: valor, doc: file.name, path, estado: null })
+      onEstado({ ...(est || {}), contas, valorDoc: valor, doc: file.name, path, estado: null, _herdadoContas: undefined })
     } catch (e) { setErro('Não consegui ler: ' + e.message) }
     setBusy(false)
   }
@@ -3718,6 +3743,7 @@ function Patrimonio({ empresaId, competencia, cliente, planoMap = {}, est, onEst
           <button className="btn" style={{ fontSize: 12.5 }} onClick={addConta}><i className="ti ti-plus" /> Incluir</button>
         </div>
         {novo && planoMap[novo] && <p style={{ fontSize: 12, color: theme.accent, margin: '6px 0 0' }}><i className="ti ti-corner-down-right" /> {planoMap[novo].nome}</p>}
+        {est?._herdadoContas && contas.length > 0 && <p style={{ fontSize: 12, color: theme.accent, margin: '8px 0 0' }}><i className="ti ti-arrow-down-to-arc" /> Contas herdadas do mês anterior (cadastro do cliente). Ajuste aqui se precisar — vale deste mês em diante.</p>}
         {contas.length > 0 && <div style={{ marginTop: 10 }}>
           {contas.map((c, i) => { const v = saldoDe(c); return (
             <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, padding: '5px 0', borderTop: i ? `1px solid ${theme.border}` : 'none' }}>
@@ -3778,11 +3804,13 @@ function FinanceiraViaSistema({ integ, sistema, empresaId, competencia, planoMap
   const estadoDe = cs => (cs.length > 0 && red && cs.every(conciliada)) ? 'validado' : null
 
   // Persiste as contas (e o estado calculado). Também reavalia quando a conciliação carrega.
-  const persist = cs => onEstado({ ...(est || {}), via: 'sistema', contas: cs, estado: estadoDe(cs) })
+  const persist = cs => onEstado({ ...(est || {}), via: 'sistema', contas: cs, estado: estadoDe(cs), _herdadoContas: undefined })
   useEffect(() => {
     if (!red) return
     const desired = estadoDe(contas)
-    if ((est?.estado || null) !== desired) onEstado({ ...(est || {}), via: 'sistema', contas, estado: desired })
+    // Persiste quando o estado muda OU quando as contas foram HERDADAS do mês anterior — assim
+    // o cadastro "sobe" e passa a pertencer a este mês (o mês anterior fica intacto).
+    if ((est?.estado || null) !== desired || est?._herdadoContas) onEstado({ ...(est || {}), via: 'sistema', contas, estado: desired, _herdadoContas: undefined })
   }, [red]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const addConta = () => { const c = novo.trim(); if (!c || contas.includes(c)) { setNovo(''); return } persist([...contas, c]); setNovo('') }
@@ -3808,6 +3836,7 @@ function FinanceiraViaSistema({ integ, sistema, empresaId, competencia, planoMap
                 <button className="btn" style={{ fontSize: 12.5 }} onClick={addConta}><i className="ti ti-plus" /> Adicionar</button>
               </div>
               {novo && planoMap[novo] && <p style={{ fontSize: 12, color: theme.accent, margin: '0 0 10px' }}><i className="ti ti-corner-down-right" /> {planoMap[novo].nome}</p>}
+              {est?._herdadoContas && contas.length > 0 && <p style={{ fontSize: 12, color: theme.accent, margin: '0 0 8px' }}><i className="ti ti-arrow-down-to-arc" /> Contas herdadas do mês anterior (cadastro do cliente). Ajuste aqui se precisar — vale deste mês em diante.</p>}
               {contas.length === 0
                 ? <p style={{ color: theme.yellow, fontSize: 12.5, margin: 0 }}>Nenhuma conta cadastrada ainda.</p>
                 : <div>
