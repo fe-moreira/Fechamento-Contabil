@@ -189,6 +189,15 @@ function tipoConta(nome) {
 }
 
 // Agrupa lançamentos por cliente/fornecedor (unificando nomes parecidos) → blocos p/ relatório.
+// Ordena lançamentos por DATA (mais antiga → mais nova) — facilita a conciliação. Datas
+// inválidas / 'abertura' (saldo inicial sem dia) vão primeiro. Ordenação ESTÁVEL: empates
+// (mesma data) mantêm a ordem de entrada (título antes do pagamento, etc.).
+const dataOrdConc = l => { const d = String(l?.data || ''); return /^\d{4}-\d{2}-\d{2}/.test(d) ? d.slice(0, 10) : '0000-00-00' }
+// Data no padrão brasileiro com pontos: "2026-01-26" → "26.01.2026". Datas não-ISO
+// (ex.: 'abertura', ou já formatada) passam sem alterar.
+const fmtDataBR = d => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(d || '')); return m ? `${m[3]}.${m[2]}.${m[1]}` : String(d || '') }
+const ordenarPorData = arr => arr.slice().sort((a, b) => { const da = dataOrdConc(a), db = dataOrdConc(b); return da < db ? -1 : da > db ? 1 : 0 })
+
 function agruparPorCliente(lancs) {
   // Título e pagamento com a MESMA NF específica (>=5 díg.) são o mesmo fornecedor, mesmo
   // com o nome lido diferente (ex.: "RSM ... AUDITORIA" no título e "RSM ... AUDITORES
@@ -219,7 +228,7 @@ function agruparPorCliente(lancs) {
   if (grupos['(não identificado)']) clusters.push(['(não identificado)'])
   return clusters.map(membros => {
     const cliente = membros.slice().sort((a, b) => b.length - a.length)[0]
-    return { cliente, lancs: membros.flatMap(m => grupos[m]) }
+    return { cliente, lancs: ordenarPorData(membros.flatMap(m => grupos[m])) }
   }).sort((a, b) => (a.cliente === '(não identificado)' ? 1 : 0) - (b.cliente === '(não identificado)' ? 1 : 0) || a.cliente.localeCompare(b.cliente, 'pt-BR'))
 }
 
@@ -1095,11 +1104,11 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   }
   const listaTodas = clusters.map(cl => {
     const membros = cl.membros.slice().sort((a, b) => b.length - a.length)
-    const lancs = cl.membros.flatMap(m => grupos[m])
+    const lancs = ordenarPorData(cl.membros.flatMap(m => grupos[m])) // data mais antiga → mais nova
     return { nome: nomeExib[membros[0]], variacoes: membros.map(m => nomeExib[m]), lancs, total: lancs.reduce((s, l) => s + ov(l), 0), unido: membros.length > 1, unk: false }
   })
   if (grupos['(não identificado)']) {
-    const lancs = grupos['(não identificado)']
+    const lancs = ordenarPorData(grupos['(não identificado)']) // data mais antiga → mais nova
     listaTodas.push({ nome: '(não identificado)', variacoes: [], lancs, total: lancs.reduce((s, l) => s + ov(l), 0), unido: false, unk: true })
   }
   listaTodas.sort((a, b) => (a.unk ? 1 : 0) - (b.unk ? 1 : 0) || a.nome.localeCompare(b.nome, 'pt-BR'))
@@ -1182,7 +1191,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
               <tbody>
                 {g.lancs.map((l, i) => (
                   <tr key={i} style={{ borderTop: `1px solid ${theme.border}`, fontSize: 12 }}>
-                    <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{l.data || '—'}</td>
+                    <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{fmtDataBR(l.data) || '—'}</td>
                     <td style={{ ...td, color: theme.sub }}>NF {l.leitura?.nf || '—'}</td>
                     <td style={{ ...td, color: theme.sub, fontFamily: 'monospace', fontSize: 11, maxWidth: 320 }}>{l.historico}</td>
                     <td style={{ ...tdR, color: theme.green }}>{Number(l.debito) ? money(l.debito) : '—'}</td>
@@ -2156,7 +2165,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
               <div key={`sug${pi}`} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '9px 16px', borderTop: `1px solid ${theme.border}`, background: 'rgba(74,124,255,0.07)' }}>
                 <i className="ti ti-link" style={{ color: theme.accent }} />
                 <span style={{ flex: 1, minWidth: 220, fontSize: 12.5, color: theme.text }}>
-                  <b>Sugestão de vínculo</b> · {money(p.valor)} — <span title={p.a.historico}>Título NF {p.a.leitura?.nf || '—'} ({p.a.data || '—'})</span> ↔ <span title={p.b.historico}>Pagto NF {p.b.leitura?.nf || '—'} ({p.b.data || '—'})</span>
+                  <b>Sugestão de vínculo</b> · {money(p.valor)} — <span title={p.a.historico}>Título NF {p.a.leitura?.nf || '—'} ({fmtDataBR(p.a.data) || '—'})</span> ↔ <span title={p.b.historico}>Pagto NF {p.b.leitura?.nf || '—'} ({fmtDataBR(p.b.data) || '—'})</span>
                 </span>
                 <button className="btn" style={{ fontSize: 12, padding: '4px 12px', background: theme.accent, borderColor: theme.accent }} onClick={() => aprovarVinculos([p])}><i className="ti ti-link" /> Aprovar</button>
                 <button className="btn btn-ghost" title="Não é o mesmo par — descartar (não sugere de novo)" style={{ fontSize: 12, padding: '4px 12px', color: theme.sub }} onClick={() => rejeitarVinculo(p)}><i className="ti ti-x" /> Não aprovar</button>
@@ -2185,7 +2194,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
                       <td style={{ ...td, textAlign: 'center' }} onClick={e => e.stopPropagation()}>
                         <input type="checkbox" title="Conectar com outro (baixa manual)" checked={selLin.has(l.id)} onChange={() => toggleSelLin(l)} style={{ cursor: 'pointer', width: 15, height: 15 }} />
                       </td>
-                      <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{l.data || '—'}</td>
+                      <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{fmtDataBR(l.data) || '—'}</td>
                       <td style={{ ...td, color: semNF ? theme.red : theme.sub, fontWeight: 600 }}>NF {l.leitura.nf || '—'}</td>
                       <td style={{ ...td, color: theme.sub, fontFamily: 'monospace', fontSize: 11, maxWidth: 280 }}>{l.historico}</td>
                       <td style={{ ...td, fontSize: 11.5, whiteSpace: 'nowrap' }} title={contras.map(c => `${c}${planoMap[c] ? ' · ' + planoMap[c] : ''}`).join('\n')}>
@@ -2246,7 +2255,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
                   <tbody>
                     {g.lancs.map((l, i) => (
                       <tr key={i} style={{ borderTop: `1px solid ${theme.border}`, fontSize: 12 }}>
-                        <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{l.data || '—'}</td>
+                        <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{fmtDataBR(l.data) || '—'}</td>
                         <td style={{ ...td, color: theme.sub }}>NF {l.leitura?.nf || '—'}</td>
                         <td style={{ ...td, color: theme.sub, fontFamily: 'monospace', fontSize: 11, maxWidth: 320 }}>{l.historico}</td>
                         <td style={{ ...tdR, color: theme.green }}>{Number(l.debito) ? money(l.debito) : '—'}</td>
@@ -2284,7 +2293,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
                     <tbody>
                       {g.lancs.map((l, i) => (
                         <tr key={i} style={{ borderTop: `1px solid ${theme.border}`, fontSize: 12 }}>
-                          <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{l.data || '—'}</td>
+                          <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{fmtDataBR(l.data) || '—'}</td>
                           <td style={{ ...td, color: theme.sub, fontFamily: 'monospace', fontSize: 11, maxWidth: 320 }}>{l.historico}</td>
                           <td style={{ ...tdR, color: theme.green }}>{Number(l.debito) ? money(l.debito) : '—'}</td>
                           <td style={{ ...tdR, color: theme.red }}>{Number(l.credito) ? money(l.credito) : '—'}</td>
@@ -2406,7 +2415,7 @@ function ModalComposicao({ titulo, itens, onClose }) {
                   const nf = l.leitura?.nf
                   return (
                     <tr key={i} style={{ borderTop: `1px solid ${theme.border}`, background: l._abertura ? 'rgba(74,124,255,0.06)' : undefined }}>
-                      <td style={{ ...td, whiteSpace: 'nowrap' }}>{l.data || ''}</td>
+                      <td style={{ ...td, whiteSpace: 'nowrap' }}>{fmtDataBR(l.data) || ''}</td>
                       <td style={{ ...td, maxWidth: 400, whiteSpace: 'normal' }}>
                         {l._abertura && <span style={{ color: theme.accent, fontSize: 10, fontWeight: 700, marginRight: 6 }}>SALDO ANT.</span>}
                         {l.historico || ''}
@@ -2445,12 +2454,12 @@ function ListaLancamentos({ lanc, carregando, contraDe, planoMap, tratados = new
   const [q, setQ] = useState('')
   const norm = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
   const termo = norm(q.trim())
-  const filtr = !termo ? lanc : lanc.filter(l => {
+  const filtr = ordenarPorData(!termo ? lanc : lanc.filter(l => {
     const contras = contraDe(l)
     const contraTxt = contras.map(c => `${c} ${planoMap[c] || ''}`).join(' ')
     const valTxt = `${Number(l.debito) ? money(l.debito) : ''} ${Number(l.credito) ? money(l.credito) : ''}`
     return norm(`${l.data || ''} ${l.historico || ''} ${contraTxt} ${valTxt}`).includes(termo)
-  })
+  }))
   const selecionaveis = filtr.filter(l => l.id != null)
   const todosMarcados = selecionaveis.length > 0 && selecionaveis.every(l => selLin?.has(l.id))
   return (
@@ -2489,7 +2498,7 @@ function ListaLancamentos({ lanc, carregando, contraDe, planoMap, tratados = new
                       {l.id != null && <input type="checkbox" title="Conectar com outro (baixa manual)" checked={selLin?.has(l.id)} onChange={() => onToggleSel(l)} style={{ cursor: 'pointer', width: 15, height: 15 }} />}
                     </td>
                   )}
-                  <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{l.data || '—'}</td>
+                  <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{fmtDataBR(l.data) || '—'}</td>
                   <td style={{ ...td, color: theme.sub, fontFamily: 'monospace', fontSize: 11, maxWidth: 320 }}>{l.historico}</td>
                   <td style={{ ...td, fontSize: 11.5, whiteSpace: 'nowrap' }} title={contras.map(c => `${c}${planoMap[c] ? ' · ' + planoMap[c] : ''}`).join('\n')}>
                     {contras.length === 0 ? <span style={{ color: theme.sub }}>—</span>
@@ -2556,7 +2565,7 @@ function SugestoesDiferenca({ conta, compId, dif }) {
 
   const Linha = ({ l }) => (
     <div style={{ display: 'flex', gap: 10, fontSize: 12.5, padding: '4px 0', borderTop: `0.5px solid ${theme.cb}` }}>
-      <span style={{ color: theme.sub, minWidth: 78 }}>{l.data || '—'}</span>
+      <span style={{ color: theme.sub, minWidth: 78 }}>{fmtDataBR(l.data) || '—'}</span>
       <span style={{ flex: 1, minWidth: 0 }}>{l.historico || '(sem histórico)'}{l.contrapartida ? ` · contra ${l.contrapartida}` : ''}</span>
       <span style={{ fontWeight: 600, whiteSpace: 'nowrap', color: val(l) < 0 ? theme.red : theme.text }}>{money(Math.abs(val(l)))} {val(l) < 0 ? 'C' : 'D'}</span>
     </div>
@@ -2627,7 +2636,7 @@ function ModalCorrigido({ linha, compId, planoMap = {}, lab = 'fornecedor', onCl
       <div onClick={e => e.stopPropagation()} style={{ width: 'min(560px,96vw)', maxHeight: '90vh', overflow: 'auto', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
         <h2 style={{ fontSize: 17, marginBottom: 4 }}>Lançamento já tratado</h2>
         <div style={{ background: theme.input, borderRadius: 10, padding: '10px 12px', margin: '8px 0 14px', fontSize: 12.5 }}>
-          <span style={{ color: theme.sub }}>{linha.data || '—'} · NF {linha.leitura?.nf || '—'} · {valor}</span>
+          <span style={{ color: theme.sub }}>{fmtDataBR(linha.data) || '—'} · NF {linha.leitura?.nf || '—'} · {valor}</span>
           <div style={{ color: theme.sub, fontFamily: 'monospace', fontSize: 11, marginTop: 4 }}>{linha.historico}</div>
         </div>
 
@@ -3158,7 +3167,7 @@ function ModalReclassLote({ lines, conta, plano, onClose, onAplicar }) {
                 const valor = Number(l.debito) || Number(l.credito) || 0
                 return (
                   <tr key={l.id} style={{ borderTop: `1px solid ${theme.border}` }}>
-                    <td style={{ ...td, fontSize: 11, color: theme.sub, whiteSpace: 'nowrap' }}>{l.data || '—'}</td>
+                    <td style={{ ...td, fontSize: 11, color: theme.sub, whiteSpace: 'nowrap' }}>{fmtDataBR(l.data) || '—'}</td>
                     <td style={{ ...td, fontSize: 11, fontFamily: 'monospace', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={l.historico}>{l.historico || '—'}</td>
                     <td style={{ ...tdR, fontSize: 11.5, color: ehDeb ? theme.green : theme.red, whiteSpace: 'nowrap' }}>{money(valor)} {ehDeb ? 'D' : 'C'}</td>
                     <td style={{ ...td, minWidth: 200 }}><CampoConta value={contas[l.id] || ''} onChange={v => setLinha(l.id, v)} plano={plano} /></td>
@@ -3271,7 +3280,7 @@ function ModalLancamento({ lanc, conta, lab, plano, natCredito, residuo = 0, onC
       <div onClick={e => e.stopPropagation()} style={{ width: 'min(560px,96vw)', maxHeight: '90vh', overflow: 'auto', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
         <h2 style={{ fontSize: 17, marginBottom: 4 }}>{tipo || 'Tratar lançamento'}</h2>
         <div style={{ background: theme.input, borderRadius: 10, padding: '10px 12px', margin: '8px 0 14px', fontSize: 12.5 }}>
-          <span style={{ color: theme.sub }}>{lanc.data || '—'} · NF {lanc.leitura.nf || '—'} · {valor}</span>
+          <span style={{ color: theme.sub }}>{fmtDataBR(lanc.data) || '—'} · NF {lanc.leitura.nf || '—'} · {valor}</span>
           <div style={{ color: theme.sub, fontFamily: 'monospace', fontSize: 11, marginTop: 4 }}>{lanc.historico}</div>
         </div>
 
