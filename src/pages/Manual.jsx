@@ -377,6 +377,7 @@ const HTML = `
 
 <section id="m-conciliacao">
   <h2 class="m-sec">13 · Conciliação</h2>
+  <div class="m-rule"><span class="k">O ajuste de um mês entra no saldo inicial do mês seguinte</span> O saldo inicial de cada conta patrimonial é o <b>saldo final REAL do mês anterior</b> — e "real" inclui <b>tudo</b>: o razão <b>mais</b> os <b>ajustes/correções</b> feitos na conciliação, as <b>apropriações</b> (seguro/despesa) e demais lançamentos gerados. Assim, se você lança um <b>ajuste em maio</b> (ex.: acerta o caixa/banco, ou aproria o seguro), <b>junho abre já com esse ajuste</b> — o saldo final de maio e o inicial de junho <b>batem</b>. Antes, o arrasto pegava o mês anterior <b>sem</b> os lançamentos do sistema, então o mês seguinte abria com o valor de <b>antes do ajuste</b> (o banco fechava maio em X e junho abria em outro valor). Corrigido: mexeu no mês anterior, o saldo inicial deste mês e a conciliação <b>se atualizam sozinhos</b>.</div>
   <p>O coração do fechamento, com farol por conta. Três tipos:</p>
   <dl class="m-kv">
     <dt>Saldo simples</dt><dd>Banco — confere o saldo do balancete com o do extrato.</dd>

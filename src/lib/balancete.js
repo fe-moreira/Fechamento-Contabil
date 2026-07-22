@@ -579,9 +579,15 @@ export async function montarBalancete(empresaId, compId, _depth = 0, opts = {}) 
     // calculado AO VIVO (recursivo). Se você mexer no mês anterior, o saldo inicial deste
     // mês — e a conciliação — se atualizam sozinhos. Contas de RESULTADO (3/4/5) NÃO
     // arrastam: o comparativo mostra o movimento do mês.
+    // IMPORTANTE: o mês anterior é FECHADO — seu saldo final REAL inclui TODOS os lançamentos
+    // (ajustes/correções da conciliação, apropriações de seguro/despesa, etc.). Por isso o
+    // arrasto força `comLancamentos: true`, INDEPENDENTE de o chamador (ex.: a Conciliação)
+    // pedir o mês CORRENTE sem lançamentos (ela soma os acertos do mês por fora). Sem isso,
+    // um ajuste feito em maio NÃO entrava no saldo inicial de junho (o banco/caixa/seguro
+    // abria o mês seguinte com o valor de ANTES do ajuste).
     const ant = await competenciaAnterior(empresaId, compId)
     if (ant) {
-      const { linhas: linhasAnt } = await montarBalancete(empresaId, ant, _depth + 1, opts)
+      const { linhas: linhasAnt } = await montarBalancete(empresaId, ant, _depth + 1, { ...opts, comLancamentos: true })
       for (const lp of linhasAnt) {
         if (lp.sintetica) continue // sintéticas são recompostas por agregação abaixo
         const d = String(lp.classifRaw || '').trim()[0]
