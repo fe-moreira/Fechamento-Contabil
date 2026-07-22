@@ -585,13 +585,24 @@ export default function CompMovimento() {
     return { atual, anterior, mesAtual: mes, mesAnterior: mesAntObj ? mesAntObj.mes : null }
   }
 
+  // Justificativa vale para a CONTA inteira (não só para o mês em que foi feita): contas de
+  // resultado ACUMULAM no ano, então uma despesa recorrente estoura os 10% todo mês. Justificou
+  // a conta em QUALQUER mês → ela conta como tratada em todos os meses (pra frente e pra trás),
+  // até desfazer. O texto é herdado do mês em que foi justificada.
+  const contasJust = new Set([...justificadas].map(ch => String(ch).split('|')[0]))
+  const textoPorConta = {}
+  for (const [ch, txt] of Object.entries(justTextos)) { const c = String(ch).split('|')[0]; if (c && txt && !(c in textoPorConta)) textoPorConta[c] = txt }
+  // Uma célula (conta,mês) está tratada se justificada nela mesma OU se a conta foi justificada
+  // em qualquer mês.
+  const celulaTratada = (reduzido, mes) => justificadas.has(chaveCelula(reduzido, mes)) || contasJust.has(reduzido)
+
   // Conta por CONTA (não por célula/mês): uma conta com qualquer mês desviante ainda
   // não justificado conta 1 — mesmo conceito do Status e do badge do menu.
   // Só nas analíticas — as sintéticas são totais (não se justificam diretamente).
   let pendentes = 0
   for (const { reduzido, key, sintetica } of contas) {
     if (sintetica) continue
-    if (comps.some(c => desviante(key, c.mes) && !justificadas.has(chaveCelula(reduzido, c.mes)))) pendentes++
+    if (comps.some(c => desviante(key, c.mes) && !celulaTratada(reduzido, c.mes))) pendentes++
   }
 
   // Níveis de sintéticas disponíveis (grau), para o filtro por nível do comparativo.
@@ -607,13 +618,15 @@ export default function CompMovimento() {
     if (texto) setJustTextos(prev => ({ ...prev, [chaveCelula(conta, mes)]: texto }))
   }
 
-  // Desfaz o ajuste: devolve a célula à contagem de pendências (atualiza na hora).
-  function marcarNaoJustificada(conta, mes) {
+  // Desfaz o ajuste: devolve a conta à contagem de pendências (atualiza na hora). Como a
+  // justificativa vale para a CONTA inteira, desfazer limpa TODOS os meses dela.
+  function marcarNaoJustificada(conta) {
     setJustificadas(prev => {
       const next = new Set(prev)
-      next.delete(chaveCelula(conta, mes))
+      for (const ch of prev) if (String(ch).split('|')[0] === String(conta)) next.delete(ch)
       return next
     })
+    setJustTextos(prev => { const n = { ...prev }; for (const ch of Object.keys(n)) if (String(ch).split('|')[0] === String(conta)) delete n[ch]; return n })
   }
 
   // Anos e meses disponíveis (para os filtros).
@@ -822,7 +835,9 @@ export default function CompMovimento() {
                         }
                         const mes = col.mesJust
                         const red = desviante(key, mes)
-                        const ok = red && justificadas.has(chaveCelula(reduzido, mes))
+                        const okProprio = justificadas.has(chaveCelula(reduzido, mes))
+                        const ok = red && celulaTratada(reduzido, mes) // tratada nela mesma OU herdada da conta
+                        const herdada = ok && !okProprio
                         // Sem saldo e sem variação: traço apagado, sem clique.
                         if (vazio && !red) {
                           return <td key={col.key} style={{ ...td, textAlign: 'right', color: theme.sub }}>—</td>
@@ -839,7 +854,7 @@ export default function CompMovimento() {
                                 fontWeight: (red && !ok) ? 700 : 400,
                               }}
                               title={ok
-                                ? `Variação justificada${justTextos[chaveCelula(reduzido, mes)] ? ' — ' + justTextos[chaveCelula(reduzido, mes)] : ''} · clique para ver o razão`
+                                ? `Variação justificada${herdada ? ' (herdada da conta)' : ''}${(justTextos[chaveCelula(reduzido, mes)] || textoPorConta[reduzido]) ? ' — ' + (justTextos[chaveCelula(reduzido, mes)] || textoPorConta[reduzido]) : ''} · clique para ver o razão`
                                 : (vazio ? 'Mês sem movimento nesta conta — variação a justificar' : 'Ver razão da conta neste mês')}
                             >
                               {ok && <i className="ti ti-circle-check" style={{ color: theme.green, fontSize: 13 }} />}
@@ -885,10 +900,10 @@ export default function CompMovimento() {
           compIdAnterior={comps.find(c => c.mes === detalhe.varInfo?.mesAnterior)?.id || null}
           usuario={user?.email}
           getCompetenciaId={getCompetenciaId}
-          jaJustificada={justificadas.has(chaveCelula(detalhe.conta, detalhe.mes))}
-          justTextoAtual={justTextos[chaveCelula(detalhe.conta, detalhe.mes)] || ''}
+          jaJustificada={celulaTratada(detalhe.conta, detalhe.mes)}
+          justTextoAtual={justTextos[chaveCelula(detalhe.conta, detalhe.mes)] || textoPorConta[detalhe.conta] || ''}
           onJustificada={(texto) => marcarJustificada(detalhe.conta, detalhe.mes, texto)}
-          onDesfeita={() => marcarNaoJustificada(detalhe.conta, detalhe.mes)}
+          onDesfeita={() => marcarNaoJustificada(detalhe.conta)}
           onCorrigido={() => setRefresh(x => x + 1)}
           plano={plano}
           centrosCC={centrosCC}
@@ -1051,13 +1066,16 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
   }
 
   async function desfazer() {
-    if (!window.confirm(`Desfazer o ajuste da conta ${conta} em ${MESES[mes - 1]}/${ANO}? A variação volta a contar como pendência.`)) return
+    // A justificativa vale para a CONTA inteira (todos os meses) — desfazer remove a
+    // justificativa da conta em todos os meses do ano (as correções/reclassificações, que
+    // são específicas do mês, ficam; só sai o tipo 'Justificativa').
+    if (!window.confirm(`Desfazer a justificativa da conta ${conta}? A variação volta a contar como pendência (em todos os meses).`)) return
     setSalvando(true)
     try {
       const { error } = await supabase.from('auditoria').delete()
-        .eq('modulo', 'Comparativo').eq('item', `${conta} · ${MESES[mes - 1]}/${ANO}`)
+        .eq('modulo', 'Comparativo').eq('tipo', 'Justificativa').like('item', `${conta} · %/${ANO}`)
       if (error) throw error
-      setMsg('Ajuste desfeito — variação voltou a pendente.'); setTratada(false); onDesfeita()
+      setMsg('Justificativa desfeita — variação voltou a pendente.'); setTratada(false); onDesfeita()
     } catch (e) { setMsg('Erro ao desfazer: ' + (e.message || e)) } finally { setSalvando(false) }
   }
 
@@ -1658,7 +1676,7 @@ function Wrapper({ children }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
         <h1 style={{ fontSize: 22, fontWeight: 500, margin: 0 }}>Comp. Movimento</h1>
         <InfoTela titulo="Comp. Movimento">
-          Contas de resultado. Valores em <b style={{ color: theme.red }}>vermelho</b> desviam mais de 10% do <b>mês anterior</b> (fev × jan, mar × fev…) — o primeiro mês não é comparado. Mês sem saldo aparece como <b>—</b>; fica vermelho quando o mês anterior tinha movimento. Clique num valor para ver o razão e o provável culpado. Se o cliente <b>usa centro de custo</b>, aparece o filtro para ver o resultado por centro.
+          Contas de resultado. Valores em <b style={{ color: theme.red }}>vermelho</b> desviam mais de 10% do <b>mês anterior</b> (fev × jan, mar × fev…) — o primeiro mês não é comparado. Mês sem saldo aparece como <b>—</b>; fica vermelho quando o mês anterior tinha movimento. Clique num valor para ver o razão e o provável culpado. Se o cliente <b>usa centro de custo</b>, aparece o filtro para ver o resultado por centro. <b>Justificou uma conta uma vez, vale para o ano todo:</b> a justificativa passa a valer em <b>todos os meses</b> daquela conta (para frente e para trás) — não precisa repetir a cada mês (as recorrentes acumulam e estourariam os 10% sempre). Desfazer tira a justificativa da conta em todos os meses.
         </InfoTela>
       </div>
       <p style={{ color: theme.sub, fontSize: 13, marginBottom: 22 }}>
