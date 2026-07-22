@@ -103,11 +103,16 @@ export async function conferirBalanceteEncerramento(empresaId, compId, importado
     if (l.conta_credito) aj[String(l.conta_credito)] = (aj[String(l.conta_credito)] || 0) - v
   }
   const dig = s => String(s || '').replace(/\D/g, '')
-  const porCod = {}, porClassif = {}
+  // Nome normalizado (só letras/números maiúsculos) para casar por NOME quando código/classificação
+  // não batem (ex.: o PDF do Domínio traz só a classificação, e a leitura pode perder um nível).
+  const normNm = s => String(s || '').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Z0-9]/g, '')
+  const porCod = {}, porClassif = {}, porNome = {}, nomeCount = {}
   for (const r of (importado || [])) {
     if (r.saldo == null) continue
     if (r.cod) porCod[String(r.cod).trim()] = Number(r.saldo)
     if (r.classif) porClassif[dig(r.classif)] = Number(r.saldo)
+    const kn = normNm(r.nome)
+    if (kn) { nomeCount[kn] = (nomeCount[kn] || 0) + 1; porNome[kn] = Number(r.saldo) }
   }
   const divergencias = []
   let verificados = 0
@@ -120,6 +125,8 @@ export async function conferirBalanceteEncerramento(empresaId, compId, importado
     verificados++
     let imp = porCod[String(l.reduzido)]
     if (imp == null) imp = porClassif[dig(l.classifRaw || l.classif)]
+    // Fallback por NOME — só quando o nome é ÚNICO no arquivo importado (evita casar errado).
+    if (imp == null) { const kn = normNm(l.nome); if (kn && nomeCount[kn] === 1) imp = porNome[kn] }
     if (imp == null) { divergencias.push({ conta: l.reduzido, nome: l.nome, esperado: efetivo, importado: null, dif: efetivo }); continue }
     const dif = Math.round((Math.abs(efetivo) - Math.abs(imp)) * 100) / 100
     if (Math.abs(dif) >= 0.05) divergencias.push({ conta: l.reduzido, nome: l.nome, esperado: efetivo, importado: imp, dif })
