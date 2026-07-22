@@ -67,18 +67,20 @@ export async function apurarVariacoes(empresaId, opts = {}) {
 
   // Justificadas. A variação some quando a conta foi justificada no Comparativo de
   // Movimento (modulo 'Comparativo') OU direto no gate "Variações sem justificativa" do
-  // Status (modulo 'Status', item `${conta} · ${NOME}`). Antes só o Comparativo era lido,
-  // então justificar pelo Status marcava "OK." mas a variação nunca baixava. A chave é
-  // (conta, mês): conta = 1º trecho do item (sempre o código); mês = da competência do
-  // registro. Itens de outros gates do Status (ex.: "Conta 326 · saldo…", "326 → 623 · …")
-  // têm 1º trecho não-numérico e não colidem com o código puro da variação.
+  // Status (modulo 'Status', item `${conta} · ${NOME}`).
+  // POR CONTA, NÃO POR MÊS: contas de resultado ACUMULAM no ano, então uma despesa
+  // recorrente (ex.: aluguel fixo) estoura os 10% TODO mês — o acumulado sempre cresce.
+  // Justificar a conta UMA vez (em qualquer mês) vale para o comparativo inteiro (meses
+  // anteriores e seguintes), até desfazer — assim não se re-justifica a mesma recorrência.
+  // conta = 1º trecho do item (sempre o código). Itens de outros gates do Status (ex.:
+  // "Conta 326 · saldo…", "326 → 623 · …") têm 1º trecho não-numérico e não colidem com o
+  // código puro da variação.
   const { data: aud } = await supabase.from('auditoria').select('item, competencia_id')
     .in('competencia_id', comps.map(c => c.id)).in('modulo', ['Comparativo', 'Status'])
   const just = new Set()
   for (const a of (aud || [])) {
     const conta = String(a.item || '').split(' · ')[0].trim()
-    const mes = mesPorComp[a.competencia_id]
-    if (conta && mes) just.add(`${conta}|${mes}`)
+    if (conta) just.add(conta)
   }
 
   // Variação mês a mês: cada mês compara com o mês ANTERIOR (fev × jan, mar × fev…).
@@ -92,7 +94,7 @@ export async function apurarVariacoes(empresaId, opts = {}) {
       const p = linha[mAnt] == null ? 0 : Number(linha[mAnt]) || 0
       if (a === 0 && p === 0) continue // sem movimento nos dois meses
       const desvia = p === 0 ? a !== 0 : Math.abs(a - p) / Math.abs(p) > 0.10
-      if (desvia && !just.has(`${conta}|${m}`)) itens.push({ conta, nome: nomes[conta] || '', mes: m, valor: linha[m] ?? 0 })
+      if (desvia && !just.has(conta)) itens.push({ conta, nome: nomes[conta] || '', mes: m, valor: linha[m] ?? 0 })
     }
   }
 
