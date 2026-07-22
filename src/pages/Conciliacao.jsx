@@ -1246,7 +1246,10 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     // zeram como um todo (confirmáveis em lote).
     for (const g of lista) {
       if (podeConfirmarEnt(g)) continue
-      const linhas = g.lancs.filter(l => l.id != null && !l.acerto && l.leitura?.ident && String(l.leitura.entidade || '').trim())
+      // Exclui linhas JÁ tratadas/conciliadas (ex.: par que você acabou de APROVAR) — senão a
+      // sugestão era recalculada com os mesmos lançamentos e "voltava", parecendo que aprovar
+      // não fazia nada. Uma vez aprovado, o par sai de aberto e a sugestão some.
+      const linhas = g.lancs.filter(l => l.id != null && !l.acerto && l.leitura?.ident && String(l.leitura.entidade || '').trim() && !jaTratada(l) && !foiConfirmado(l))
       const debs = linhas.filter(l => Number(l.debito) > 0.005)
       const creds = linhas.filter(l => Number(l.credito) > 0.005)
       const usados = new Set()
