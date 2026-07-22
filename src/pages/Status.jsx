@@ -5,7 +5,7 @@ import { useAuth } from '../components/AuthProvider'
 import { apurarDistribuicao } from '../lib/distribuicao'
 import { apurarBancoResultado } from '../lib/bancoResultado'
 import { apurarVariacoes } from '../lib/variacoes'
-import { contasConciliacaoAbertas, conferirBalanceteEncerramento, erroContaSintetica } from '../lib/balancete'
+import { contasConciliacaoAbertas, conferirBalanceteEncerramento, balanceteEfetivo, erroContaSintetica } from '../lib/balancete'
 import { theme, money } from '../lib/theme'
 import InfoTela from '../components/InfoTela'
 import { abrePdfTimbrado } from '../lib/pdf'
@@ -393,10 +393,45 @@ export default function Status() {
   // Importa o balancete (exportado do Domínio) e confere se BATE com a conciliação —
   // conta a conta, pelo código reduzido OU pela classificação. Só com tudo batendo
   // o "Encerrar fechamento" é liberado.
+  // Lê um balancete em PDF (texto extraído) → [{ cod, classif, saldo }]. Heurística para o
+  // balancete do Domínio: cada linha de conta tem um código (reduzido e/ou classificação) e,
+  // no fim, o SALDO ATUAL (último valor monetário) com o indicador D/C. Pula cabeçalhos/totais.
+  function linhasBalancetePdf(texto) {
+    const val = /-?\d{1,3}(?:\.\d{3})*,\d{2}/g
+    const parseBR = s => { const n = parseFloat(String(s).replace(/\./g, '').replace(',', '.')); return Number.isNaN(n) ? null : n }
+    const out = []
+    for (const raw of String(texto || '').split(/\r?\n/)) {
+      const linha = raw.trim(); if (!linha) continue
+      const low = linha.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+      if (/balancete|saldo anterior|debito|credito|pagina|periodo|empresa|cnpj|classific|descric|total (do|geral)|^total\b|folha|impress/.test(low)) continue
+      const nums = linha.match(val); if (!nums || !nums.length) continue
+      const mDC = linha.match(/([DC])\s*$/i)
+      let saldo = parseBR(nums[nums.length - 1]); if (saldo == null) continue
+      if (mDC && /c/i.test(mDC[1])) saldo = -Math.abs(saldo)
+      const mClass = linha.match(/\b(\d(?:\.\d+){2,})\b/)   // classificação pontuada (>=3 níveis)
+      const mCod = linha.match(/^\s*(\d{1,6})\b/)           // reduzido no início da linha
+      const classif = mClass ? mClass[1] : ''
+      const cod = (mCod && (!mClass || mCod.index < mClass.index)) ? mCod[1] : ''
+      if (!cod && !classif) continue
+      out.push({ cod, classif, saldo })
+    }
+    return out
+  }
+
   async function importarBalancete(file) {
     if (!file || !compId) return
     setBalBusy(true); setMsg('')
     try {
+      // PDF: lê o texto e reconhece as linhas de conta (código + saldo atual).
+      if (/\.pdf$/i.test(file.name) || file.type === 'application/pdf') {
+        const { extrairTextoPdf } = await import('../lib/pdfText')
+        const importadoPdf = linhasBalancetePdf(await extrairTextoPdf(file))
+        if (importadoPdf.length < 2) { setMsg('Li o PDF, mas não reconheci as linhas do balancete (formato diferente). Tente o Excel, ou me mande o arquivo para eu ajustar a leitura.'); setBalBusy(false); return }
+        const resPdf = await conferirBalanceteEncerramento(empresaId, compId, importadoPdf)
+        setBalConf({ ...resPdf, nome: file.name })
+        setMsg(resPdf.bate ? 'Balancete (PDF) confere com a conciliação — pode encerrar.' : `Balancete (PDF) não bate: ${resPdf.divergencias.length} conta(s) divergente(s).`)
+        setBalBusy(false); return
+      }
       const XLSX = await import('xlsx')
       const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' })
       const arr = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' })
@@ -424,6 +459,25 @@ export default function Status() {
       setBalConf({ ...res, nome: file.name })
       setMsg(res.bate ? 'Balancete confere com a conciliação — pode encerrar.' : `Balancete não bate: ${res.divergencias.length} conta(s) divergente(s).`)
     } catch (e) { setMsg('Não consegui ler o balancete: ' + e.message) }
+    setBalBusy(false)
+  }
+
+  // Exporta o balancete EFETIVO do sistema (razão vivo: balancete + correções) em Excel —
+  // para o analista ver/conferir o que a plataforma está considerando, ou usar como base.
+  async function exportarBalancete() {
+    if (!compId) return
+    setBalBusy(true); setMsg('')
+    try {
+      const linhas = await balanceteEfetivo(empresaId, compId)
+      if (!linhas.length) { setMsg('Sem saldos para exportar nesta competência.'); setBalBusy(false); return }
+      const XLSX = await import('xlsx')
+      const aoa = [['Conta', 'Classificação', 'Nome', 'Saldo', 'D/C']]
+      for (const l of linhas) aoa.push([l.conta, l.classif, l.nome, Math.abs(l.saldo), l.saldo < 0 ? 'C' : 'D'])
+      const ws = XLSX.utils.aoa_to_sheet(aoa)
+      const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Balancete')
+      XLSX.writeFile(wb, `balancete_sistema_${competencia.replace('/', '-')}.xlsx`)
+      setMsg('Balancete do sistema exportado (Excel).')
+    } catch (e) { setMsg('Não consegui exportar: ' + e.message) }
     setBalBusy(false)
   }
 
@@ -668,9 +722,12 @@ export default function Status() {
             onClick={() => { if (pronto && dados.lancamentos.length) gerarDominioCSV(dados.lancamentos, `dominio_${competencia.replace('/', '-')}.csv`) }}>
             <i className="ti ti-download" /> Gerar arquivo
           </button>
-          <label className="btn btn-ghost" style={{ fontSize: 13, cursor: pronto ? 'pointer' : 'not-allowed', opacity: pronto ? 1 : 0.5 }} title="Importe o balancete exportado do Domínio — tem que bater com a conciliação para liberar o encerramento">
-            <i className="ti ti-file-import" /> {balBusy ? 'Conferindo…' : 'Importar balancete'}
-            <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} disabled={!pronto || balBusy} onChange={e => importarBalancete(e.target.files?.[0])} />
+          <button className="btn btn-ghost" style={{ fontSize: 13 }} disabled={balBusy} title="Baixa o balancete que a plataforma calculou (razão vivo + correções) em Excel — para conferir ou usar como base" onClick={exportarBalancete}>
+            <i className="ti ti-file-spreadsheet" /> Exportar balancete
+          </button>
+          <label className="btn btn-ghost" style={{ fontSize: 13, cursor: pronto ? 'pointer' : 'not-allowed', opacity: pronto ? 1 : 0.5 }} title="Importe o balancete exportado do Domínio — aceita Excel (.xlsx/.xls/.csv) OU PDF. Tem que bater com a conciliação para liberar o encerramento; se não bater, mostra em quais contas.">
+            <i className="ti ti-file-import" /> {balBusy ? 'Conferindo…' : 'Importar balancete (Excel/PDF)'}
+            <input type="file" accept=".xlsx,.xls,.csv,.pdf" style={{ display: 'none' }} disabled={!pronto || balBusy} onChange={e => importarBalancete(e.target.files?.[0])} />
           </label>
         </div>
       </div>
