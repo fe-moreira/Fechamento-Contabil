@@ -408,12 +408,15 @@ export default function Status() {
       const mDC = linha.match(/([DC])\s*$/i)
       let saldo = parseBR(nums[nums.length - 1]); if (saldo == null) continue
       if (mDC && /c/i.test(mDC[1])) saldo = -Math.abs(saldo)
-      const mClass = linha.match(/\b(\d(?:\.\d+){2,})\b/)   // classificação pontuada (>=3 níveis)
-      const mCod = linha.match(/^\s*(\d{1,6})\b/)           // reduzido no início da linha
+      const mClass = linha.match(/\b(\d(?:\.\d+){2,})\b/)          // classificação pontuada (>=3 níveis)
+      const mCod = linha.match(/^\s*(\d{1,6})(?!\.)\b/)            // reduzido no início (NÃO parte de um código pontuado)
       const classif = mClass ? mClass[1] : ''
-      const cod = (mCod && (!mClass || mCod.index < mClass.index)) ? mCod[1] : ''
-      if (!cod && !classif) continue
-      out.push({ cod, classif, saldo })
+      const cod = mCod ? mCod[1] : ''
+      // Nome = texto entre o código e o 1º valor (para casar por NOME quando o código não bate).
+      const firstNum = linha.match(/-?\d{1,3}(?:\.\d{3})*,\d{2}/)
+      const nome = linha.slice(0, firstNum ? firstNum.index : linha.length).replace(/^[\s.\d]+/, '').replace(/\s+/g, ' ').trim()
+      if (!cod && !classif && !nome) continue
+      out.push({ cod, classif, saldo, nome })
     }
     return out
   }
@@ -442,6 +445,7 @@ export default function Status() {
       const col = re => header.findIndex(x => re.test(x))
       const cCod = col(/reduz|^cod|codigo|^conta/)
       const cClass = col(/classif/)
+      const cNome = col(/descri|nome|conta/)
       let cSaldo = col(/saldo.*(atual|final)/); if (cSaldo < 0) cSaldo = col(/saldo/)
       const cDC = col(/^d\/?c$|natureza|deb.*cred/)
       if (cSaldo < 0 || (cCod < 0 && cClass < 0)) { setMsg('Não identifiquei as colunas do balancete (preciso de Código ou Classificação e o Saldo). Confira o arquivo.'); setBalBusy(false); return }
@@ -452,8 +456,9 @@ export default function Status() {
         if (cDC >= 0 && /c/i.test(String(r[cDC] ?? ''))) saldo = -Math.abs(saldo)
         const cod = cCod >= 0 ? String(r[cCod] ?? '').trim() : ''
         const classif = cClass >= 0 ? String(r[cClass] ?? '').trim() : ''
-        if (!cod && !classif) continue
-        importado.push({ cod, classif, saldo })
+        const nome = (cNome >= 0 && cNome !== cCod && cNome !== cClass) ? String(r[cNome] ?? '').trim() : ''
+        if (!cod && !classif && !nome) continue
+        importado.push({ cod, classif, saldo, nome })
       }
       const res = await conferirBalanceteEncerramento(empresaId, compId, importado)
       setBalConf({ ...res, nome: file.name })
