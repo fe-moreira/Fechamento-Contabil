@@ -204,7 +204,10 @@ function CheckDropdown({ icon, label, resumo, options, marcado, onToggle, onTodo
 }
 
 export default function CompMovimento() {
-  const { empresaId, empresaNome, getCompetenciaId, plano } = useAppData()
+  const { empresaId, empresaNome, competencia, getCompetenciaId, plano } = useAppData()
+  // Mês do FECHAMENTO em andamento (competência global, "MM/AAAA"). Correções/lançamentos
+  // só podem ser feitos NESTE mês; a justificativa é que vale para o ano todo.
+  const fechMes = (() => { const m = /^(\d{2})\/(\d{4})$/.exec(String(competencia || '')); return (m && Number(m[2]) === ANO) ? Number(m[1]) : null })()
   const { user } = useAuth()
 
   const [carregando, setCarregando] = useState(false)
@@ -901,6 +904,8 @@ export default function CompMovimento() {
           usuario={user?.email}
           getCompetenciaId={getCompetenciaId}
           jaJustificada={celulaTratada(detalhe.conta, detalhe.mes)}
+          fechMes={fechMes}
+          competenciaLabel={competencia}
           justTextoAtual={justTextos[chaveCelula(detalhe.conta, detalhe.mes)] || textoPorConta[detalhe.conta] || ''}
           onJustificada={(texto) => marcarJustificada(detalhe.conta, detalhe.mes, texto)}
           onDesfeita={() => marcarNaoJustificada(detalhe.conta)}
@@ -916,7 +921,7 @@ export default function CompMovimento() {
   )
 }
 
-function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuario, jaJustificada, justTextoAtual, onJustificada, onDesfeita, onCorrigido, plano, centrosCC = [], ccSel = new Set(), filtroCC = false, onClose }) {
+function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuario, jaJustificada, fechMes, competenciaLabel, justTextoAtual, onJustificada, onDesfeita, onCorrigido, plano, centrosCC = [], ccSel = new Set(), filtroCC = false, onClose }) {
   const { conta, nome, mes, compId, todos, compIds, mesPorComp, classif } = detalhe
   // Conta de resultado (3/4/5) → precisa de centro de custo; sem CC aparece destacado.
   const contaResultado = ['3', '4', '5'].includes(String(classif || '')[0])
@@ -1093,6 +1098,13 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
     const conta_credito = foiDebito ? conta : contaCerta
     const cid = l.competencia_id
     const mesL = mesDoLanc(l)
+    // TRAVA: correção/lançamento só no mês do FECHAMENTO. Um lançamento de OUTRO mês tem que
+    // ser corrigido NO próprio mês (mude o fechamento para lá) — o razão é vivo, então os
+    // meses seguintes se atualizam sozinhos. (A JUSTIFICATIVA, essa sim, vale para o ano todo.)
+    if (!fechMes || mesL !== fechMes) {
+      const alvo = MESES[((mesL || 1) - 1)] ? `${MESES[(mesL || 1) - 1]}/${ANO}` : 'o mês do lançamento'
+      throw new Error(`Este lançamento é de ${alvo}. Correção só pode ser feita no mês do fechamento${competenciaLabel ? ` (${competenciaLabel})` : ''}. Mude o fechamento para ${alvo} e corrija lá — os outros meses se atualizam sozinhos. A justificativa, essa sim, vale para o ano todo.`)
+    }
     const { error } = await supabase.from('lancamentos').insert({
       competencia_id: cid, data: l.data || null,
       conta_debito, conta_credito, valor: v,
@@ -1175,6 +1187,12 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
   // Desfaz a correção: remove o lançamento e apaga a auditoria. O comparativo lê o razão
   // vivo, então basta sumir com o lançamento — os saldos voltam sozinhos.
   async function desfazerCorrecao(l, corr) {
+    const mesL = mesDoLanc(l)
+    if (!fechMes || mesL !== fechMes) {
+      const alvo = MESES[((mesL || 1) - 1)] ? `${MESES[(mesL || 1) - 1]}/${ANO}` : 'o mês do lançamento'
+      setMsg(`Esta correção é de ${alvo}. Desfazer/mexer no lançamento só no mês do fechamento — mude o fechamento para ${alvo}.`)
+      return
+    }
     if (!window.confirm('Desfazer esta correção? O lançamento de correção será removido e os saldos revertidos.')) return
     setSalvando(true)
     try {
@@ -1228,6 +1246,15 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
             <i className="ti ti-x" /> Fechar
           </button>
         </div>
+
+        {!todos && fechMes && mes !== fechMes && (
+          <div style={{ margin: '14px 22px 0', background: 'rgba(240,180,41,0.12)', border: `1px solid ${theme.yellow}`, borderRadius: 10, padding: '10px 14px' }}>
+            <p style={{ color: theme.text, fontSize: 12.5, margin: 0 }}>
+              <i className="ti ti-alert-triangle" style={{ color: theme.yellow, marginRight: 6 }} />
+              Você está no fechamento de <b>{competenciaLabel}</b>, mas esta coluna é de <b>{MESES[mes - 1]}/{ANO}</b>. Aqui você só pode <b>justificar</b> (vale para o ano todo). Para <b>corrigir/reclassificar</b> um lançamento de {MESES[mes - 1]}, <b>mude o fechamento para {MESES[mes - 1]}/{ANO}</b> e corrija lá — os meses seguintes se atualizam sozinhos.
+            </p>
+          </div>
+        )}
 
         <div style={{ margin: '14px 22px 0', background: 'rgba(74,124,255,0.08)', border: `1px solid ${theme.accent}`, borderRadius: 10, padding: '10px 14px' }}>
           <p style={{ color: theme.text, fontSize: 12.5, margin: 0 }}>
