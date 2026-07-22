@@ -1411,6 +1411,20 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     setMsg(ajustouLeitura ? 'Leitura ajustada — o sistema vai recruzar.' : virouLancamento ? 'Correção registrada — lançamento enviado para o painel Contabilizar.' : `${tipo} registrada na auditoria.`)
     if (ehAb) setTratadosAb(prev => new Set(prev).add(chaveAbertura(acao))) // abertura: marca pela chave
     else if (acao?.id) setTratados(prev => new Set(prev).add(acao.id)) // marca a linha como tratada na hora
+    // Ajustar a leitura (nome/NF) de uma linha de ABERTURA já conferida MUDA a chave estável.
+    // Migra as conferências (auditoria + estado) da chave antiga para a nova — a linha CONTINUA
+    // conferida mesmo depois de corrigir o nome/NF (não volta para "revisar").
+    if (ehAb && ajustouLeitura) {
+      const lNovo = { ...acao, leitura: { ...(acao.leitura || {}),
+        entidade: aj?.entidade ? String(aj.entidade).trim() : acao.leitura?.entidade,
+        nf: (aj?.nf != null && aj?.nf !== '') ? String(aj.nf).trim() : acao.leitura?.nf } }
+      const chaveAntiga = chaveAbertura(acao), chaveNova = chaveAbertura(lNovo)
+      if (chaveAntiga !== chaveNova) {
+        await supabase.from('auditoria').update({ item: chaveNova })
+          .eq('competencia_id', id).eq('modulo', 'Conciliação').eq('item', chaveAntiga)
+        setTratadosAb(prev => { const s = new Set(prev); s.delete(chaveAntiga); s.add(chaveNova); return s })
+      }
+    }
     setAcao(null)
     carregarTratados()
     if (virouLancamento) { onMudou && onMudou(); carregarLanc() } // atualiza saldo e mostra o acerto na composição
@@ -2377,6 +2391,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       {verCorr && (
         <ModalCorrigido linha={verCorr} conta={conta} compId={compId} planoMap={planoMap} lab={lab}
           onClose={() => setVerCorr(null)} onDesfazer={() => desfazerCorrecao(verCorr)}
+          onCorrigir={() => { const alvo = verCorr; setVerCorr(null); setAcao(alvo) }}
           onCorrigirNome={corrigirNomeAcerto}
           onDesvincular={async () => { const alvo = verCorr; setVerCorr(null); await desvincularLinha(alvo); setMsg(`Desvinculado — separado dos nomes parecidos.`) }} />
       )}
@@ -2615,7 +2630,7 @@ function SugestoesDiferenca({ conta, compId, dif }) {
 //            (marcando "pendência do cliente", entra no Relatório de Pendências).
 // Lançamento JÁ TRATADO: mostra o que foi feito (correção/estorno/justificativa)
 // e o lançamento de acerto gerado — e permite DESFAZER. Não reabre a tela de tratar.
-function ModalCorrigido({ linha, compId, planoMap = {}, lab = 'fornecedor', onClose, onDesfazer, onCorrigirNome, onDesvincular }) {
+function ModalCorrigido({ linha, compId, planoMap = {}, lab = 'fornecedor', onClose, onDesfazer, onCorrigir, onCorrigirNome, onDesvincular }) {
   const [dados, setDados] = useState(null)
   const [busy, setBusy] = useState(false)
   const [nomeAcerto, setNomeAcerto] = useState(String(linha.leitura?.entidade || '').trim())
@@ -2679,6 +2694,9 @@ function ModalCorrigido({ linha, compId, planoMap = {}, lab = 'fornecedor', onCl
 
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginTop: 18, flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {onCorrigir && !linha.acerto && (
+              <button className="btn btn-ghost" style={{ color: theme.accent, borderColor: theme.accent }} disabled={busy} onClick={() => onCorrigir()} title="Corrigir a leitura desta linha — nome do fornecedor/cliente, número da NF, histórico — mesmo já estando tratada. A conferência é mantida."><i className="ti ti-wand" /> Ajustar leitura (nome / NF)</button>
+            )}
             <button className="btn btn-ghost" style={{ color: theme.red, borderColor: theme.red }} disabled={busy} onClick={async () => { setBusy(true); await onDesfazer() }}><i className="ti ti-rotate-2" /> Desfazer correção</button>
             {onDesvincular && (linha.leitura?.entidade || linha.historico) && (
               <button className="btn btn-ghost" style={{ color: theme.yellow, borderColor: theme.yellow }} disabled={busy} onClick={async () => { setBusy(true); await onDesvincular() }} title="Este fornecedor/cliente é diferente — separar dos nomes parecidos (e desfazer união por apelido, se houver)"><i className="ti ti-arrows-split" /> Desvincular</button>
