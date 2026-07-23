@@ -104,11 +104,16 @@ const GENERICAS = new Set(['COMPANHIA', 'CIA', 'DISTRIBUIDORA', 'DISTRIBUIDOR', 
   'LTDA', 'EIRELI', 'EPP', 'MEI', 'CF', 'RPS',
   'DO', 'DA', 'DE', 'DOS', 'DAS', 'E', 'EM'])
 const normNome = s => String(s || '').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim()
-// Tokens distintivos de um nome (>=3 letras, sem genéricas). Se sobrar vazio, usa todos.
+// Tokens distintivos de um nome (>=3 letras, sem genéricas). Se não sobrar nenhum "forte",
+// usa os tokens NÃO genéricos mesmo CURTOS (iniciais como "C K", "A S", "RC") — que
+// distinguem melhor do que cair em TODOS (com as palavras genéricas juntas, que encadeiam
+// empresas diferentes). Só se nem isso sobrar é que usa todos.
 function tokensNome(nome) {
   const todos = normNome(nome).split(' ').filter(Boolean)
   const dist = todos.filter(t => t.length >= 3 && !GENERICAS.has(t))
-  return dist.length ? dist : todos
+  if (dist.length) return dist
+  const naoGen = todos.filter(t => !GENERICAS.has(t))
+  return naoGen.length ? naoGen : todos
 }
 // Dois nomes são o mesmo cliente se um conjunto de tokens é subconjunto do outro,
 // ou a interseção cobre a maioria do menor e há um token forte (>=4 letras) em comum.

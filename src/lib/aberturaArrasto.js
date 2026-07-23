@@ -18,7 +18,9 @@ const normNome = s => String(s || '').toUpperCase().normalize('NFD').replace(/[�
 export function tokensNome(nome) {
   const todos = normNome(nome).split(' ').filter(Boolean)
   const dist = todos.filter(t => t.length >= 3 && !GENERICAS.has(t))
-  return dist.length ? dist : todos
+  if (dist.length) return dist
+  const naoGen = todos.filter(t => !GENERICAS.has(t)) // iniciais "C K", "A S" — melhor que todos com genéricas
+  return naoGen.length ? naoGen : todos
 }
 export function mesmoCliente(a, b) {
   const inter = a.filter(t => b.includes(t))
