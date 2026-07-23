@@ -367,6 +367,10 @@ export function limparNomeEntidade(nome) {
   // Prefixo do fiscal integrado com ACUMULADOR: "SERV. PREST. PROPAGANDA – CUMULATIVO ACUM. 27 –
   // <CLIENTE>". O cliente vem DEPOIS do "ACUM. N –/—" (qualquer traço). Tira tudo até lá.
   s = s.replace(/^.*?\bACUM(?:ULADOR)?\.?\s*\d+[\s|\-–—−]+/i, '')
+  // Sufixo fiscal no FIM do nome ("… CF. NF. N.º", "… CF NF Nº 1265") — marcador da nota,
+  // não faz parte do nome do cliente. Sem tirar, o "CF NF" grudava e ajudava a fundir nomes.
+  s = s.replace(/\s*\bCF\.?(?:\s*NF\.?)?(?:\s*N[º°o.]*\.?\s*\d*)?\s*$/i, '')
+    .replace(/\s*\bNF\.?\s*(?:N[º°o.]*\.?\s*\d*)?\s*$/i, '')
   // Tira, do INÍCIO, palavras de "tipo de conta" que vêm coladas no nome: adiantamento de/a
   // fornecedor/cliente e prefixos de IMPOSTO (COFINS, PIS, ICMS, ISS, IRPJ, CSLL, IRRF, INSS,
   // IPI, DARF, DAS…). Repete enquanto houver (ex.: "PIS COFINS MIRAGE ..." → "MIRAGE ...").
