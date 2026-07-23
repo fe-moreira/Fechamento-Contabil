@@ -10,7 +10,9 @@ import { supabase } from './supabase'
 const RUIDO = /\b(VENDA|VENDAS|COMPRA|COMPRAS|PAGTO|PAGAMENTO|RECEBIMENTO|RECEBTO|REF|REFERENTE|NOTA|FISCAL|DUPLICATA|DUPL|BOLETO|TITULO|TÍTULO|VLR|VALOR|PARCELA|PARC|CONF|S\/|A|DE|DA|DO|DOS|DAS|E|NO|NA|EM)\b/ig
 const tiraSufixo = e => e.replace(/\s+(S[./]?\s?A\.?|LTDA\.?|EIRELI|EPP|ME)\b.*$/i, '').replace(/\s+/g, ' ').trim()
 
-const GENERICAS = new Set(['COMPANHIA', 'CIA', 'DISTRIBUIDORA', 'DISTRIBUIDOR', 'ENERGIA', 'ENERGIAS', 'ELETRICA', 'ELETRICAS', 'FORCA', 'LUZ', 'COMERCIO', 'COMERCIAL', 'INDUSTRIA', 'INDUSTRIAL', 'SERVICO', 'SERVICOS', 'BRASIL', 'NACIONAL', 'GRUPO', 'HOLDING', 'PARTICIPACOES', 'EMPREENDIMENTOS', 'TRANSPORTE', 'TRANSPORTES', 'LOGISTICA', 'SOLUCOES', 'TECNOLOGIA', 'SISTEMAS', 'ASSOCIACAO', 'INSTITUTO', 'FUNDACAO', 'BANCO', 'SUPERMERCADO', 'SUPERMERCADOS', 'ALIMENTOS', 'DO', 'DA', 'DE', 'DOS', 'DAS', 'E', 'EM'])
+const GENERICAS = new Set(['COMPANHIA', 'CIA', 'DISTRIBUIDORA', 'DISTRIBUIDOR', 'ENERGIA', 'ENERGIAS', 'ELETRICA', 'ELETRICAS', 'FORCA', 'LUZ', 'COMERCIO', 'COMERCIAL', 'INDUSTRIA', 'INDUSTRIAL', 'SERVICO', 'SERVICOS', 'BRASIL', 'NACIONAL', 'GRUPO', 'HOLDING', 'PARTICIPACOES', 'EMPREENDIMENTOS', 'TRANSPORTE', 'TRANSPORTES', 'LOGISTICA', 'SOLUCOES', 'TECNOLOGIA', 'SISTEMAS', 'ASSOCIACAO', 'INSTITUTO', 'FUNDACAO', 'BANCO', 'SUPERMERCADO', 'SUPERMERCADOS', 'ALIMENTOS',
+  'SERV', 'PROPAGANDA', 'CUMULATIVO', 'ACUM', 'PREST', 'PRESTACAO', 'CONTABIL', 'CONTABEIS', 'CONTABILIDADE', 'ASSESSORIA', 'ASSESSORIAS', 'CONSULTORIA', 'CONSULTORIAS', 'EMPRESARIAL', 'EMPRESARIAIS', 'GESTAO', 'TRIBUTARIA', 'ADMINISTRATIVA', 'ADMINISTRATIVOS', 'PERICIA', 'AUDITORIA', 'AUDITORES', 'ESCRITORIO', 'FINANCEIRA',
+  'DO', 'DA', 'DE', 'DOS', 'DAS', 'E', 'EM'])
 const normNome = s => String(s || '').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim()
 export function tokensNome(nome) {
   const todos = normNome(nome).split(' ').filter(Boolean)
@@ -32,10 +34,14 @@ function lerHistorico(h) {
   const corpo = s.split(/\s(?:CF\b|NF\b|NOTA\s+FISCAL|RPS\b)/i)[0].trim()
   let entidade = '', ident = false
   const mRec = corpo.match(/\b(?:RECEBIMENTO|RECEBTO|PAGAMENTO|PAGTO)\s+(?:A\s+|DE\s+|AO\s+)?(.+)$/i)
+  // Fiscal integrado (SAÍDAS/serviços): cliente vem DEPOIS do "ACUM. N —" (qualquer traço).
+  const mAcum = corpo.match(/\bACUM(?:ULADOR)?\.?\s*\d+[\s|\-–—−]+(.+)$/i)
   if (mRec) {
     entidade = tiraSufixo(mRec[1].trim()); ident = true
-  } else if (/\s[-–]\s/.test(corpo)) {
-    const segs = corpo.split(/\s[-–]\s/).map(x => x.trim()).filter(Boolean)
+  } else if (mAcum && mAcum[1].trim().length >= 3) {
+    entidade = tiraSufixo(mAcum[1].trim()); ident = true
+  } else if (/\s[-–—−]\s/.test(corpo)) {
+    const segs = corpo.split(/\s[-–—−]\s/).map(x => x.trim()).filter(Boolean)
     entidade = tiraSufixo(segs[segs.length - 1]); ident = true
   }
   if (!entidade || entidade.length < 3) {
