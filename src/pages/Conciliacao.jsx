@@ -665,6 +665,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const [nomesIsolados, setNomesIsolados] = useState(new Set()) // nomes a NÃO unir com parecidos (desvincular)
   const [separados, setSeparados] = useState(new Set()) // linhas (por id) forçadas a ficar no PRÓPRIO grupo (desvincular determinístico)
   const [nomesAlias, setNomesAlias] = useState({}) // APELIDOS: nomeAntigoKey -> nome correto (renomeia em todo lugar)
+  const [aliasesForcados, setAliasesForcados] = useState({}) // VÍNCULO MANUAL: nomeKey -> nome correto, aplicado SEM a trava do "mesmo cliente" (o usuário mandou juntar)
   const [ultimaCorrecao, setUltimaCorrecao] = useState(null) // { old, neu } da última correção de nome → alimenta as sugestões
   const [sugDismiss, setSugDismiss] = useState(() => new Set()) // sugestões de nome descartadas (chaveNome do atual)
   const [aberturaAj, setAberturaAj] = useState({}) // ajustes por item de saldo inicial: {chave:{nf,entidade,historico}}
@@ -685,6 +686,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     setNomesConf(new Set((d.confiaveis || []).map(chaveNome)))
     setNomesIsolados(new Set((d.isolados || []).map(chaveNome)))
     setNomesAlias(d.aliases && typeof d.aliases === 'object' ? d.aliases : {})
+    setAliasesForcados(d.aliasesForcados && typeof d.aliasesForcados === 'object' ? d.aliasesForcados : {})
     setAberturaAj(d.aberturaAjustes && typeof d.aberturaAjustes === 'object' ? d.aberturaAjustes : {})
     setAcertoNomes(d.acertoNomes && typeof d.acertoNomes === 'object' ? d.acertoNomes : {})
     setBaixasReabertas(new Set(Array.isArray(d.baixasReabertas) ? d.baixasReabertas : []))
@@ -693,10 +695,10 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     setSeparados(new Set(Array.isArray(d.separados) ? d.separados : []))
   }
   useEffect(() => { if (empresaId) carregarNomes() }, [empresaId]) // eslint-disable-line react-hooks/exhaustive-deps
-  async function salvarNomes(conf, iso, aliases = nomesAlias, aberAj = aberturaAj, acNomes = acertoNomes, baixasReab = baixasReabertas, sugRej = sugestoesRejeitadas, modoPN = modoPorNome, sep = separados) {
+  async function salvarNomes(conf, iso, aliases = nomesAlias, aberAj = aberturaAj, acNomes = acertoNomes, baixasReab = baixasReabertas, sugRej = sugestoesRejeitadas, modoPN = modoPorNome, sep = separados, aliasF = aliasesForcados) {
     await supabase.from('cargas_cadastro').delete().eq('cliente_id', empresaId).eq('tipo', 'conciliacao_nomes')
     // vigencia é NOT NULL — usa a competência atual (o registro é único por cliente, lido sempre o mais recente).
-    const { error } = await supabase.from('cargas_cadastro').insert({ cliente_id: empresaId, tipo: 'conciliacao_nomes', vigencia: competencia || '00/0000', dados: { confiaveis: [...conf], isolados: [...iso], aliases: aliases || {}, aberturaAjustes: aberAj || {}, acertoNomes: acNomes || {}, baixasReabertas: [...baixasReab], sugestoesRejeitadas: [...sugRej], modoPorNome: modoPN || {}, separados: [...(sep || [])] }, usuario })
+    const { error } = await supabase.from('cargas_cadastro').insert({ cliente_id: empresaId, tipo: 'conciliacao_nomes', vigencia: competencia || '00/0000', dados: { confiaveis: [...conf], isolados: [...iso], aliases: aliases || {}, aberturaAjustes: aberAj || {}, acertoNomes: acNomes || {}, baixasReabertas: [...baixasReab], sugestoesRejeitadas: [...sugRej], modoPorNome: modoPN || {}, separados: [...(sep || [])], aliasesForcados: aliasF || {} }, usuario })
     if (error) { setMsg('Não consegui salvar: ' + error.message); return error }
   }
   // Chave estável de uma linha (para "separar" determinístico): razão pelo id, abertura pela
@@ -888,6 +890,9 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     }
     // APELIDOS: renomeia o nome lido pelo nome correto (vale p/ saldo inicial e razão).
     const aliasMap = (cn?.dados?.aliases && typeof cn.dados.aliases === 'object') ? cn.dados.aliases : {}
+    // VÍNCULO MANUAL: apelidos que o usuário forçou (botão "Vincular") — aplicados SEM a trava
+    // do "mesmo cliente", porque foi uma ordem explícita de juntar dois nomes num grupo só.
+    const aliasForcadoMap = (cn?.dados?.aliasesForcados && typeof cn.dados.aliasesForcados === 'object') ? cn.dados.aliasesForcados : {}
     // Nomes CONFIÁVEIS do cliente → quem bate sobe para conf 'alta' (não pede revisão).
     const confSet = new Set(((cn?.dados?.confiaveis) || []).map(chaveNome))
     // Ajustes por item de saldo inicial (NF/nome/histórico) — não têm razao_id.
@@ -933,6 +938,9 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       if (al && al !== leitura.entidade && mesmoCliente(tokensNome(leitura.entidade), tokensNome(al))) {
         leitura = { ...leitura, entidade: al, ident: true }
       }
+      // Vínculo MANUAL forçado: aplica mesmo entre nomes diferentes (o usuário mandou juntar).
+      const alF = leitura.entidade ? aliasForcadoMap[chaveNome(leitura.entidade)] : null
+      if (alF && alF !== leitura.entidade) leitura = { ...leitura, entidade: alF, ident: true }
       // Rede de segurança: seja qual for a origem do nome (histórico, fiscal, alias), tira
       // prefixo de tipo de conta / imposto colado no começo (ex.: "ADIANTAMENTO DE CLIENTES …").
       if (leitura.entidade) { const limpo = limparNomeEntidade(leitura.entidade); if (limpo && limpo !== leitura.entidade) leitura = { ...leitura, entidade: limpo } }
@@ -1736,6 +1744,54 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     carregarLanc()
   }
 
+  // VINCULAR EM LOTE (inverso do desvincular): junta os lançamentos selecionados num
+  // cliente/fornecedor SÓ, mesmo que os nomes estejam escritos diferentes ou tenham sido
+  // separados antes. Desfaz o desvínculo (separados/isolados), dá a TODOS o mesmo nome (o
+  // escolhido, senão o mais completo) por linha/item e grava um APELIDO FORÇADO — aplicado sem
+  // a trava do "mesmo cliente" — para continuar unido nos próximos meses.
+  async function vincularLote(lines, nomeAlvo) {
+    const comNome = (lines || []).filter(l => (l.leitura?.entidade || '').trim() || l.acerto)
+    if (comNome.length < 2) { setLoteForn(null); setMsg('Marque ao menos 2 linhas para vincular.'); return }
+    // Nome alvo: o digitado; senão o MAIS COMPLETO (mais longo) entre os selecionados.
+    let alvo = String(nomeAlvo || '').trim()
+    if (!alvo) alvo = (comNome.map(l => String(l.leitura?.entidade || '').trim()).filter(Boolean).sort((a, b) => b.length - a.length)[0]) || ''
+    if (!alvo) { setLoteForn(null); setMsg('Nenhum nome para usar como destino do vínculo.'); return }
+    const kAlvo = chaveNome(alvo)
+    const razaoLinhas = comNome.filter(l => !l.acerto)   // razão + saldo anterior
+    const acertoLinhas = comNome.filter(l => l.acerto)   // lançamentos gerados
+    const aliases = { ...nomesAlias }
+    const aliasF = { ...aliasesForcados }
+    const aberAjNovo = { ...aberturaAj }
+    const iso = new Set(nomesIsolados)
+    const sep = new Set(separados)
+    for (const l of razaoLinhas) {
+      const k = chaveNome(l.leitura?.entidade || '')
+      // Apelido normal + apelido FORÇADO (sem a trava do "mesmo cliente"): garante que o nome
+      // antigo continue caindo no grupo alvo nos próximos meses, mesmo entre nomes diferentes.
+      if (k && k !== kAlvo) { aliases[k] = alvo; aliasF[k] = alvo; iso.delete(k) }
+      // Desfaz o desvínculo determinístico desta linha, para ela poder voltar ao grupo.
+      sep.delete(sepKey(l))
+      // Saldo inicial: fixa o nome no próprio item (garante o mesmo grupo).
+      if (l._abertura) { const key = chaveAberturaAj(l); aberAjNovo[key] = { ...(aberAjNovo[key] || {}), entidade: alvo } }
+    }
+    for (const l of acertoLinhas) sep.delete(sepKey(l))
+    iso.delete(kAlvo)
+    // Acerto (lançamento gerado): guarda o nome por uuid.
+    const acMap = { ...acertoNomes }
+    for (const l of acertoLinhas) { const rid = String(l.id).replace(/^ac_/, ''); if (rid) acMap[rid] = alvo }
+    setNomesAlias(aliases); setAliasesForcados(aliasF); setAberturaAj(aberAjNovo); setAcertoNomes(acMap); setNomesIsolados(iso); setSeparados(sep)
+    await salvarNomes(nomesConf, iso, aliases, aberAjNovo, acMap, baixasReabertas, sugestoesRejeitadas, modoPorNome, sep, aliasF)
+    // Razão: também grava ajuste_leitura (força o nome na linha, mesmo "não identificada").
+    const razaoIds = razaoLinhas.filter(l => !l._abertura && l.id).map(l => l.id)
+    if (razaoIds.length) {
+      const id = await getCompetenciaId()
+      if (id) await supabase.from('ajuste_leitura').upsert(razaoIds.map(rid => ({ competencia_id: id, razao_id: rid, entidade: alvo, usuario })), { onConflict: 'razao_id' })
+    }
+    setSelLin(new Set()); setLoteForn(null)
+    setMsg(`${comNome.length} lançamento(s) vinculados em "${alvo}".`)
+    carregarLanc()
+  }
+
   // Corrige o FORNECEDOR/CLIENTE de vários lançamentos de uma vez (ajuste de leitura em
   // lote): útil quando o sistema leu o nome errado em várias linhas do mesmo fornecedor.
   async function aplicarFornecedorLote(lines, nome, aprender) {
@@ -2366,6 +2422,8 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         // lançamentos gerados/"não identificados" — nesses o nome fica salvo por lançamento).
         // Desvincular só faz sentido em quem já tem nome (título/saldo anterior).
         const desvincaveis = selLancs.filter(l => !l.acerto && (l.leitura?.entidade || '').trim())
+        // Vinculáveis: linhas com nome (ou lançamento gerado) — precisa de 2+ para juntar num grupo só.
+        const vincaveis = selLancs.filter(l => (l.leitura?.entidade || '').trim() || l.acerto)
         // Reclassificáveis: lançamentos do razão (não abertura, não acerto) — têm razao_id.
         const reclassificaveis = selLancs.filter(l => !l._abertura && !l.acerto && l.id != null)
         return (
@@ -2376,6 +2434,9 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
             </button>
             <button className="btn btn-ghost" disabled={!reclassificaveis.length} title={!reclassificaveis.length ? 'Selecione lançamentos do razão para reclassificar.' : 'Trocar a conta destes lançamentos (uma conta por linha ou a mesma para todos)'} style={{ fontSize: 12.5, opacity: reclassificaveis.length ? 1 : 0.5, cursor: reclassificaveis.length ? 'pointer' : 'not-allowed' }} onClick={() => reclassificaveis.length && setReclassLote({ lines: reclassificaveis })}>
               <i className="ti ti-arrows-exchange" /> Reclassificar conta
+            </button>
+            <button className="btn btn-ghost" disabled={vincaveis.length < 2} title={vincaveis.length < 2 ? 'Marque 2+ linhas (com nome) para juntar num cliente só.' : 'Juntar os selecionados num cliente/fornecedor só — mesmo com nomes diferentes ou separados antes. Vale para todos os meses.'} style={{ fontSize: 12.5, color: theme.accent, borderColor: theme.accent, opacity: vincaveis.length >= 2 ? 1 : 0.5, cursor: vincaveis.length >= 2 ? 'pointer' : 'not-allowed' }} onClick={() => vincaveis.length >= 2 && setLoteForn({ lines: vincaveis, vincular: true })}>
+              <i className="ti ti-arrows-join" /> Vincular
             </button>
             <button className="btn btn-ghost" disabled={!desvincaveis.length} title={!desvincaveis.length ? 'Selecione um título ou o saldo anterior (com nome).' : 'Manter estes nomes separados (não unir com parecidos) — vale para todos os meses'} style={{ fontSize: 12.5, color: theme.yellow, borderColor: theme.yellow, opacity: desvincaveis.length ? 1 : 0.5, cursor: desvincaveis.length ? 'pointer' : 'not-allowed' }} onClick={() => desvincaveis.length && desvincularLote(desvincaveis)}>
               <i className="ti ti-arrows-split" /> Desvincular
@@ -2401,7 +2462,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       )}
 
       {loteForn && (
-        <ModalLoteForn lines={loteForn.lines} lab={lab} onClose={() => setLoteForn(null)} onAplicar={aplicarFornecedorLote} />
+        <ModalLoteForn lines={loteForn.lines} lab={lab} vincular={loteForn.vincular} onClose={() => setLoteForn(null)} onAplicar={loteForn.vincular ? ((lines, nome) => vincularLote(lines, nome)) : aplicarFornecedorLote} />
       )}
 
       {reclassLote && (
@@ -3154,32 +3215,47 @@ function ModalConectarDif({ net, plano, onClose, onAplicar }) {
   )
 }
 
-// Corrigir o fornecedor/cliente de vários lançamentos de uma vez.
-function ModalLoteForn({ lines, lab, onClose, onAplicar }) {
+// Corrigir o fornecedor/cliente de vários lançamentos de uma vez — ou VINCULAR (juntar num
+// cliente só) quando `vincular` está ligado.
+function ModalLoteForn({ lines, lab, vincular, onClose, onAplicar }) {
   // Aplica a TODAS as linhas selecionadas: título e saldo anterior (por apelido/ajuste) e
   // também os lançamentos gerados/"não identificados" (nome salvo por lançamento).
   const total = (lines || []).length
   const comAcerto = (lines || []).filter(l => l.acerto).length
-  // Prefill: o nome mais frequente entre os selecionados (que já têm nome).
+  // Prefill: no corrigir, o nome mais frequente; no vincular, o MAIS COMPLETO (mais longo).
   const cont = {}
   for (const l of (lines || [])) { const n = (l.leitura?.entidade || '').trim(); if (n) cont[n] = (cont[n] || 0) + 1 }
-  const sugestao = Object.entries(cont).sort((a, b) => b[1] - a[1])[0]?.[0] || ''
+  const sugestao = vincular
+    ? (Object.keys(cont).sort((a, b) => b.length - a.length)[0] || '')
+    : (Object.entries(cont).sort((a, b) => b[1] - a[1])[0]?.[0] || '')
+  const nomesDistintos = Object.keys(cont).length
   const [nome, setNome] = useState(sugestao)
   const [aprender, setAprender] = useState(true)
   const [busy, setBusy] = useState(false)
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 95 }}>
       <div onClick={e => e.stopPropagation()} style={{ width: 'min(480px,96vw)', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 14, padding: 20 }}>
-        <h3 style={{ fontSize: 15, margin: '0 0 8px' }}><i className="ti ti-user-edit" style={{ color: theme.accent, marginRight: 6 }} />Corrigir {lab} em lote</h3>
-        <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 12px' }}>Aplica o nome a <b style={{ color: theme.text }}>{total}</b> lançamento(s) selecionado(s){comAcerto > 0 ? ` (${comAcerto} lançamento(s) gerado(s) — o nome fica salvo por lançamento)` : ''}. Renomeia esse {lab} em todos os meses.</p>
-        <label style={{ fontSize: 12, color: theme.sub }}>Nome correto do {lab}</label>
-        <input className="input" autoFocus value={nome} onChange={e => setNome(e.target.value)} placeholder={`Nome correto do ${lab}`} style={{ marginBottom: 12 }} />
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: theme.sub, cursor: 'pointer', marginBottom: 16 }}>
-          <input type="checkbox" checked={aprender} onChange={e => setAprender(e.target.checked)} /> Aprender — não pedir revisão desse {lab} nos próximos meses
-        </label>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+        {vincular ? (
+          <>
+            <h3 style={{ fontSize: 15, margin: '0 0 8px' }}><i className="ti ti-arrows-join" style={{ color: theme.accent, marginRight: 6 }} />Vincular num {lab} só</h3>
+            <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 12px' }}>Junta os <b style={{ color: theme.text }}>{total}</b> lançamento(s) selecionado(s){nomesDistintos > 1 ? ` (${nomesDistintos} nomes diferentes)` : ''} num {lab} só — <b>mesmo que estivessem separados antes</b>. Escolha o nome que fica (por padrão, o mais completo). Vale para todos os meses.</p>
+          </>
+        ) : (
+          <>
+            <h3 style={{ fontSize: 15, margin: '0 0 8px' }}><i className="ti ti-user-edit" style={{ color: theme.accent, marginRight: 6 }} />Corrigir {lab} em lote</h3>
+            <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 12px' }}>Aplica o nome a <b style={{ color: theme.text }}>{total}</b> lançamento(s) selecionado(s){comAcerto > 0 ? ` (${comAcerto} lançamento(s) gerado(s) — o nome fica salvo por lançamento)` : ''}. Renomeia esse {lab} em todos os meses.</p>
+          </>
+        )}
+        <label style={{ fontSize: 12, color: theme.sub }}>Nome do {lab}{vincular ? ' que fica' : ' correto'}</label>
+        <input className="input" autoFocus value={nome} onChange={e => setNome(e.target.value)} placeholder={`Nome do ${lab}`} style={{ marginBottom: 12 }} />
+        {!vincular && (
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: theme.sub, cursor: 'pointer', marginBottom: 16 }}>
+            <input type="checkbox" checked={aprender} onChange={e => setAprender(e.target.checked)} /> Aprender — não pedir revisão desse {lab} nos próximos meses
+          </label>
+        )}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: vincular ? 4 : 0 }}>
           <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
-          <button className="btn" disabled={!nome.trim() || !total || busy} onClick={async () => { setBusy(true); await onAplicar(lines, nome, aprender) }}><i className="ti ti-check" /> Aplicar</button>
+          <button className="btn" disabled={!nome.trim() || !total || busy} onClick={async () => { setBusy(true); await onAplicar(lines, nome, aprender) }}><i className={`ti ${vincular ? 'ti-arrows-join' : 'ti-check'}`} /> {vincular ? 'Vincular' : 'Aplicar'}</button>
         </div>
       </div>
     </div>
