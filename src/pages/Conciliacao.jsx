@@ -116,6 +116,12 @@ function mesmoCliente(a, b) {
   const inter = a.filter(t => b.includes(t))
   if (!inter.length) return false
   const menor = Math.min(a.length, b.length)
+  // Conjuntos de tokens IDÊNTICOS → mesmo cliente (ex.: duas linhas "BRIT CONTABILIDADE").
+  if (a.length === b.length && inter.length === menor) return true
+  // Um dos nomes tem UM só token distintivo, contido no outro (subconjunto): só é o mesmo
+  // cliente se esse token for FORTE (>=5 letras). Senão "NOVA" uniria "NOVA CONTABILIDADE"
+  // com "NOVA ALIANCA" (empresas diferentes que só compartilham a palavra comum "NOVA").
+  if (menor === 1) return inter.length === 1 && inter[0].length >= 5
   if (inter.length === menor) return true
   return inter.length / menor >= 0.6 && inter.some(t => t.length >= 4)
 }
