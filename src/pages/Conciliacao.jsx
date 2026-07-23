@@ -925,7 +925,14 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         if (rec && rec !== leitura.entidade) leitura = { ...leitura, entidade: rec, ident: true }
       }
       const al = leitura.entidade ? aliasMap[chaveNome(leitura.entidade)] : null
-      if (al && al !== leitura.entidade) leitura = { ...leitura, entidade: al, ident: true }
+      // Só aplica o APELIDO se o nome final for do MESMO cliente (compartilha token distintivo).
+      // Assim, apelidos criados por uma UNIFICAÇÃO ERRADA antiga — quando o sistema juntava
+      // nomes totalmente diferentes num grupo e o Conectar/Confirmar salvava todos apelidados
+      // pelo nome mais longo (ex.: "PHARUS…" virou apelido de "NOVA CONTABILIDADE…") — deixam de
+      // forçar o agrupamento depois que a leitura passou a extrair o cliente certo.
+      if (al && al !== leitura.entidade && mesmoCliente(tokensNome(leitura.entidade), tokensNome(al))) {
+        leitura = { ...leitura, entidade: al, ident: true }
+      }
       // Rede de segurança: seja qual for a origem do nome (histórico, fiscal, alias), tira
       // prefixo de tipo de conta / imposto colado no começo (ex.: "ADIANTAMENTO DE CLIENTES …").
       if (leitura.entidade) { const limpo = limparNomeEntidade(leitura.entidade); if (limpo && limpo !== leitura.entidade) leitura = { ...leitura, entidade: limpo } }
