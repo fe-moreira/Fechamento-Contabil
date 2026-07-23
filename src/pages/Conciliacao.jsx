@@ -96,6 +96,9 @@ const GENERICAS = new Set(['COMPANHIA', 'CIA', 'DISTRIBUIDORA', 'DISTRIBUIDOR', 
   'RECEITA', 'RECEITAS', 'MONTAGEM', 'MONTAGENS', 'PROJETO', 'PROJETOS', 'REDES', 'REDE', 'PRESTACAO', 'PREST',
   // Estrutura societária de incorporadoras/imobiliárias/engenharia (comum, não distingue).
   'INCORPORACOES', 'INCORPORACAO', 'INCORPORADORA', 'IMOBILIARIOS', 'IMOBILIARIO', 'IMOBILIARIA', 'IMOBILIARIAS', 'SPE', 'CONSTRUTORA', 'CONSTRUCAO', 'CONSTRUCOES', 'ENGENHARIA', 'ENGENHARIAS', 'DESENVOLVIMENTO', 'DESENVOLVIMENTOS',
+  // Termos de ESCRITÓRIO CONTÁBIL (não distinguem uma firma da outra) e do prefixo fiscal
+  // "SERV. PREST. PROPAGANDA CUMULATIVO ACUM." — senão fundiam dezenas de contabilidades diferentes.
+  'SERV', 'PROPAGANDA', 'CUMULATIVO', 'CONTABIL', 'CONTABEIS', 'CONTABILIDADE', 'CONTABILIDADES', 'ASSESSORIA', 'ASSESSORIAS', 'CONSULTORIA', 'CONSULTORIAS', 'EMPRESARIAL', 'EMPRESARIAIS', 'EMPRESARIAIS', 'GESTAO', 'TRIBUTARIA', 'TRIBUTARIOS', 'TRIBUTARIO', 'ADMINISTRATIVA', 'ADMINISTRATIVOS', 'ADMINISTRATIVO', 'PERICIA', 'AUDITORIA', 'AUDITORES', 'ESCRITORIO', 'ORGANIZACAO', 'ORGANIZACOES', 'FINANCEIRA', 'FINANCEIRO',
   'DO', 'DA', 'DE', 'DOS', 'DAS', 'E', 'EM'])
 const normNome = s => String(s || '').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim()
 // Tokens distintivos de um nome (>=3 letras, sem genéricas). Se sobrar vazio, usa todos.
@@ -145,15 +148,22 @@ function lerHistorico(h) {
   const corpo = s.split(/\s(?:CF\b|NF\b|NOTA\s+FISCAL|RPS\b)/i)[0].trim()
   let entidade = '', ident = false
   const mRec = corpo.match(/\b(?:RECEBIMENTO|RECEBTO|PAGAMENTO|PAGTO)\s+(?:A\s+|DE\s+|AO\s+)?(.+)$/i)
+  // Fiscal integrado (SAÍDAS/serviços): "<natureza> — CUMULATIVO ACUM. N — <CLIENTE> CF. NF. Nº".
+  // O CLIENTE vem DEPOIS do "ACUM. N —"; pega o que vem após o ÚLTIMO acumulador. Aceita
+  // qualquer traço (hífen, en-dash –, em-dash —, sinal −). Sem isso o prefixo comum ("SERV.
+  // PREST. PROPAGANDA – CUMULATIVO ACUM. 27 –") ficava no nome e fundia clientes diferentes.
+  const mAcum = corpo.match(/\bACUM(?:ULADOR)?\.?\s*\d+[\s|\-–—−]+(.+)$/i)
   if (mRec) {
     // "VALOR REF. RECEBIMENTO <NOME> NF ..." (tira também o prefixo "ADIANTAMENTO DE FORNECEDOR/CLIENTE").
     entidade = tiraSufixo(limparNomeEntidade(mRec[1].trim())); ident = true
+  } else if (mAcum && mAcum[1].trim().length >= 3) {
+    entidade = tiraSufixo(limparNomeEntidade(mAcum[1].trim())); ident = true
   } else if (/^\s*ADIANTAMENTOS?\s+(?:DE\s+|A\s+|AO\s+|AOS\s+)?(?:FORNECEDOR(?:ES)?|CLIENTE(?:S)?)\b/i.test(corpo)) {
     // "ADIANTAMENTO DE FORNECEDOR <NOME> 003881" → tira o prefixo do tipo de conta e o código.
     entidade = tiraSufixo(limparNomeEntidade(corpo)); ident = true
-  } else if (/\s[-–]\s/.test(corpo)) {
-    // "... - ACUM. N - <NOME> CF. NF. ..." → último segmento entre travessões
-    entidade = tiraSufixo(limparNomeEntidade(corpo.split(/\s[-–]\s/).map(x => x.trim()).filter(Boolean).slice(-1)[0])); ident = true
+  } else if (/\s[-–—−]\s/.test(corpo)) {
+    // "... - ACUM. N - <NOME> CF. NF. ..." → último segmento entre travessões (qualquer traço)
+    entidade = tiraSufixo(limparNomeEntidade(corpo.split(/\s[-–—−]\s/).map(x => x.trim()).filter(Boolean).slice(-1)[0])); ident = true
   }
   // Fallback: heurística antiga de remoção de ruído (leitura incerta).
   if (!entidade || entidade.length < 3) {

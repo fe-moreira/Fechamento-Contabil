@@ -364,6 +364,9 @@ export function limparNomeEntidade(nome) {
   // nome do acumulador (um token, pode ter "/") logo após o traço.
   const opAcum = /^\s*(?:(?:RE)?VENDAS?|COMPRAS?|AQUISI[CÇ][AÃ]O|PRESTA[CÇ][AÃ]O|DEVOLU[CÇ][AÃ]O|RETORNO|REMESSA|TRANSFER[EÊ]NCIA|BONIFICA[CÇ][AÃ]O|FATURAMENTO)(?:\s+(?:DE|PARA|DO|DA|EM|A|AO))?\s+(?:MERCADORIAS?|PRODU[CÇ][AÃ]O|PRODUTOS?|SERVI[CÇ]OS?|COMERCIALIZA[CÇ][AÃ]O|INDUSTRIALIZA[CÇ][AÃ]O|CONSUMO|IMOBILIZADO)(?:\s*[-–—]\s*[A-Za-zÀ-ÿ0-9./]+)?\s+(?=[A-Za-zÀ-ÿ0-9])/i
   s = s.replace(opAcum, '')
+  // Prefixo do fiscal integrado com ACUMULADOR: "SERV. PREST. PROPAGANDA – CUMULATIVO ACUM. 27 –
+  // <CLIENTE>". O cliente vem DEPOIS do "ACUM. N –/—" (qualquer traço). Tira tudo até lá.
+  s = s.replace(/^.*?\bACUM(?:ULADOR)?\.?\s*\d+[\s|\-–—−]+/i, '')
   // Tira, do INÍCIO, palavras de "tipo de conta" que vêm coladas no nome: adiantamento de/a
   // fornecedor/cliente e prefixos de IMPOSTO (COFINS, PIS, ICMS, ISS, IRPJ, CSLL, IRRF, INSS,
   // IPI, DARF, DAS…). Repete enquanto houver (ex.: "PIS COFINS MIRAGE ..." → "MIRAGE ...").
