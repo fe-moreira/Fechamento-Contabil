@@ -24,6 +24,10 @@ export function mesmoCliente(a, b) {
   const inter = a.filter(t => b.includes(t))
   if (!inter.length) return false
   const menor = Math.min(a.length, b.length)
+  // Conjuntos idênticos → mesmo cliente. Subconjunto com UM só token distintivo só casa se
+  // esse token for FORTE (>=5) — senão "NOVA" uniria "NOVA CONTABILIDADE" e "NOVA ALIANCA".
+  if (a.length === b.length && inter.length === menor) return true
+  if (menor === 1) return inter.length === 1 && inter[0].length >= 5
   if (inter.length === menor) return true
   return inter.length / menor >= 0.6 && inter.some(t => t.length >= 4)
 }
