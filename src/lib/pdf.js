@@ -343,3 +343,75 @@ export function abreCartaPendencias({ empresa = '', cnpj = '', competencia = '',
   if (!w) { alert('Permita pop-ups para gerar o PDF.'); return }
   w.document.write(html); w.document.close()
 }
+
+// ---------------------------------------------------------------------------
+// RELATÓRIOS CONTÁBEIS — um ÚNICO PDF com vários relatórios, cada um começando
+// numa página nova (quebra de página), no padrão institucional "Modelo A".
+// secoes: [{ titulo, sub?, html }] — `html` é o conteúdo (tabelas) já montado.
+// meta: { empresa, cnpj, competencia }. Abre a janela de impressão uma vez só.
+export function abreRelatoriosContabeis({ empresa = '', cnpj = '', competencia = '', secoes = [] }) {
+  const esc = s => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))
+  const emissao = agoraBR()
+  const id = `ATN-${emissao.replace(/\D/g, '').slice(0, 12)}`
+  const legal = [empresa, cnpj && `CNPJ ${cnpj}`].filter(Boolean).join(' · ') || 'Attentive Contabilidade'
+  const paginas = (secoes || []).filter(Boolean).map((s, i) => `
+    <section class="rep" style="${i ? 'page-break-before:always' : ''}">
+      <div class="band">
+        <div>
+          <div class="tt">${esc(s.titulo)}</div>
+          ${s.sub ? `<div class="ss">${esc(s.sub)}</div>` : ''}
+        </div>
+        <div class="cmp">
+          <div class="logo"><span class="wordmark">Attentive</span></div>
+          ${competencia ? `<div class="l">Competência</div><div class="v">${esc(competencia)}</div>` : ''}
+        </div>
+      </div>
+      <div class="meta"><div class="mi"><div class="lbl">Empresa</div><div class="val">${esc(empresa || '—')}</div></div><div class="mi"><div class="lbl">CNPJ</div><div class="val">${esc(cnpj || '—')}</div></div><div class="mi"><div class="lbl">Emissão</div><div class="val">${esc(emissao)}</div></div></div>
+      <div class="content">${s.html || '<p class="vazio">Sem dados para este relatório nesta competência.</p>'}</div>
+    </section>`).join('') || '<section class="rep"><p class="vazio">Nenhum relatório selecionado.</p></section>'
+
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Relatórios Contábeis - ${esc(empresa)}</title>
+    <style>
+      * { box-sizing: border-box; }
+      @page { margin: 34px 40px 40px; }
+      body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; color:#1c2430; margin:0; font-size:11px; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+      .band { background:#101a2e; color:#fff; padding:14px 18px 12px; display:flex; justify-content:space-between; align-items:flex-end; border-radius:4px 4px 0 0; }
+      .band .tt { font-size:15px; font-weight:700; letter-spacing:2px; text-transform:uppercase; line-height:1.15; }
+      .band .ss { font-size:9px; letter-spacing:1.2px; text-transform:uppercase; color:#8fa3c4; margin-top:4px; }
+      .band .cmp { text-align:right; }
+      .band .cmp .wordmark { font-size:18px; font-weight:700; letter-spacing:-0.3px; color:#fff; }
+      .band .cmp .l { font-size:8px; letter-spacing:2px; text-transform:uppercase; color:#8fa3c4; margin-top:6px; }
+      .band .cmp .v { font-size:14px; font-weight:600; letter-spacing:1px; margin-top:2px; }
+      .meta { display:flex; gap:40px; padding:9px 18px; background:#fafbfc; border:1px solid #e6e9ef; border-top:none; }
+      .meta .lbl { font-size:8px; letter-spacing:2px; text-transform:uppercase; color:#98a2b3; }
+      .meta .val { font-size:10.5px; color:#1c2430; margin-top:2px; }
+      .content { padding:14px 2px 0; }
+      .vazio { color:#98a2b3; font-size:11px; padding:16px 4px; }
+      table.rt { width:100%; border-collapse:collapse; font-size:9.6px; margin-bottom:8px; }
+      table.rt thead th { text-align:left; text-transform:uppercase; letter-spacing:.6px; font-size:8px; font-weight:700; color:#4a5468; border-bottom:1.5px solid #101a2e; padding:7px 7px; white-space:nowrap; }
+      table.rt thead th.r { text-align:right; }
+      table.rt td { padding:5px 7px; border-bottom:1px solid #eef0f4; vertical-align:top; color:#1c2430; }
+      table.rt tr:nth-child(even) td { background:#fafbfc; }
+      table.rt td.r { text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums; }
+      table.rt tr.grp td { background:#f2f4f7; color:#101a2e; font-weight:700; text-transform:uppercase; letter-spacing:.6px; font-size:8.4px; padding:7px; border-top:1px solid #dfe3ea; }
+      table.rt tr.sub td { background:#f4f7fc; font-weight:700; color:#1c2430; }
+      table.rt tfoot td, table.rt tr.tot td { font-weight:700; background:#101a2e; color:#fff; padding:8px 7px; border:none; }
+      .kpis { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:12px; }
+      .kpi { flex:1; min-width:120px; border:1px solid #e6e9ef; border-radius:8px; padding:9px 11px; background:#fafbfc; }
+      .kpi .k { font-size:8px; text-transform:uppercase; letter-spacing:1px; color:#98a2b3; font-weight:700; }
+      .kpi .v { font-size:14px; font-weight:800; margin-top:3px; letter-spacing:-.3px; }
+      .kpi .v.neg { color:#c0392b; }
+      h2.blk { font-size:10.5px; text-transform:uppercase; letter-spacing:1px; color:#4a5468; margin:14px 0 7px; font-weight:700; }
+      thead { display: table-header-group; }
+      tr { page-break-inside: avoid; }
+      .rep-foot { margin-top:10px; padding-top:6px; border-top:1px solid #e6e9ef; font-size:7.6px; color:#9aa3b0; text-align:center; }
+    </style></head>
+    <body>
+      ${paginas}
+      <div class="rep-foot">Documento gerado automaticamente pela Central de Automação Attentive · ID ${esc(id)} · ${esc(legal)} · Valores em BRL.</div>
+      <script>window.onload=function(){setTimeout(function(){window.print()},300)}</script>
+    </body></html>`
+  const w = window.open('', '_blank')
+  if (!w) { alert('Permita pop-ups para gerar o PDF.'); return }
+  w.document.write(html); w.document.close()
+}
