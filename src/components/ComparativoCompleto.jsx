@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { lerTudo } from '../lib/lerTudo'
 import { montarBalancete } from '../lib/balancete'
+import { useAppData } from '../lib/appData'
 import { gerarExcelDominio } from '../lib/excel'
 import { abreComparativoDominio } from '../lib/pdf'
 import { theme, moneyDC } from '../lib/theme'
@@ -56,8 +57,11 @@ export default function ComparativoCompleto({ empresaId, empresaNome, competenci
   const [mesesSel, setMesesSel] = useState(() => new Set()) // vazio = todos
   const [ccSel, setCcSel] = useState(() => new Set()) // centros de custo marcados; vazio = todos (sem filtro)
   const ano = Number((competencia || '').split('/')[1]) || new Date().getFullYear()
+  const { versaoRelatorioAno, lerRelCache, gravarRelCache } = useAppData()
   useEffect(() => { setCcSel(new Set()) }, [empresaId, ano]) // troca de empresa/ano → volta a "todos"
 
+  // COM CACHE (por ano): o Comparativo lê os 12 meses — pesado. Guarda o resultado por
+  // (cliente·ano) e só reprocessa se algo do ano mudou (carimbo versaoRelatorioAno).
   useEffect(() => {
     setDados(null)
     if (!empresaId) return
@@ -65,10 +69,15 @@ export default function ComparativoCompleto({ empresaId, empresaNome, competenci
     ;(async () => {
       setCarregando(true)
       try {
+        const chave = `comparativo|${empresaId}|${ano}`
+        const versao = await versaoRelatorioAno(empresaId, ano)
+        if (!vivo) return
+        const cache = lerRelCache(chave)
+        if (cache && cache.versao === versao) { setDados(cache.dados); return }
         const { data: comps } = await supabase.from('competencias').select('id, mes')
           .eq('cliente_id', empresaId).eq('ano', ano).order('mes', { ascending: true })
         if (!vivo) return
-        if (!comps || !comps.length) { setDados({ meses: [], contas: [], mov: {}, sf: {} }); return }
+        if (!comps || !comps.length) { const vazio = { meses: [], contas: [], mov: {}, sf: {} }; gravarRelCache(chave, versao, vazio); setDados(vazio); return }
         const meta = {}, mov = {}, sf = {}, si = {}, meses = []
         for (const c of comps) {
           const { linhas } = await montarBalancete(empresaId, c.id, 0, { comLancamentos: true })
@@ -121,7 +130,8 @@ export default function ComparativoCompleto({ empresaId, empresaNome, competenci
             .map(cod => ({ k: cod, nome: cod === '(sem centro)' ? '(sem centro)' : (nomeByCod[cod] ? `${cod} · ${nomeByCod[cod]}` : cod) }))
           cc = { usaCC: true, centros, movCC }
         }
-        if (vivo) setDados({ meses, contas, mov, sf, si, ...cc })
+        const resultado = { meses, contas, mov, sf, si, ...cc }
+        if (vivo) { gravarRelCache(chave, versao, resultado); setDados(resultado) }
       } finally {
         if (vivo) setCarregando(false)
       }
