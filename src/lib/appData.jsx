@@ -185,6 +185,83 @@ export function AppDataProvider({ children }) {
   // Perfil único por enquanto: todo usuário logado é ADM.
   const isAdmin = !!user
 
+  // ===================================================================================
+  // CACHE DE RELATÓRIOS (Cockpit, Book, …): guarda o resultado já processado por
+  // (tela · cliente · competência) e só reprocessa se os dados MUDARAM. Vive aqui no
+  // provider (acima das telas), então sobrevive à troca de tela — sai e volta, aparece
+  // a última versão na hora, sem remontar. O "carimbo" (versaoRelatorio) é barato:
+  // contagem + data da última alteração das tabelas que alimentam os relatórios.
+  // ===================================================================================
+  const relCacheRef = useRef(new Map())
+  // Carimbo dos dados do fechamento: se ele não muda, nada que alimenta os relatórios
+  // mudou (lançamentos, razão, auditoria/justificativas, conciliação, ajuste de leitura,
+  // cadastros/apelidos, comentários e a própria competência).
+  async function versaoRelatorio(id, compId) {
+    if (!id || !compId) return 'sem'
+    const ult = (tbl, col, filtroCol, val) => supabase.from(tbl).select(col, { count: 'exact' }).eq(filtroCol, val).order(col, { ascending: false }).limit(1)
+    const [lanc, razao, bal, aud, conc, aju, carg, com, compRow] = await Promise.all([
+      ult('lancamentos', 'created_at', 'competencia_id', compId),
+      // razão: count + data da última importação (reimport carimba created_at=now(), então
+      // detecta mesmo quando o número de linhas não muda).
+      ult('razao', 'created_at', 'competencia_id', compId),
+      // balancete (saldos) não tem timestamp — conta as linhas para pegar mudança de contas.
+      supabase.from('balancete').select('id', { count: 'exact', head: true }).eq('competencia_id', compId),
+      ult('auditoria', 'created_at', 'competencia_id', compId),
+      ult('conciliacao_conta', 'updated_at', 'competencia_id', compId),
+      ult('ajuste_leitura', 'updated_at', 'competencia_id', compId),
+      supabase.from('cargas_cadastro').select('created_at').eq('cliente_id', id).order('created_at', { ascending: false }).limit(1),
+      ult('conta_comentario', 'created_at', 'cliente_id', id),
+      supabase.from('competencias').select('updated_at').eq('id', compId).maybeSingle(),
+    ])
+    const c = (r, col) => `${r?.count ?? ''}:${r?.data?.[0]?.[col] || ''}`
+    return [
+      c(lanc, 'created_at'), c(razao, 'created_at'), bal?.count ?? '', c(aud, 'created_at'),
+      c(conc, 'updated_at'), c(aju, 'updated_at'),
+      carg?.data?.[0]?.created_at || '', c(com, 'created_at'),
+      compRow?.data?.updated_at || '',
+    ].join('|')
+  }
+  const lerRelCache = chave => relCacheRef.current.get(chave)
+  const gravarRelCache = (chave, versao, dados) => relCacheRef.current.set(chave, { versao, dados })
+  const limparRelCache = () => relCacheRef.current.clear()
+
+  // ===================================================================================
+  // DOWNLOADS EM SEGUNDO PLANO (ex.: o .zip do Book): a geração roda aqui no provider,
+  // então CONTINUA mesmo se você trocar de tela. Ao terminar, o navegador baixa o
+  // arquivo e o item fica na bandeja do sino (topo) marcado como "não visto" até você abrir.
+  // ===================================================================================
+  const [downloads, setDownloads] = useState([]) // { id, nome, estado:'gerando'|'pronto'|'erro', url, nomeArquivo, visto, erro }
+  const downloadSeq = useRef(0)
+  function baixarBlobUrl(url, nomeArquivo) {
+    const a = document.createElement('a')
+    a.href = url; a.download = nomeArquivo || 'download'
+    document.body.appendChild(a); a.click(); document.body.removeChild(a)
+  }
+  // Roda uma geração (gerar → { blob, nomeArquivo }) em segundo plano. Devolve o id.
+  async function iniciarDownload(nome, gerar) {
+    const id = `dl-${++downloadSeq.current}`
+    setDownloads(ds => [{ id, nome, estado: 'gerando', visto: false }, ...ds])
+    try {
+      const { blob, nomeArquivo } = await gerar()
+      const url = URL.createObjectURL(blob)
+      setDownloads(ds => ds.map(d => d.id === id ? { ...d, estado: 'pronto', url, nomeArquivo, visto: false } : d))
+      baixarBlobUrl(url, nomeArquivo) // baixa na hora; fica na bandeja para rebaixar
+    } catch (e) {
+      setDownloads(ds => ds.map(d => d.id === id ? { ...d, estado: 'erro', erro: String(e?.message || e), visto: false } : d))
+    }
+    return id
+  }
+  function rebaixarDownload(idOuItem) {
+    const d = typeof idOuItem === 'string' ? downloads.find(x => x.id === idOuItem) : idOuItem
+    if (d?.url) baixarBlobUrl(d.url, d.nomeArquivo)
+  }
+  function marcarDownloadsVistos() { setDownloads(ds => ds.some(d => !d.visto) ? ds.map(d => ({ ...d, visto: true })) : ds) }
+  function removerDownload(id) {
+    setDownloads(ds => { const d = ds.find(x => x.id === id); if (d?.url) URL.revokeObjectURL(d.url); return ds.filter(x => x.id !== id) })
+  }
+  const downloadsNaoVistos = downloads.filter(d => !d.visto && d.estado !== 'gerando').length
+  const downloadsGerando = downloads.filter(d => d.estado === 'gerando').length
+
   const value = {
     empresas, empresaId, setEmpresaId,
     competencia, setCompetencia, competencias: COMPETENCIAS,
@@ -193,6 +270,50 @@ export function AppDataProvider({ children }) {
     fechamentoAtivo, setFechamentoAtivo, abrirFechamento,
     plano, recarregarPlano,
     competenciaFechada, refreshStatusCompetencia,
+    // cache de relatórios
+    versaoRelatorio, lerRelCache, gravarRelCache, limparRelCache,
+    // downloads em segundo plano
+    downloads, iniciarDownload, rebaixarDownload, marcarDownloadsVistos, removerDownload,
+    downloadsNaoVistos, downloadsGerando,
   }
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
+}
+
+// Hook de relatório COM CACHE: resolve a competência, confere o "carimbo" dos dados e só
+// chama `computar(compId, {mes,ano})` se algo mudou desde a última vez — senão devolve a
+// versão pronta na hora. Como o cache vive no provider, sair e voltar da tela é instantâneo.
+// Retorna { carregando, dados, semComp, erro }. `extraDep` (ex.: o plano) força recomputar
+// quando muda, mesmo sem tocar no banco.
+export function useRelatorio({ tela, empresaId, competencia, computar, ativo = true, extraDep }) {
+  const { versaoRelatorio, lerRelCache, gravarRelCache } = useAppData()
+  const [estado, setEstado] = useState({ carregando: true, dados: null, semComp: false, erro: null })
+  const computarRef = useRef(computar); computarRef.current = computar
+  useEffect(() => {
+    if (!ativo) return
+    if (!empresaId) { setEstado({ carregando: false, dados: null, semComp: false, erro: null }); return }
+    let vivo = true
+    setEstado(s => ({ ...s, carregando: true, erro: null }))
+    ;(async () => {
+      try {
+        const [mes, ano] = competencia.split('/').map(Number)
+        const { data: comp } = await supabase.from('competencias').select('id')
+          .eq('cliente_id', empresaId).eq('ano', ano).eq('mes', mes).maybeSingle()
+        if (!vivo) return
+        if (!comp) { setEstado({ carregando: false, dados: null, semComp: true, erro: null }); return }
+        const chave = `${tela}|${empresaId}|${competencia}`
+        const versao = await versaoRelatorio(empresaId, comp.id)
+        if (!vivo) return
+        const cache = lerRelCache(chave)
+        if (cache && cache.versao === versao) { setEstado({ carregando: false, dados: cache.dados, semComp: false, erro: null }); return }
+        const dados = await computarRef.current(comp.id, { mes, ano })
+        if (!vivo) return
+        gravarRelCache(chave, versao, dados)
+        setEstado({ carregando: false, dados, semComp: false, erro: null })
+      } catch (e) {
+        if (vivo) setEstado({ carregando: false, dados: null, semComp: false, erro: String(e?.message || e) })
+      }
+    })()
+    return () => { vivo = false }
+  }, [tela, empresaId, competencia, ativo, extraDep]) // eslint-disable-line react-hooks/exhaustive-deps
+  return estado
 }

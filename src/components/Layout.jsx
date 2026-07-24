@@ -90,6 +90,57 @@ function TimerSessao() {
   )
 }
 
+// Sino de downloads em segundo plano (ex.: o .zip do Book): mostra o que está sendo
+// gerado e o que já ficou pronto — visível em qualquer tela. O badge vermelho conta os
+// prontos ainda "não vistos"; abrir a bandeja marca como visto.
+function SinoDownloads() {
+  const { downloads, downloadsNaoVistos, downloadsGerando, marcarDownloadsVistos, rebaixarDownload, removerDownload } = useAppData()
+  const [aberto, setAberto] = useState(false)
+  function toggle() { setAberto(a => { const n = !a; if (n) marcarDownloadsVistos(); return n }) }
+  useEffect(() => {
+    if (!aberto) return
+    const onDoc = () => setAberto(false)
+    const t = setTimeout(() => document.addEventListener('click', onDoc), 0)
+    return () => { clearTimeout(t); document.removeEventListener('click', onDoc) }
+  }, [aberto])
+  return (
+    <div style={{ position: 'relative' }} onClick={e => e.stopPropagation()}>
+      <button onClick={toggle} title="Downloads em segundo plano"
+        style={{ position: 'relative', background: 'none', border: 'none', cursor: 'pointer', color: theme.sub, padding: 6, display: 'inline-flex', alignItems: 'center' }}>
+        <i className={`ti ${downloadsGerando ? 'ti-loader-2' : 'ti-bell'}`} style={{ fontSize: 19 }} />
+        {downloadsNaoVistos > 0 && (
+          <span style={{ position: 'absolute', top: 0, right: 0, minWidth: 16, height: 16, padding: '0 4px', borderRadius: 20, fontSize: 10, fontWeight: 700, color: '#fff', background: theme.red, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>{downloadsNaoVistos}</span>
+        )}
+      </button>
+      {aberto && (
+        <div style={{ position: 'absolute', right: 0, top: 'calc(100% + 8px)', width: 340, maxHeight: 420, overflow: 'auto', background: theme.card, border: `1px solid ${theme.border}`, borderRadius: 12, boxShadow: '0 12px 40px rgba(0,0,0,0.35)', zIndex: 80 }}>
+          <div style={{ padding: '11px 14px', borderBottom: `1px solid ${theme.border}`, fontSize: 12.5, fontWeight: 700, color: theme.text }}>Downloads</div>
+          {downloads.length === 0 ? (
+            <p style={{ padding: '16px 14px', fontSize: 12.5, color: theme.sub, margin: 0 }}>Nenhum download ainda. Gere o Book (ou outro relatório pesado) — ele continua em segundo plano mesmo se você trocar de tela e aparece aqui quando ficar pronto.</p>
+          ) : downloads.map(d => (
+            <div key={d.id} style={{ padding: '11px 14px', borderBottom: `1px solid ${theme.border}`, display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+              <i className={`ti ${d.estado === 'gerando' ? 'ti-loader-2' : d.estado === 'erro' ? 'ti-alert-triangle' : 'ti-file-zip'}`}
+                style={{ fontSize: 17, color: d.estado === 'erro' ? theme.red : d.estado === 'pronto' ? theme.green : theme.sub, marginTop: 1 }} />
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: 12.5, color: theme.text, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={d.nome}>{d.nome}</div>
+                <div style={{ fontSize: 11, color: d.estado === 'erro' ? theme.red : theme.sub, marginTop: 2 }}>
+                  {d.estado === 'gerando' ? 'Gerando…' : d.estado === 'erro' ? `Erro: ${d.erro}` : 'Pronto — baixado'}
+                </div>
+                {d.estado === 'pronto' && (
+                  <button onClick={() => rebaixarDownload(d.id)} className="btn-ghost" style={{ fontSize: 11.5, padding: '4px 9px', marginTop: 6, display: 'inline-flex', alignItems: 'center', gap: 5 }}><i className="ti ti-download" /> Baixar de novo</button>
+                )}
+              </div>
+              {d.estado !== 'gerando' && (
+                <i className="ti ti-x" title="Remover" onClick={() => removerDownload(d.id)} style={{ fontSize: 15, color: theme.sub, cursor: 'pointer' }} />
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function Layout() {
   const { user, signOut } = useAuth()
   const { competencia, empresaId, empresaNome, pendencias, fechamentoAtivo, competenciaFechada } = useAppData()
@@ -195,14 +246,17 @@ export default function Layout() {
               </Link>
             )}
           </div>
-          {fechamentoAtivo && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <i className="ti ti-calendar-event" style={{ color: theme.green }} />
-              <span style={{ fontSize: 12.5, color: theme.sub }}>Fechamento</span>
-              <span style={{ fontSize: 13, fontWeight: 600, color: theme.text }}>{competencia}</span>
-              <Link to="/fechamentos" className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }}><i className="ti ti-switch-horizontal" /> Trocar</Link>
-            </div>
-          )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+            {fechamentoAtivo && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <i className="ti ti-calendar-event" style={{ color: theme.green }} />
+                <span style={{ fontSize: 12.5, color: theme.sub }}>Fechamento</span>
+                <span style={{ fontSize: 13, fontWeight: 600, color: theme.text }}>{competencia}</span>
+                <Link to="/fechamentos" className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }}><i className="ti ti-switch-horizontal" /> Trocar</Link>
+              </div>
+            )}
+            <SinoDownloads />
+          </div>
         </div>
 
         {fechamentoAtivo && competenciaFechada && (
