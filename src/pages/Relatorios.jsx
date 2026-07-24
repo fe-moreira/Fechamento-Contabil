@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { supabase } from '../lib/supabase'
-import { useAppData } from '../lib/appData'
+import { useAppData, useRelatorio } from '../lib/appData'
 import { apurarDistribuicao } from '../lib/distribuicao'
 import { apurarBancoResultado } from '../lib/bancoResultado'
 import { apurarVariacoes } from '../lib/variacoes'
@@ -40,80 +40,49 @@ const RELATORIOS = [
 export default function Relatorios() {
   const { empresaId, empresaNome, competencia, empresas } = useAppData()
   const cnpj = empresas?.find(e => e.id === empresaId)?.cnpj
-  const [carregando, setCarregando] = useState(false)
-  const [temComp, setTemComp] = useState(null) // null = não checado, false = sem competência
-  const [linhas, setLinhas] = useState([])      // balancete (tabela crua)
-  const [hier, setHier] = useState([])          // balancete hierárquico (montarBalancete: sint. + analít.)
-  const [documentos, setDocumentos] = useState([]) // competencias.documentos
-  const [concPend, setConcPend] = useState([])     // contas de conciliação marcadas como pendência do cliente
-  const [auditoria, setAuditoria] = useState([])    // auditoria desta competência
-  const [dist, setDist] = useState(null)            // apuração de distribuição de lucros
-  const [br, setBr] = useState(null)                // apuração banco × resultado
-  const [comparativo, setComparativo] = useState(null) // matriz conta × mês do ano
-  const [concOk, setConcOk] = useState(null)        // conciliação finalizada? (null = checando)
-  const [compId, setCompId] = useState(null)        // id da competência resolvida (p/ montarBalancete)
   const [gerandoDom, setGerandoDom] = useState(false)
   const [aba, setAba] = useState('balancete')
   const [cardsAberto, setCardsAberto] = useState(true) // recolher a lista de cards p/ dar espaço ao relatório
 
-  // Resolve a competência (READ-ONLY) e lê balancete + documentos + auditoria.
-  useEffect(() => {
-    setLinhas([]); setHier([]); setDocumentos([]); setConcPend([]); setAuditoria([]); setDist(null); setBr(null); setComparativo(null); setConcOk(null); setCompId(null); setTemComp(null)
-    if (!empresaId) return
-    let vivo = true
-    ;(async () => {
-      setCarregando(true)
-      try {
-        const [mes, ano] = competencia.split('/').map(Number)
-        const { data: comp } = await supabase.from('competencias').select('id, documentos')
-          .eq('cliente_id', empresaId).eq('ano', ano).eq('mes', mes).maybeSingle()
-        if (!vivo) return
-        if (!comp) { setTemComp(false); return }
-        setTemComp(true)
-        setCompId(comp.id)
-        setDocumentos(Array.isArray(comp.documentos) ? comp.documentos : [])
-
+  // Relatórios COM CACHE: monta TODO o pacote (balancete, hierarquia, DRE, comparativo,
+  // banco×resultado, distribuição, auditoria, pendências) uma vez e guarda por
+  // (cliente·competência). Sai e volta e aparece na hora; só reprocessa se algum dado do
+  // fechamento mudou (mesmo carimbo do Cockpit/Book). Todas as abas leem desse pacote.
+  const { carregando, dados, semComp } = useRelatorio({
+    tela: 'relatorios', empresaId, competencia,
+    computar: async (cId) => {
+      const [compRow, hier, concOk, balAud, ccPlano] = await Promise.all([
+        supabase.from('competencias').select('documentos').eq('id', cId).maybeSingle(),
         // Balancete hierárquico (sintéticas + analíticas, com Saldo Anterior por arrasto).
-        montarBalancete(empresaId, comp.id, 0, { comLancamentos: true }).then(r => { if (vivo) setHier(r.linhas || []) }).catch(() => { if (vivo) setHier([]) })
-
-        // Tick verde do Book de Composições: acende só quando a conciliação está
-        // finalizada (nenhuma conta de Ativo/Passivo em aberto — mesma régua do Status).
-        contasConciliacaoAbertas(empresaId, comp.id).then(ab => { if (vivo) setConcOk(ab.length === 0) }).catch(() => { if (vivo) setConcOk(null) })
-
-        const [{ data: bal }, { data: aud }] = await Promise.all([
-          supabase.from('balancete')
-            .select('conta, nome, saldo_inicial, debito, credito, saldo_final')
-            .eq('competencia_id', comp.id)
-            .order('conta', { ascending: true }),
-          supabase.from('auditoria')
-            .select('modulo, item, tipo, detalhe, dedutibilidade, usuario, created_at')
-            .eq('competencia_id', comp.id)
-            .order('created_at', { ascending: false }),
-        ])
-        if (!vivo) return
-        setLinhas(bal || [])
-        setAuditoria(aud || [])
-
-        // Pendências de conciliação (contas de saldo marcadas como "pendência do cliente").
-        const [{ data: cc }, { data: planoCarga }] = await Promise.all([
-          supabase.from('conciliacao_conta').select('conta, justificativa').eq('competencia_id', comp.id).eq('pendencia_cliente', true),
+        montarBalancete(empresaId, cId, 0, { comLancamentos: true }).then(r => r.linhas || []).catch(() => []),
+        // Tick verde do Book: conciliação finalizada (nenhuma conta de Ativo/Passivo em aberto).
+        contasConciliacaoAbertas(empresaId, cId).then(ab => ab.length === 0).catch(() => null),
+        Promise.all([
+          supabase.from('balancete').select('conta, nome, saldo_inicial, debito, credito, saldo_final').eq('competencia_id', cId).order('conta', { ascending: true }),
+          supabase.from('auditoria').select('modulo, item, tipo, detalhe, dedutibilidade, usuario, created_at').eq('competencia_id', cId).order('created_at', { ascending: false }),
+        ]),
+        Promise.all([
+          supabase.from('conciliacao_conta').select('conta, justificativa').eq('competencia_id', cId).eq('pendencia_cliente', true),
           supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'plano').order('created_at', { ascending: false }).limit(1).maybeSingle(),
-        ])
-        if (!vivo) return
-        const nomePorCod = Object.fromEntries(parsePlano(planoCarga?.dados).map(p => [p.reduzido, p.nome]))
-        setConcPend((cc || []).map(r => ({ conta: r.conta, nome: nomePorCod[r.conta] || '', justificativa: r.justificativa || '' })))
-        const d = await apurarDistribuicao(empresaId, comp.id)
-        if (vivo) setDist(d)
-        const b = await apurarBancoResultado(empresaId, comp.id)
-        if (vivo) setBr(b)
-        const cmp = await apurarVariacoes(empresaId, { comLancamentos: true })
-        if (vivo) setComparativo(cmp)
-      } finally {
-        if (vivo) setCarregando(false)
-      }
-    })()
-    return () => { vivo = false }
-  }, [empresaId, competencia])
+        ]),
+      ])
+      const documentos = Array.isArray(compRow?.data?.documentos) ? compRow.data.documentos : []
+      const [{ data: bal }, { data: aud }] = balAud
+      const [{ data: cc }, { data: planoCarga }] = ccPlano
+      const nomePorCod = Object.fromEntries(parsePlano(planoCarga?.dados).map(p => [p.reduzido, p.nome]))
+      const concPend = (cc || []).map(r => ({ conta: r.conta, nome: nomePorCod[r.conta] || '', justificativa: r.justificativa || '' }))
+      const dist = await apurarDistribuicao(empresaId, cId)
+      const br = await apurarBancoResultado(empresaId, cId)
+      const comparativo = await apurarVariacoes(empresaId, { comLancamentos: true })
+      return { compId: cId, documentos, hier, concOk, linhas: bal || [], auditoria: aud || [], concPend, dist, br, comparativo }
+    },
+  })
+  const temComp = semComp ? false : (dados ? true : null)
+  const {
+    compId = null, documentos = [], hier = [], concOk = null, linhas = [],
+    auditoria = [], concPend = [], dist = null, br = null, comparativo = null,
+  } = dados || {}
+
 
   if (!empresaId) {
     return (

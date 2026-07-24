@@ -221,6 +221,24 @@ export function AppDataProvider({ children }) {
       compRow?.data?.updated_at || '',
     ].join('|')
   }
+  // Carimbo do ANO inteiro (para o Comparativo, que lê os 12 meses de uma vez): cobre
+  // lançamentos, razão e balancete de TODAS as competências do ano + os cadastros do cliente.
+  async function versaoRelatorioAno(id, ano) {
+    if (!id || !ano) return 'sem'
+    const { data: comps } = await supabase.from('competencias').select('id, updated_at').eq('cliente_id', id).eq('ano', ano)
+    const ids = (comps || []).map(c => c.id)
+    if (!ids.length) return `vazio:${ano}`
+    const maxComp = (comps || []).reduce((m, c) => (c.updated_at > m ? c.updated_at : m), '')
+    const inUlt = (tbl, col) => supabase.from(tbl).select(col, { count: 'exact' }).in('competencia_id', ids).order(col, { ascending: false }).limit(1)
+    const [lanc, razao, bal, carg] = await Promise.all([
+      inUlt('lancamentos', 'created_at'),
+      inUlt('razao', 'created_at'),
+      supabase.from('balancete').select('id', { count: 'exact', head: true }).in('competencia_id', ids),
+      supabase.from('cargas_cadastro').select('created_at').eq('cliente_id', id).order('created_at', { ascending: false }).limit(1),
+    ])
+    const c = (r, col) => `${r?.count ?? ''}:${r?.data?.[0]?.[col] || ''}`
+    return [ids.length, maxComp, c(lanc, 'created_at'), c(razao, 'created_at'), bal?.count ?? '', carg?.data?.[0]?.created_at || ''].join('|')
+  }
   const lerRelCache = chave => relCacheRef.current.get(chave)
   const gravarRelCache = (chave, versao, dados) => relCacheRef.current.set(chave, { versao, dados })
   const limparRelCache = () => relCacheRef.current.clear()
@@ -271,7 +289,7 @@ export function AppDataProvider({ children }) {
     plano, recarregarPlano,
     competenciaFechada, refreshStatusCompetencia,
     // cache de relatórios
-    versaoRelatorio, lerRelCache, gravarRelCache, limparRelCache,
+    versaoRelatorio, versaoRelatorioAno, lerRelCache, gravarRelCache, limparRelCache,
     // downloads em segundo plano
     downloads, iniciarDownload, rebaixarDownload, marcarDownloadsVistos, removerDownload,
     downloadsNaoVistos, downloadsGerando,
