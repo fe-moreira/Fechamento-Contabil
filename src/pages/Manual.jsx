@@ -463,12 +463,15 @@ const HTML = `
 <section id="m-relatorios">
   <h2 class="m-sec">17 · Relatórios</h2>
   <p>A saída do fechamento: <b>Book de Composições, Relatório de Pendências, DRE, Comparativo, Balanço, DFC e Balancete</b>. Todos leem o razão vivo. Destaque para o relatório de <b>Justificativas e Correções</b> — o raio-x da competência, que consolida todas as justificativas (Comparativo, Banco × Resultado, Impostos) e todas as correções lançadas, cada uma com <b>usuário e data</b>.</p>
+  <div class="m-rule"><span class="k">Não regenera à toa (cache)</span> Depois de gerar um relatório (Cockpit, Book…), ao <b>sair e voltar</b> para a tela ele mostra a <b>última versão na hora</b>, sem remontar. Só reprocessa se algum dado do fechamento <b>mudou de fato</b> — a plataforma confere um <b>carimbo barato</b> (contagem + data da última alteração de lançamentos, razão, conciliação, justificativas, apelidos e comentários). Mudou → recalcula sozinho; não mudou → versão pronta. Vale enquanto a aba estiver aberta; um <b>refresh</b> (F5) limpa o cache e monta de novo.</div>
+  <div class="m-rule"><span class="k">Book em segundo plano + sino de downloads</span> O <b>Book</b> é pesado por causa do volume (planilha timbrada + PDFs). Ao clicar em <b>Excel + PDFs (.zip)</b>, a geração roda em <b>segundo plano</b>: você pode <b>trocar de tela</b> que ela continua. Quando fica pronta, o navegador <b>baixa o arquivo</b> e o <b>sino no topo</b> acende um número (<b>“não visto”</b>) — abra o sino para ver a bandeja de downloads (o que está gerando e o que já ficou pronto) e <b>Baixar de novo</b> se precisar. O sino fica visível em <b>qualquer tela</b>.</div>
 </section>
 
 <section id="m-cockpit">
   <h2 class="m-sec">18 · Cockpit Financeiro</h2>
   <p>A visão gerencial para conversar com o cliente: receita, custo, despesa e resultado do mês e acumulado, DRE estruturada e a evolução no ano. Lê o <b>razão vivo</b> — a mesma fonte da Conciliação e do Comparativo — então o balanço e o resultado fecham na identidade <b>Ativo − (Passivo + PL) = Resultado acumulado</b>.</p>
   <div class="m-rule"><span class="k">Fonte única</span> Se Cockpit, Conciliação e Comparativo divergirem, é sinal de que algum ajuste não foi confirmado como lançamento — não de conta errada. Todos bebem da mesma fonte viva.</div>
+  <div class="m-rule"><span class="k">Abre na hora ao voltar</span> O Cockpit guarda o resultado já processado: sai e volta e ele aparece <b>instantâneo</b>, sem recarregar. Só refaz o cálculo quando algum dado do fechamento mudou (mesma regra de cache dos Relatórios).</div>
 </section>
 
 <hr class="m-div">

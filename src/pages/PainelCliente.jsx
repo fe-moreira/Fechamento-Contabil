@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { lerTudo } from '../lib/lerTudo'
-import { useAppData } from '../lib/appData'
+import { useAppData, useRelatorio } from '../lib/appData'
 import { apurarVariacoes } from '../lib/variacoes'
 import { apurarDistribuicao } from '../lib/distribuicao'
 import { montarBalancete } from '../lib/balancete'
@@ -39,37 +39,25 @@ const RE_DISP = /\bcaixa\b|banc|aplica|dispon|financeir|conta\s*corrente/i
 
 export default function PainelCliente() {
   const { empresaId, empresaNome, competencia, empresas, plano } = useAppData()
-  const [carregando, setCarregando] = useState(false)
-  const [temComp, setTemComp] = useState(null) // null=não checado, false=sem competência
-  const [d, setD] = useState(null)
-
   const empresa = empresas.find(e => e.id === empresaId)
   const compSlug = competencia.replace('/', '-')
 
-  useEffect(() => {
-    setD(null); setTemComp(null)
-    if (!empresaId) return
-    let vivo = true
-    ;(async () => {
-      setCarregando(true)
-      try {
-        const [mes, ano] = competencia.split('/').map(Number)
-        const { data: comp } = await supabase.from('competencias').select('id')
-          .eq('cliente_id', empresaId).eq('ano', ano).eq('mes', mes).maybeSingle()
-        if (!vivo) return
-        if (!comp) { setTemComp(false); return }
-        setTemComp(true)
-
+  // Cockpit COM CACHE: sai e volta da tela e aparece a última versão na hora; só reprocessa
+  // se algum dado do fechamento mudou (o carimbo de versaoRelatorio detecta). Fonte VIVA
+  // (razão + lançamentos confirmados) — mesma base da Conciliação e do Comparativo.
+  const { carregando, dados: d, semComp } = useRelatorio({
+    tela: 'cockpit', empresaId, competencia, extraDep: plano,
+    computar: async (compId, { mes, ano }) => {
         // Balancete hierárquico VIVO (razão + lançamentos confirmados) — MESMA fonte da
         // Conciliação e do resultado abaixo, para o ativo bater com a Conciliação e a identidade
         // fechar: Ativo − (Passivo + PL) = Resultado acumulado. As correções (ex.: estorno de
         // rendimento lançado em dobro) entram nos dois lados, mantendo tudo consistente.
-        const { linhas: hier } = await montarBalancete(empresaId, comp.id, 0, { comLancamentos: true })
+        const { linhas: hier } = await montarBalancete(empresaId, compId, 0, { comLancamentos: true })
         const analit = (hier || []).filter(l => !l.sintetica)
         const g = l => String(l.classifRaw || '')[0] // grupo pela CLASSIFICAÇÃO (não pelo reduzido)
 
         const comparativo = await apurarVariacoes(empresaId, { comLancamentos: true }) // só p/ o gate de variações
-        const dist = await apurarDistribuicao(empresaId, comp.id, ano, mes)
+        const dist = await apurarDistribuicao(empresaId, compId, ano, mes)
 
         // --- Receita / Custo / Despesa / Resultado — VIVO (com as correções) ---
         // Soma por GRUPO (líquido) a partir do balancete VIVO (razão + lançamentos confirmados),
@@ -82,7 +70,7 @@ export default function PainelCliente() {
           .eq('cliente_id', empresaId).eq('ano', ano).order('mes', { ascending: true })
         const porMes = {}, meses = []
         for (const c of (compsAno || [])) {
-          const linhasC = c.id === comp.id ? hier : (await montarBalancete(empresaId, c.id, 0, { comLancamentos: true })).linhas // vivo (com correções)
+          const linhasC = c.id === compId ? hier : (await montarBalancete(empresaId, c.id, 0, { comLancamentos: true })).linhas // vivo (com correções)
           const res = (linhasC || []).filter(l => !l.sintetica && ['3', '4', '5'].includes(String(l.classifRaw || '')[0]))
           if (!res.length) continue
           let g3 = 0, g4 = 0, g5 = 0
@@ -185,7 +173,7 @@ export default function PainelCliente() {
         let topClientes = [], totReceitaRazao = 0
         if (receitaCods.length) {
           const rz = await lerTudo(() => supabase.from('razao').select('conta, historico, debito, credito')
-            .eq('competencia_id', comp.id).in('conta', receitaCods))
+            .eq('competencia_id', compId).in('conta', receitaCods))
           const mapa = {}
           for (const l of (rz || [])) {
             const v = num(l.credito) - num(l.debito) // receita = crédito (estorno debita)
@@ -200,8 +188,7 @@ export default function PainelCliente() {
             .sort((a, b) => b.valor - a.valor).slice(0, 6)
         }
 
-        if (!vivo) return
-        setD({
+        return {
           faturamento, custo, despesa, resultado, lucro, acumulado, serie, serieCombo,
           totAtivo, totPassivo, clientes, fornecedores,
           impostos, disponiveis, totDispIni, totDispFim, geracaoCaixa, dataIni, dataFim,
@@ -209,13 +196,9 @@ export default function PainelCliente() {
           comparativo,
           variacoesConta: new Set((comparativo.itens || []).map(i => String(i.conta))).size,
           topClientes, totReceitaRazao,
-        })
-      } finally {
-        if (vivo) setCarregando(false)
-      }
-    })()
-    return () => { vivo = false }
-  }, [empresaId, competencia, plano])
+        }
+    },
+  })
 
   function exportarExcel() {
     if (!d) return
@@ -312,7 +295,7 @@ export default function PainelCliente() {
       </div>
 
       {carregando && <p style={{ color: theme.sub, fontSize: 13 }}>Carregando painel do cliente…</p>}
-      {temComp === false && <Aviso icon="ti-file-import" texto="Sem competência importada. Importe o razão desta competência primeiro." />}
+      {semComp && <Aviso icon="ti-file-import" texto="Sem competência importada. Importe o razão desta competência primeiro." />}
       {!carregando && d && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
           <BlocoResultado d={d} />

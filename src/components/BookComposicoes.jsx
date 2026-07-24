@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react'
-import JSZip from 'jszip'
+import { useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { montarBalancete, composicaoAbertura, difConciliacao } from '../lib/balancete'
 import { itensAbertosConta } from '../lib/aberturaArrasto'
 import { comentariosPorConta } from '../lib/comentarios'
-import { gerarExcelTimbrado } from '../lib/excel'
+import { useAppData, useRelatorio } from '../lib/appData'
+import { gerarZipBook, statusConta } from '../lib/bookExport'
 import { theme, money } from '../lib/theme'
 
 const num = v => Number(v) || 0
@@ -15,76 +15,51 @@ const dataBR = d => { const s = String(d || ''); const m = s.match(/^(\d{4})-(\d
 const dataBRhora = iso => { const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) }
 const fmtCnpj = c => { const s = String(c || '').replace(/\D/g, ''); return s.length === 14 ? `${s.slice(0,2)}.${s.slice(2,5)}.${s.slice(5,8)}/${s.slice(8,12)}-${s.slice(12)}` : (c || '—') }
 
-// Situação da amarração de uma conta patrimonial.
-function statusConta(c) {
-  if (c.dif != null && Math.abs(c.dif) < 0.05 && c.documento_path) return { txt: 'Conciliado — documento', cor: theme.green }
-  if (c.conciliada && c.justificativa) return { txt: 'Conciliado — justificativa', cor: theme.yellow }
-  if (c.dif != null && Math.abs(c.dif) >= 0.05) return { txt: 'Diferença a resolver', cor: theme.red }
-  return { txt: 'Sem documento', cor: theme.yellow }
-}
-
 export default function BookComposicoes({ empresaId, empresaNome, competencia, cnpj }) {
-  const [carregando, setCarregando] = useState(false)
-  const [semComp, setSemComp] = useState(false)
-  const [contas, setContas] = useState(null)
-  const [exportando, setExportando] = useState('') // '' | 'zip'
+  const { iniciarDownload } = useAppData()
+  const [enviado, setEnviado] = useState(false) // aviso "mandado para segundo plano"
 
-  useEffect(() => {
-    setContas(null); setSemComp(false)
-    if (!empresaId) return
-    let vivo = true
-    ;(async () => {
-      setCarregando(true)
-      try {
-        const [mes, ano] = competencia.split('/').map(Number)
-        const { data: comp } = await supabase.from('competencias').select('id')
-          .eq('cliente_id', empresaId).eq('ano', ano).eq('mes', mes).maybeSingle()
-        if (!vivo) return
-        if (!comp) { setSemComp(true); return }
-
-        // montarBalancete com comLancamentos já entrega o razão VIVO (lançamentos
-        // confirmados embutidos no saldo) — não precisamos sobrepor os lançamentos de novo.
-        const [{ linhas }, { data: conc }, coments] = await Promise.all([
-          montarBalancete(empresaId, comp.id, 0, { comLancamentos: true }),
-          supabase.from('conciliacao_conta').select('conta, saldo_documento, documento, documento_path, conciliada, justificativa').eq('competencia_id', comp.id),
-          comentariosPorConta(empresaId),
-        ])
-        if (!vivo) return
-        const conf = {}; for (const r of (conc || [])) conf[String(r.conta)] = r
-
-        // Só contas patrimoniais analíticas (Ativo 1 / Passivo+PL 2) com saldo.
-        const patr = linhas.filter(l => !l.sintetica
-          && ['1', '2'].includes(String(l.classifRaw || '')[0])
-          && Math.abs(num(l.saldo_final)) > 0.005)
-
-        const out = []
-        for (const l of patr) {
-          const cod = String(l.reduzido || '')
-          const reg = conf[cod] || null
-          const saldoEf = num(l.saldo_final) // já vivo (lançamentos embutidos)
-          const dif = reg && reg.saldo_documento != null ? difConciliacao(saldoEf, reg.saldo_documento) : null
-          let composicao = []
-          if (ehEntidade(l.nome)) {
-            try {
-              const abertura = await composicaoAbertura(empresaId, comp.id, cod, l.classifRaw, l.nome)
-              composicao = await itensAbertosConta(comp.id, cod, l.nome, l.classifRaw, abertura)
-            } catch { composicao = [] }
-          }
-          out.push({
-            conta: cod, nome: l.nome || '', classifRaw: l.classifRaw, grupo: String(l.classifRaw)[0] === '1' ? 'Ativo' : 'Passivo + PL',
-            saldo_final: num(l.saldo_final), natureza: num(l.saldo_final) >= 0 ? 'D' : 'C',
-            saldo_documento: reg?.saldo_documento ?? null, documento: reg?.documento || null, documento_path: reg?.documento_path || null,
-            conciliada: !!reg?.conciliada, justificativa: reg?.justificativa || '', dif, composicao,
-            comentarios: coments[cod] || [],
-          })
+  // Montagem do book COM CACHE: sai e volta da tela e aparece a última versão na hora;
+  // só remonta se algum dado do fechamento mudou (o carimbo de versaoRelatorio detecta).
+  const { carregando, dados: contas, semComp } = useRelatorio({
+    tela: 'book', empresaId, competencia,
+    computar: async (compId) => {
+      // montarBalancete com comLancamentos já entrega o razão VIVO (lançamentos
+      // confirmados embutidos no saldo) — não precisamos sobrepor os lançamentos de novo.
+      const [{ linhas }, { data: conc }, coments] = await Promise.all([
+        montarBalancete(empresaId, compId, 0, { comLancamentos: true }),
+        supabase.from('conciliacao_conta').select('conta, saldo_documento, documento, documento_path, conciliada, justificativa').eq('competencia_id', compId),
+        comentariosPorConta(empresaId),
+      ])
+      const conf = {}; for (const r of (conc || [])) conf[String(r.conta)] = r
+      // Só contas patrimoniais analíticas (Ativo 1 / Passivo+PL 2) com saldo.
+      const patr = linhas.filter(l => !l.sintetica
+        && ['1', '2'].includes(String(l.classifRaw || '')[0])
+        && Math.abs(num(l.saldo_final)) > 0.005)
+      const out = []
+      for (const l of patr) {
+        const cod = String(l.reduzido || '')
+        const reg = conf[cod] || null
+        const saldoEf = num(l.saldo_final) // já vivo (lançamentos embutidos)
+        const dif = reg && reg.saldo_documento != null ? difConciliacao(saldoEf, reg.saldo_documento) : null
+        let composicao = []
+        if (ehEntidade(l.nome)) {
+          try {
+            const abertura = await composicaoAbertura(empresaId, compId, cod, l.classifRaw, l.nome)
+            composicao = await itensAbertosConta(compId, cod, l.nome, l.classifRaw, abertura)
+          } catch { composicao = [] }
         }
-        if (vivo) setContas(out)
-      } finally {
-        if (vivo) setCarregando(false)
+        out.push({
+          conta: cod, nome: l.nome || '', classifRaw: l.classifRaw, grupo: String(l.classifRaw)[0] === '1' ? 'Ativo' : 'Passivo + PL',
+          saldo_final: num(l.saldo_final), natureza: num(l.saldo_final) >= 0 ? 'D' : 'C',
+          saldo_documento: reg?.saldo_documento ?? null, documento: reg?.documento || null, documento_path: reg?.documento_path || null,
+          conciliada: !!reg?.conciliada, justificativa: reg?.justificativa || '', dif, composicao,
+          comentarios: coments[cod] || [],
+        })
       }
-    })()
-    return () => { vivo = false }
-  }, [empresaId, competencia])
+      return out
+    },
+  })
 
   async function abrirDoc(path, nome) {
     try {
@@ -94,92 +69,15 @@ export default function BookComposicoes({ empresaId, empresaNome, competencia, c
     } catch (e) { alert('Não consegui abrir o documento: ' + (e?.message || e)) }
   }
 
-  // Gera um .zip com a planilha timbrada + a pasta anexos/ com os PDFs originais.
-  // A planilha traz um link relativo por conta ("anexos/<conta>_<doc>.pdf"): ao
-  // descompactar, clicar na célula abre o documento — offline e sem expirar.
-  async function exportar() {
-    if (!contas || exportando) return
-    setExportando('zip')
-    try {
-      const zip = new JSZip()
-      const pasta = zip.folder('anexos')
-      const linkDe = {}
-      for (const c of contas) {
-        if (!c.documento_path) continue
-        try {
-          const { data, error } = await supabase.storage.from('extratos').download(c.documento_path)
-          if (error || !data) continue
-          const ext = (c.documento_path.match(/\.[a-z0-9]+$/i)?.[0]) || (c.documento?.match(/\.[a-z0-9]+$/i)?.[0]) || '.pdf'
-          // Nome do anexo = código da conta + nome da conta (sem acento/espaço), para
-          // localizar fácil na pasta. Ex.: "374_banco_itau_cc.pdf".
-          const cod = String(c.conta).replace(/[^\w.-]+/g, '_')
-          const nomeConta = baixa(c.nome || '').replace(/[^\w.-]+/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '').slice(0, 50)
-          const fname = `${cod}_${nomeConta || 'documento'}${ext}`
-          pasta.file(fname, await data.arrayBuffer())
-          linkDe[c.conta] = `anexos/${fname}`
-        } catch { /* pula anexo com erro, segue os demais */ }
-      }
-
-      const totSaldo = contas.reduce((s, c) => s + c.saldo_final, 0)
-      const sub = `${empresaNome} · CNPJ ${fmtCnpj(cnpj)} · competência ${competencia} · ${contas.length} contas patrimoniais`
-      const colunas = [
-        { nome: 'Conta / item', largura: 16 },
-        { nome: 'Nome / histórico', largura: 44, wrap: true },
-        { nome: 'Saldo / valor', alinhar: 'right', moeda: true },
-        { nome: 'Documento', alinhar: 'right', moeda: true },
-        { nome: 'Diferença', alinhar: 'right', moeda: true },
-        { nome: 'Situação / anexo', largura: 26 },
-      ]
-      const secoes = [{
-        titulo: 'Amarração geral — contas patrimoniais',
-        linhas: contas.map(c => [
-          c.conta, `${c.comentarios?.length ? '* ' : ''}${c.nome}`, num(c.saldo_final),
-          c.saldo_documento == null ? '' : num(c.saldo_documento),
-          c.dif == null ? '' : num(c.dif),
-          linkDe[c.conta] ? { text: 'Abrir PDF', hyperlink: linkDe[c.conta] } : statusConta(c).txt,
-        ]),
-        totais: ['', 'Total patrimonial', num(totSaldo), '', '', ''],
-      }]
-      // Uma folha por conta patrimonial — TODAS, espelhando a tela: composição (quando
-      // houver), amarração (saldo × documento × diferença × situação) e documento-suporte
-      // (nome do arquivo ou justificativa). Contas sem composição vêm só com o saldo.
-      for (const c of contas) {
-        const anexo = linkDe[c.conta] ? { text: 'Abrir PDF', hyperlink: linkDe[c.conta] } : (c.documento_path ? '(anexo indisponível)' : '')
-        const st = statusConta(c)
-        const linhasSec = []
-        if (c.composicao.length) {
-          for (const i of c.composicao) linhasSec.push([dataBR(i.data), i.historico, num(i.debito) - num(i.credito), '', '', ''])
-          linhasSec.push(['', 'Saldo da conta (composição)', num(c.saldo_final), '', '', ''])
-        }
-        linhasSec.push(['Amarração', `saldo × documento × diferença · ${st.txt}`, num(c.saldo_final),
-          c.saldo_documento == null ? '' : num(c.saldo_documento), c.dif == null ? '' : num(c.dif), anexo])
-        const sup = c.documento ? `Documento: ${c.documento}`
-          : (c.justificativa ? `Justificativa: ${c.justificativa}` : 'Sem documento nem justificativa anexados')
-        linhasSec.push(['Documento-suporte', sup, '', '', '', anexo])
-        for (const m of (c.comentarios || [])) {
-          const quem = m.usuario ? ` · ${String(m.usuario).split('@')[0]}` : ''
-          linhasSec.push(['Comentário', `${m.texto}  (${dataBRhora(m.created_at)}${quem})`, '', '', '', ''])
-        }
-        secoes.push({
-          titulo: `${c.conta} · ${c.nome} — ${c.grupo} (natureza ${c.natureza})`,
-          linhas: linhasSec,
-        })
-      }
-      const buf = await gerarExcelTimbrado({ titulo: 'Book de Composições — contas patrimoniais', sub, colunas, secoes, aba: 'Book', retornarBuffer: true })
-      const nomeBase = `book_composicoes_${(empresaNome || 'cliente').toLowerCase().replace(/[^a-z0-9]+/g, '_').slice(0, 30)}_${competencia.replace('/', '-')}`
-      zip.file(`${nomeBase}.xlsx`, buf)
-
-      const blob = await zip.generateAsync({ type: 'blob' })
-      const a = document.createElement('a')
-      a.href = URL.createObjectURL(blob)
-      a.download = `${nomeBase}.zip`
-      document.body.appendChild(a); a.click(); document.body.removeChild(a)
-      URL.revokeObjectURL(a.href)
-    } catch (e) {
-      alert('Não consegui gerar o pacote: ' + (e?.message || e))
-    } finally {
-      setExportando('')
-    }
+  // Gera o .zip (planilha timbrada + PDFs) em SEGUNDO PLANO: continua mesmo se você
+  // trocar de tela. Ao terminar, o navegador baixa e o item fica no sino (topo) marcado
+  // como "não visto". A planilha traz um link relativo por conta ("anexos/<conta>_<doc>.pdf").
+  function exportar() {
+    if (!contas || !contas.length) return
+    const nome = `Book de Composições — ${empresaNome} · ${competencia}`
+    iniciarDownload(nome, () => gerarZipBook(contas, { empresaNome, cnpj, competencia }))
+    setEnviado(true)
+    setTimeout(() => setEnviado(false), 8000)
   }
 
   if (semComp) return <Aviso icon="ti-file-import" texto="Importe o razão desta competência primeiro." />
@@ -200,11 +98,16 @@ export default function BookComposicoes({ empresaId, empresaNome, competencia, c
             ? <span style={{ color: theme.green }}>amarração completa ✓</span>
             : <span style={{ color: theme.yellow }}>{pendentes} conta(s) sem documento/amarração</span>}
         </p>
-        <div className="no-print" style={{ display: 'flex', gap: 8 }}>
-          <button className="btn-ghost" onClick={exportar} disabled={!!exportando}
-            title="Baixa um .zip com a planilha timbrada + os PDFs originais (pasta anexos/)"
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 8, opacity: exportando ? .6 : 1 }}>
-            <i className={`ti ${exportando ? 'ti-loader-2' : 'ti-file-zip'}`} /> {exportando ? 'Gerando ZIP…' : 'Excel + PDFs (.zip)'}
+        <div className="no-print" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          {enviado && (
+            <span style={{ fontSize: 12, color: theme.green, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+              <i className="ti ti-check" /> Gerando em segundo plano — avisamos no sino ↗
+            </span>
+          )}
+          <button className="btn-ghost" onClick={exportar}
+            title="Gera um .zip (planilha timbrada + PDFs originais) em segundo plano — pode trocar de tela que ele continua; avisamos no sino quando ficar pronto."
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            <i className="ti ti-file-zip" /> Excel + PDFs (.zip)
           </button>
           <button className="btn-ghost" onClick={() => window.print()} style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><i className="ti ti-file-type-pdf" /> PDF</button>
         </div>
