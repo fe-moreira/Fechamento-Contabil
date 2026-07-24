@@ -151,12 +151,26 @@ export default function PainelCliente() {
         const mAnt = mes === 1 ? 12 : mes - 1, aAnt = mes === 1 ? ano - 1 : ano
         const dataIni = fmtDia(aAnt, mAnt), dataFim = fmtDia(ano, mes)
 
-        // --- Índices (última coluna da conciliação; classificação mascarada) ---
+        // --- Índices ---
         const somaClassif = pref => analit.filter(l => String(l.classif || '').startsWith(pref))
           .reduce((s, l) => s + num(l.saldo_final), 0)
-        const ac = somaClassif('1.1') // ativo circulante
-        const pc = somaClassif('2.1') // passivo circulante
-        const pnc = somaClassif('2.2') // passivo não circulante
+        // Circulante robusto: acha a SINTÉTICA "circulante" pelo nome (como nas Disponibilidades)
+        // e soma as filhas pela classificação; só cai no prefixo mascarado (1.1/2.1/2.2) se não achar.
+        // Assim a Liquidez não zera quando o plano do cliente não segue o mascaramento padrão.
+        const norm = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+        const somaPrefixoRaw = pref => analit.filter(l => String(l.classifRaw || '').startsWith(pref)).reduce((s, l) => s + num(l.saldo_final), 0)
+        const prefSintetica = (grupo, re, exc) => {
+          const s = (hier || []).filter(l => l.sintetica && g(l) === grupo && re.test(norm(l.nome || '')) && !(exc && exc.test(norm(l.nome || ''))))
+            .sort((a, b) => String(a.classifRaw || '').length - String(b.classifRaw || '').length)[0]
+          return s?.classifRaw || null
+        }
+        const NAOCIRC = /n[ao] circulante|nao-circulante|longo prazo/
+        const preAC = prefSintetica('1', /circulante/, NAOCIRC)
+        const prePC = prefSintetica('2', /circulante/, NAOCIRC)
+        const prePNC = prefSintetica('2', NAOCIRC, null)
+        const ac = preAC ? somaPrefixoRaw(preAC) : somaClassif('1.1')  // ativo circulante
+        const pc = prePC ? somaPrefixoRaw(prePC) : somaClassif('2.1')  // passivo circulante
+        const pnc = prePNC ? somaPrefixoRaw(prePNC) : somaClassif('2.2') // passivo não circulante
         const indices = {
           margem: faturamento ? ((faturamento - custo - despesa) / faturamento) * 100 : null,
           cargaTrib: faturamento ? (impostos / faturamento) * 100 : null,
