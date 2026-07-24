@@ -631,12 +631,18 @@ function BlocoClientesIndices({ d }) {
         <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'hidden' }}>
           <p style={{ fontSize: 13.5, fontWeight: 600, padding: '13px 15px', margin: 0, borderBottom: `1px solid ${theme.border}` }}>Índices financeiros</p>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)' }}>
-            <Kpi label="Liquidez corrente" v={ix.liquidez == null ? '—' : ix.liquidez.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} hint="Ativo circ. ÷ Passivo circ." cor={corFaixa(ix.liquidez, 1, 0.7, true)} />
-            <Kpi label="Margem líquida" v={fmtPct(ix.margem)} hint="Resultado ÷ receita" cor={corResultado(ix.margem)} />
-            <Kpi label="Endividamento" v={fmtPct(ix.endividamento)} hint="Passivo exig. ÷ ativo" cor={corFaixa(ix.endividamento, 50, 70, false)} />
-            <Kpi label="Carga tributária" v={fmtPct(ix.cargaTrib)} hint="Impostos ÷ receita" cor={corFaixa(ix.cargaTrib, 15, 25, false)} />
-            <Kpi label="Prazo médio receb." v={ix.prazoReceb == null ? '—' : `${ix.prazoReceb} dias`} hint="A receber ÷ receita" />
-            <Kpi label="Resultado / receita" v={fmtPct(ix.margem)} hint="Rentabilidade do mês" cor={corResultado(ix.margem)} />
+            <Kpi label="Liquidez corrente" v={ix.liquidez == null ? '—' : ix.liquidez.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} hint="Ativo circ. ÷ Passivo circ." cor={corFaixa(ix.liquidez, 1, 0.7, true)}
+              info={<>Mede a capacidade de pagar as <b>dívidas de curto prazo</b>. Divide o <b>Ativo Circulante</b> (o que vira dinheiro em até 12 meses: caixa, bancos, clientes a receber, estoques) pelo <b>Passivo Circulante</b> (o que vence em até 12 meses: fornecedores, impostos, empréstimos curtos). <b>Acima de 1,00</b> = sobra folga para pagar as contas do período; <b>abaixo de 1,00</b> = o curto prazo aperta.</>} />
+            <Kpi label="Margem líquida" v={fmtPct(ix.margem)} hint="Resultado ÷ receita" cor={corResultado(ix.margem)}
+              info={<>Quanto <b>sobra de lucro</b> para cada R$ 100 de receita, depois de todos os custos, despesas e impostos. É o <b>resultado do mês ÷ receita do mês</b>. Quanto maior, mais rentável a operação.</>} />
+            <Kpi label="Endividamento" v={fmtPct(ix.endividamento)} hint="Passivo exig. ÷ ativo" cor={corFaixa(ix.endividamento, 50, 70, false)}
+              info={<>Quanto do que a empresa tem (<b>ativo</b>) está comprometido com <b>dívidas</b> (passivo exigível: fornecedores, empréstimos, impostos). É o (Passivo Circulante + Não Circulante) <b>÷ ativo total</b>. Quanto <b>menor</b>, menos dependente de capital de terceiros.</>} />
+            <Kpi label="Carga tributária" v={fmtPct(ix.cargaTrib)} hint="Impostos ÷ receita" cor={corFaixa(ix.cargaTrib, 15, 25, false)}
+              info={<>Peso dos <b>impostos</b> sobre o faturamento. É o total de <b>impostos apurados ÷ receita do mês</b>. Mostra quanto de cada venda vira tributo.</>} />
+            <Kpi label="Prazo médio receb." v={ix.prazoReceb == null ? '—' : `${ix.prazoReceb} dias`} hint="A receber ÷ receita"
+              info={<>Em média, quantos <b>dias</b> a empresa leva para <b>receber dos clientes</b> depois de vender. É o (contas a receber ÷ receita) × 30. Quanto <b>menor</b>, mais rápido o dinheiro entra no caixa.</>} />
+            <Kpi label="Resultado / receita" v={fmtPct(ix.margem)} hint="Rentabilidade do mês" cor={corResultado(ix.margem)}
+              info={<>A <b>rentabilidade da competência</b> — mesma base da margem líquida: quanto do faturamento do mês virou <b>lucro</b> (verde) ou <b>prejuízo</b> (vermelho).</>} />
           </div>
         </div>
       </div>
@@ -674,10 +680,13 @@ function Mini({ label, v }) {
     </div>
   )
 }
-function Kpi({ label, v, hint, cor }) {
+function Kpi({ label, v, hint, cor, info }) {
   return (
     <div style={{ padding: '13px 15px', borderTop: `1px solid ${theme.border}`, borderRight: `1px solid ${theme.border}` }}>
-      <span style={{ color: theme.sub, fontSize: 10.5, textTransform: 'uppercase', letterSpacing: .4, fontWeight: 700 }}>{label}</span>
+      <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+        <span style={{ color: theme.sub, fontSize: 10.5, textTransform: 'uppercase', letterSpacing: .4, fontWeight: 700 }}>{label}</span>
+        {info && <InfoTela titulo={label} size={14}>{info}</InfoTela>}
+      </span>
       <b style={{ display: 'block', fontSize: 18, fontWeight: 800, margin: '3px 0 0', fontVariantNumeric: 'tabular-nums', color: cor || theme.text }}>{v}</b>
       <span style={{ fontSize: 11, color: theme.sub }}>{hint}</span>
     </div>

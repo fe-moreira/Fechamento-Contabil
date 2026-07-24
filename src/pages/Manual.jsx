@@ -472,6 +472,7 @@ const HTML = `
   <p>A visão gerencial para conversar com o cliente: receita, custo, despesa e resultado do mês e acumulado, DRE estruturada e a evolução no ano. Lê o <b>razão vivo</b> — a mesma fonte da Conciliação e do Comparativo — então o balanço e o resultado fecham na identidade <b>Ativo − (Passivo + PL) = Resultado acumulado</b>.</p>
   <div class="m-rule"><span class="k">Fonte única</span> Se Cockpit, Conciliação e Comparativo divergirem, é sinal de que algum ajuste não foi confirmado como lançamento — não de conta errada. Todos bebem da mesma fonte viva.</div>
   <div class="m-rule"><span class="k">Abre na hora ao voltar</span> O Cockpit guarda o resultado já processado: sai e volta e ele aparece <b>instantâneo</b>, sem recarregar. Só refaz o cálculo quando algum dado do fechamento mudou (mesma regra de cache dos Relatórios).</div>
+  <div class="m-rule"><span class="k">Entenda cada índice (ⓘ)</span> No bloco <b>Índices financeiros</b>, cada indicador (Liquidez corrente, Margem líquida, Endividamento, Carga tributária, Prazo médio de recebimento, Resultado/receita) tem um <b>ⓘ</b> ao lado do nome: clique para abrir um balão explicando <b>o que é</b>, <b>como é calculado</b> e <b>como ler</b> — bom para explicar ao cliente na reunião.</div>
 </section>
 
 <hr class="m-div">
