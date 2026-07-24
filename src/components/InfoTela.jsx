@@ -4,13 +4,13 @@ import { theme } from '../lib/theme'
 // Botão de informação (ⓘ): clica e abre um balão com a explicação da tela/seção.
 // Padrão para substituir os parágrafos de ajuda que poluíam as telas.
 //   <InfoTela titulo="Comparativo de resultado">Texto de ajuda…</InfoTela>
-export default function InfoTela({ children, titulo, style }) {
+export default function InfoTela({ children, titulo, style, size = 19 }) {
   const [aberto, setAberto] = useState(false)
   return (
     <span style={{ position: 'relative', display: 'inline-flex', ...style }}>
-      <button type="button" onClick={() => setAberto(a => !a)} title="Sobre esta tela"
+      <button type="button" onClick={() => setAberto(a => !a)} title="O que é isso?"
         style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, display: 'inline-flex', color: theme.accent }}>
-        <i className="ti ti-info-circle-filled" style={{ fontSize: 19 }} />
+        <i className="ti ti-info-circle-filled" style={{ fontSize: size }} />
       </button>
       {aberto && (
         <>
