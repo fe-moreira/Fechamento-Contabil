@@ -1,24 +1,12 @@
 import { useState } from 'react'
-import { supabase } from '../lib/supabase'
-import { lerTudo } from '../lib/lerTudo'
 import { useAppData, useRelatorio } from '../lib/appData'
-import { apurarVariacoes } from '../lib/variacoes'
-import { apurarDistribuicao } from '../lib/distribuicao'
-import { montarBalancete } from '../lib/balancete'
-import { extrairEntidade } from '../lib/financeiro'
+import { apurarCockpit } from '../lib/cockpit'
 import { gerarExcelTimbrado } from '../lib/excel'
 import { theme, money } from '../lib/theme'
 import InfoTela from '../components/InfoTela'
 
 const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
 const num = v => Number(v) || 0
-const pct = (a, b) => (b ? (a / b) * 100 : null)
-// "Principais clientes" sai do histórico das NFs de receita. Alguns lançamentos de receita
-// (rendimento de aplicação) trazem o BANCO no histórico, e o texto às vezes deixa só uma
-// palavra genérica ("VALOR"). Esses NÃO são clientes — filtra banco e ruído.
-const BANCO_RE = /\bBANCO\b|SANTANDER|ITA[UÚ]|BRADESCO|\bCAIXA\b|SICOOB|SICREDI|\bINTER\b|NUBANK|\bBTG\b|SAFRA|DAYCOVAL|VOTORANTIM|PAGSEGURO|MERCADO ?PAGO|\bC6\b|BANRISUL|\bBB\b/i
-const LIXO_ENT = new Set(['VALOR', 'VALORES', 'RENDIMENTO', 'RENDIMENTOS', 'APLICACAO', 'APLICACOES', 'JUROS', 'SALDO', 'RESGATE', 'CDB', 'POUPANCA', 'TARIFA', 'TARIFAS', 'IOF', 'RECEITA', 'RECEITAS', 'FINANCEIRA', 'FINANCEIRAS', 'DIVERSOS', 'DIVERSAS', 'CLIENTE', 'CLIENTES', 'DEPOSITO', 'TRANSFERENCIA', 'TED', 'PIX', 'DOC'])
-const ehCliente = ent => { const n = String(ent || '').trim().toUpperCase(); return !!n && !BANCO_RE.test(n) && !LIXO_ENT.has(n) }
 const fmtPct = p => p == null ? '—' : `${p.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`
 const LARANJA = '#E5894D'
 // Lucro verde, prejuízo vermelho.
@@ -31,12 +19,6 @@ function fmtCnpj(c) {
   return `${s.slice(0, 2)}.${s.slice(2, 5)}.${s.slice(5, 8)}/${s.slice(8, 12)}-${s.slice(12)}`
 }
 
-// Palavras de nome de conta que identificam cada grupo (heurística sobre o balancete).
-const RE_IMPOSTO = /impost|tribut|\bicms\b|\bpis\b|cofins|\birpj\b|\bcsll\b|\biss\b|simples|\bdas\b|inss|fgts|contrib/i
-const RE_RECEBER = /client|duplicat.*receb|\ba\s*receber|receb.*client|cart[aã]o/i
-const RE_PAGAR = /fornec|\ba\s*pagar|duplicat.*pag|obrig.*pag/i
-const RE_DISP = /\bcaixa\b|banc|aplica|dispon|financeir|conta\s*corrente/i
-
 export default function PainelCliente() {
   const { empresaId, empresaNome, competencia, empresas, plano } = useAppData()
   const empresa = empresas.find(e => e.id === empresaId)
@@ -47,157 +29,7 @@ export default function PainelCliente() {
   // (razão + lançamentos confirmados) — mesma base da Conciliação e do Comparativo.
   const { carregando, dados: d, semComp } = useRelatorio({
     tela: 'cockpit', empresaId, competencia, extraDep: plano,
-    computar: async (compId, { mes, ano }) => {
-        // Balancete hierárquico VIVO (razão + lançamentos confirmados) — MESMA fonte da
-        // Conciliação e do resultado abaixo, para o ativo bater com a Conciliação e a identidade
-        // fechar: Ativo − (Passivo + PL) = Resultado acumulado. As correções (ex.: estorno de
-        // rendimento lançado em dobro) entram nos dois lados, mantendo tudo consistente.
-        const { linhas: hier } = await montarBalancete(empresaId, compId, 0, { comLancamentos: true })
-        const analit = (hier || []).filter(l => !l.sintetica)
-        const g = l => String(l.classifRaw || '')[0] // grupo pela CLASSIFICAÇÃO (não pelo reduzido)
-
-        const comparativo = await apurarVariacoes(empresaId, { comLancamentos: true }) // só p/ o gate de variações
-        const dist = await apurarDistribuicao(empresaId, compId, ano, mes)
-
-        // --- Receita / Custo / Despesa / Resultado — VIVO (com as correções) ---
-        // Soma por GRUPO (líquido) a partir do balancete VIVO (razão + lançamentos confirmados),
-        // MESMA fonte do balanço acima e da Conciliação: receita = grupo 3 (credor), custo = grupo 4,
-        // despesa = grupo 5 (LÍQUIDO — rendimentos financeiros do 5.5, credores, compensam as
-        // despesas dentro do próprio grupo 5). Assim as correções que ainda não subiram ao Comparativo
-        // (ex.: estorno de rendimento lançado em dobro) já entram aqui e a identidade fecha:
-        // Ativo − (Passivo + PL) = Resultado acumulado.
-        const { data: compsAno } = await supabase.from('competencias').select('id, mes')
-          .eq('cliente_id', empresaId).eq('ano', ano).order('mes', { ascending: true })
-        const porMes = {}, meses = []
-        for (const c of (compsAno || [])) {
-          const linhasC = c.id === compId ? hier : (await montarBalancete(empresaId, c.id, 0, { comLancamentos: true })).linhas // vivo (com correções)
-          const res = (linhasC || []).filter(l => !l.sintetica && ['3', '4', '5'].includes(String(l.classifRaw || '')[0]))
-          if (!res.length) continue
-          let g3 = 0, g4 = 0, g5 = 0
-          for (const l of res) {
-            const sf = Number(l.saldo_final) || 0
-            const grp = String(l.classifRaw || '')[0]
-            if (grp === '3') g3 += sf; else if (grp === '4') g4 += sf; else g5 += sf
-          }
-          const receita = -g3, custo = g4, despesa = g5 // grupo 3 credor → receita positiva; 4/5 devedores
-          meses.push(c.mes)
-          porMes[c.mes] = { receita, custo, despesa, resultado: receita - custo - despesa }
-        }
-        meses.sort((a, b) => a - b)
-        const receitaMes = m => porMes[m]?.receita || 0
-        const custoMes = m => porMes[m]?.custo || 0
-        const despesaMes = m => porMes[m]?.despesa || 0
-        const resMes = m => porMes[m]?.resultado || 0
-        const serie = meses.map(m => ({ mes: m, receita: receitaMes(m), despesa: custoMes(m) + despesaMes(m), resultado: resMes(m) }))
-        const resultado = resMes(mes)
-        const acumulado = meses.filter(m => m <= mes).reduce((s, m) => s + resMes(m), 0)
-
-        // Gráfico de desempenho (combo): usa a MESMA base do painel (grupos por 1º dígito —
-        // 3 = receita, 4 = custo, 5 = despesa), e não o montarDRE detalhado (que assume a
-        // estrutura do Domínio 31/43/51… e, num plano simples, perde o custo/despesa e faz
-        // EBITDA e Lucro darem iguais à Receita — margem 100%).
-        //   Receita Líquida = receita (grupo 3)
-        //   EBITDA (resultado operacional) = receita − custo (grupo 3 − grupo 4)
-        //   Lucro Líquido = receita − custo − despesa (grupo 3 − 4 − 5)
-        const serieCombo = meses.map(m => {
-          const p = porMes[m] || { receita: 0, custo: 0, despesa: 0, resultado: 0 }
-          const receitaLiq = p.receita, ebitda = p.receita - p.custo, lucroLiq = p.resultado
-          return {
-            mes: m, rotulo: MESES[m - 1], receitaLiq, ebitda, lucroLiq,
-            margemEbitda: receitaLiq ? (ebitda / receitaLiq) * 100 : 0,
-            margemLiquida: receitaLiq ? (lucroLiq / receitaLiq) * 100 : 0,
-          }
-        })
-
-        // Nível 1 resumido do mês da competência.
-        const faturamento = receitaMes(mes)
-        const custo = custoMes(mes)
-        const despesa = despesaMes(mes)
-        const lucro = resultado
-
-        // --- Balanço: saldo_final = última coluna da conciliação ---
-        const ativoLinhas = analit.filter(l => g(l) === '1')
-        const passivoLinhas = analit.filter(l => g(l) === '2')
-        const totAtivo = ativoLinhas.reduce((s, l) => s + num(l.saldo_final), 0)
-        const totPassivo = passivoLinhas.reduce((s, l) => s + num(l.saldo_final), 0)
-        const somaFiltro = (arr, re) => arr.filter(l => re.test(l.nome || ''))
-          .reduce((s, l) => s + Math.abs(num(l.saldo_final)), 0)
-        const clientes = somaFiltro(ativoLinhas, RE_RECEBER)
-        const fornecedores = somaFiltro(passivoLinhas, RE_PAGAR)
-        const impostos = somaFiltro(passivoLinhas, RE_IMPOSTO)
-
-        // --- Disponibilidades: TODAS as analíticas da sintética "Disponível" (o totalizador
-        // de caixa/bancos/aplicações), como na conciliação — não por nome solto (que pegava
-        // contas erradas, tipo IRRF/PROV. IR). Acha a sintética Disponível e soma as filhas
-        // pela classificação; se não achar, cai no 1.1.1 padrão e, por fim, no filtro de nome.
-        const sintDisp = (hier || [])
-          .filter(l => l.sintetica && g(l) === '1' && /dispon|caixa\s*e\s*equival|disponibilidad/i.test(l.nome || ''))
-          .sort((a, b) => String(a.classifRaw || '').length - String(b.classifRaw || '').length)[0]
-        let dispPrefix = sintDisp?.classifRaw
-        if (!dispPrefix && analit.some(l => String(l.classifRaw || '').startsWith('111'))) dispPrefix = '111'
-        const ehDisp = l => dispPrefix ? String(l.classifRaw || '').startsWith(dispPrefix) : RE_DISP.test(l.nome || '')
-        const disponiveis = ativoLinhas.filter(ehDisp)
-          .map(l => ({ nome: l.nome || l.reduzido, ini: num(l.saldo_inicial), fim: num(l.saldo_final) }))
-          .filter(l => Math.abs(l.ini) > 0.005 || Math.abs(l.fim) > 0.005)
-          .sort((a, b) => b.fim - a.fim)
-        const totDispIni = disponiveis.reduce((s, l) => s + l.ini, 0)
-        const totDispFim = disponiveis.reduce((s, l) => s + l.fim, 0)
-        const geracaoCaixa = totDispFim - totDispIni
-
-        // Datas dos saldos: coluna 1 = fim do mês anterior (saldo inicial); coluna 2 = fim da
-        // competência. Ex.: 30/04/2026 e 31/05/2026.
-        const ultDia = (a, m) => new Date(a, m, 0).getDate()
-        const fmtDia = (a, m) => `${String(ultDia(a, m)).padStart(2, '0')}/${String(m).padStart(2, '0')}/${a}`
-        const mAnt = mes === 1 ? 12 : mes - 1, aAnt = mes === 1 ? ano - 1 : ano
-        const dataIni = fmtDia(aAnt, mAnt), dataFim = fmtDia(ano, mes)
-
-        // --- Índices (última coluna da conciliação; classificação mascarada) ---
-        const somaClassif = pref => analit.filter(l => String(l.classif || '').startsWith(pref))
-          .reduce((s, l) => s + num(l.saldo_final), 0)
-        const ac = somaClassif('1.1') // ativo circulante
-        const pc = somaClassif('2.1') // passivo circulante
-        const pnc = somaClassif('2.2') // passivo não circulante
-        const indices = {
-          margem: faturamento ? ((faturamento - custo - despesa) / faturamento) * 100 : null,
-          cargaTrib: faturamento ? (impostos / faturamento) * 100 : null,
-          liquidez: pc ? ac / Math.abs(pc) : null,
-          endividamento: totAtivo ? pct(Math.abs(pc) + Math.abs(pnc), Math.abs(totAtivo)) : null,
-          prazoReceb: faturamento ? Math.round((clientes / faturamento) * 30) : null,
-        }
-
-        // --- Distribuição de lucros (campo de distribuição / ata) ---
-        const distTotal = (dist?.socios || []).reduce((s, x) => s + num(x.total), 0)
-
-        // --- Principais clientes (NOME extraído do histórico das NFs de receita) ---
-        const receitaCods = [...new Set(analit.filter(l => g(l) === '3').map(l => String(l.reduzido)))]
-        let topClientes = [], totReceitaRazao = 0
-        if (receitaCods.length) {
-          const rz = await lerTudo(() => supabase.from('razao').select('conta, historico, debito, credito')
-            .eq('competencia_id', compId).in('conta', receitaCods))
-          const mapa = {}
-          for (const l of (rz || [])) {
-            const v = num(l.credito) - num(l.debito) // receita = crédito (estorno debita)
-            if (v <= 0) continue
-            totReceitaRazao += v
-            const ent = extrairEntidade(l.historico)
-            if (!ent || /^[\d.,\s]+$/.test(ent) || ent.replace(/[^A-Za-zÀ-ú]/g, '').length < 3) continue // descarta "nome" que é só número
-            if (!ehCliente(ent)) continue // não é cliente: banco (rendimento de aplicação) ou palavra genérica ("VALOR")
-            mapa[ent] = (mapa[ent] || 0) + v
-          }
-          topClientes = Object.entries(mapa).map(([nome, valor]) => ({ nome, valor }))
-            .sort((a, b) => b.valor - a.valor).slice(0, 6)
-        }
-
-        return {
-          faturamento, custo, despesa, resultado, lucro, acumulado, serie, serieCombo,
-          totAtivo, totPassivo, clientes, fornecedores,
-          impostos, disponiveis, totDispIni, totDispFim, geracaoCaixa, dataIni, dataFim,
-          indices, dist, distTotal, ata: dist.ata || { distribuido: 0, pago: 0, pagoMes: 0, saldo: 0 },
-          comparativo,
-          variacoesConta: new Set((comparativo.itens || []).map(i => String(i.conta))).size,
-          topClientes, totReceitaRazao,
-        }
-    },
+    computar: (compId, { mes, ano }) => apurarCockpit(empresaId, compId, mes, ano),
   })
 
   function exportarExcel() {
