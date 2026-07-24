@@ -46,7 +46,7 @@ const CONTABEIS = [
   { id: 'dre', nome: 'DRE', icon: 'ti-report-money', desc: 'Demonstração do resultado do exercício.' },
   { id: 'dfc', nome: 'DFC', icon: 'ti-arrows-exchange', desc: 'Fluxo de caixa (método indireto).', novo: true, emBreve: true },
   { id: 'balanco', nome: 'Balanço Patrimonial', icon: 'ti-scale', desc: 'Ativo, Passivo e Patrimônio Líquido por conta.' },
-  { id: 'comparativo', nome: 'Comparativo de Movimento', icon: 'ti-arrows-diff', desc: 'Saldo de cada conta ao longo dos meses.', emBreve: true },
+  { id: 'comparativo', nome: 'Comparativo de Movimento', icon: 'ti-arrows-diff', desc: 'Contas de resultado, mês a mês (Receitas, Custos e Despesas).' },
   { id: 'pendencias', nome: 'Relatório de Pendências', icon: 'ti-alert-triangle', desc: 'Documentos e itens ainda pendentes.' },
 ]
 // ids que saem dos cards soltos (viraram o card único). Book e os especiais continuam.
@@ -92,7 +92,7 @@ function secFinanceiro(ck) {
   if (!ck) return { titulo: 'Relatório do Financeiro (Cockpit)', html: '<p class="vazio">Sem dados.</p>' }
   const kpi = (k, v, neg) => `<div class="kpi"><div class="k">${k}</div><div class="v ${neg ? 'neg' : ''}">${v}</div></div>`
   const resumo = `<div class="kpis">${kpi('Faturamento do mês', money2(ck.faturamento))}${kpi('Custo', money2(ck.custo))}${kpi('Despesa', money2(ck.despesa))}${kpi('Resultado do mês', money2(ck.resultado), ck.resultado < 0)}${kpi('Resultado acumulado', money2(ck.acumulado), ck.acumulado < 0)}${kpi('Geração de caixa', money2(ck.geracaoCaixa), ck.geracaoCaixa < 0)}</div>`
-  const serie = `<h2 class="blk">Evolução no ano</h2><table class="rt"><thead><tr><th>Mês</th><th class="r">Receita</th><th class="r">Custo + Despesa</th><th class="r">Resultado</th></tr></thead><tbody>${(ck.serie || []).map(s => `<tr><td>${MES3[s.mes - 1]}</td><td class="r">${money2(s.receita)}</td><td class="r">${money2(s.despesa)}</td><td class="r">${money2(s.resultado)}</td></tr>`).join('') || '<tr><td colspan="4">—</td></tr>'}</tbody></table>`
+  const serie = `<h2 class="blk">Evolução no ano</h2>${svgBarrasSerie(ck.serie)}<table class="rt"><thead><tr><th>Mês</th><th class="r">Receita</th><th class="r">Custo + Despesa</th><th class="r">Resultado</th></tr></thead><tbody>${(ck.serie || []).map(s => `<tr><td>${MES3[s.mes - 1]}</td><td class="r">${money2(s.receita)}</td><td class="r">${money2(s.despesa)}</td><td class="r">${money2(s.resultado)}</td></tr>`).join('') || '<tr><td colspan="4">—</td></tr>'}</tbody></table>`
   const disp = `<h2 class="blk">Disponibilidades (${ck.dataIni} → ${ck.dataFim})</h2><table class="rt"><thead><tr><th>Conta</th><th class="r">Saldo inicial</th><th class="r">Saldo final</th></tr></thead><tbody>${(ck.disponiveis || []).map(l => `<tr><td>${escP(l.nome)}</td><td class="r">${money2(l.ini)}</td><td class="r">${money2(l.fim)}</td></tr>`).join('') || '<tr><td colspan="3">—</td></tr>'}</tbody><tfoot><tr><td>Total · geração de caixa ${money2(ck.geracaoCaixa)}</td><td class="r">${money2(ck.totDispIni)}</td><td class="r">${money2(ck.totDispFim)}</td></tr></tfoot></table>`
   const idx = ck.indices || {}
   const indices = `<h2 class="blk">Indicadores</h2><table class="rt"><tbody><tr><td>Margem líquida</td><td class="r">${pctN(idx.margem)}</td></tr><tr><td>Carga tributária</td><td class="r">${pctN(idx.cargaTrib)}</td></tr><tr><td>Liquidez corrente</td><td class="r">${idx.liquidez == null ? '—' : idx.liquidez.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td></tr><tr><td>Endividamento</td><td class="r">${pctN(idx.endividamento)}</td></tr><tr><td>Prazo médio de recebimento</td><td class="r">${idx.prazoReceb == null ? '—' : idx.prazoReceb + ' dias'}</td></tr></tbody></table>`
@@ -100,11 +100,53 @@ function secFinanceiro(ck) {
   return { titulo: 'Relatório do Financeiro (Cockpit)', sub: 'Receita, resultado, caixa e indicadores', html: resumo + serie + disp + indices + top }
 }
 
+// Mini gráfico de barras (SVG) da evolução no ano — Receita (azul) × Resultado (verde/vermelho).
+function svgBarrasSerie(serie) {
+  if (!serie || !serie.length) return ''
+  const W = 720, H = 190, pad = 30, n = serie.length
+  const max = Math.max(1, ...serie.flatMap(s => [Math.abs(s.receita), Math.abs(s.resultado)]))
+  const bw = (W - pad * 2) / n, y0 = H - 26
+  const sc = v => (Math.abs(v) / max) * (H - 66)
+  const bars = serie.map((s, i) => {
+    const x = pad + i * bw, rh = sc(s.receita), lh = sc(s.resultado)
+    return `<rect x="${(x + bw * 0.16).toFixed(1)}" y="${(y0 - rh).toFixed(1)}" width="${(bw * 0.3).toFixed(1)}" height="${rh.toFixed(1)}" fill="#4A7CFF" rx="1.5"/><rect x="${(x + bw * 0.52).toFixed(1)}" y="${(y0 - lh).toFixed(1)}" width="${(bw * 0.3).toFixed(1)}" height="${lh.toFixed(1)}" fill="${s.resultado >= 0 ? '#30A46C' : '#E5484D'}" rx="1.5"/><text x="${(x + bw * 0.5).toFixed(1)}" y="${H - 9}" font-size="8.5" text-anchor="middle" fill="#98a2b3">${MES3[s.mes - 1]}</text>`
+  }).join('')
+  return `<div style="border:1px solid #e6e9ef;border-radius:8px;padding:8px 10px 2px;background:#fafbfc;margin-bottom:6px"><svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto"><line x1="${pad}" y1="${y0}" x2="${W - pad}" y2="${y0}" stroke="#e6e9ef"/>${bars}</svg><div style="font-size:8px;color:#98a2b3;padding:0 0 6px"><span style="color:#4A7CFF">■</span> Receita &nbsp; <span style="color:#30A46C">■</span> Resultado (lucro) &nbsp; <span style="color:#E5484D">■</span> Resultado (prejuízo)</div></div>`
+}
+
+// Comparativo de Movimento — só as CONTAS DE RESULTADO (grupos 3/4/5), MÊS A MÊS.
+// Lê o balancete vivo de cada competência do ano e monta a matriz conta × mês (movimento).
+async function dadosCompResultado(empresaId, ano) {
+  const { data: comps } = await supabase.from('competencias').select('id, mes')
+    .eq('cliente_id', empresaId).eq('ano', ano).order('mes', { ascending: true })
+  const meta = {}, mov = {}, meses = []
+  for (const c of (comps || [])) {
+    const { linhas } = await montarBalancete(empresaId, c.id, 0, { comLancamentos: true })
+    const res = (linhas || []).filter(l => ['3', '4', '5'].includes(String(l.classifRaw || '')[0]))
+    if (!res.length) continue
+    meses.push(c.mes)
+    for (const l of res) {
+      const key = (!l.sintetica && l.reduzido) ? '#' + l.reduzido : (l.classifRaw || l.classif)
+      if (!meta[key]) meta[key] = { key, cod: l.reduzido, nome: l.nome, classifRaw: l.classifRaw || l.classif, sintetica: l.sintetica }
+      ;(mov[key] ||= {})[c.mes] = (Number(l.debito) || 0) - (Number(l.credito) || 0)
+    }
+  }
+  meses.sort((a, b) => a - b)
+  const contas = Object.values(meta).sort((a, b) => a.classifRaw < b.classifRaw ? -1 : a.classifRaw > b.classifRaw ? 1 : 0)
+  return { meses, contas, mov }
+}
+function secComparativo({ meses, contas, mov }) {
+  const dc = v => { if (v == null) return ''; const n = Number(v) || 0; return Math.abs(n) < 0.005 ? '0,00' : fmtN(n) + (n >= 0 ? ' D' : ' C') }
+  const thM = meses.map(m => `<th class="r">${MES3[m - 1]}</th>`).join('')
+  const body = contas.map(c => `<tr class="${c.sintetica ? 'grp' : ''}"><td>${escP(c.cod || '')}</td><td>${escP(c.nome || '')}</td>${meses.map(m => `<td class="r">${dc(mov[c.key]?.[m])}</td>`).join('')}</tr>`).join('')
+  return { titulo: 'Comparativo de Movimento — contas de resultado', sub: 'Movimento mês a mês · Receitas, Custos e Despesas', html: `<table class="rt"><thead><tr><th>Código</th><th>Conta</th>${thM}</tr></thead><tbody>${body || `<tr><td colspan="${2 + meses.length}">Sem dados no comparativo.</td></tr>`}</tbody></table>` }
+}
+
 export default function Relatorios() {
   const { empresaId, empresaNome, competencia, empresas } = useAppData()
   const cnpj = empresas?.find(e => e.id === empresaId)?.cnpj
   const [gerandoDom, setGerandoDom] = useState(false)
-  const [aba, setAba] = useState('balancete')
+  const [aba, setAba] = useState('') // '' = nenhum relatório aberto na tela (os contábeis só geram PDF)
   const [cardsAberto, setCardsAberto] = useState(true) // recolher a lista de cards p/ dar espaço ao relatório
   const [modalContab, setModalContab] = useState(false) // painel "Relatórios Contábeis" (gerar individual/todos)
   const [selContab, setSelContab] = useState(() => new Set(CONTABEIS.filter(c => !c.emBreve).map(c => c.id)))
@@ -206,6 +248,7 @@ export default function Relatorios() {
         else if (id === 'balancete') secoes.push(secBalancete({ hier, linhas }))
         else if (id === 'dre') secoes.push(secDRE({ dreRows }))
         else if (id === 'balanco') secoes.push(secBalanco({ hier }))
+        else if (id === 'comparativo') secoes.push(secComparativo(await dadosCompResultado(empresaId, ano)))
         else if (id === 'pendencias') secoes.push(secPendencias({ pendencias, concPend, contratoPend, despesaPend }))
       }
       abreRelatoriosContabeis({ empresa: empresaNome, cnpj, competencia, secoes })
@@ -431,7 +474,7 @@ export default function Relatorios() {
           <label style={{ fontSize: 12, color: theme.sub, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
             <i className="ti ti-report" /> Relatório:
             <select className="input" style={{ width: 'auto', fontSize: 13, padding: '6px 10px' }} value={aba} onChange={e => setAba(e.target.value)}>
-              {RELATORIOS.map(r => <option key={r.id} value={r.id}>{r.nome}</option>)}
+              {RELATORIOS.filter(r => !CONTAB_NA_LISTA.has(r.id)).map(r => <option key={r.id} value={r.id}>{r.nome}</option>)}
             </select>
           </label>
         )}
