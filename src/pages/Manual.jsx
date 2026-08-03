@@ -266,6 +266,7 @@ const HTML = `
   <p>Sobe informação de vários clientes de uma vez, amarrando pelo CNPJ. Dois usos:</p>
   <h3><span class="m-dot db"></span> Relação de documentos</h3>
   <p>Uma planilha (CNPJ · Cliente · Documento) define a lista de documentos esperados de cada cliente na competência — e propaga para os fechamentos abertos dali em diante.</p>
+  <div class="m-rule"><span class="k">Complementar × Substituir (não apaga sem confirmar)</span> Ao importar, a plataforma <b>pergunta</b> o que fazer com a lista que já existe: <b>Complementar</b> (padrão) mantém os documentos já cadastrados — inclusive o que já foi <b>recebido</b> — e só <b>adiciona os novos</b> que faltam; <b>Substituir</b> deixa a lista igual à da planilha (os que não estiverem nela saem), preservando o “recebido” dos que continuam. Assim uma importação nunca zera a lista de um cliente sem você escolher.</div>
   <h3><span class="m-dot db"></span> Recebimento de arquivos — sem renomear</h3>
   <p>Arraste os extratos de vários clientes de uma vez. O sistema <b>reconhece cada arquivo pelo conteúdo</b> e monta uma grade de conferência. Duas vias, nesta ordem:</p>
   <ul>

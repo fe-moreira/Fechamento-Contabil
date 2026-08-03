@@ -61,6 +61,7 @@ export default function ImportacaoMassa() {
   const [msg, setMsg] = useState('')
   const [massa, setMassa] = useState(null)
   const [aplicando, setAplicando] = useState(false)
+  const [modoDocs, setModoDocs] = useState('complementar') // 'complementar' (soma) | 'substituir' — NUNCA apaga sem escolher
 
   // ---- Relação de documentos (por CNPJ) ----
   async function baixarModeloDocs() {
@@ -118,25 +119,36 @@ export default function ImportacaoMassa() {
     setAplicando(true); setMsg('')
     try {
       const { ano, mes } = massa
+      const complementar = modoDocs === 'complementar'
+      // Mescla a lista NOVA com a existente conforme o modo escolhido — SEM perder o que já
+      // estava recebido. Complementar: mantém tudo e só adiciona os que faltam. Substituir:
+      // fica com a lista nova, mas PRESERVA rec/date dos documentos que continuam nela.
+      const mesclar = (existentesRaw) => {
+        const existentes = normaliza(existentesRaw)
+        if (!complementar) {
+          const recPorNome = Object.fromEntries(existentes.map(x => [x.name, x]))
+          return c => c.docs.map(name => recPorNome[name] || { name, rec: false, date: '' })
+        }
+        const nomes = new Set(existentes.map(d => d.name))
+        return c => [...existentes, ...c.docs.filter(name => !nomes.has(name)).map(name => ({ name, rec: false, date: '' }))]
+      }
       let atualizados = 0, pulados = 0
       for (const c of massa.encontrados) {
-        const docs = c.docs.map(name => ({ name, rec: false, date: '' }))
-        const { data: ex } = await supabase.from('competencias').select('id, status').eq('cliente_id', c.id).eq('ano', ano).eq('mes', mes).maybeSingle()
+        const { data: ex } = await supabase.from('competencias').select('id, status, documentos').eq('cliente_id', c.id).eq('ano', ano).eq('mes', mes).maybeSingle()
         if (ex?.status === 'fechado') { pulados++; continue }
         let compId = ex?.id
         if (!compId) {
           const { data: cr } = await supabase.from('competencias').insert({ cliente_id: c.id, ano, mes }).select('id').single()
           compId = cr?.id
         }
-        if (compId) { await supabase.from('competencias').update({ documentos: docs }).eq('id', compId); atualizados++ }
-        // propaga para os fechamentos ABERTOS deste cliente dali pra frente.
+        if (compId) { await supabase.from('competencias').update({ documentos: mesclar(ex?.documentos)(c) }).eq('id', compId); atualizados++ }
+        // propaga para os fechamentos ABERTOS deste cliente dali pra frente (mesmo modo).
         const { data: futuras } = await supabase.from('competencias').select('id, ano, mes, status, documentos').eq('cliente_id', c.id)
         for (const f of (futuras || []).filter(x => (x.ano > ano || (x.ano === ano && x.mes > mes)) && x.status !== 'fechado')) {
-          const recPorNome = Object.fromEntries(normaliza(f.documentos).map(x => [x.name, x]))
-          await supabase.from('competencias').update({ documentos: c.docs.map(name => recPorNome[name] || { name, rec: false, date: '' }) }).eq('id', f.id)
+          await supabase.from('competencias').update({ documentos: mesclar(f.documentos)(c) }).eq('id', f.id)
         }
       }
-      setMsg(`Documentos: ${atualizados} cliente(s) atualizado(s) na competência ${String(mes).padStart(2, '0')}/${ano}${pulados ? ` · ${pulados} pulado(s) (fechado)` : ''}.`)
+      setMsg(`Documentos: ${atualizados} cliente(s) ${complementar ? 'complementado(s)' : 'atualizado(s)'} em ${String(mes).padStart(2, '0')}/${ano}${pulados ? ` · ${pulados} pulado(s) (fechado)` : ''}.`)
       setMassa(null)
       recalcularPendencias?.()
     } catch (err) { setMsg('Erro ao aplicar: ' + err.message) } finally { setAplicando(false) }
@@ -156,7 +168,7 @@ export default function ImportacaoMassa() {
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 14 }}>
         {/* Relação de documentos */}
-        <Bloco icon="ti-files" titulo="Relação de documentos" desc="Lista de documentos esperados por cliente. Substitui a lista de cada CNPJ na competência escolhida e propaga para os abertos em diante.">
+        <Bloco icon="ti-files" titulo="Relação de documentos" desc="Lista de documentos esperados por cliente. Ao importar você escolhe Complementar (soma aos existentes) ou Substituir — nunca apaga sem você confirmar. Propaga para os abertos em diante.">
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
             <span style={{ fontSize: 12.5, color: theme.sub }}>Competência:</span>
             <select className="input" style={{ width: 'auto', padding: '6px 10px', fontSize: 13 }} value={alvo} onChange={e => setAlvo(e.target.value)}>
@@ -185,9 +197,21 @@ export default function ImportacaoMassa() {
         <div onClick={() => !aplicando && setMassa(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 50 }}>
           <div onClick={e => e.stopPropagation()} style={{ width: 'min(560px,96vw)', maxHeight: '88vh', overflow: 'auto', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
             <h2 style={{ fontSize: 17, marginBottom: 4 }}>Importar relação de documentos</h2>
-            <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 14 }}>
-              Competência <b style={{ color: theme.text }}>{String(massa.mes).padStart(2, '0')}/{massa.ano}</b>. Cada cliente encontrado tem a lista <b style={{ color: theme.text }}>substituída</b> (e propagada para os fechamentos abertos em diante). Fechados não mudam.
+            <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 12 }}>
+              Competência <b style={{ color: theme.text }}>{String(massa.mes).padStart(2, '0')}/{massa.ano}</b> (e propagado para os fechamentos abertos em diante). Fechados não mudam.
             </p>
+            {/* Escolha OBRIGATÓRIA: complementar (soma) ou substituir — evita apagar a lista existente sem querer. */}
+            <div style={{ border: `1px solid ${theme.border}`, borderRadius: 10, padding: '11px 13px', marginBottom: 14, background: theme.input }}>
+              <p style={{ fontSize: 12, color: theme.sub, margin: '0 0 8px', fontWeight: 600 }}>O que fazer com a lista que já existe?</p>
+              <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer', marginBottom: 8 }}>
+                <input type="radio" checked={modoDocs === 'complementar'} onChange={() => setModoDocs('complementar')} style={{ marginTop: 2 }} />
+                <span style={{ fontSize: 12.5, color: theme.text }}><b>Complementar</b> <span style={{ color: theme.sub }}>— mantém os documentos já cadastrados (e o que já foi recebido) e só <b>adiciona os novos</b> que faltam. Não apaga nada.</span></span>
+              </label>
+              <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer' }}>
+                <input type="radio" checked={modoDocs === 'substituir'} onChange={() => setModoDocs('substituir')} style={{ marginTop: 2 }} />
+                <span style={{ fontSize: 12.5, color: theme.text }}><b>Substituir</b> <span style={{ color: theme.sub }}>— a lista passa a ser <b>exatamente a da planilha</b> (documentos que não estiverem nela saem). O “recebido” dos que continuam é preservado.</span></span>
+              </label>
+            </div>
             <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginBottom: 14 }}>
               <Tag c={theme.green} n={massa.encontrados.length} t="cliente(s) a atualizar" />
               {massa.consolidadas.length > 0 && <Tag c={theme.sub} n={massa.consolidadas.length} t="filial consolidada (ignorada)" />}
@@ -207,7 +231,7 @@ export default function ImportacaoMassa() {
             )}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
               <button className="btn btn-ghost" onClick={() => setMassa(null)} disabled={aplicando}>Cancelar</button>
-              <button className="btn" onClick={aplicar} disabled={aplicando || !massa.encontrados.length}>{aplicando ? 'Aplicando…' : 'Aplicar importação'}</button>
+              <button className="btn" onClick={aplicar} disabled={aplicando || !massa.encontrados.length}>{aplicando ? 'Aplicando…' : (modoDocs === 'complementar' ? 'Complementar' : 'Substituir')}</button>
             </div>
           </div>
         </div>
