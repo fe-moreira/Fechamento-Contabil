@@ -233,8 +233,8 @@ export default function Layout() {
 
       {/* CONTEÚDO */}
       <main style={{ flex: 1, background: theme.contentBg, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
-        {/* Barra superior: faixa navy (igual à lateral) para "casar" no tema claro também */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '16px 32px', background: theme.sidebar, borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+        {/* Barra superior: faixa navy CONGELADA (sticky) — fica fixa ao rolar o conteúdo */}
+        <div style={{ position: 'sticky', top: 0, zIndex: 20, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '16px 32px', background: theme.sidebar, borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
           <div style={{ fontSize: 13, color: '#8A9BBE', display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, color: '#fff', fontWeight: 500 }}>
               <i className="ti ti-building" style={{ color: '#8A9BBE' }} />
