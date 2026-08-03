@@ -153,9 +153,9 @@ export default function Layout() {
   const [colapsado, setColapsado] = useState(false)
 
   return (
-    <div style={{ display: 'flex', minHeight: '100vh' }}>
-      {/* SIDEBAR */}
-      <aside style={{ width: colapsado ? 72 : 248, background: theme.sidebar, display: 'flex', flexDirection: 'column', flexShrink: 0, transition: 'width .2s ease' }}>
+    <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
+      {/* SIDEBAR — altura fixa da tela e rolagem PRÓPRIA: fica congelada ao rolar o conteúdo */}
+      <aside style={{ width: colapsado ? 72 : 248, background: theme.sidebar, display: 'flex', flexDirection: 'column', flexShrink: 0, transition: 'width .2s ease', height: '100vh', overflowY: 'auto' }}>
         {/* Marca + recolher */}
         <div style={{ padding: colapsado ? '20px 12px 16px' : '20px 16px 16px', display: 'flex', alignItems: 'center', gap: 9, justifyContent: colapsado ? 'center' : 'space-between' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 9, minWidth: 0 }}>
