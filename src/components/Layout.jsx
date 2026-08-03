@@ -106,7 +106,7 @@ function SinoDownloads() {
   return (
     <div style={{ position: 'relative' }} onClick={e => e.stopPropagation()}>
       <button onClick={toggle} title="Downloads em segundo plano"
-        style={{ position: 'relative', background: 'none', border: 'none', cursor: 'pointer', color: theme.sub, padding: 6, display: 'inline-flex', alignItems: 'center' }}>
+        style={{ position: 'relative', background: 'none', border: 'none', cursor: 'pointer', color: '#C5CFE3', padding: 6, display: 'inline-flex', alignItems: 'center' }}>
         <i className={`ti ${downloadsGerando ? 'ti-loader-2' : 'ti-bell'}`} style={{ fontSize: 19 }} />
         {downloadsNaoVistos > 0 && (
           <span style={{ position: 'absolute', top: 0, right: 0, minWidth: 16, height: 16, padding: '0 4px', borderRadius: 20, fontSize: 10, fontWeight: 700, color: '#fff', background: theme.red, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>{downloadsNaoVistos}</span>
@@ -233,11 +233,11 @@ export default function Layout() {
 
       {/* CONTEÚDO */}
       <main style={{ flex: 1, background: theme.contentBg, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
-        {/* Barra superior: empresa + tempo + competência */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '16px 32px', borderBottom: `1px solid ${theme.border}` }}>
-          <div style={{ fontSize: 13, color: theme.sub, display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-              <i className="ti ti-building" style={{ color: theme.sub }} />
+        {/* Barra superior: faixa navy (igual à lateral) para "casar" no tema claro também */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '16px 32px', background: theme.sidebar, borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+          <div style={{ fontSize: 13, color: '#8A9BBE', display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, color: '#fff', fontWeight: 500 }}>
+              <i className="ti ti-building" style={{ color: '#8A9BBE' }} />
               {empresaNome || 'Nenhuma empresa selecionada'}
             </span>
             {empresaNome && (
@@ -250,9 +250,9 @@ export default function Layout() {
             {fechamentoAtivo && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <i className="ti ti-calendar-event" style={{ color: theme.green }} />
-                <span style={{ fontSize: 12.5, color: theme.sub }}>Fechamento</span>
-                <span style={{ fontSize: 13, fontWeight: 600, color: theme.text }}>{competencia}</span>
-                <Link to="/fechamentos" className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }}><i className="ti ti-switch-horizontal" /> Trocar</Link>
+                <span style={{ fontSize: 12.5, color: '#8A9BBE' }}>Fechamento</span>
+                <span style={{ fontSize: 13, fontWeight: 600, color: '#fff' }}>{competencia}</span>
+                <Link to="/fechamentos" style={{ fontSize: 12, padding: '5px 10px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.18)', color: '#C5CFE3', display: 'inline-flex', alignItems: 'center', gap: 5 }}><i className="ti ti-switch-horizontal" /> Trocar</Link>
               </div>
             )}
             <SinoDownloads />
