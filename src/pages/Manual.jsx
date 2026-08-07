@@ -328,7 +328,7 @@ const HTML = `
 
 <section id="m-consulta">
   <h2 class="m-sec">Consulta de Lançamentos</h2>
-  <p>Procura no razão da competência <b>onde um lançamento caiu</b> — sem abrir conta por conta. Filtre por <b>data</b> (de/até), <b>conta</b> (bate na conta <b>ou</b> na contrapartida), <b>valor</b> (débito ou crédito) ou <b>histórico contém</b>. <b>Qualquer filtro sozinho já busca</b> — não precisa preencher todos. O resultado mostra os <b>dois lados da partida</b> (conta × contrapartida), com data, histórico e valor.</p>
+  <p>Procura no razão <b>onde um lançamento caiu</b> — sem abrir conta por conta e <b>sem precisar abrir fechamento</b>: basta ter a empresa selecionada. A busca varre <b>todas as competências</b> do cliente, então dá para achar pela <b>data</b> mesmo sem saber o mês. Filtre por <b>data</b> (de/até), <b>conta</b> (bate na conta <b>ou</b> na contrapartida), <b>valor</b> (débito ou crédito) ou <b>histórico contém</b>. <b>Qualquer filtro sozinho já busca</b> — não precisa preencher todos. O resultado mostra a <b>competência</b> e os <b>dois lados da partida</b> (conta × contrapartida), com data, histórico e valor.</p>
   <div class="m-rule"><span class="k">Busca no banco, sem limite de linhas</span> A consulta filtra <b>direto no banco</b> (não puxa tudo para o navegador) e traz o resultado <b>paginado</b> — o botão <b>Carregar mais</b> busca o próximo bloco. Assim ela nunca esbarra no corte de 1000 linhas do Supabase, mesmo em razões grandes.</div>
 </section>
 
