@@ -15,21 +15,23 @@ function parseBR(v) {
 }
 
 export default function ConsultaLancamentos() {
-  const { empresaId, empresaNome, competencia, getCompetenciaId, plano } = useAppData()
+  const { empresaId, empresaNome, plano } = useAppData()
   const nomePorConta = Object.fromEntries((plano || []).map(p => [String(p.cod), p.nome]))
 
   const [f, setF] = useState({ dataDe: '', dataAte: '', conta: '', valor: '', historico: '' })
   const set = (k, v) => setF(o => ({ ...o, [k]: v }))
+  const [compMap, setCompMap] = useState({}) // { competencia_id: 'MM/AAAA' }
   const [linhas, setLinhas] = useState(null) // null = ainda não buscou
   const [carregando, setCarregando] = useState(false)
   const [temMais, setTemMais] = useState(false)
   const [msg, setMsg] = useState('')
 
-  // Monta a query no banco (filtros server-side). Cada filtro é opcional — um sozinho já vale.
-  function construir(compId) {
+  // Monta a query no banco (filtros server-side). Busca em TODAS as competências do cliente —
+  // não precisa de fechamento aberto. Cada filtro é opcional: um sozinho já vale.
+  function construir(ids) {
     let q = supabase.from('razao')
-      .select('data, conta, contrapartida, historico, debito, credito')
-      .eq('competencia_id', compId)
+      .select('competencia_id, data, conta, contrapartida, historico, debito, credito')
+      .in('competencia_id', ids)
     if (f.dataDe) q = q.gte('data', f.dataDe)
     if (f.dataAte) q = q.lte('data', f.dataAte)
     const c = f.conta.trim()
@@ -42,13 +44,19 @@ export default function ConsultaLancamentos() {
   }
 
   async function buscar(reset = true) {
-    if (!empresaId) return
+    if (!empresaId) { setMsg('Selecione uma empresa no menu à esquerda.'); return }
     setCarregando(true); setMsg('')
     try {
-      const compId = await getCompetenciaId()
-      if (!compId) { setLinhas([]); setMsg('Sem razão importado nesta competência.'); return }
+      let mapa = compMap, ids = Object.keys(compMap)
+      if (reset || !ids.length) {
+        const { data: comps } = await supabase.from('competencias').select('id, ano, mes').eq('cliente_id', empresaId)
+        ids = (comps || []).map(c => c.id)
+        mapa = Object.fromEntries((comps || []).map(c => [c.id, `${String(c.mes).padStart(2, '0')}/${c.ano}`]))
+        setCompMap(mapa)
+      }
+      if (!ids.length) { setLinhas([]); setTemMais(false); setMsg('Este cliente ainda não tem razão importado.'); return }
       const from = reset ? 0 : (linhas?.length || 0)
-      const { data, error } = await construir(compId).range(from, from + PAGE - 1)
+      const { data, error } = await construir(ids).range(from, from + PAGE - 1)
       if (error) { setMsg('Erro na busca: ' + error.message); return }
       const novos = data || []
       setLinhas(reset ? novos : [...(linhas || []), ...novos])
@@ -64,10 +72,12 @@ export default function ConsultaLancamentos() {
     <div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
         <h1 style={{ fontSize: 22, fontWeight: 500, margin: 0 }}>Consulta de Lançamentos</h1>
-        <InfoTela titulo="Consulta de Lançamentos">Procura no razão da competência <b>onde um lançamento caiu</b>. Filtre por <b>data</b>, <b>conta</b> (conta ou contrapartida), <b>valor</b> (débito ou crédito) ou <b>histórico</b> — qualquer um sozinho já busca. O resultado mostra os <b>dois lados da partida</b> (conta × contrapartida). A busca roda no banco e vem paginada, então não esbarra no limite de linhas.</InfoTela>
+        <InfoTela titulo="Consulta de Lançamentos">Procura no razão <b>onde um lançamento caiu</b>, em <b>todas as competências</b> do cliente — <b>não precisa abrir fechamento</b>. Filtre por <b>data</b>, <b>conta</b> (conta ou contrapartida), <b>valor</b> (débito ou crédito) ou <b>histórico</b> — qualquer um sozinho já busca. O resultado mostra a <b>competência</b> e os <b>dois lados da partida</b> (conta × contrapartida). A busca roda no banco e vem paginada, então não esbarra no limite de linhas.</InfoTela>
       </div>
       <p style={{ color: theme.sub, fontSize: 13, marginBottom: 18 }}>
-        <b style={{ color: theme.text }}>{empresaNome || 'Selecione uma empresa'}</b> · competência <b style={{ color: theme.text }}>{competencia}</b>
+        {empresaId
+          ? <>Busca em <b style={{ color: theme.text }}>todo o razão</b> de <b style={{ color: theme.text }}>{empresaNome}</b> — todas as competências. Não precisa abrir fechamento.</>
+          : <>Selecione uma empresa no menu à esquerda para consultar.</>}
       </p>
 
       {/* Filtros */}
@@ -82,7 +92,7 @@ export default function ConsultaLancamentos() {
         </div>
         <div>
           <label>Conta (ou contrapartida)</label>
-          <input className="input" value={f.conta} onChange={e => set('conta', e.target.value)} placeholder="código da conta" />
+          <input className="input" value={f.conta} onChange={e => set('conta', e.target.value)} placeholder="código da conta" onKeyDown={e => e.key === 'Enter' && buscar()} />
         </div>
         <div>
           <label>Valor (débito ou crédito)</label>
@@ -109,18 +119,19 @@ export default function ConsultaLancamentos() {
             <b style={{ color: theme.text }}>{linhas.length}</b> lançamento(s){temMais ? '+' : ''} encontrado(s)
           </div>
           {linhas.length === 0 ? (
-            <p style={{ padding: 16, fontSize: 13, color: theme.sub }}>Nenhum lançamento com esses filtros nesta competência.</p>
+            <p style={{ padding: 16, fontSize: 13, color: theme.sub }}>Nenhum lançamento com esses filtros.</p>
           ) : (
-            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 820 }}>
               <thead>
                 <tr style={{ background: theme.input }}>
-                  <th style={th}>Data</th><th style={th}>Conta (onde caiu)</th><th style={th}>Contrapartida</th>
+                  <th style={th}>Competência</th><th style={th}>Data</th><th style={th}>Conta (onde caiu)</th><th style={th}>Contrapartida</th>
                   <th style={th}>Histórico</th><th style={thNum}>Débito</th><th style={thNum}>Crédito</th>
                 </tr>
               </thead>
               <tbody>
                 {linhas.map((l, i) => (
                   <tr key={i} style={{ borderTop: `1px solid ${theme.border}` }}>
+                    <td style={{ ...td, whiteSpace: 'nowrap', color: theme.sub }}>{compMap[l.competencia_id] || '—'}</td>
                     <td style={{ ...td, whiteSpace: 'nowrap' }}>{fmtData(l.data)}</td>
                     <td style={td} title={contaLabel(l.conta)}>{contaLabel(l.conta)}</td>
                     <td style={{ ...td, color: theme.sub }} title={contaLabel(l.contrapartida)}>{contaLabel(l.contrapartida)}</td>
