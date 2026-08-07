@@ -175,6 +175,7 @@ const HTML = `
       <li><a href="#m-relmassa"><span class="n">06</span> Relatórios em massa</a></li>
       <li><a href="#m-fechamentos"><span class="n">07</span> Fechamentos</a></li>
       <li><a href="#m-documentos"><span class="n">08</span> Documentos Recebidos</a></li>
+      <li><a href="#m-consulta"><span class="n">·</span> Consulta de Lançamentos</a></li>
       <li><a href="#m-razao"><span class="n">09</span> Importar Razão</a></li>
       <li><a href="#m-sugestoes"><span class="n">10</span> Sugestões de Contab.</a></li>
       <li><a href="#m-outras"><span class="n">11</span> Outras Contabilizações</a></li>
@@ -323,6 +324,12 @@ const HTML = `
   <p>Uma conta bancária costuma ter <b>dois</b> documentos na mesma conta contábil: o <b>extrato do banco (PDF)</b> → Conciliação e a <b>planilha do sistema (Excel)</b> → Integração. O <b>tipo</b> distingue os dois para um não marcar o outro. Deixe em <b>Auto</b> que o sistema deduz pelo formato (“(PDF)”/“(Excel)”), ou fixe manualmente.</p>
   <div class="m-rule"><span class="k">Ver / excluir arquivo</span> Todo arquivo recebido pode ser aberto (“ver arquivo”) e, se subiu na conta errada, excluído — o documento volta a pendente e a conciliação é limpa.</div>
   <div class="m-rule"><span class="k">Saldo do extrato: amarelo × automático</span> Ao subir um <b>extrato PDF</b>, o sistema lê o saldo e avisa <b>como</b> leu: se você <b>pintou de amarelo</b> os saldos (destaque), ele mostra “saldo = <b>SOMA</b> de N valores destacados” — use isso quando o saldo é a <b>soma de vários</b> (ex.: extrato de investimento com vários CDBs). Se não achar amarelo, lê <b>automaticamente</b> e avisa “saldo lido AUTOMATICAMENTE — confira”: nesse caso ele pega <b>um</b> saldo (o mais provável), então, se precisava somar vários, <b>pinte-os de amarelo e suba de novo</b>. Importante: o amarelo precisa ser um <b>destaque de verdade</b> (anotação Highlight) sobre o texto — PDF “achatado”/impresso ou escaneado não tem o destaque legível e cai no automático. Não precisa cobrir o número inteiro com precisão: <b>basta o grifo tocar/sobrepor o valor</b> (mesmo parcialmente) que ele é somado.</div>
+</section>
+
+<section id="m-consulta">
+  <h2 class="m-sec">Consulta de Lançamentos</h2>
+  <p>Procura no razão da competência <b>onde um lançamento caiu</b> — sem abrir conta por conta. Filtre por <b>data</b> (de/até), <b>conta</b> (bate na conta <b>ou</b> na contrapartida), <b>valor</b> (débito ou crédito) ou <b>histórico contém</b>. <b>Qualquer filtro sozinho já busca</b> — não precisa preencher todos. O resultado mostra os <b>dois lados da partida</b> (conta × contrapartida), com data, histórico e valor.</p>
+  <div class="m-rule"><span class="k">Busca no banco, sem limite de linhas</span> A consulta filtra <b>direto no banco</b> (não puxa tudo para o navegador) e traz o resultado <b>paginado</b> — o botão <b>Carregar mais</b> busca o próximo bloco. Assim ela nunca esbarra no corte de 1000 linhas do Supabase, mesmo em razões grandes.</div>
 </section>
 
 <section id="m-razao">
