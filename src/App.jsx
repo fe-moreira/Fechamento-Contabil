@@ -13,6 +13,7 @@ import Usuarios from './pages/Usuarios'
 import Fechamentos from './pages/Fechamentos'
 import ImportarRazao from './pages/ImportarRazao'
 import ConsultaLancamentos from './pages/ConsultaLancamentos'
+import DemonstracoesContabeis from './pages/DemonstracoesContabeis'
 import DocumentosRecebidos from './pages/DocumentosRecebidos'
 import Integracao from './pages/Integracao'
 import Conciliacao from './pages/Conciliacao'
@@ -60,6 +61,7 @@ function Rotas() {
         <Route path="contabilizar" element={<Contabilizar />} />
         <Route path="relatorios" element={<Relatorios />} />
         <Route path="painel-cliente" element={<PainelCliente />} />
+        <Route path="demonstracoes" element={<DemonstracoesContabeis />} />
         <Route path="status" element={<Status />} />
         <Route path="base" element={<BaseInformacoes />} />
         <Route path="importacoes" element={<ImportacaoMassa />} />

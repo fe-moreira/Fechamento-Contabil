@@ -25,6 +25,7 @@ const FECHAMENTO = [
   { to: '/status', icon: 'ti-traffic-lights', label: 'Status' },
   { to: '/relatorios', icon: 'ti-report', label: 'Relatórios' },
   { to: '/painel-cliente', icon: 'ti-presentation-analytics', label: 'Cockpit Financeiro' },
+  { to: '/demonstracoes', icon: 'ti-file-text-ai', label: 'Demonstrações Contábeis' },
 ]
 
 const SISTEMA = [
