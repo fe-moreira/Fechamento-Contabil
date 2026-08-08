@@ -204,7 +204,7 @@ function CheckDropdown({ icon, label, resumo, options, marcado, onToggle, onTodo
 }
 
 export default function CompMovimento() {
-  const { empresaId, empresaNome, competencia, getCompetenciaId, plano } = useAppData()
+  const { empresaId, empresaNome, competencia, getCompetenciaId, plano, competenciaFechada } = useAppData()
   // Mês do FECHAMENTO em andamento (competência global, "MM/AAAA"). Correções/lançamentos
   // só podem ser feitos NESTE mês; a justificativa é que vale para o ano todo.
   const fechMes = (() => { const m = /^(\d{2})\/(\d{4})$/.exec(String(competencia || '')); return (m && Number(m[2]) === ANO) ? Number(m[1]) : null })()
@@ -237,6 +237,7 @@ export default function CompMovimento() {
   // fechamentos reais). Depois o comparativo já traz a régua dos 10% com histórico.
   async function importarMeses(file) {
     if (!file || !empresaId) return
+    if (competenciaFechada) { setImpMsg('Erro: competência encerrada — reabra no Status para importar lançamentos.'); return }
     setImpBusy(true); setImpMsg('')
     try {
       // Trava de segurança: o arquivo tem que ser da EMPRESA selecionada (código Domínio /
@@ -325,6 +326,7 @@ export default function CompMovimento() {
   // substituir = troca o razão de cada mês; complementar = soma ao que já existe (matriz + filiais).
   async function aplicarMeses(modo) {
     const porMes = pendMeses?.porMes; if (!porMes) return
+    if (competenciaFechada) { setPendMeses(null); setImpMsg('Erro: competência encerrada — reabra no Status para importar lançamentos.'); return }
     setPendMeses(null); setImpBusy(true); setImpMsg('')
     try {
       const meses = Object.keys(porMes).map(Number).sort((a, b) => a - b)
@@ -703,9 +705,10 @@ export default function CompMovimento() {
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 18, background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 10, padding: '10px 14px' }}>
         <i className="ti ti-calendar-plus" style={{ color: theme.accent, fontSize: 18 }} />
         <span style={{ fontSize: 12.5, color: theme.sub, flex: 1, minWidth: 200 }}>Comecei depois do início do ano? Importe o razão dos <b style={{ color: theme.text }}>meses anteriores</b> (um arquivo com os meses) para ter a comparação de oscilação.</span>
-        <label className="btn btn-ghost" style={{ fontSize: 12.5, cursor: impBusy ? 'wait' : 'pointer' }}>
-          <i className={impBusy ? 'ti ti-loader-2 girando' : 'ti ti-file-import'} /> {impBusy ? 'Importando…' : 'Importar meses anteriores'}
-          <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} disabled={impBusy} onChange={e => importarMeses(e.target.files?.[0])} />
+        <label className="btn btn-ghost" title={competenciaFechada ? 'Competência encerrada — reabra no Status para importar.' : undefined}
+          style={{ fontSize: 12.5, cursor: competenciaFechada ? 'not-allowed' : impBusy ? 'wait' : 'pointer', opacity: competenciaFechada ? 0.5 : 1 }}>
+          <i className={impBusy ? 'ti ti-loader-2 girando' : competenciaFechada ? 'ti ti-lock' : 'ti ti-file-import'} /> {impBusy ? 'Importando…' : 'Importar meses anteriores'}
+          <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} disabled={impBusy || competenciaFechada} onChange={e => importarMeses(e.target.files?.[0])} />
         </label>
       </div>
       {impMsg && <p style={{ fontSize: 12.5, margin: '-8px 0 16px', color: impMsg.startsWith('Erro') ? theme.red : theme.green }}><i className={`ti ${impMsg.startsWith('Erro') ? 'ti-alert-triangle' : 'ti-circle-check'}`} /> {impMsg}</p>}
@@ -741,7 +744,17 @@ export default function CompMovimento() {
       {!carregando && anosMeses.length > 0 && (
         <>
           <div style={{ marginBottom: 14 }}>
-            {pendentes > 0 ? (
+            {competenciaFechada ? (
+              <span style={{
+                display: 'inline-flex', alignItems: 'center', gap: 7,
+                background: theme.input, color: theme.sub,
+                border: `0.5px solid ${theme.cb}`, borderRadius: 999,
+                padding: '6px 13px', fontSize: 12.5, fontWeight: 600,
+              }}>
+                <i className="ti ti-lock" />
+                Competência encerrada — somente leitura{pendentes > 0 ? ` · ${pendentes} variação(ões) a tratar ao reabrir` : ''}
+              </span>
+            ) : pendentes > 0 ? (
               <span style={{
                 display: 'inline-flex', alignItems: 'center', gap: 7,
                 background: 'rgba(229,72,77,0.12)', color: theme.red,
@@ -905,6 +918,7 @@ export default function CompMovimento() {
           getCompetenciaId={getCompetenciaId}
           jaJustificada={celulaTratada(detalhe.conta, detalhe.mes)}
           fechMes={fechMes}
+          bloqueado={competenciaFechada}
           competenciaLabel={competencia}
           justTextoAtual={justTextos[chaveCelula(detalhe.conta, detalhe.mes)] || textoPorConta[detalhe.conta] || ''}
           onJustificada={(texto) => marcarJustificada(detalhe.conta, detalhe.mes, texto)}
@@ -921,7 +935,7 @@ export default function CompMovimento() {
   )
 }
 
-function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuario, jaJustificada, fechMes, competenciaLabel, justTextoAtual, onJustificada, onDesfeita, onCorrigido, plano, centrosCC = [], ccSel = new Set(), filtroCC = false, onClose }) {
+function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuario, jaJustificada, fechMes, bloqueado = false, competenciaLabel, justTextoAtual, onJustificada, onDesfeita, onCorrigido, plano, centrosCC = [], ccSel = new Set(), filtroCC = false, onClose }) {
   const { conta, nome, mes, compId, todos, compIds, mesPorComp, classif } = detalhe
   // Conta de resultado (3/4/5) → precisa de centro de custo; sem CC aparece destacado.
   const contaResultado = ['3', '4', '5'].includes(String(classif || '')[0])
@@ -1053,6 +1067,7 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
   }, [compId, conta, todos]) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function registrar(tipo, detalheTxt) {
+    if (bloqueado) { setMsg('Competência encerrada — reabra no Status para justificar/editar.'); return }
     setSalvando(true)
     try {
       // Remove uma justificativa anterior do mesmo item (evita duplicar e permite EDITAR).
@@ -1074,6 +1089,7 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
     // A justificativa vale para a CONTA inteira (todos os meses) — desfazer remove a
     // justificativa da conta em todos os meses do ano (as correções/reclassificações, que
     // são específicas do mês, ficam; só sai o tipo 'Justificativa').
+    if (bloqueado) { setMsg('Competência encerrada — reabra no Status para editar.'); return }
     if (!window.confirm(`Desfazer a justificativa da conta ${conta}? A variação volta a contar como pendência (em todos os meses).`)) return
     setSalvando(true)
     try {
@@ -1088,6 +1104,7 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
   // recarrega nem mexe em estado de UI — é o núcleo reusado pela correção individual e em
   // lote. Lança erro em caso de problema (conta sintética, valor inválido, etc.).
   async function inserirCorrecao(l, { contaCerta, valor, historico, dedut }) {
+    if (bloqueado) throw new Error('Competência encerrada — reabra no Status para lançar correções.')
     const eSint = erroContaSintetica(plano, contaCerta, conta)
     if (eSint) throw new Error(eSint)
     const v = Number(valor) || 0
@@ -1187,6 +1204,7 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
   // Desfaz a correção: remove o lançamento e apaga a auditoria. O comparativo lê o razão
   // vivo, então basta sumir com o lançamento — os saldos voltam sozinhos.
   async function desfazerCorrecao(l, corr) {
+    if (bloqueado) { setMsg('Competência encerrada — reabra no Status para editar.'); return }
     const mesL = mesDoLanc(l)
     if (!fechMes || mesL !== fechMes) {
       const alvo = MESES[((mesL || 1) - 1)] ? `${MESES[(mesL || 1) - 1]}/${ANO}` : 'o mês do lançamento'
