@@ -63,12 +63,21 @@ export default function DemonstracoesContabeis() {
         .sort((a, b) => (a.ano - b.ano) || (a.mes - b.mes))
       if (!doPeriodo.length) { setMsg('Nenhuma competência importada dentro desse período.'); return }
 
-      // Balancete vivo (razão + lançamentos confirmados) mês a mês.
-      const perMonth = []
-      for (const c of doPeriodo) {
+      // Para o GRÁFICO do Cockpit e o "acumulado do ano": meses do ano jan→mês final do período
+      // (igual à prévia/Cockpit, que mostram a evolução do ano). O resto do relatório usa só o período.
+      const ult0 = doPeriodo[doPeriodo.length - 1]
+      const doAno = (comps || []).filter(c => c.ano === ult0.ano && c.mes <= ult0.mes)
+        .sort((a, b) => a.mes - b.mes)
+
+      // Balancete vivo (razão + lançamentos confirmados) mês a mês — carrega a UNIÃO uma vez só.
+      const uniao = [...new Map([...doPeriodo, ...doAno].map(c => [c.id, c])).values()]
+      const balCache = {}
+      for (const c of uniao) {
         const { linhas } = await montarBalancete(empresaId, c.id, 0, { comLancamentos: true })
-        perMonth.push({ ano: c.ano, mes: c.mes, linhas: linhas || [] })
+        balCache[c.id] = linhas || []
       }
+      const perMonth = doPeriodo.map(c => ({ ano: c.ano, mes: c.mes, linhas: balCache[c.id] }))
+      const anoPerMonth = doAno.map(c => ({ ano: c.ano, mes: c.mes, linhas: balCache[c.id] }))
 
       // Razão das contas de receita (grupo 3) p/ principais clientes — só se o Cockpit foi marcado.
       let razaoReceita = []
@@ -84,7 +93,7 @@ export default function DemonstracoesContabeis() {
         }
       }
 
-      const dados = montarDadosDemonstracoes(perMonth, razaoReceita)
+      const dados = montarDadosDemonstracoes(perMonth, razaoReceita, anoPerMonth)
       const pri = doPeriodo[0], ult = doPeriodo[doPeriodo.length - 1]
       const ok = abrirDemonstracoesContabeis({
         empresa: empresaNome, cnpj: empresa?.cnpj || '',
