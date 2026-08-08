@@ -368,7 +368,7 @@ export default function CompMovimento() {
       try {
         // Todos os anos com dados (para comparação multi-ano/por período).
         const { data: competencias } = await supabase
-          .from('competencias').select('id, ano, mes')
+          .from('competencias').select('id, ano, mes, status')
           .eq('cliente_id', empresaId)
           .order('ano', { ascending: true }).order('mes', { ascending: true })
 
@@ -391,7 +391,7 @@ export default function CompMovimento() {
           if (!res.length) continue
 
           amArr.push({ ano: c.ano, mes: c.mes, id: c.id })
-          if (c.ano === ANO) compsComDados.push({ id: c.id, mes: c.mes })
+          if (c.ano === ANO) compsComDados.push({ id: c.id, mes: c.mes, status: c.status })
           for (const l of res) {
             // Identidade da linha = código reduzido nas ANALÍTICAS (várias dividem a mesma
             // classificação — ex.: 6 contas em 4102021800 — e se fundiriam se a chave fosse
@@ -600,6 +600,10 @@ export default function CompMovimento() {
   // Uma célula (conta,mês) está tratada se justificada nela mesma OU se a conta foi justificada
   // em qualquer mês.
   const celulaTratada = (reduzido, mes) => justificadas.has(chaveCelula(reduzido, mes)) || contasJust.has(reduzido)
+
+  // Meses ENCERRADOS (fechados) do ano de fechamento — imutáveis mesmo estando num mês aberto.
+  // Ex.: trabalhando em julho, junho pra trás está fechado → não se justifica/corrige lá.
+  const mesesFechados = new Set(comps.filter(c => c.status === 'fechado').map(c => c.mes))
 
   // Conta por CONTA (não por célula/mês): uma conta com qualquer mês desviante ainda
   // não justificado conta 1 — mesmo conceito do Status e do badge do menu.
@@ -850,6 +854,7 @@ export default function CompMovimento() {
                           return <td key={col.key} style={{ ...td, textAlign: 'right', color: vazio ? theme.sub : theme.text }}>{vazio ? '—' : moneyDC(v)}</td>
                         }
                         const mes = col.mesJust
+                        const mesFechado = mesesFechados.has(mes) // mês encerrado = somente leitura
                         const red = desviante(key, mes)
                         const okProprio = justificadas.has(chaveCelula(reduzido, mes))
                         const ok = red && celulaTratada(reduzido, mes) // tratada nela mesma OU herdada da conta
@@ -858,21 +863,27 @@ export default function CompMovimento() {
                         if (vazio && !red) {
                           return <td key={col.key} style={{ ...td, textAlign: 'right', color: theme.sub }}>—</td>
                         }
+                        // Mês encerrado: não pinta como cobrança (vermelho) e não é acionável para
+                        // justificar/corrigir — só abre o razão (leitura). Tratar só reabrindo no Status.
+                        const acionavel = red && !ok && !mesFechado
                         return (
                           <td key={col.key} style={{ ...td, textAlign: 'right' }}>
                             <button
-                              onClick={() => setDetalhe({ conta: reduzido, classif, nome, mes, compId: col.compId, varInfo: infoVariacao(key, mes) })}
+                              onClick={() => setDetalhe({ conta: reduzido, classif, nome, mes, compId: col.compId, mesFechado, varInfo: infoVariacao(key, mes) })}
                               style={{
                                 display: 'inline-flex', alignItems: 'center', gap: 4, justifyContent: 'flex-end',
                                 background: 'none', border: 'none', padding: 0, cursor: 'pointer',
                                 fontSize: 12.5, fontFamily: 'inherit',
-                                color: (red && !ok) ? theme.red : theme.text,
-                                fontWeight: (red && !ok) ? 700 : 400,
+                                color: acionavel ? theme.red : theme.text,
+                                fontWeight: acionavel ? 700 : 400,
                               }}
-                              title={ok
-                                ? `Variação justificada${herdada ? ' (herdada da conta)' : ''}${(justTextos[chaveCelula(reduzido, mes)] || textoPorConta[reduzido]) ? ' — ' + (justTextos[chaveCelula(reduzido, mes)] || textoPorConta[reduzido]) : ''} · clique para ver o razão`
-                                : (vazio ? 'Mês sem movimento nesta conta — variação a justificar' : 'Ver razão da conta neste mês')}
+                              title={mesFechado
+                                ? `${MESES[mes - 1]}/${ANO} encerrado — somente leitura. Reabra no Status para tratar. · clique para ver o razão`
+                                : ok
+                                  ? `Variação justificada${herdada ? ' (herdada da conta)' : ''}${(justTextos[chaveCelula(reduzido, mes)] || textoPorConta[reduzido]) ? ' — ' + (justTextos[chaveCelula(reduzido, mes)] || textoPorConta[reduzido]) : ''} · clique para ver o razão`
+                                  : (vazio ? 'Mês sem movimento nesta conta — variação a justificar' : 'Ver razão da conta neste mês')}
                             >
+                              {mesFechado && red && !ok && <i className="ti ti-lock" style={{ color: theme.sub, fontSize: 12 }} />}
                               {ok && <i className="ti ti-circle-check" style={{ color: theme.green, fontSize: 13 }} />}
                               {vazio ? '—' : moneyDC(v)}
                             </button>
@@ -918,7 +929,7 @@ export default function CompMovimento() {
           getCompetenciaId={getCompetenciaId}
           jaJustificada={celulaTratada(detalhe.conta, detalhe.mes)}
           fechMes={fechMes}
-          bloqueado={competenciaFechada}
+          bloqueado={competenciaFechada || !!detalhe.mesFechado || mesesFechados.has(detalhe.mes)}
           competenciaLabel={competencia}
           justTextoAtual={justTextos[chaveCelula(detalhe.conta, detalhe.mes)] || textoPorConta[detalhe.conta] || ''}
           onJustificada={(texto) => marcarJustificada(detalhe.conta, detalhe.mes, texto)}
