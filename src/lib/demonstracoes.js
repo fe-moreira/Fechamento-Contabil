@@ -103,7 +103,7 @@ export function agregarBalancete(perMonth) {
 // ---------------------------------------------------------------------------
 // Indicadores do Cockpit para o período (mesma lógica do PainelCliente, adaptada ao período).
 // agg = balancete agregado; perMonth p/ a série; razaoReceita p/ principais clientes.
-function apurarCockpit(agg, perMonth, razaoReceita, primeiro, ultimo) {
+function apurarCockpit(agg, perMonth, razaoReceita, primeiro, ultimo, serieMonths) {
   const analit = agg.filter(l => !l.sintetica)
   const ativo = analit.filter(l => g1(l) === '1')
   const passivo = analit.filter(l => g1(l) === '2')
@@ -119,8 +119,9 @@ function apurarCockpit(agg, perMonth, razaoReceita, primeiro, ultimo) {
   const receita = -resGrupo('3'), custo = resGrupo('4'), despesa = resGrupo('5')
   const resultado = receita - custo - despesa
 
-  // Série mês a mês (resultado por mês)
-  const serie = perMonth.map(mm => {
+  // Série mês a mês (gráfico do Cockpit) — usa os meses do ANO quando fornecidos (igual ao
+  // Cockpit/prévia, que mostram jan→mês), senão os meses do próprio período.
+  const serie = (serieMonths && serieMonths.length ? serieMonths : perMonth).map(mm => {
     const an = (mm.linhas || []).filter(l => !l.sintetica)
     const r = -an.filter(l => g1(l) === '3').reduce((s, l) => s + num(l.saldo_final), 0)
     const c = an.filter(l => g1(l) === '4').reduce((s, l) => s + num(l.saldo_final), 0)
@@ -128,6 +129,8 @@ function apurarCockpit(agg, perMonth, razaoReceita, primeiro, ultimo) {
     return { rotulo: MESES[mm.mes - 1], receitaLiq: r, ebitda: r - c, lucroLiq: r - c - d,
       margemEbitda: r ? ((r - c) / r) * 100 : 0, margemLiquida: r ? ((r - c - d) / r) * 100 : 0 }
   })
+  // Acumulado do ano = soma dos resultados dos meses da série (jan→mês do período).
+  const acumuladoAno = serie.reduce((s, m) => s + m.lucroLiq, 0)
 
   // Disponibilidades: analíticas da sintética "Disponível" (ini = 1ª ponta, fim = última ponta)
   const sintDisp = agg.filter(l => l.sintetica && g1(l) === '1' && /dispon|caixa\s*e\s*equival|disponibilidad/i.test(l.nome || ''))
@@ -158,6 +161,7 @@ function apurarCockpit(agg, perMonth, razaoReceita, primeiro, ultimo) {
   const pnc = prePNC ? somaRaw(prePNC) : somaClassif('2.2')
   const indices = {
     margem: receita ? (resultado / receita) * 100 : null,
+    margemBruta: receita ? ((receita - custo) / receita) * 100 : null,
     cargaTrib: receita ? (impostos / receita) * 100 : null,
     liquidez: Math.abs(pc) > 0.005 ? ac / Math.abs(pc) : null,
     endividamento: Math.abs(totAtivo) > 0.005 ? ((Math.abs(pc) + Math.abs(pnc)) / Math.abs(totAtivo)) * 100 : null,
@@ -177,7 +181,7 @@ function apurarCockpit(agg, perMonth, razaoReceita, primeiro, ultimo) {
   }
   const topClientes = Object.entries(mapaCli).map(([nome, valor]) => ({ nome, valor })).sort((a, b) => b.valor - a.valor).slice(0, 6)
 
-  return { receita, custo, despesa, resultado, totAtivo, totPassivo, clientes, fornecedores, impostos,
+  return { receita, custo, despesa, resultado, acumuladoAno, totAtivo, totPassivo, clientes, fornecedores, impostos,
     disponiveis, totDispIni, totDispFim, geracaoCaixa, indices, serie, topClientes, totReceitaRazao,
     ac, pc, pnc,
     dataIni: diaBR(primeiro.mes === 1 ? primeiro.ano - 1 : primeiro.ano, primeiro.mes === 1 ? 12 : primeiro.mes - 1), // fim do mês anterior à 1ª ponta
@@ -213,12 +217,13 @@ function apurarDFC(agg, cockpit) {
 
 // ---------------------------------------------------------------------------
 // Monta TODOS os dados a partir dos balancetes mensais já lidos + razão de receita do período.
-// perMonth: [{ ano, mes, linhas }] em ordem cronológica.
-export function montarDadosDemonstracoes(perMonth, razaoReceita) {
+// perMonth: [{ ano, mes, linhas }] em ordem cronológica (dados do PERÍODO).
+// anoPerMonth: meses do ANO (jan→mês do período) só p/ o gráfico do Cockpit + acumulado do ano.
+export function montarDadosDemonstracoes(perMonth, razaoReceita, anoPerMonth) {
   const agg = agregarBalancete(perMonth)
   const primeiro = perMonth[0], ultimo = perMonth[perMonth.length - 1]
   const dre = montarDRE(agg)
-  const cockpit = apurarCockpit(agg, perMonth, razaoReceita, primeiro, ultimo)
+  const cockpit = apurarCockpit(agg, perMonth, razaoReceita, primeiro, ultimo, anoPerMonth)
   const dfc = apurarDFC(agg, cockpit)
   // Matriz do comparativo (contas de resultado, mês a mês)
   const meses = perMonth.map(m => m.mes)
@@ -238,6 +243,7 @@ export function abrirDemonstracoesContabeis({ empresa, cnpj, periodoLabel, perio
   const B = new Set(blocos)
   const { agg, dre, cockpit, dfc, meses, contasRes } = dados
   const c = cockpit
+  const emissao = new Date().toLocaleDateString('pt-BR')
   let folha = 1 // a capa é a folha 1 (sem marca); os blocos seguintes começam na 2
   const marca = () => `<div class="pmark">Folha ${++folha}</div>`
   const bandCmp = per => `<div class="cmp"><div class="wm">Attentive</div><div class="per">Período</div><div class="perv">${esc(per)}</div></div>`
@@ -247,34 +253,38 @@ export function abrirDemonstracoesContabeis({ empresa, cnpj, periodoLabel, perio
   // ---- Capa / desempenho (sempre) ----
   const ix = c.indices
   const grafico = svgDesempenho(c.serie)
+  const custoP = c.receita ? (c.custo / c.receita) * 100 : 0
+  const despP = c.receita ? (c.despesa / c.receita) * 100 : 0
+  const fmt2 = v => v == null ? '—' : v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
   paginas.push(`
   <div class="page">
     <div class="band"><div><div class="tt">Demonstrações Contábeis</div><div class="ss">Demonstrações e desempenho do período</div></div>${bandCmp(periodoLabel)}</div>
     <div class="meta">
       <div><div class="l">Empresa</div><div class="v">${esc(empresa)}</div></div>
       <div><div class="l">CNPJ</div><div class="v">${esc(cnpj || '—')}</div></div>
-      <div><div class="l">Período</div><div class="v">${esc(periodoLabel)}</div></div>
+      <div><div class="l">Emissão</div><div class="v">${esc(emissao)}</div></div>
     </div>
     <div class="content">
       <h2 class="sec">Resumo do desempenho</h2>
-      <p class="lead">No período <b>${esc(periodoLabel)}</b>, a ${esc(empresa)} registrou receita de <b>${brlR(c.receita)}</b> e resultado de <b>${brlR(c.resultado)}</b> (margem líquida de <b>${pctBR(ix.margem)}</b>). As disponibilidades fecharam em <b>${brlR(c.totDispFim)}</b>, com geração de caixa de <b>${brlR(c.geracaoCaixa)}</b> no período.</p>
+      <p class="lead">No período <b>${esc(periodoLabel)}</b>, a ${esc(empresa)} registrou receita de <b>${brlR(c.receita)}</b> e resultado de <span class="up">${brlR(c.resultado)}</span>, uma <b>margem líquida de ${pctBR(ix.margem)}</b>. Custo de ${brlR(c.custo)} (${pctBR(custoP)} da receita) e despesas de ${brlR(c.despesa)} (${pctBR(despP)}). No <b>acumulado do ano</b>: <b>${brlR(c.acumuladoAno)}</b>.</p>
       <div class="kpis">
-        <div class="kpi"><div class="k">Resultado do período</div><div class="v ${c.resultado >= 0 ? 'g' : 'r'}">${brlR(c.resultado)}</div></div>
-        <div class="kpi"><div class="k">Faturamento</div><div class="v">${brlR(c.receita)}</div></div>
-        <div class="kpi"><div class="k">Margem líquida</div><div class="v">${pctBR(ix.margem)}</div></div>
-        <div class="kpi"><div class="k">Geração de caixa</div><div class="v ${c.geracaoCaixa >= 0 ? 'g' : 'r'}">${brlR(c.geracaoCaixa)}</div></div>
+        <div class="kpi"><div class="k">Receita do período</div><div class="v">${brlR(c.receita)}</div></div>
+        <div class="kpi"><div class="k">Resultado</div><div class="v ${c.resultado >= 0 ? 'g' : 'r'}">${brlR(c.resultado)}</div></div>
+        <div class="kpi"><div class="k">Margem líquida</div><div class="v ${c.resultado >= 0 ? 'g' : 'r'}">${pctBR(ix.margem)}</div></div>
+        <div class="kpi"><div class="k">Acumulado do ano</div><div class="v">${brlR(c.acumuladoAno)}</div></div>
       </div>
       <h2 class="sec">Indicadores</h2>
       <table class="gtab">
         <tr><td>Margem líquida</td><td class="r">${pctBR(ix.margem)}</td><td class="mut">resultado ÷ receita</td></tr>
-        <tr><td>Liquidez corrente</td><td class="r">${ix.liquidez == null ? '—' : ix.liquidez.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td><td class="mut">ativo circ. ÷ passivo circ.</td></tr>
+        <tr><td>Margem bruta</td><td class="r">${pctBR(ix.margemBruta)}</td><td class="mut">(receita − custo) ÷ receita</td></tr>
+        <tr><td>Liquidez corrente</td><td class="r">${fmt2(ix.liquidez)}</td><td class="mut">ativo circ. ÷ passivo circ.</td></tr>
         <tr><td>Endividamento</td><td class="r">${pctBR(ix.endividamento)}</td><td class="mut">passivo exig. ÷ ativo</td></tr>
         <tr><td>Carga tributária</td><td class="r">${pctBR(ix.cargaTrib)}</td><td class="mut">impostos ÷ receita</td></tr>
         <tr><td>Prazo médio de recebimento</td><td class="r">${ix.prazoReceb == null ? '—' : ix.prazoReceb + ' dias'}</td><td class="mut">a receber ÷ receita</td></tr>
       </table>
-      ${c.serie.length > 1 ? `<h2 class="sec">Desempenho por mês</h2>
+      ${c.serie.length > 1 ? `<h2 class="sec">Desempenho por mês (gráfico do Cockpit)</h2>
       <div class="chart">${grafico}
-        <div class="leg"><span><i style="background:#4A7CFF"></i>Receita Líquida</span><span><i style="background:#E5484D"></i>EBITDA</span><span><i style="background:#30A46C"></i>Lucro Líquido</span></div>
+        <div class="leg"><span><i style="background:#4A7CFF"></i>Receita Líquida</span><span><i style="background:#E5484D"></i>EBITDA</span><span><i style="background:#30A46C"></i>Lucro Líquido</span><span><i class="ln" style="background:#E5484D"></i>Margem EBITDA</span><span><i class="ln" style="background:#30A46C"></i>Margem Líquida</span></div>
       </div>` : ''}
     </div>
     <div class="foot">Attentive Contabilidade · Demonstrações Contábeis · Valores em BRL</div>
@@ -368,35 +378,43 @@ export function abrirDemonstracoesContabeis({ empresa, cnpj, periodoLabel, perio
   </div>`)
   }
 
-  // ---- Balancete completo (Domínio) ----
+  // ---- Balancete completo (Domínio) — 2 folhas: Patrimoniais e Resultado (igual à prévia) ----
   if (B.has('balancete')) {
-    const rowsBal = agg.filter(l => Math.abs(num(l.saldo_final)) > 0.005 || Math.abs(num(l.debito)) > 0.005 || Math.abs(num(l.credito)) > 0.005)
-      .map(l => {
-        const cls = l.sintetica ? (String(l.classifRaw || '').length <= 1 ? 'g' : 'n') : ''
-        const ind = l.sintetica ? (String(l.classifRaw || '').length <= 1 ? '' : 'i1') : 'i2'
-        return `<tr class="${cls}"><td>${esc(l.reduzido)}</td><td>${esc(l.classif)}</td><td class="${ind}">${esc(l.nome)}</td><td class="r">${dc(l.saldo_inicial)}</td><td class="r">${brl(l.debito)}</td><td class="r">${brl(l.credito)}</td><td class="r">${dc(l.saldo_final)}</td></tr>`
-      }).join('')
-    paginas.push(`
+    const temMov = l => Math.abs(num(l.saldo_final)) > 0.005 || Math.abs(num(l.debito)) > 0.005 || Math.abs(num(l.credito)) > 0.005
+    const linhaBal = l => {
+      const cls = l.sintetica ? (String(l.classifRaw || '').length <= 1 ? 'g' : 'n') : ''
+      const ind = l.sintetica ? (String(l.classifRaw || '').length <= 1 ? '' : 'i1') : 'i2'
+      return `<tr class="${cls}"><td>${esc(l.reduzido)}</td><td>${esc(l.classif)}</td><td class="${ind}">${esc(l.nome)}</td><td class="r">${dc(l.saldo_inicial)}</td><td class="r">${brl(l.debito)}</td><td class="r">${brl(l.credito)}</td><td class="r">${dc(l.saldo_final)}</td></tr>`
+    }
+    const folhaBal = (titulo, sub, h3, grupos, folhaNo, rodape) => {
+      const rows = agg.filter(l => temMov(l) && grupos.includes(g1(l))).map(linhaBal).join('')
+      if (!rows) return
+      paginas.push(`
   <div class="page">
     ${marca()}
-    <div class="band"><div><div class="tt">Balancete</div><div class="ss">Modelo Domínio · completo</div></div>${bandCmp(periodoLabel)}</div>
+    <div class="band"><div><div class="tt">${titulo}</div><div class="ss">${sub}</div></div>${bandCmp(periodoLabel)}</div>
     <div class="content">
       <div class="dominio">
         <div class="cab"><table>
-          <tr><td class="lab">Empresa:</td><td>${esc(empresa)}</td><td style="text-align:right;white-space:nowrap">Folha:&nbsp;&nbsp;0001</td></tr>
+          <tr><td class="lab">Empresa:</td><td>${esc(empresa)}</td><td style="text-align:right;white-space:nowrap">Folha:&nbsp;&nbsp;${folhaNo}</td></tr>
           <tr><td class="lab">C.N.P.J.:</td><td>${esc(cnpj || '—')}</td><td></td></tr>
           <tr><td class="lab">Período:</td><td>${esc(periodoIni)} - ${esc(periodoFim)}</td><td></td></tr>
         </table></div>
-        <h3>BALANCETE</h3>
+        <h3>${h3}</h3>
         <div style="overflow:auto"><table class="dtab">
           <tr><th>Código</th><th>Classificação</th><th>Descrição da conta</th><th class="r">Saldo anterior</th><th class="r">Débito</th><th class="r">Crédito</th><th class="r">Saldo atual</th></tr>
-          ${rowsBal}
+          ${rows}
         </table></div>
       </div>
-      <p class="mut" style="font-size:10px;margin:8px 0 0">Balancete <b>completo</b> — todos os níveis (grupo, sintéticas e analíticas). O sistema pagina automaticamente conforme o nº de contas.</p>
+      <p class="mut" style="font-size:10px;margin:8px 0 0">${rodape}</p>
     </div>
     <div class="foot">Attentive Contabilidade · Demonstrações Contábeis · Valores em BRL</div>
   </div>`)
+    }
+    folhaBal('Balancete', 'Modelo Domínio · completo (1/2)', 'BALANCETE — CONTAS PATRIMONIAIS', ['1', '2'], '0001',
+      `Fecha <b>Ativo = Passivo + PL = ${brlR(Math.abs(c.totAtivo))}</b>. <i>Contas de resultado na próxima folha →</i>`)
+    folhaBal('Balancete (continuação)', 'Modelo Domínio · completo (2/2)', 'BALANCETE — CONTAS DE RESULTADO', ['3', '4', '5'], '0002',
+      `Balancete <b>completo</b> — todos os níveis (grupo, sintéticas e analíticas). Receitas − Custos − Despesas = <b>resultado do período ${brlR(c.resultado)}</b>.`)
   }
 
   // ---- Balanço Patrimonial (estilo CEMIG) ----
@@ -519,25 +537,30 @@ export function abrirDemonstracoesContabeis({ empresa, cnpj, periodoLabel, perio
   return true
 }
 
-// Gráfico de desempenho (combo simples: barras Receita/EBITDA/Lucro por mês).
+// Gráfico do Cockpit (combo) — idêntico à prévia: barras Receita Líquida / EBITDA / Lucro
+// por mês + linhas de Margem EBITDA e Margem Líquida no eixo %.
 function svgDesempenho(serie) {
   if (!serie || serie.length < 2) return ''
-  const W = 760, H = 220, mL = 8, mR = 8, mT = 12, mB = 26
-  const x0 = mL, x1 = W - mR, y1 = H - mB, plotH = y1 - mT, plotW = x1 - x0
-  const n = serie.length, gw = plotW / n
-  const maxV = Math.max(1, ...serie.map(p => Math.max(p.receitaLiq, p.ebitda, p.lucroLiq))) * 1.1
-  const yB = v => y1 - (Math.max(0, v) / maxV) * plotH
-  const cx = i => x0 + gw * i + gw / 2
-  const bars = [['receitaLiq', '#4A7CFF'], ['ebitda', '#E5484D'], ['lucroLiq', '#30A46C']]
-  const bw = (gw * 0.6) / 3
-  let s = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto">`
-  serie.forEach((p, i) => bars.forEach(([k, cor], bi) => {
-    const y = yB(p[k]); const bx = cx(i) - (bw * 3) / 2 + bi * bw
-    s += `<rect x="${bx.toFixed(1)}" y="${y.toFixed(1)}" width="${Math.max(1, bw - 1).toFixed(1)}" height="${Math.max(0, y1 - y).toFixed(1)}" fill="${cor}" rx="1"/>`
-  }))
-  serie.forEach((p, i) => { s += `<text x="${cx(i).toFixed(1)}" y="${y1 + 16}" text-anchor="middle" font-size="10" fill="#5a6785">${p.rotulo}</text>` })
-  s += '</svg>'
-  return s
+  const rec = serie.map(p => p.receitaLiq), ebi = serie.map(p => p.ebitda), luc = serie.map(p => p.lucroLiq)
+  const mgE = serie.map(p => p.margemEbitda), mgL = serie.map(p => p.margemLiquida)
+  const W = 760, H = 220, padL = 10, padR = 10, padB = 26, padT = 16, y0 = H - padB
+  const maxV = Math.max(1, ...rec) * 1.12, n = rec.length, gw = (W - padL - padR) / n
+  const bh = v => (Math.max(0, v) / maxV) * (H - padT - padB), yB = v => y0 - bh(v)
+  const yP = p => padT + (100 - Math.max(0, Math.min(100, p))) / 100 * (H - padT - padB)
+  let g = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto"><line x1="${padL}" y1="${y0}" x2="${W - padR}" y2="${y0}" stroke="#e6e9ef"/>`
+  rec.forEach((_, i) => {
+    const x = padL + i * gw, bw = gw * 0.2
+    const bar = (v, off, cor) => `<rect x="${(x + gw * off).toFixed(1)}" y="${yB(v).toFixed(1)}" width="${bw.toFixed(1)}" height="${bh(v).toFixed(1)}" rx="1.5" fill="${cor}"/>`
+    g += bar(rec[i], 0.14, '#4A7CFF') + bar(ebi[i], 0.40, '#E5484D') + bar(luc[i], 0.66, '#30A46C')
+    g += `<text x="${(x + gw * 0.5).toFixed(1)}" y="${H - 9}" font-size="10" text-anchor="middle" fill="#98a2b3">${serie[i].rotulo}</text>`
+  })
+  const linha = (arr, cor, d) => {
+    const pts = arr.map((p, i) => `${(padL + (i + 0.5) * gw).toFixed(1)},${yP(p).toFixed(1)}`).join(' ')
+    return `<polyline points="${pts}" fill="none" stroke="${cor}" stroke-width="1.6" stroke-dasharray="${d}"/>` +
+      arr.map((p, i) => `<circle cx="${(padL + (i + 0.5) * gw).toFixed(1)}" cy="${yP(p).toFixed(1)}" r="2.1" fill="${cor}"/>`).join('')
+  }
+  g += linha(mgE, '#E5484D', '5 3') + linha(mgL, '#30A46C', '2 3')
+  return g + '</svg>'
 }
 
 // CSS do documento (estilo CEMIG: Cambria/Calibri; Domínio em Arial, intocado).
@@ -547,11 +570,11 @@ const CSS = `
 html,body{margin:0;background:#e9edf3;color:var(--ink);font-family:var(--sans)}
 body{padding:20px 12px 60px}
 .mut{color:var(--sub)}
-.page{background:var(--paper);color:var(--ink);width:min(820px,100%);margin:0 auto 22px;border-radius:8px;box-shadow:0 8px 30px rgba(20,30,60,.15);overflow:hidden}
-.page.land{width:min(1140px,100%)}
+.page{background:var(--paper);color:var(--ink);width:min(820px,100%);margin:0 auto 24px;border-radius:10px;box-shadow:0 10px 40px rgba(20,30,60,.18);overflow:hidden}
+.page.land{width:min(1160px,100%)}
 .pmark{font-size:9px;color:#9aa9c0;text-align:center;padding:6px 0 0}
 .band{background:var(--band);color:#fff;padding:16px 30px 14px;display:flex;justify-content:space-between;align-items:flex-end;gap:16px}
-.band .tt{font-family:var(--serif);font-size:18px;font-weight:700;letter-spacing:.3px;line-height:1.15}
+.band .tt{font-family:var(--serif);font-size:18px;font-weight:700;letter-spacing:.4px;line-height:1.15}
 .band .ss{font-size:9px;letter-spacing:1.6px;text-transform:uppercase;color:var(--bandsub);margin-top:5px}
 .band .cmp{text-align:right}
 .band .cmp .wm{font-family:var(--serif);font-size:18px;font-weight:700}
@@ -560,21 +583,24 @@ body{padding:20px 12px 60px}
 .meta{display:flex;gap:34px;padding:10px 30px;background:var(--soft);border-bottom:1px solid var(--line);flex-wrap:wrap}
 .meta .l{font-size:8px;letter-spacing:2px;text-transform:uppercase;color:#98a2b3}
 .meta .v{font-size:11.5px;margin-top:2px;font-weight:500}
-.content{padding:20px 30px 26px}
-h2.sec{font-family:var(--serif);font-size:15px;color:var(--band);font-weight:700;margin:22px 0 11px;padding-bottom:6px;border-bottom:2px solid var(--accent)}
+.content{padding:22px 30px 28px}
+h2.sec{font-family:var(--serif);font-size:15px;letter-spacing:.2px;color:var(--band);font-weight:700;margin:22px 0 11px;padding-bottom:6px;border-bottom:2px solid var(--accent)}
 h2.sec:first-child{margin-top:0}
-p.lead{font-size:13.5px;line-height:1.65;margin:0 0 12px}
-.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+p.lead{font-size:13.5px;line-height:1.65;margin:0 0 10px}
+p.lead .up{color:var(--green);font-weight:700}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:2px 0}
 .kpi{border:1px solid var(--line);border-radius:10px;padding:11px 13px;background:var(--soft)}
 .kpi .k{font-size:8.5px;text-transform:uppercase;letter-spacing:1px;color:#98a2b3;font-weight:700}
-.kpi .v{font-size:18px;font-weight:800;margin-top:4px}
+.kpi .v{font-size:19px;font-weight:800;margin-top:4px}
+.kpi .v.g{color:var(--green)}
 .gtab{width:100%;border-collapse:collapse;font-size:12.5px}
 .gtab td{padding:8px;border-bottom:1px solid var(--line)}
 .gtab td.r{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 .gtab td.mut{color:var(--sub)}
-.chart{border:1px solid var(--line);border-radius:10px;padding:12px 14px 8px;background:var(--soft)}
-.chart .leg{display:flex;gap:14px;flex-wrap:wrap;font-size:10.5px;color:var(--sub);padding-top:6px}
+.chart{border:1px solid var(--line);border-radius:10px;padding:12px 14px 6px;background:var(--soft)}
+.chart .leg{display:flex;gap:14px;flex-wrap:wrap;font-size:10.5px;color:var(--sub);padding:2px 2px 4px}
 .chart .leg i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:middle}
+.chart .leg i.ln{width:16px;height:3px;border-radius:2px}
 .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
 .tile{border:1px solid var(--line);border-radius:10px;padding:11px 13px;background:var(--paper)}
 .tile .k{font-size:8.5px;text-transform:uppercase;letter-spacing:1px;color:#98a2b3;font-weight:700}
