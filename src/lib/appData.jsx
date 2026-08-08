@@ -63,8 +63,11 @@ export function AppDataProvider({ children }) {
     if (cli?.carga_saldos && !cli?.carga_inicial_feita) p += 1
     const [mes, ano] = competencia.split('/').map(Number)
     const { data: comp } = await supabase.from('competencias')
-      .select('id, documentos, integracoes').eq('cliente_id', empresaId).eq('ano', ano).eq('mes', mes).maybeSingle()
+      .select('id, documentos, integracoes, status').eq('cliente_id', empresaId).eq('ano', ano).eq('mes', mes).maybeSingle()
     if (!comp) { setPendencias(p + 1); return } // razão ainda não importado
+    // Competência ENCERRADA = somente leitura: nada é acionável sem reabrir, então o badge
+    // não cobra pendência. Reabrindo no Status, as pendências (se houver) reaparecem.
+    if (comp.status === 'fechado') { setPendencias(0); return }
     const { count } = await supabase.from('razao').select('id', { count: 'exact', head: true }).eq('competencia_id', comp.id)
     if (!count) p += 1
     // Só documento indeciso (pendente) conta; "não tem"/"não enviou" não bloqueiam.

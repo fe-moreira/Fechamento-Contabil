@@ -674,13 +674,18 @@ export default function Status() {
         <div style={{
           width: 64, height: 64, borderRadius: '50%', flexShrink: 0,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          background: pronto ? 'rgba(48,164,108,0.14)' : 'rgba(229,72,77,0.14)',
-          border: `0.5px solid ${pronto ? 'rgba(48,164,108,0.4)' : 'rgba(229,72,77,0.4)'}`,
+          background: (pronto || fechado) ? 'rgba(48,164,108,0.14)' : 'rgba(229,72,77,0.14)',
+          border: `0.5px solid ${(pronto || fechado) ? 'rgba(48,164,108,0.4)' : 'rgba(229,72,77,0.4)'}`,
         }}>
-          <i className={`ti ${pronto ? 'ti-check' : 'ti-alert-triangle'}`} style={{ fontSize: 32, color: pronto ? theme.green : theme.red }} />
+          <i className={`ti ${fechado ? 'ti-lock' : pronto ? 'ti-check' : 'ti-alert-triangle'}`} style={{ fontSize: 32, color: (pronto || fechado) ? theme.green : theme.red }} />
         </div>
         <div style={{ flex: 1, minWidth: 220 }}>
-          {pronto ? (
+          {fechado ? (
+            <>
+              <p style={{ fontSize: 21, fontWeight: 700, color: theme.green, margin: 0 }}>Competência encerrada — somente leitura</p>
+              <p style={{ fontSize: 13, color: theme.sub, margin: '4px 0 0' }}>{totalPendencias > 0 ? <>Reabra para tratar {totalPendencias} pendência{totalPendencias > 1 ? 's' : ''} (variações/ajustes que surgiram depois do fechamento).</> : 'Nenhuma pendência. Reabra se precisar editar.'}</p>
+            </>
+          ) : pronto ? (
             <>
               <p style={{ fontSize: 21, fontWeight: 700, color: theme.green, margin: 0 }}>Tudo OK — fechamento liberado</p>
               <p style={{ fontSize: 13, color: theme.sub, margin: '4px 0 0' }}>Nenhuma pendência nos gates desta competência.</p>
