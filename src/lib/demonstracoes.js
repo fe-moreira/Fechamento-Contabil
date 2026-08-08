@@ -284,7 +284,7 @@ export function abrirDemonstracoesContabeis({ empresa, cnpj, periodoLabel, perio
       </table>
       ${c.serie.length > 1 ? `<h2 class="sec">Desempenho por mês (gráfico do Cockpit)</h2>
       <div class="chart">${grafico}
-        <div class="leg"><span><i style="background:#4A7CFF"></i>Receita Líquida</span><span><i style="background:#E5484D"></i>EBITDA</span><span><i style="background:#30A46C"></i>Lucro Líquido</span><span><i class="ln" style="background:#E5484D"></i>Margem EBITDA</span><span><i class="ln" style="background:#30A46C"></i>Margem Líquida</span></div>
+        <div class="leg"><span><i style="background:#4A7CFF"></i>Receita Líquida</span><span><i style="background:#E5484D"></i>EBITDA</span><span><i style="background:#30A46C"></i>Lucro Líquido</span><span><i class="ln" style="border-top:2px dashed #E5484D"></i>Margem EBITDA</span><span><i class="ln" style="border-top:2px dotted #30A46C"></i>Margem Líquida</span></div>
       </div>` : ''}
     </div>
     <div class="foot">Attentive Contabilidade · Demonstrações Contábeis · Valores em BRL</div>
@@ -537,29 +537,50 @@ export function abrirDemonstracoesContabeis({ empresa, cnpj, periodoLabel, perio
   return true
 }
 
-// Gráfico do Cockpit (combo) — idêntico à prévia: barras Receita Líquida / EBITDA / Lucro
-// por mês + linhas de Margem EBITDA e Margem Líquida no eixo %.
-function svgDesempenho(serie) {
-  if (!serie || serie.length < 2) return ''
-  const rec = serie.map(p => p.receitaLiq), ebi = serie.map(p => p.ebitda), luc = serie.map(p => p.lucroLiq)
-  const mgE = serie.map(p => p.margemEbitda), mgL = serie.map(p => p.margemLiquida)
-  const W = 760, H = 220, padL = 10, padR = 10, padB = 26, padT = 16, y0 = H - padB
-  const maxV = Math.max(1, ...rec) * 1.12, n = rec.length, gw = (W - padL - padR) / n
-  const bh = v => (Math.max(0, v) / maxV) * (H - padT - padB), yB = v => y0 - bh(v)
-  const yP = p => padT + (100 - Math.max(0, Math.min(100, p))) / 100 * (H - padT - padB)
-  let g = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto"><line x1="${padL}" y1="${y0}" x2="${W - padR}" y2="${y0}" stroke="#e6e9ef"/>`
-  rec.forEach((_, i) => {
-    const x = padL + i * gw, bw = gw * 0.2
-    const bar = (v, off, cor) => `<rect x="${(x + gw * off).toFixed(1)}" y="${yB(v).toFixed(1)}" width="${bw.toFixed(1)}" height="${bh(v).toFixed(1)}" rx="1.5" fill="${cor}"/>`
-    g += bar(rec[i], 0.14, '#4A7CFF') + bar(ebi[i], 0.40, '#E5484D') + bar(luc[i], 0.66, '#30A46C')
-    g += `<text x="${(x + gw * 0.5).toFixed(1)}" y="${H - 9}" font-size="10" text-anchor="middle" fill="#98a2b3">${serie[i].rotulo}</text>`
-  })
-  const linha = (arr, cor, d) => {
-    const pts = arr.map((p, i) => `${(padL + (i + 0.5) * gw).toFixed(1)},${yP(p).toFixed(1)}`).join(' ')
-    return `<polyline points="${pts}" fill="none" stroke="${cor}" stroke-width="1.6" stroke-dasharray="${d}"/>` +
-      arr.map((p, i) => `<circle cx="${(padL + (i + 0.5) * gw).toFixed(1)}" cy="${yP(p).toFixed(1)}" r="2.1" fill="${cor}"/>`).join('')
+// Gráfico do Cockpit (combo) — IDÊNTICO ao GraficoDesempenho do PainelCliente (versão estática
+// p/ o PDF): eixo R$ à esquerda, eixo % à direita, linhas de grade, barras Receita Líquida /
+// EBITDA / Lucro Líquido e linhas de Margem EBITDA (tracejada) e Margem Líquida (pontilhada)
+// com o rótulo do valor em cada ponto.
+const ACC = '#4A7CFF', VERM = '#E5484D', VERD = '#30A46C', GRID = '#e6e9ef', SUB = '#98a2b3', INK = '#1c2430'
+function svgDesempenho(s) {
+  if (!s || s.length < 2) return ''
+  const W = 1000, H = 360, mL = 78, mR = 54, mT = 16, mB = 38
+  const x0 = mL, x1 = W - mR, y1 = H - mB
+  const plotH = y1 - mT, plotW = x1 - x0
+  const n = s.length, gw = plotW / n
+  const maxR = Math.max(1, ...s.map(p => Math.max(p.receitaLiq, p.ebitda, p.lucroLiq))) * 1.12
+  const maxPctR = Math.max(10, Math.ceil(Math.max(...s.flatMap(p => [p.margemEbitda, p.margemLiquida, 0])) / 10) * 10)
+  const yR = v => y1 - (Math.max(0, v) / maxR) * plotH
+  const yP = v => y1 - (v / maxPctR) * plotH
+  const cx = i => x0 + gw * i + gw / 2
+  const bars = [['receitaLiq', ACC], ['ebitda', VERM], ['lucroLiq', VERD]]
+  const linhas = [['margemEbitda', VERM, '7 4'], ['margemLiquida', VERD, '2 4']]
+  const bw = (gw * 0.62) / 3
+  const money0 = v => `R$ ${Math.round(v).toLocaleString('pt-BR')}`
+  let g = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto">`
+  // grades + eixo R$ (esq) e % (dir)
+  for (let i = 0; i < 6; i++) {
+    const vR = maxR * i / 5, y = yR(vR), vP = maxPctR * i / 5
+    g += `<line x1="${x0}" y1="${y.toFixed(1)}" x2="${x1}" y2="${y.toFixed(1)}" stroke="${GRID}"/>`
+    g += `<text x="${x0 - 8}" y="${(y + 3.5).toFixed(1)}" text-anchor="end" font-size="10" fill="${SUB}">${money0(vR)}</text>`
+    g += `<text x="${x1 + 8}" y="${(yP(vP) + 3.5).toFixed(1)}" text-anchor="start" font-size="10" fill="${SUB}">${vP.toFixed(0)}%</text>`
   }
-  g += linha(mgE, '#E5484D', '5 3') + linha(mgL, '#30A46C', '2 3')
+  // barras
+  s.forEach((p, i) => bars.forEach(([k, cor], bi) => {
+    const v = p[k], y = yR(v), bx = cx(i) - (bw * 3) / 2 + bi * bw
+    g += `<rect x="${bx.toFixed(1)}" y="${y.toFixed(1)}" width="${Math.max(1, bw - 1).toFixed(1)}" height="${Math.max(0, y1 - y).toFixed(1)}" fill="${cor}" rx="1"/>`
+  }))
+  // linhas de margem + rótulos
+  linhas.forEach(([k, cor, dash]) => {
+    g += `<polyline points="${s.map((p, i) => `${cx(i).toFixed(1)},${yP(p[k]).toFixed(1)}`).join(' ')}" fill="none" stroke="${cor}" stroke-width="2" stroke-dasharray="${dash}"/>`
+    s.forEach((p, i) => {
+      g += `<circle cx="${cx(i).toFixed(1)}" cy="${yP(p[k]).toFixed(1)}" r="2.6" fill="${cor}"/>`
+      g += `<text x="${cx(i).toFixed(1)}" y="${(yP(p[k]) - 7).toFixed(1)}" text-anchor="middle" font-size="9.5" font-weight="600" fill="${INK}">${p[k].toFixed(2)}%</text>`
+    })
+  })
+  // meses + eixos
+  s.forEach((p, i) => { g += `<text x="${cx(i).toFixed(1)}" y="${y1 + 16}" text-anchor="middle" font-size="10.5" fill="${SUB}">${p.rotulo}</text>` })
+  g += `<line x1="${x0}" y1="${mT}" x2="${x0}" y2="${y1}" stroke="${GRID}"/><line x1="${x1}" y1="${mT}" x2="${x1}" y2="${y1}" stroke="${GRID}"/>`
   return g + '</svg>'
 }
 
@@ -599,8 +620,8 @@ p.lead .up{color:var(--green);font-weight:700}
 .gtab td.mut{color:var(--sub)}
 .chart{border:1px solid var(--line);border-radius:10px;padding:12px 14px 6px;background:var(--soft)}
 .chart .leg{display:flex;gap:14px;flex-wrap:wrap;font-size:10.5px;color:var(--sub);padding:2px 2px 4px}
-.chart .leg i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:middle}
-.chart .leg i.ln{width:16px;height:3px;border-radius:2px}
+.chart .leg i{display:inline-block;width:14px;height:11px;border-radius:3px;margin-right:5px;vertical-align:middle}
+.chart .leg i.ln{width:18px;height:0;border-radius:0;background:none!important}
 .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
 .tile{border:1px solid var(--line);border-radius:10px;padding:11px 13px;background:var(--paper)}
 .tile .k{font-size:8.5px;text-transform:uppercase;letter-spacing:1px;color:#98a2b3;font-weight:700}
