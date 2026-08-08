@@ -1,0 +1,628 @@
+// Demonstrações Contábeis — relatório consolidado para o cliente, montado por FOLHAS
+// (páginas) no estilo do relatório da CEMIG (tipografia Cambria/Calibri), reaproveitando os
+// geradores que já existem: montarBalancete (razão vivo), montarDRE, extrairEntidade,
+// apurarDistribuicao. Os relatórios "modelo Domínio" (DRE, Balancete, Comparativo) saem em
+// Arial, iguais ao Domínio; o invólucro (capa, cockpit, balanço, DFC) sai no estilo CEMIG.
+//
+// A tela escolhe O QUE incluir (Cockpit, DRE, Balancete, Balanço, DFC, Comparativo) e o
+// PERÍODO (mês, trimestre, semestre, anual ou personalizado). Como DRE/Balancete são por
+// competência, aqui há uma camada de AGREGAÇÃO por período: roda montarBalancete mês a mês e
+// consolida (saldo inicial da 1ª ponta, movimento somado, saldo final da última ponta para
+// contas patrimoniais; soma do movimento para contas de resultado).
+
+import { supabase } from './supabase'
+import { lerTudo } from './lerTudo'
+import { montarBalancete } from './balancete'
+import { montarDRE } from './dre'
+import { extrairEntidade } from './financeiro'
+
+const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
+const num = v => Number(v) || 0
+const g1 = l => String(l.classifRaw || l.classif || '')[0] // grupo pelo 1º dígito da classificação
+
+// Heurísticas de nome de conta (mesmas do Cockpit) para os índices/balanço-resumo.
+const RE_IMPOSTO = /impost|tribut|\bicms\b|\bpis\b|cofins|\birpj\b|\bcsll\b|\biss\b|simples|\bdas\b|inss|fgts|contrib/i
+const RE_RECEBER = /client|duplicat.*receb|\ba\s*receber|receb.*client|cart[aã]o/i
+const RE_PAGAR = /fornec|\ba\s*pagar|duplicat.*pag|obrig.*pag/i
+const RE_DEPREC = /deprecia|amortiza|exaust/i
+const BANCO_RE = /\bBANCO\b|SANTANDER|ITA[UÚ]|BRADESCO|\bCAIXA\b|SICOOB|SICREDI|\bINTER\b|NUBANK|\bBTG\b|SAFRA|DAYCOVAL|VOTORANTIM|PAGSEGURO|MERCADO ?PAGO|\bC6\b|BANRISUL|\bBB\b/i
+const LIXO_ENT = new Set(['VALOR', 'VALORES', 'RENDIMENTO', 'RENDIMENTOS', 'APLICACAO', 'APLICACOES', 'JUROS', 'SALDO', 'RESGATE', 'CDB', 'POUPANCA', 'TARIFA', 'TARIFAS', 'IOF', 'RECEITA', 'RECEITAS', 'FINANCEIRA', 'FINANCEIRAS', 'DIVERSOS', 'DIVERSAS', 'CLIENTE', 'CLIENTES', 'DEPOSITO', 'TRANSFERENCIA', 'TED', 'PIX', 'DOC'])
+const ehCliente = ent => { const n = String(ent || '').trim().toUpperCase(); return !!n && !BANCO_RE.test(n) && !LIXO_ENT.has(n) }
+const norm = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+
+// ---- formatação ----
+export const brl = v => Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+export const brlR = v => 'R$ ' + brl(v)
+const pctBR = p => p == null ? '—' : `${Number(p).toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`
+// Saldo com sufixo D/C (Domínio): saldo devedor → D, credor → C. Parênteses em deduções.
+const dc = v => `${brl(Math.abs(v))} ${num(v) < -0.005 ? 'C' : 'D'}`
+const par = v => { const n = num(v); const a = brl(Math.abs(n)); return n < -0.005 ? `(${a})` : a }
+const esc = s => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))
+const ultimoDia = (a, m) => new Date(a, m, 0).getDate()
+const diaBR = (a, m) => `${String(ultimoDia(a, m)).padStart(2, '0')}/${String(m).padStart(2, '0')}/${a}`
+
+// ---------------------------------------------------------------------------
+// Período → lista de meses {ano, mes}. tipo: 'mes' | 'tri' | 'sem' | 'ano' | 'custom'.
+// ref: { ano, mes, tri, sem, de:'YYYY-MM', ate:'YYYY-MM' }.
+export function mesesDoPeriodo(tipo, ref = {}) {
+  const ano = Number(ref.ano)
+  let lista = []
+  let label = ''
+  if (tipo === 'mes') {
+    lista = [{ ano, mes: Number(ref.mes) }]
+    label = `${MESES[Number(ref.mes) - 1]} / ${ano}`
+  } else if (tipo === 'tri') {
+    const t = Number(ref.tri); const m0 = (t - 1) * 3 + 1
+    lista = [0, 1, 2].map(k => ({ ano, mes: m0 + k }))
+    label = `${t}º trimestre / ${ano}`
+  } else if (tipo === 'sem') {
+    const s = Number(ref.sem); const m0 = (s - 1) * 6 + 1
+    lista = Array.from({ length: 6 }, (_, k) => ({ ano, mes: m0 + k }))
+    label = `${s}º semestre / ${ano}`
+  } else if (tipo === 'ano') {
+    lista = Array.from({ length: 12 }, (_, k) => ({ ano, mes: k + 1 }))
+    label = `Exercício de ${ano}`
+  } else { // custom 'YYYY-MM'
+    const [ai, mi] = String(ref.de || '').split('-').map(Number)
+    const [af, mf] = String(ref.ate || '').split('-').map(Number)
+    if (ai && mi && af && mf) {
+      let a = ai, m = mi
+      while (a < af || (a === af && m <= mf)) {
+        lista.push({ ano: a, mes: m }); m++; if (m > 12) { m = 1; a++ }
+      }
+      label = `${String(mi).padStart(2, '0')}/${ai} a ${String(mf).padStart(2, '0')}/${af}`
+    }
+  }
+  return { lista, label }
+}
+
+// ---------------------------------------------------------------------------
+// Consolida vários balancetes mensais (na ordem cronológica) num balancete de PERÍODO.
+// perMonth: [{ ano, mes, linhas }] já em ordem. Chaveia por 'reduzido'.
+export function agregarBalancete(perMonth) {
+  const mapa = new Map()
+  perMonth.forEach((mm, idx) => {
+    const ehPrimeiro = idx === 0, ehUltimo = idx === perMonth.length - 1
+    for (const l of (mm.linhas || [])) {
+      const k = String(l.reduzido)
+      let a = mapa.get(k)
+      if (!a) { a = { ...l, saldo_inicial: 0, debito: 0, credito: 0, saldo_final: 0, _iniSet: false }; mapa.set(k, a) }
+      // nome/classif/hierarquia: mantém o mais recente
+      a.nome = l.nome; a.classif = l.classif; a.classifRaw = l.classifRaw; a.sintetica = l.sintetica; a.grau = l.grau; a.folha = l.folha
+      if (ehPrimeiro || !a._iniSet) { a.saldo_inicial = num(l.saldo_inicial); a._iniSet = true }
+      a.debito += num(l.debito)
+      a.credito += num(l.credito)
+      const grp = String(l.classifRaw || '')[0]
+      if (grp === '3' || grp === '4' || grp === '5' || grp === '6') a.saldo_final += num(l.saldo_final) // resultado: soma o movimento
+      else if (ehUltimo) a.saldo_final = num(l.saldo_final) // patrimonial: foto do fim do período
+    }
+  })
+  return [...mapa.values()].sort((x, y) => String(x.classifRaw || '').localeCompare(String(y.classifRaw || '')))
+}
+
+// ---------------------------------------------------------------------------
+// Indicadores do Cockpit para o período (mesma lógica do PainelCliente, adaptada ao período).
+// agg = balancete agregado; perMonth p/ a série; razaoReceita p/ principais clientes.
+function apurarCockpit(agg, perMonth, razaoReceita, primeiro, ultimo) {
+  const analit = agg.filter(l => !l.sintetica)
+  const ativo = analit.filter(l => g1(l) === '1')
+  const passivo = analit.filter(l => g1(l) === '2')
+  const totAtivo = ativo.reduce((s, l) => s + num(l.saldo_final), 0)
+  const totPassivo = passivo.reduce((s, l) => s + num(l.saldo_final), 0)
+  const somaFiltro = (arr, re) => arr.filter(l => re.test(l.nome || '')).reduce((s, l) => s + Math.abs(num(l.saldo_final)), 0)
+  const clientes = somaFiltro(ativo, RE_RECEBER)
+  const fornecedores = somaFiltro(passivo, RE_PAGAR)
+  const impostos = somaFiltro(passivo, RE_IMPOSTO)
+
+  // Resultado do período (grupos 3/4/5 do agregado)
+  const resGrupo = d => analit.filter(l => g1(l) === d).reduce((s, l) => s + num(l.saldo_final), 0)
+  const receita = -resGrupo('3'), custo = resGrupo('4'), despesa = resGrupo('5')
+  const resultado = receita - custo - despesa
+
+  // Série mês a mês (resultado por mês)
+  const serie = perMonth.map(mm => {
+    const an = (mm.linhas || []).filter(l => !l.sintetica)
+    const r = -an.filter(l => g1(l) === '3').reduce((s, l) => s + num(l.saldo_final), 0)
+    const c = an.filter(l => g1(l) === '4').reduce((s, l) => s + num(l.saldo_final), 0)
+    const d = an.filter(l => g1(l) === '5').reduce((s, l) => s + num(l.saldo_final), 0)
+    return { rotulo: MESES[mm.mes - 1], receitaLiq: r, ebitda: r - c, lucroLiq: r - c - d,
+      margemEbitda: r ? ((r - c) / r) * 100 : 0, margemLiquida: r ? ((r - c - d) / r) * 100 : 0 }
+  })
+
+  // Disponibilidades: analíticas da sintética "Disponível" (ini = 1ª ponta, fim = última ponta)
+  const sintDisp = agg.filter(l => l.sintetica && g1(l) === '1' && /dispon|caixa\s*e\s*equival|disponibilidad/i.test(l.nome || ''))
+    .sort((a, b) => String(a.classifRaw || '').length - String(b.classifRaw || '').length)[0]
+  let pref = sintDisp?.classifRaw
+  if (!pref && analit.some(l => String(l.classifRaw || '').startsWith('111'))) pref = '111'
+  const ehDisp = l => pref ? String(l.classifRaw || '').startsWith(pref) : /\bcaixa\b|banc|aplica|dispon|financeir|conta\s*corrente/i.test(l.nome || '')
+  const disponiveis = ativo.filter(ehDisp)
+    .map(l => ({ nome: l.nome || l.reduzido, ini: num(l.saldo_inicial), fim: num(l.saldo_final) }))
+    .filter(l => Math.abs(l.ini) > 0.005 || Math.abs(l.fim) > 0.005)
+    .sort((a, b) => b.fim - a.fim)
+  const totDispIni = disponiveis.reduce((s, l) => s + l.ini, 0)
+  const totDispFim = disponiveis.reduce((s, l) => s + l.fim, 0)
+  const geracaoCaixa = totDispFim - totDispIni
+
+  // Índices — circulante robusto (acha a sintética "circulante"; senão cai no prefixo 1.1/2.1/2.2)
+  const somaRaw = p => analit.filter(l => String(l.classifRaw || '').startsWith(p)).reduce((s, l) => s + num(l.saldo_final), 0)
+  const somaClassif = p => analit.filter(l => String(l.classif || '').startsWith(p)).reduce((s, l) => s + num(l.saldo_final), 0)
+  const NAOCIRC = /n[ao] circulante|nao-circulante|longo prazo/
+  const prefSint = (grupo, re, exc) => {
+    const s = agg.filter(l => l.sintetica && g1(l) === grupo && re.test(norm(l.nome || '')) && !(exc && exc.test(norm(l.nome || ''))))
+      .sort((a, b) => String(a.classifRaw || '').length - String(b.classifRaw || '').length)[0]
+    return s?.classifRaw || null
+  }
+  const preAC = prefSint('1', /circulante/, NAOCIRC), prePC = prefSint('2', /circulante/, NAOCIRC), prePNC = prefSint('2', NAOCIRC, null)
+  const ac = preAC ? somaRaw(preAC) : somaClassif('1.1')
+  const pc = prePC ? somaRaw(prePC) : somaClassif('2.1')
+  const pnc = prePNC ? somaRaw(prePNC) : somaClassif('2.2')
+  const indices = {
+    margem: receita ? (resultado / receita) * 100 : null,
+    cargaTrib: receita ? (impostos / receita) * 100 : null,
+    liquidez: Math.abs(pc) > 0.005 ? ac / Math.abs(pc) : null,
+    endividamento: Math.abs(totAtivo) > 0.005 ? ((Math.abs(pc) + Math.abs(pnc)) / Math.abs(totAtivo)) * 100 : null,
+    prazoReceb: receita ? Math.round((clientes / receita) * 30 * perMonth.length) : null,
+  }
+
+  // Principais clientes (nome no histórico das NFs de receita, somando o período)
+  const mapaCli = {}; let totReceitaRazao = 0
+  for (const l of (razaoReceita || [])) {
+    const v = num(l.credito) - num(l.debito)
+    if (v <= 0) continue
+    totReceitaRazao += v
+    const ent = extrairEntidade(l.historico)
+    if (!ent || /^[\d.,\s]+$/.test(ent) || ent.replace(/[^A-Za-zÀ-ú]/g, '').length < 3) continue
+    if (!ehCliente(ent)) continue
+    mapaCli[ent] = (mapaCli[ent] || 0) + v
+  }
+  const topClientes = Object.entries(mapaCli).map(([nome, valor]) => ({ nome, valor })).sort((a, b) => b.valor - a.valor).slice(0, 6)
+
+  return { receita, custo, despesa, resultado, totAtivo, totPassivo, clientes, fornecedores, impostos,
+    disponiveis, totDispIni, totDispFim, geracaoCaixa, indices, serie, topClientes, totReceitaRazao,
+    ac, pc, pnc,
+    dataIni: diaBR(primeiro.mes === 1 ? primeiro.ano - 1 : primeiro.ano, primeiro.mes === 1 ? 12 : primeiro.mes - 1), // fim do mês anterior à 1ª ponta
+    dataFim: diaBR(ultimo.ano, ultimo.mes) }
+}
+
+// DFC método indireto (aproximado) reconciliado à variação de caixa do período.
+function apurarDFC(agg, cockpit) {
+  const analit = agg.filter(l => !l.sintetica)
+  const lucro = cockpit.resultado
+  const deprec = analit.filter(l => RE_DEPREC.test(l.nome || '') && (g1(l) === '1' || g1(l) === '5' || g1(l) === '4'))
+    .reduce((s, l) => s + Math.abs(num(l.debito)), 0) // depreciação do período (movimento)
+  const varCaixa = cockpit.geracaoCaixa
+  // Financiamento: variação de empréstimos/financiamentos e capital (fim − ini)
+  const RE_EMPREST = /empr[eé]stim|financiam|debentur|arrendam/i
+  const RE_CAPITAL = /capital\s*social|reserva|adiantamento.*futuro.*aumento/i
+  const varConta = re => analit.filter(l => re.test(l.nome || '') && (g1(l) === '2'))
+    .reduce((s, l) => s + (num(l.saldo_final) - num(l.saldo_inicial)), 0)
+  // passivo credor: saldo_final negativo; aumento de dívida = entrada de caixa. (fim−ini) em passivo credor
+  // já vem com sinal correto p/ caixa quando invertido:
+  const financiamento = -(varConta(RE_EMPREST) + varConta(RE_CAPITAL))
+  // Investimento: variação do imobilizado/investimentos (grupo 1 não circulante), fora depreciação
+  const RE_IMOB = /imobiliz|investiment|intangiv|imposto.*diferido/i
+  const varImob = analit.filter(l => RE_IMOB.test(l.nome || '') && g1(l) === '1' && !RE_DEPREC.test(l.nome || ''))
+    .reduce((s, l) => s + (num(l.saldo_final) - num(l.saldo_inicial)), 0)
+  const investimento = -varImob // aumento de ativo = saída de caixa
+  // Operacional = variação de caixa − investimento − financiamento (fecha por diferença)
+  const operacional = varCaixa - investimento - financiamento
+  const capitalGiro = operacional - lucro - deprec // plug que fecha o operacional
+  return { lucro, deprec, capitalGiro, operacional, investimento, financiamento, varCaixa,
+    saldoIni: cockpit.totDispIni, saldoFim: cockpit.totDispFim }
+}
+
+// ---------------------------------------------------------------------------
+// Monta TODOS os dados a partir dos balancetes mensais já lidos + razão de receita do período.
+// perMonth: [{ ano, mes, linhas }] em ordem cronológica.
+export function montarDadosDemonstracoes(perMonth, razaoReceita) {
+  const agg = agregarBalancete(perMonth)
+  const primeiro = perMonth[0], ultimo = perMonth[perMonth.length - 1]
+  const dre = montarDRE(agg)
+  const cockpit = apurarCockpit(agg, perMonth, razaoReceita, primeiro, ultimo)
+  const dfc = apurarDFC(agg, cockpit)
+  // Matriz do comparativo (contas de resultado, mês a mês)
+  const meses = perMonth.map(m => m.mes)
+  const contasRes = {}
+  perMonth.forEach(mm => (mm.linhas || []).filter(l => !l.sintetica && ['3', '4', '5'].includes(g1(l))).forEach(l => {
+    const k = String(l.reduzido)
+    if (!contasRes[k]) contasRes[k] = { cod: l.reduzido, nome: l.nome, grupo: g1(l), vals: {} }
+    contasRes[k].vals[mm.mes] = (contasRes[k].vals[mm.mes] || 0) + num(l.saldo_final)
+    contasRes[k].nome = l.nome
+  }))
+  return { agg, dre, cockpit, dfc, meses, contasRes }
+}
+
+// ---------------------------------------------------------------------------
+// BUILDER do documento HTML (folhas). blocos: Set com 'cockpit','dre','balancete','balanco','dfc','comparativo'.
+export function abrirDemonstracoesContabeis({ empresa, cnpj, periodoLabel, periodoIni, periodoFim, blocos, dados }) {
+  const B = new Set(blocos)
+  const { agg, dre, cockpit, dfc, meses, contasRes } = dados
+  const c = cockpit
+  let folha = 1 // a capa é a folha 1 (sem marca); os blocos seguintes começam na 2
+  const marca = () => `<div class="pmark">Folha ${++folha}</div>`
+  const bandCmp = per => `<div class="cmp"><div class="wm">Attentive</div><div class="per">Período</div><div class="perv">${esc(per)}</div></div>`
+
+  const paginas = []
+
+  // ---- Capa / desempenho (sempre) ----
+  const ix = c.indices
+  const grafico = svgDesempenho(c.serie)
+  paginas.push(`
+  <div class="page">
+    <div class="band"><div><div class="tt">Demonstrações Contábeis</div><div class="ss">Demonstrações e desempenho do período</div></div>${bandCmp(periodoLabel)}</div>
+    <div class="meta">
+      <div><div class="l">Empresa</div><div class="v">${esc(empresa)}</div></div>
+      <div><div class="l">CNPJ</div><div class="v">${esc(cnpj || '—')}</div></div>
+      <div><div class="l">Período</div><div class="v">${esc(periodoLabel)}</div></div>
+    </div>
+    <div class="content">
+      <h2 class="sec">Resumo do desempenho</h2>
+      <p class="lead">No período <b>${esc(periodoLabel)}</b>, a ${esc(empresa)} registrou receita de <b>${brlR(c.receita)}</b> e resultado de <b>${brlR(c.resultado)}</b> (margem líquida de <b>${pctBR(ix.margem)}</b>). As disponibilidades fecharam em <b>${brlR(c.totDispFim)}</b>, com geração de caixa de <b>${brlR(c.geracaoCaixa)}</b> no período.</p>
+      <div class="kpis">
+        <div class="kpi"><div class="k">Resultado do período</div><div class="v ${c.resultado >= 0 ? 'g' : 'r'}">${brlR(c.resultado)}</div></div>
+        <div class="kpi"><div class="k">Faturamento</div><div class="v">${brlR(c.receita)}</div></div>
+        <div class="kpi"><div class="k">Margem líquida</div><div class="v">${pctBR(ix.margem)}</div></div>
+        <div class="kpi"><div class="k">Geração de caixa</div><div class="v ${c.geracaoCaixa >= 0 ? 'g' : 'r'}">${brlR(c.geracaoCaixa)}</div></div>
+      </div>
+      <h2 class="sec">Indicadores</h2>
+      <table class="gtab">
+        <tr><td>Margem líquida</td><td class="r">${pctBR(ix.margem)}</td><td class="mut">resultado ÷ receita</td></tr>
+        <tr><td>Liquidez corrente</td><td class="r">${ix.liquidez == null ? '—' : ix.liquidez.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td><td class="mut">ativo circ. ÷ passivo circ.</td></tr>
+        <tr><td>Endividamento</td><td class="r">${pctBR(ix.endividamento)}</td><td class="mut">passivo exig. ÷ ativo</td></tr>
+        <tr><td>Carga tributária</td><td class="r">${pctBR(ix.cargaTrib)}</td><td class="mut">impostos ÷ receita</td></tr>
+        <tr><td>Prazo médio de recebimento</td><td class="r">${ix.prazoReceb == null ? '—' : ix.prazoReceb + ' dias'}</td><td class="mut">a receber ÷ receita</td></tr>
+      </table>
+      ${c.serie.length > 1 ? `<h2 class="sec">Desempenho por mês</h2>
+      <div class="chart">${grafico}
+        <div class="leg"><span><i style="background:#4A7CFF"></i>Receita Líquida</span><span><i style="background:#E5484D"></i>EBITDA</span><span><i style="background:#30A46C"></i>Lucro Líquido</span></div>
+      </div>` : ''}
+    </div>
+    <div class="foot">Attentive Contabilidade · Demonstrações Contábeis · Valores em BRL</div>
+  </div>`)
+
+  // ---- Cockpit ----
+  if (B.has('cockpit')) {
+    const disp = c.disponiveis.length
+      ? c.disponiveis.map(l => `<tr><td>${esc(l.nome)}</td><td class="r">${brl(l.ini)}</td><td class="r">${brl(l.fim)}</td></tr>`).join('')
+      : `<tr><td colspan="3" class="mut">Sem contas de disponibilidade no período.</td></tr>`
+    const maxCli = Math.max(1, ...c.topClientes.map(x => x.valor))
+    const baseCli = c.totReceitaRazao || c.topClientes.reduce((s, x) => s + x.valor, 0)
+    const cliRows = c.topClientes.length
+      ? c.topClientes.map(x => `<div class="cli"><span style="font-weight:600">${esc(x.nome)}</span><span>${brlR(x.valor)} <small class="mut">· ${pctBR(baseCli ? (x.valor / baseCli) * 100 : null)}</small></span></div><div class="bar"><span style="width:${(x.valor / maxCli) * 100}%"></span></div>`).join('')
+      : `<p class="mut" style="font-size:11px;margin:6px 0 0">Sem nomes de clientes identificados no histórico das NFs de receita.</p>`
+    paginas.push(`
+  <div class="page">
+    ${marca()}
+    <div class="band"><div><div class="tt">Painel do Cockpit</div><div class="ss">Resultado · balanço · financeiro · impostos · clientes · índices</div></div>${bandCmp(periodoLabel)}</div>
+    <div class="content">
+      <h2 class="sec">Comparativo de movimento — resumo (nível 1)</h2>
+      <div class="tiles">
+        <div class="tile"><div class="k">Total de faturamento</div><div class="v a">${brlR(c.receita)}</div></div>
+        <div class="tile"><div class="k">Total de custo</div><div class="v y">${brlR(c.custo)}</div></div>
+        <div class="tile"><div class="k">Despesa</div><div class="v y">${brlR(c.despesa)}</div></div>
+        <div class="tile"><div class="k">Lucro / resultado</div><div class="v ${c.resultado >= 0 ? 'g' : 'r'}">${brlR(c.resultado)}</div><div class="s">margem ${pctBR(ix.margem)}</div></div>
+      </div>
+      <h2 class="sec">Balanço patrimonial</h2>
+      <div class="tiles">
+        <div class="tile"><div class="k">Total do ativo</div><div class="v">${brlR(c.totAtivo)}</div></div>
+        <div class="tile"><div class="k">Total do passivo + PL</div><div class="v">${brlR(Math.abs(c.totPassivo))}</div></div>
+        <div class="tile"><div class="k">Clientes (a receber)</div><div class="v g">${brlR(c.clientes)}</div></div>
+        <div class="tile"><div class="k">Fornecedores (a pagar)</div><div class="v r">${brlR(c.fornecedores)}</div></div>
+      </div>
+      <h2 class="sec">Financeiro — disponibilidades e geração de caixa</h2>
+      <div class="fin2">
+        <table class="ftab"><thead><tr><td>Conta</td><td class="r">${esc(c.dataIni)}</td><td class="r">${esc(c.dataFim)}</td></tr></thead>
+          <tbody>${disp}</tbody>
+          <tfoot><tr><td>Total disponível</td><td class="r">${brl(c.totDispIni)}</td><td class="r">${brl(c.totDispFim)}</td></tr></tfoot>
+        </table>
+        <div class="tiles" style="grid-template-columns:1fr">
+          <div class="tile"><div class="k">Total disponível (fim)</div><div class="v a">${brlR(c.totDispFim)}</div></div>
+          <div class="tile"><div class="k">Geração de caixa no período</div><div class="v ${c.geracaoCaixa >= 0 ? 'g' : 'r'}">${brlR(c.geracaoCaixa)}</div></div>
+        </div>
+      </div>
+      <h2 class="sec">Impostos</h2>
+      <div class="tiles">
+        <div class="tile"><div class="k">Impostos apurados</div><div class="v">${brlR(c.impostos)}</div><div class="s">${pctBR(ix.cargaTrib)} do faturamento</div></div>
+        <div class="tile"><div class="k">Carga tributária</div><div class="v">${pctBR(ix.cargaTrib)}</div><div class="s">impostos ÷ faturamento</div></div>
+      </div>
+      <h2 class="sec">Principais clientes do período</h2>
+      <div class="clibox">${cliRows}</div>
+      <h2 class="sec">Índices financeiros</h2>
+      <div class="tiles">
+        <div class="tile"><div class="k">Liquidez corrente</div><div class="v">${ix.liquidez == null ? '—' : ix.liquidez.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div><div class="s">ativo circ. ÷ passivo circ.</div></div>
+        <div class="tile"><div class="k">Margem líquida</div><div class="v">${pctBR(ix.margem)}</div><div class="s">resultado ÷ receita</div></div>
+        <div class="tile"><div class="k">Endividamento</div><div class="v">${pctBR(ix.endividamento)}</div><div class="s">passivo exig. ÷ ativo</div></div>
+        <div class="tile"><div class="k">Carga tributária</div><div class="v">${pctBR(ix.cargaTrib)}</div><div class="s">impostos ÷ receita</div></div>
+        <div class="tile"><div class="k">Prazo médio receb.</div><div class="v">${ix.prazoReceb == null ? '—' : ix.prazoReceb + ' dias'}</div><div class="s">a receber ÷ receita</div></div>
+      </div>
+    </div>
+    <div class="foot">Attentive Contabilidade · Demonstrações Contábeis · Valores em BRL</div>
+  </div>`)
+  }
+
+  // ---- DRE (Domínio) ----
+  if (B.has('dre')) {
+    const linhasDre = dre.map(r => r.sub
+      ? `<tr class="s"><td>${esc(r.label)}</td><td class="r"></td><td class="r">${par(r.valor)}</td></tr>`
+      : `<tr><td>${esc(r.label)}</td><td class="r">${par(r.valor)}</td><td class="r">${par(r.valor)}</td></tr>`).join('')
+    paginas.push(`
+  <div class="page">
+    ${marca()}
+    <div class="band"><div><div class="tt">Demonstração do Resultado</div><div class="ss">Modelo Domínio</div></div>${bandCmp(periodoLabel)}</div>
+    <div class="content">
+      <div class="dominio">
+        <div class="cab"><table>
+          <tr><td class="lab">Empresa:</td><td>${esc(empresa)}</td><td style="text-align:right;white-space:nowrap">Folha:&nbsp;&nbsp;0001</td></tr>
+          <tr><td class="lab">C.N.P.J.:</td><td>${esc(cnpj || '—')}</td><td></td></tr>
+          <tr><td class="lab">Período:</td><td>${esc(periodoIni)} - ${esc(periodoFim)}</td><td></td></tr>
+        </table></div>
+        <h3>DEMONSTRAÇÃO DO RESULTADO DO EXERCÍCIO</h3>
+        <table class="dtab">
+          <tr><th>Descrição</th><th class="r">Saldo</th><th class="r">Total</th></tr>
+          ${linhasDre}
+        </table>
+      </div>
+      <p class="mut" style="font-size:10px;margin:8px 0 0"><b>Modelo Domínio</b> — apurado do razão vivo do período.</p>
+    </div>
+    <div class="foot">Attentive Contabilidade · Demonstrações Contábeis · Valores em BRL</div>
+  </div>`)
+  }
+
+  // ---- Balancete completo (Domínio) ----
+  if (B.has('balancete')) {
+    const rowsBal = agg.filter(l => Math.abs(num(l.saldo_final)) > 0.005 || Math.abs(num(l.debito)) > 0.005 || Math.abs(num(l.credito)) > 0.005)
+      .map(l => {
+        const cls = l.sintetica ? (String(l.classifRaw || '').length <= 1 ? 'g' : 'n') : ''
+        const ind = l.sintetica ? (String(l.classifRaw || '').length <= 1 ? '' : 'i1') : 'i2'
+        return `<tr class="${cls}"><td>${esc(l.reduzido)}</td><td>${esc(l.classif)}</td><td class="${ind}">${esc(l.nome)}</td><td class="r">${dc(l.saldo_inicial)}</td><td class="r">${brl(l.debito)}</td><td class="r">${brl(l.credito)}</td><td class="r">${dc(l.saldo_final)}</td></tr>`
+      }).join('')
+    paginas.push(`
+  <div class="page">
+    ${marca()}
+    <div class="band"><div><div class="tt">Balancete</div><div class="ss">Modelo Domínio · completo</div></div>${bandCmp(periodoLabel)}</div>
+    <div class="content">
+      <div class="dominio">
+        <div class="cab"><table>
+          <tr><td class="lab">Empresa:</td><td>${esc(empresa)}</td><td style="text-align:right;white-space:nowrap">Folha:&nbsp;&nbsp;0001</td></tr>
+          <tr><td class="lab">C.N.P.J.:</td><td>${esc(cnpj || '—')}</td><td></td></tr>
+          <tr><td class="lab">Período:</td><td>${esc(periodoIni)} - ${esc(periodoFim)}</td><td></td></tr>
+        </table></div>
+        <h3>BALANCETE</h3>
+        <div style="overflow:auto"><table class="dtab">
+          <tr><th>Código</th><th>Classificação</th><th>Descrição da conta</th><th class="r">Saldo anterior</th><th class="r">Débito</th><th class="r">Crédito</th><th class="r">Saldo atual</th></tr>
+          ${rowsBal}
+        </table></div>
+      </div>
+      <p class="mut" style="font-size:10px;margin:8px 0 0">Balancete <b>completo</b> — todos os níveis (grupo, sintéticas e analíticas). O sistema pagina automaticamente conforme o nº de contas.</p>
+    </div>
+    <div class="foot">Attentive Contabilidade · Demonstrações Contábeis · Valores em BRL</div>
+  </div>`)
+  }
+
+  // ---- Balanço Patrimonial (estilo CEMIG) ----
+  if (B.has('balanco')) {
+    const analit = agg.filter(l => !l.sintetica)
+    const ativoRows = analit.filter(l => g1(l) === '1' && Math.abs(num(l.saldo_final)) > 0.005)
+      .map(l => `<tr><td class="i1">${esc(l.nome)}</td><td class="r">${brl(Math.abs(num(l.saldo_final)))}</td></tr>`).join('')
+    const passRows = analit.filter(l => g1(l) === '2' && Math.abs(num(l.saldo_final)) > 0.005)
+      .map(l => `<tr><td class="i1">${esc(l.nome)}</td><td class="r">${brl(Math.abs(num(l.saldo_final)))}</td></tr>`).join('')
+    paginas.push(`
+  <div class="page">
+    ${marca()}
+    <div class="band"><div><div class="tt">Balanço Patrimonial</div><div class="ss">Posição em ${esc(periodoFim)}</div></div>${bandCmp(periodoLabel)}</div>
+    <div class="content">
+      <div class="fincols">
+        <table class="fin">
+          <tr class="h"><td>ATIVO</td><td class="r">${esc(periodoFim)}</td></tr>
+          ${ativoRows || '<tr><td class="i1 mut">Sem contas de ativo</td><td class="r">—</td></tr>'}
+          <tr class="tot"><td>TOTAL DO ATIVO</td><td class="r">${brl(Math.abs(c.totAtivo))}</td></tr>
+        </table>
+        <table class="fin">
+          <tr class="h"><td>PASSIVO + PATRIMÔNIO LÍQUIDO</td><td class="r">${esc(periodoFim)}</td></tr>
+          ${passRows || '<tr><td class="i1 mut">Sem contas de passivo/PL</td><td class="r">—</td></tr>'}
+          <tr class="tot"><td>TOTAL DO PASSIVO + PL</td><td class="r">${brl(Math.abs(c.totPassivo))}</td></tr>
+        </table>
+      </div>
+      <p class="mut" style="font-size:10.5px;margin:8px 0 0">Conferência: <b>Ativo = Passivo + PL = ${brlR(Math.abs(c.totAtivo))}</b>. Saldos da última coluna da conciliação (fim do período).</p>
+    </div>
+    <div class="foot">Attentive Contabilidade · Demonstrações Contábeis · Valores em BRL</div>
+  </div>`)
+  }
+
+  // ---- DFC (estilo CEMIG) ----
+  if (B.has('dfc')) {
+    const f = dfc
+    paginas.push(`
+  <div class="page">
+    ${marca()}
+    <div class="band"><div><div class="tt">Fluxo de Caixa</div><div class="ss">DFC · método indireto</div></div>${bandCmp(periodoLabel)}</div>
+    <div class="content">
+      <table class="fin" style="max-width:600px">
+        <tr class="h"><td>Fluxo de caixa — ${esc(periodoLabel)}</td><td class="r">R$</td></tr>
+        <tr class="t"><td>Atividades operacionais</td><td class="r">${par(f.operacional)}</td></tr>
+        <tr><td class="i1">Lucro/prejuízo do período</td><td class="r">${par(f.lucro)}</td></tr>
+        <tr><td class="i1">(+) Depreciação/amortização</td><td class="r">${par(f.deprec)}</td></tr>
+        <tr><td class="i1">(±) Variação do capital de giro</td><td class="r">${par(f.capitalGiro)}</td></tr>
+        <tr class="t"><td>Atividades de investimento</td><td class="r">${par(f.investimento)}</td></tr>
+        <tr><td class="i1">Imobilizado / investimentos</td><td class="r">${par(f.investimento)}</td></tr>
+        <tr class="t"><td>Atividades de financiamento</td><td class="r">${par(f.financiamento)}</td></tr>
+        <tr><td class="i1">Empréstimos, capital e distribuições</td><td class="r">${par(f.financiamento)}</td></tr>
+        <tr class="tot"><td>VARIAÇÃO LÍQUIDA DE CAIXA</td><td class="r">${par(f.varCaixa)}</td></tr>
+        <tr><td>(+) Saldo inicial de caixa</td><td class="r">${brl(f.saldoIni)}</td></tr>
+        <tr class="t"><td>(=) Saldo final de caixa</td><td class="r">${brl(f.saldoFim)}</td></tr>
+      </table>
+      <p class="mut" style="font-size:10.5px;margin:8px 0 0">Método indireto — a variação de caixa (<b>${brlR(f.varCaixa)}</b>) bate com o saldo final das disponibilidades. Operacional e capital de giro são apurados por diferença (reconciliação automática).</p>
+    </div>
+    <div class="foot">Attentive Contabilidade · Demonstrações Contábeis · Valores em BRL</div>
+  </div>`)
+  }
+
+  // ---- Comparativo de Movimento (paisagem) ----
+  if (B.has('comparativo')) {
+    const thMeses = meses.map(m => `<th class="r">${MESES[m - 1]}</th>`).join('')
+    const grupoLabel = { '3': 'RECEITAS', '4': 'CUSTOS', '5': 'DESPESAS' }
+    let corpo = ''
+    const porMesResultado = {}
+    for (const grp of ['3', '4', '5']) {
+      const contas = Object.values(contasRes).filter(x => x.grupo === grp).sort((a, b) => String(a.cod).localeCompare(String(b.cod)))
+      const tot = {}; meses.forEach(m => { tot[m] = contas.reduce((s, x) => s + (x.vals[m] || 0), 0) })
+      const totGeral = meses.reduce((s, m) => s + tot[m], 0)
+      corpo += `<tr class="g"><td>${grp}</td><td>${grupoLabel[grp]}</td>${meses.map(m => `<td class="r">${brl(Math.abs(tot[m]))}</td>`).join('')}<td class="r">${brl(Math.abs(totGeral))}</td></tr>`
+      corpo += contas.map(x => {
+        const tt = meses.reduce((s, m) => s + (x.vals[m] || 0), 0)
+        return `<tr><td>${esc(x.cod)}</td><td>${esc(x.nome)}</td>${meses.map(m => `<td class="r">${brl(Math.abs(x.vals[m] || 0))}</td>`).join('')}<td class="r">${brl(Math.abs(tt))}</td></tr>`
+      }).join('')
+      meses.forEach(m => { porMesResultado[m] = (porMesResultado[m] || 0) + (grp === '3' ? -tot[m] : -tot[m]) })
+    }
+    // resultado do mês = -(receita+custo+despesa somados com sinal do saldo_final): receita credora(neg), custo/desp devedora(pos)
+    const resMes = {}; let acum = 0; const acumMes = {}
+    meses.forEach(m => {
+      const contas = Object.values(contasRes)
+      const r = -contas.filter(x => x.grupo === '3').reduce((s, x) => s + (x.vals[m] || 0), 0)
+      const cu = contas.filter(x => x.grupo === '4').reduce((s, x) => s + (x.vals[m] || 0), 0)
+      const de = contas.filter(x => x.grupo === '5').reduce((s, x) => s + (x.vals[m] || 0), 0)
+      resMes[m] = r - cu - de; acum += resMes[m]; acumMes[m] = acum
+    })
+    const totRes = meses.reduce((s, m) => s + resMes[m], 0)
+    corpo += `<tr class="s"><td></td><td>RESULTADO DO MÊS</td>${meses.map(m => `<td class="r">${brl(resMes[m])}</td>`).join('')}<td class="r">${brl(totRes)}</td></tr>`
+    corpo += `<tr class="s"><td></td><td>RESULTADO DO EXERCÍCIO (acumulado)</td>${meses.map(m => `<td class="r">${brl(acumMes[m])}</td>`).join('')}<td class="r">${brl(totRes)}</td></tr>`
+    paginas.push(`
+  <div class="page land">
+    ${marca().replace('</div>', ' · paisagem</div>')}
+    <div class="band"><div><div class="tt">Comparativo de Movimento</div><div class="ss">Contas de resultado · todos os meses · paisagem</div></div>${bandCmp(periodoLabel)}</div>
+    <div class="content">
+      <div class="dominio">
+        <div class="cab"><table>
+          <tr><td class="lab">Empresa:</td><td>${esc(empresa)}</td><td style="text-align:right;white-space:nowrap">Folha:&nbsp;&nbsp;0001&nbsp;·&nbsp;Paisagem</td></tr>
+          <tr><td class="lab">C.N.P.J.:</td><td>${esc(cnpj || '—')}</td><td></td></tr>
+          <tr><td class="lab">Período:</td><td>${esc(periodoIni)} - ${esc(periodoFim)} · contas de resultado (grupos 3, 4 e 5)</td><td></td></tr>
+        </table></div>
+        <h3>COMPARATIVO DE MOVIMENTO — CONTAS DE RESULTADO</h3>
+        <div style="overflow:auto"><table class="dtab">
+          <tr><th>Código</th><th>Descrição da conta</th>${thMeses}<th class="r">Total</th></tr>
+          ${corpo}
+        </table></div>
+      </div>
+      <p class="mut" style="font-size:10px;margin:8px 0 0">Comparativo <b>completo</b> das contas de resultado (grupos 3, 4 e 5), mês a mês, em paisagem.</p>
+    </div>
+    <div class="foot">Attentive Contabilidade · Demonstrações Contábeis · Valores em BRL</div>
+  </div>`)
+  }
+
+  const html = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Demonstrações Contábeis — ${esc(empresa)}</title>
+<style>${CSS}</style></head><body>${paginas.join('\n')}
+<script>window.onload=function(){setTimeout(function(){window.print()},350)}</script>
+</body></html>`
+  const w = window.open('', '_blank')
+  if (!w) { alert('Permita pop-ups para gerar o PDF.'); return false }
+  w.document.write(html); w.document.close()
+  return true
+}
+
+// Gráfico de desempenho (combo simples: barras Receita/EBITDA/Lucro por mês).
+function svgDesempenho(serie) {
+  if (!serie || serie.length < 2) return ''
+  const W = 760, H = 220, mL = 8, mR = 8, mT = 12, mB = 26
+  const x0 = mL, x1 = W - mR, y1 = H - mB, plotH = y1 - mT, plotW = x1 - x0
+  const n = serie.length, gw = plotW / n
+  const maxV = Math.max(1, ...serie.map(p => Math.max(p.receitaLiq, p.ebitda, p.lucroLiq))) * 1.1
+  const yB = v => y1 - (Math.max(0, v) / maxV) * plotH
+  const cx = i => x0 + gw * i + gw / 2
+  const bars = [['receitaLiq', '#4A7CFF'], ['ebitda', '#E5484D'], ['lucroLiq', '#30A46C']]
+  const bw = (gw * 0.6) / 3
+  let s = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto">`
+  serie.forEach((p, i) => bars.forEach(([k, cor], bi) => {
+    const y = yB(p[k]); const bx = cx(i) - (bw * 3) / 2 + bi * bw
+    s += `<rect x="${bx.toFixed(1)}" y="${y.toFixed(1)}" width="${Math.max(1, bw - 1).toFixed(1)}" height="${Math.max(0, y1 - y).toFixed(1)}" fill="${cor}" rx="1"/>`
+  }))
+  serie.forEach((p, i) => { s += `<text x="${cx(i).toFixed(1)}" y="${y1 + 16}" text-anchor="middle" font-size="10" fill="#5a6785">${p.rotulo}</text>` })
+  s += '</svg>'
+  return s
+}
+
+// CSS do documento (estilo CEMIG: Cambria/Calibri; Domínio em Arial, intocado).
+const CSS = `
+*{box-sizing:border-box}
+:root{--paper:#fff;--ink:#1c2430;--sub:#5a6785;--line:#e6e9ef;--band:#101a2e;--bandsub:#8fa3c4;--accent:#4A7CFF;--green:#1f9d63;--amber:#8a5a12;--soft:#f6f8fb;--serif:"Cambria",Georgia,"Times New Roman",serif;--sans:"Calibri","Segoe UI",system-ui,-apple-system,sans-serif}
+html,body{margin:0;background:#e9edf3;color:var(--ink);font-family:var(--sans)}
+body{padding:20px 12px 60px}
+.mut{color:var(--sub)}
+.page{background:var(--paper);color:var(--ink);width:min(820px,100%);margin:0 auto 22px;border-radius:8px;box-shadow:0 8px 30px rgba(20,30,60,.15);overflow:hidden}
+.page.land{width:min(1140px,100%)}
+.pmark{font-size:9px;color:#9aa9c0;text-align:center;padding:6px 0 0}
+.band{background:var(--band);color:#fff;padding:16px 30px 14px;display:flex;justify-content:space-between;align-items:flex-end;gap:16px}
+.band .tt{font-family:var(--serif);font-size:18px;font-weight:700;letter-spacing:.3px;line-height:1.15}
+.band .ss{font-size:9px;letter-spacing:1.6px;text-transform:uppercase;color:var(--bandsub);margin-top:5px}
+.band .cmp{text-align:right}
+.band .cmp .wm{font-family:var(--serif);font-size:18px;font-weight:700}
+.band .cmp .per{font-size:8px;letter-spacing:1.6px;text-transform:uppercase;color:var(--bandsub);margin-top:6px}
+.band .cmp .perv{font-size:13px;font-weight:600;margin-top:1px}
+.meta{display:flex;gap:34px;padding:10px 30px;background:var(--soft);border-bottom:1px solid var(--line);flex-wrap:wrap}
+.meta .l{font-size:8px;letter-spacing:2px;text-transform:uppercase;color:#98a2b3}
+.meta .v{font-size:11.5px;margin-top:2px;font-weight:500}
+.content{padding:20px 30px 26px}
+h2.sec{font-family:var(--serif);font-size:15px;color:var(--band);font-weight:700;margin:22px 0 11px;padding-bottom:6px;border-bottom:2px solid var(--accent)}
+h2.sec:first-child{margin-top:0}
+p.lead{font-size:13.5px;line-height:1.65;margin:0 0 12px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+.kpi{border:1px solid var(--line);border-radius:10px;padding:11px 13px;background:var(--soft)}
+.kpi .k{font-size:8.5px;text-transform:uppercase;letter-spacing:1px;color:#98a2b3;font-weight:700}
+.kpi .v{font-size:18px;font-weight:800;margin-top:4px}
+.gtab{width:100%;border-collapse:collapse;font-size:12.5px}
+.gtab td{padding:8px;border-bottom:1px solid var(--line)}
+.gtab td.r{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.gtab td.mut{color:var(--sub)}
+.chart{border:1px solid var(--line);border-radius:10px;padding:12px 14px 8px;background:var(--soft)}
+.chart .leg{display:flex;gap:14px;flex-wrap:wrap;font-size:10.5px;color:var(--sub);padding-top:6px}
+.chart .leg i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:middle}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.tile{border:1px solid var(--line);border-radius:10px;padding:11px 13px;background:var(--paper)}
+.tile .k{font-size:8.5px;text-transform:uppercase;letter-spacing:1px;color:#98a2b3;font-weight:700}
+.tile .v{font-size:17px;font-weight:800;margin-top:4px}
+.tile .s{font-size:10px;color:var(--sub);margin-top:2px}
+.v.g{color:var(--green)}.v.r{color:#c0392b}.v.a{color:var(--accent)}.v.y{color:#8a5a12}
+.fin2{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,.9fr);gap:12px;align-items:start}
+.ftab{width:100%;border-collapse:collapse;font-size:12px}
+.ftab td{padding:7px 8px;border-bottom:1px solid var(--line)}
+.ftab td.r{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.ftab thead td{font-size:9px;text-transform:uppercase;letter-spacing:.5px;color:#98a2b3;font-weight:700;background:var(--soft)}
+.ftab tfoot td{font-weight:700;background:var(--soft)}
+.clibox{border:1px solid var(--line);border-radius:10px;padding:12px 15px;background:var(--soft)}
+.cli{display:flex;justify-content:space-between;gap:10px;font-size:12px;padding:7px 0 3px}
+.bar{height:6px;background:var(--line);border-radius:20px;overflow:hidden;margin-bottom:5px}
+.bar>span{display:block;height:100%;background:var(--accent);border-radius:20px}
+.fincols{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
+.fin{width:100%;border-collapse:collapse;font-size:12px}
+.fin td{padding:5px 8px;border-bottom:1px solid var(--line)}
+.fin td.r{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.fin td.i1{padding-left:22px}
+.fin tr.h td{font-family:var(--serif);font-weight:700;font-size:12.5px;color:var(--band);background:var(--soft);border-top:1.5px solid var(--band)}
+.fin tr.t td{font-weight:700;border-top:1px solid #b9c2d4;border-bottom:1.5px solid var(--band);background:var(--soft)}
+.fin tr.tot td{font-family:var(--serif);font-weight:700;font-size:13px;color:#fff;background:var(--band)}
+.foot{padding:12px 30px;border-top:1px solid var(--line);font-size:8.5px;color:#98a2b3;text-align:center;background:var(--soft)}
+/* Modelo Domínio (Arial, intocado) */
+.dominio{border:1px solid #000;border-radius:4px;overflow:hidden;background:#fff;color:#000;font-family:Arial,Helvetica,sans-serif}
+.dominio .cab table{width:100%;border-collapse:collapse;font-size:11px}
+.dominio .cab td{padding:4px 10px}
+.dominio .cab tr+tr td{border-top:1px solid #000}
+.dominio .cab{border-bottom:1px solid #000}
+.dominio .cab td.lab{font-weight:bold;width:74px}
+.dominio h3{text-align:center;font-size:12px;margin:9px 0;font-weight:bold;letter-spacing:.5px}
+.dtab{width:100%;border-collapse:collapse;font-size:11px}
+.dtab th{background:#ededed;border-top:1px solid #000;border-bottom:1px solid #000;padding:5px 8px;text-align:left;font-size:9px;text-transform:uppercase;letter-spacing:.3px;white-space:nowrap}
+.dtab th.r,.dtab td.r{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.dtab td{padding:5px 8px;border-bottom:1px solid #e3e3e3}
+.dtab tr.s td{font-weight:bold;border-top:1px solid #9a9a9a;border-bottom:1px solid #9a9a9a;background:#f3f3f3}
+.dtab tr.g td{font-weight:bold;background:#f0f0f0;text-transform:uppercase;font-size:10px}
+.dtab tr.n td{font-weight:bold;background:#fafafa}
+.dtab td.i1{padding-left:16px}.dtab td.i2{padding-left:26px}
+/* Impressão: cada folha vira uma página; comparativo em paisagem */
+@page{size:A4 portrait;margin:14mm}
+@page land{size:A4 landscape;margin:12mm}
+@media print{
+  html,body{background:#fff;padding:0}
+  .page{width:auto;margin:0;border-radius:0;box-shadow:none;page-break-after:always}
+  .page.land{page:land}
+  .pmark{display:none}
+}
+`

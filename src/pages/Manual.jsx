@@ -186,6 +186,7 @@ const HTML = `
       <li><a href="#m-status"><span class="n">16</span> Status</a></li>
       <li><a href="#m-relatorios"><span class="n">17</span> Relatórios</a></li>
       <li><a href="#m-cockpit"><span class="n">18</span> Cockpit Financeiro</a></li>
+      <li><a href="#m-demonstracoes"><span class="n">·</span> Demonstrações Contábeis</a></li>
       <li><a href="#m-regras"><span class="n">19</span> Regras de ouro</a></li>
       <li><a href="#m-atalhos"><span class="n">20</span> Dicas e atalhos</a></li>
     </ol>
@@ -481,6 +482,18 @@ const HTML = `
   <div class="m-rule"><span class="k">Fonte única</span> Se Cockpit, Conciliação e Comparativo divergirem, é sinal de que algum ajuste não foi confirmado como lançamento — não de conta errada. Todos bebem da mesma fonte viva.</div>
   <div class="m-rule"><span class="k">Abre na hora ao voltar</span> O Cockpit guarda o resultado já processado: sai e volta e ele aparece <b>instantâneo</b>, sem recarregar. Só refaz o cálculo quando algum dado do fechamento mudou (mesma regra de cache dos Relatórios).</div>
   <div class="m-rule"><span class="k">Entenda cada índice (ⓘ)</span> No bloco <b>Índices financeiros</b>, cada indicador (Liquidez corrente, Margem líquida, Endividamento, Carga tributária, Prazo médio de recebimento, Resultado/receita) tem um <b>ⓘ</b> ao lado do nome: clique para abrir um balão explicando <b>o que é</b>, <b>como é calculado</b> e <b>como ler</b> — bom para explicar ao cliente na reunião.</div>
+</section>
+
+<hr class="m-div">
+
+<section id="m-demonstracoes">
+  <div class="m-eyebrow">Nível cliente</div>
+  <h2 class="m-sec">Demonstrações Contábeis</h2>
+  <p>O relatório de fechamento <b>para o cliente</b>, montado <b>na hora</b>: você escolhe o <b>período</b> e <b>o que incluir</b>, e o sistema gera um PDF por folhas (páginas), no estilo de um relatório de demonstrações (tipografia Cambria/Calibri, à la CEMIG). Reaproveita o <b>razão vivo</b> — mesma base da Conciliação, do Cockpit e do Comparativo.</p>
+  <div class="m-rule"><span class="k">Período</span> Escolha <b>Mês</b>, <b>Trimestre</b>, <b>Semestre</b>, <b>Anual</b> ou <b>Personalizado</b> (de/até por mês). Para períodos com vários meses, o sistema soma os movimentos e pega o saldo inicial da 1ª ponta e o saldo final da última — só entram as competências já importadas dentro do intervalo.</div>
+  <div class="m-rule"><span class="k">O que incluir</span> Marque os blocos: <b>Cockpit</b> (todas as informações do painel), <b>DRE</b>, <b>Balancete</b> (completo), <b>Balanço Patrimonial</b>, <b>DFC</b> (fluxo de caixa, método indireto) e <b>Comparativo de Movimento</b> (folha em paisagem). O relatório sai sempre nesta sequência: Capa/desempenho → Cockpit → DRE → Balancete → Balanço → DFC → Comparativo.</div>
+  <div class="m-rule"><span class="k">Modelo Domínio intocado</span> A DRE, o Balancete e o Comparativo saem no <b>modelo Domínio</b> (Arial, quadro preto/branco), exatamente como nos Relatórios; só o invólucro (capa, cockpit, balanço, DFC) usa a tipografia do relatório.</div>
+  <div class="m-rule"><span class="k">Gerar PDF</span> Clique em <b>Gerar PDF</b> e escolha “Salvar como PDF” na janela de impressão. O Comparativo sai automaticamente em <b>paisagem</b>.</div>
 </section>
 
 <hr class="m-div">
