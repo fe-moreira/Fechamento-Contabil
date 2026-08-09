@@ -123,12 +123,14 @@ export default function Relatorios() {
   // FONTE ÚNICA (apurarBalanco): separa Ativo/Passivo pela classificação e calcula o resultado
   // do período, que entra no PL como Lucros/Prejuízo do Exercício e fecha o balanço. O mesmo
   // cálculo alimenta o Balanço das Demonstrações Contábeis.
-  // Resultado ACUMULADO do ano vem do COMPARATIVO DE MOVIMENTO (fonte oficial): soma o saldo
-  // acumulado das contas de resultado (3/4/5) no mês da competência e inverte o sinal (receita
-  // credora → lucro positivo). Esse número entra no PL e soma no total do Passivo.
+  // Resultado ACUMULADO do ano vem do COMPARATIVO DE MOVIMENTO (fonte oficial): é o resultado
+  // de CADA mês de jan até o período (junho) SOMADO — não só o mês. Soma todos os meses ≤ mês
+  // da competência de todas as contas de resultado (3/4/5) e inverte o sinal (receita credora →
+  // lucro positivo). Esse número (o TOTAL do comparativo) entra no PL e soma no total do Passivo.
   const mesAtual = Number(String(competencia).split('/')[0]) || 0
   const resAcumComp = (comparativo && comparativo.matriz)
-    ? -Math.round(Object.values(comparativo.matriz).reduce((s, linha) => s + (Number(linha?.[mesAtual]) || 0), 0) * 100) / 100
+    ? -Math.round(Object.values(comparativo.matriz).reduce((s, linha) =>
+        s + Object.entries(linha || {}).reduce((a, [m, v]) => a + (Number(m) <= mesAtual ? (Number(v) || 0) : 0), 0), 0) * 100) / 100
     : null
   const bal = apurarBalanco(hier.filter(l => !l.sintetica), { resultado: resAcumComp })
   // EXIBIÇÃO com NÍVEIS (sintéticas + analíticas), igual ao Comparativo/demonstrativo: mostra
