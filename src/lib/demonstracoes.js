@@ -441,9 +441,12 @@ export function abrirDemonstracoesContabeis({ empresa, cnpj, periodoLabel, perio
     const lado = grupo => agg.filter(l => g1(l) === grupo && Math.abs(num(l.saldo_final)) > 0.005 && passaNivel(l))
       .sort((a, b) => String(a.classifRaw || '').localeCompare(String(b.classifRaw || ''), 'pt-BR', { numeric: true }))
     const A = lado('1'), P = lado('2')
-    // FONTE ÚNICA (apurarBalanco) — mesmo cálculo do card Balanço dos Relatórios: o resultado do
-    // período entra no PL como Lucros/Prejuízo do Exercício e fecha (Ativo = Passivo + PL).
-    const balc = apurarBalanco(agg.filter(l => !l.sintetica))
+    // FONTE ÚNICA (apurarBalanco) — mesmo cálculo do card Balanço. O resultado ACUMULADO vem do
+    // Comparativo de Movimento (soma dos movimentos de resultado no período, = RESULTADO DO
+    // EXERCÍCIO), entra no PL e soma no total do Passivo.
+    const resAcumComp = -Object.values(contasRes).filter(x => !x.sintetica)
+      .reduce((s, x) => s + meses.reduce((a, m) => a + (x.vals[m] || 0), 0), 0)
+    const balc = apurarBalanco(agg.filter(l => !l.sintetica), { resultado: resAcumComp })
     const cellDesc = l => {
       const ind = 6 + Math.max(0, (l.grau || 1) - 1) * 13
       return `<td style="padding-left:${ind}px${l.sintetica ? ';font-weight:bold' : ''}">${esc(l.nome)}</td>`
@@ -475,7 +478,9 @@ export function abrirDemonstracoesContabeis({ empresa, cnpj, periodoLabel, perio
           ${corpo}
         </table></div>
       </div>
-      <p class="mut" style="font-size:10px;margin:8px 0 0">Conferência: <b>Ativo = Passivo + PL = ${brlR(balc.totAtivo)}</b> (inclui o <b>${esc(balc.labelResultado.toLowerCase())}</b> de ${brlR(balc.resultado)} apurado no resultado, lançado no PL). Saldos do fim do período. <i>(−) contas redutoras aparecem com o saldo na natureza invertida (ex.: depreciação em C).</i></p>
+      <p class="mut" style="font-size:10px;margin:8px 0 0">${Math.abs(balc.diferenca) < 0.01
+        ? `Conferência: <b>Ativo = Passivo + PL = ${brlR(balc.totAtivo)}</b> (inclui o <b>${esc(balc.labelResultado.toLowerCase())}</b> de ${brlR(balc.resultado)}, vindo do Comparativo de Movimento).`
+        : `<b style="color:#c0341d">Diferença de ${brlR(balc.diferenca)}</b> entre Ativo (${brlR(balc.totAtivo)}) e Passivo + PL (${brlR(balc.totPassivo)}) — o resultado do Comparativo (${brlR(balc.resultado)}) não fecha o patrimônio. Conferir conciliação/classificação.`} Saldos do fim do período. <i>(−) contas redutoras aparecem com o saldo na natureza invertida.</i></p>
     </div>
     <div class="foot">Attentive Contabilidade · Demonstrações Contábeis · Valores em BRL</div>
   </div>`)

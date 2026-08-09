@@ -123,7 +123,14 @@ export default function Relatorios() {
   // FONTE ÚNICA (apurarBalanco): separa Ativo/Passivo pela classificação e calcula o resultado
   // do período, que entra no PL como Lucros/Prejuízo do Exercício e fecha o balanço. O mesmo
   // cálculo alimenta o Balanço das Demonstrações Contábeis.
-  const bal = apurarBalanco(hier.filter(l => !l.sintetica))
+  // Resultado ACUMULADO do ano vem do COMPARATIVO DE MOVIMENTO (fonte oficial): soma o saldo
+  // acumulado das contas de resultado (3/4/5) no mês da competência e inverte o sinal (receita
+  // credora → lucro positivo). Esse número entra no PL e soma no total do Passivo.
+  const mesAtual = Number(String(competencia).split('/')[0]) || 0
+  const resAcumComp = (comparativo && comparativo.matriz)
+    ? -Math.round(Object.values(comparativo.matriz).reduce((s, linha) => s + (Number(linha?.[mesAtual]) || 0), 0) * 100) / 100
+    : null
+  const bal = apurarBalanco(hier.filter(l => !l.sintetica), { resultado: resAcumComp })
   // EXIBIÇÃO com NÍVEIS (sintéticas + analíticas), igual ao Comparativo/demonstrativo: mostra
   // toda a hierarquia do grupo, ordenada pela classificação e indentada por nível. Os TOTAIS e o
   // resultado vêm do apurarBalanco (só analíticas — as sintéticas são agregados e não somam).
@@ -576,6 +583,17 @@ export default function Relatorios() {
             <GrupoBalanco titulo="Ativo" contas={ativo} total={totAtivo} />
             <GrupoBalanco titulo="Passivo + Patrimônio Líquido" contas={passivo} total={totPassivo} />
           </div>
+          {Math.abs(bal.diferenca) < 0.01 ? (
+            <p style={{ fontSize: 12, color: theme.sub, marginTop: 10 }}>
+              <i className="ti ti-circle-check" style={{ color: '#0a7d33', marginRight: 5 }} />
+              Balanço fecha: <b>Ativo = Passivo + PL = {money(totAtivo)}</b> (inclui o {bal.labelResultado.toLowerCase()} de {money(bal.resultado)}, do Comparativo de Movimento).
+            </p>
+          ) : (
+            <p style={{ fontSize: 12, color: '#c0341d', marginTop: 10, fontWeight: 600 }}>
+              <i className="ti ti-alert-triangle" style={{ marginRight: 5 }} />
+              Diferença de {money(bal.diferenca)} entre Ativo ({money(totAtivo)}) e Passivo + PL ({money(totPassivo)}) — o resultado do Comparativo ({money(bal.resultado)}) não fecha o patrimônio. Conferir conciliação/classificação.
+            </p>
+          )}
         </Secao>
       )}
 

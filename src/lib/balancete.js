@@ -168,20 +168,27 @@ export function applyMask(code, mask) {
 // Antes eu somava os grupos 3/4/5 do balancete — no card (uma competência) isso trazia só o
 // movimento do MÊS e não batia com o patrimônio (que é acumulado). A diferença resolve os dois.
 // Entra como "Lucros do Exercício" (se ≥ 0) ou "Prejuízo do Exercício" (se < 0).
-export function apurarBalanco(analiticas) {
+// opts.resultado: resultado ACUMULADO do ano vindo do Comparativo de Movimento (a fonte
+// oficial). Quando informado, é ele que entra no PL e soma no total do Passivo. Se não vier,
+// usa a diferença Ativo − (Passivo+PL) como fallback (fecha por construção). `diferenca` = o
+// quanto ainda falta pra fechar (Ativo − Passivo+PL final): 0 = bateu; ≠ 0 = acusar no relatório.
+export function apurarBalanco(analiticas, opts = {}) {
   const grp = l => String(l.classif ?? l.classifRaw ?? '').replace(/\D/g, '').charAt(0)
   const val = l => Number(l.saldo_final) || 0
   const ativo = (analiticas || []).filter(l => grp(l) === '1')
   const passivo = (analiticas || []).filter(l => grp(l) === '2')
   const totAtivo = ativo.reduce((s, l) => s + val(l), 0)            // devedor (+)
   const totPassivoContas = -passivo.reduce((s, l) => s + val(l), 0) // credor → positivo
-  const resultado = Math.round((totAtivo - totPassivoContas) * 100) / 100 // acumulado = diferença
+  const gap = Math.round((totAtivo - totPassivoContas) * 100) / 100
+  const resultado = (opts.resultado != null) ? Math.round(Number(opts.resultado) * 100) / 100 : gap
+  const totPassivo = Math.round((totPassivoContas + resultado) * 100) / 100
   return {
-    ativo, passivo, resultado,
+    ativo, passivo, resultado, gap,
     labelResultado: resultado >= 0 ? 'Lucros do Exercício' : 'Prejuízo do Exercício',
     totAtivo,
     totPassivoContas,
-    totPassivo: totPassivoContas + resultado, // fecha sempre: = totAtivo
+    totPassivo, // com o resultado somado
+    diferenca: Math.round((totAtivo - totPassivo) * 100) / 100, // 0 = fecha; ≠ 0 = acusar
   }
 }
 
