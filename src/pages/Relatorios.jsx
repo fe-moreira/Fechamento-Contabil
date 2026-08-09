@@ -896,7 +896,7 @@ function GrupoBalanco({ titulo, contas, total }) {
               const forte = l.sintetica || l.resultado
               return (
                 <tr key={i} style={{ borderTop: i ? `1px solid ${theme.border}` : 'none', background: (l.resultado || l.sintetica) ? theme.input : 'transparent' }}>
-                  <td style={{ ...td, fontWeight: forte ? 700 : 400, fontStyle: l.resultado ? 'italic' : 'normal', paddingLeft: 10 + Math.max(0, (l.grau || 1) - 1) * 15 }}>
+                  <td style={{ ...td, fontWeight: forte ? 700 : 400, paddingLeft: 10 + Math.max(0, (l.grau || 1) - 1) * 15 }}>
                     <span style={{ color: theme.sub, fontSize: 11 }}>{l.conta}</span> {l.nome || ''}
                   </td>
                   <td style={{ ...tdNum, fontWeight: forte ? 700 : 400 }}>{money(l.saldo_final)}</td>

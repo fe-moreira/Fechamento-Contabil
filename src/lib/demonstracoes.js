@@ -457,7 +457,7 @@ export function abrirDemonstracoesContabeis({ empresa, cnpj, periodoLabel, perio
       corpo += `<tr>${a ? cellDesc(a) + cellSal(a) : vazio}<td class="sep">${p ? '' : ''}</td>${p ? cellDesc(p) + cellSal(p) : vazio}</tr>`
     }
     // Resultado do exercício no PL (fecha o balanço) + linha de TOTAIS batendo dos dois lados.
-    corpo += `<tr>${vazio}<td class="sep"></td><td style="font-weight:bold;font-style:italic">${esc(balc.labelResultado)}</td><td class="r" style="font-weight:bold">${brl(balc.resultado)}</td></tr>`
+    corpo += `<tr class="g"><td></td><td class="r"></td><td class="sep"></td><td style="font-weight:bold">${esc(balc.labelResultado)}</td><td class="r" style="font-weight:bold">${brl(balc.resultado)}</td></tr>`
     corpo += `<tr class="s"><td>TOTAL DO ATIVO</td><td class="r">${brlR(balc.totAtivo)}</td><td class="sep"></td><td>TOTAL DO PASSIVO + PL</td><td class="r">${brlR(balc.totPassivo)}</td></tr>`
     paginas.push(`
   <div class="page">
