@@ -417,31 +417,41 @@ export function abrirDemonstracoesContabeis({ empresa, cnpj, periodoLabel, perio
       `Balancete <b>completo</b> — todos os níveis (grupo, sintéticas e analíticas). Receitas − Custos − Despesas = <b>resultado do período ${brlR(c.resultado)}</b>.`)
   }
 
-  // ---- Balanço Patrimonial (estilo CEMIG) ----
+  // ---- Balanço Patrimonial (modelo Domínio) — hierárquico, 2 colunas (Ativo | Passivo+PL) ----
   if (B.has('balanco')) {
-    const analit = agg.filter(l => !l.sintetica)
-    const ativoRows = analit.filter(l => g1(l) === '1' && Math.abs(num(l.saldo_final)) > 0.005)
-      .map(l => `<tr><td class="i1">${esc(l.nome)}</td><td class="r">${brl(Math.abs(num(l.saldo_final)))}</td></tr>`).join('')
-    const passRows = analit.filter(l => g1(l) === '2' && Math.abs(num(l.saldo_final)) > 0.005)
-      .map(l => `<tr><td class="i1">${esc(l.nome)}</td><td class="r">${brl(Math.abs(num(l.saldo_final)))}</td></tr>`).join('')
+    // Duas colunas independentes, top-down: grupo → subgrupo → sintéticas → analíticas, com D/C.
+    const lado = grupo => agg.filter(l => g1(l) === grupo && Math.abs(num(l.saldo_final)) > 0.005)
+      .sort((a, b) => String(a.classifRaw || '').localeCompare(String(b.classifRaw || ''), 'pt-BR', { numeric: true }))
+    const A = lado('1'), P = lado('2')
+    const cellDesc = l => {
+      const ind = 6 + Math.max(0, (l.grau || 1) - 1) * 13
+      return `<td style="padding-left:${ind}px${l.sintetica ? ';font-weight:bold' : ''}">${esc(l.nome)}</td>`
+    }
+    const cellSal = l => `<td class="r"${l.sintetica ? ' style="font-weight:bold"' : ''}>${dc(l.saldo_final)}</td>`
+    const vazio = '<td></td><td class="r"></td>'
+    const nrows = Math.max(A.length, P.length)
+    let corpo = ''
+    for (let i = 0; i < nrows; i++) {
+      const a = A[i], p = P[i]
+      corpo += `<tr>${a ? cellDesc(a) + cellSal(a) : vazio}<td class="sep">${p ? '' : ''}</td>${p ? cellDesc(p) + cellSal(p) : vazio}</tr>`
+    }
     paginas.push(`
   <div class="page">
     ${marca()}
-    <div class="band"><div><div class="tt">Balanço Patrimonial</div><div class="ss">Posição em ${esc(periodoFim)}</div></div>${bandCmp(periodoLabel)}</div>
+    <div class="band"><div><div class="tt">Balanço Patrimonial</div><div class="ss">Modelo Domínio · encerrado em ${esc(periodoFim)}</div></div>${bandCmp(periodoLabel)}</div>
     <div class="content">
-      <div class="fincols">
-        <table class="fin">
-          <tr class="h"><td>ATIVO</td><td class="r">${esc(periodoFim)}</td></tr>
-          ${ativoRows || '<tr><td class="i1 mut">Sem contas de ativo</td><td class="r">—</td></tr>'}
-          <tr class="tot"><td>TOTAL DO ATIVO</td><td class="r">${brl(Math.abs(c.totAtivo))}</td></tr>
-        </table>
-        <table class="fin">
-          <tr class="h"><td>PASSIVO + PATRIMÔNIO LÍQUIDO</td><td class="r">${esc(periodoFim)}</td></tr>
-          ${passRows || '<tr><td class="i1 mut">Sem contas de passivo/PL</td><td class="r">—</td></tr>'}
-          <tr class="tot"><td>TOTAL DO PASSIVO + PL</td><td class="r">${brl(Math.abs(c.totPassivo))}</td></tr>
-        </table>
+      <div class="dominio">
+        <div class="cab"><table>
+          <tr><td class="lab">Empresa:</td><td>${esc(empresa)}</td><td style="text-align:right;white-space:nowrap">Balanço encerrado em:&nbsp;&nbsp;${esc(periodoFim)}</td></tr>
+          <tr><td class="lab">C.N.P.J.:</td><td>${esc(cnpj || '—')}</td><td></td></tr>
+        </table></div>
+        <h3>BALANÇO PATRIMONIAL</h3>
+        <div style="overflow:auto"><table class="dtab baltab">
+          <tr><th>Descrição</th><th class="r">Saldo Atual</th><th class="sep"></th><th>Descrição</th><th class="r">Saldo Atual</th></tr>
+          ${corpo}
+        </table></div>
       </div>
-      <p class="mut" style="font-size:10.5px;margin:8px 0 0">Conferência: <b>Ativo = Passivo + PL = ${brlR(Math.abs(c.totAtivo))}</b>. Saldos da última coluna da conciliação (fim do período).</p>
+      <p class="mut" style="font-size:10px;margin:8px 0 0">Conferência: <b>Ativo = Passivo + PL = ${brlR(Math.abs(c.totAtivo))}</b>. Saldos do fim do período (última coluna da conciliação). <i>(−) contas redutoras aparecem com o saldo na natureza invertida (ex.: depreciação em C).</i></p>
     </div>
     <div class="foot">Attentive Contabilidade · Demonstrações Contábeis · Valores em BRL</div>
   </div>`)
@@ -663,6 +673,8 @@ p.lead .up{color:var(--green);font-weight:700}
 .dtab tr.g td{font-weight:bold;background:#f0f0f0;text-transform:uppercase;font-size:10px}
 .dtab tr.n td{font-weight:bold;background:#fafafa}
 .dtab td.i1{padding-left:16px}.dtab td.i2{padding-left:26px}
+.dtab td.sep,.dtab th.sep{width:14px;min-width:14px;border-left:1px solid #000;border-bottom:none;background:#fff;padding:0}
+.baltab td,.baltab th{font-size:10.5px}
 /* Impressão: cada folha vira uma página; comparativo em paisagem */
 @page{size:A4 portrait;margin:14mm}
 @page land{size:A4 landscape;margin:12mm}
