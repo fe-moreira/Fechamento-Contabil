@@ -137,8 +137,11 @@ export async function conferirBalanceteEncerramento(empresaId, compId, importado
 // Aplica a máscara do Domínio (ex.: "9.9.9.999.9999") a uma classificação sem pontos.
 // "1110010001" → "1.1.1.001.0001"; aceita códigos parciais (sintéticas): "111001" → "1.1.1.001".
 export function applyMask(code, mask) {
-  const c = String(code ?? '')
-  if (!mask || !c) return c
+  // SEMPRE parte dos DÍGITOS (aceita código já pontuado — "1.1.1.002" vira "111002" e é
+  // remascarado certo). Sem isso, remascarar uma classificação já com pontos gerava "muitos
+  // pontos" ("1..1..1...002."). Conta mais funda que a máscara: mantém o resto, NÃO trunca.
+  const c = String(code ?? '').replace(/\D/g, '')
+  if (!mask || !c) return String(code ?? '')
   const tams = String(mask).split('.').map(s => s.length)
   const out = []
   let i = 0
@@ -147,6 +150,7 @@ export function applyMask(code, mask) {
     out.push(c.slice(i, i + t))
     i += t
   }
+  if (i < c.length) out.push(c.slice(i)) // resto (conta mais funda que a máscara) — não perde dígito
   return out.join('.')
 }
 
