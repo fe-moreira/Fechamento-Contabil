@@ -270,6 +270,64 @@ export function abreBalanceteDominio({ empresa = '', cnpj = '', periodoIni = '',
 }
 
 // ---------------------------------------------------------------------------
+// BALANÇO PATRIMONIAL no PADRÃO DOMÍNIO: duas colunas (Ativo | Passivo + PL), hierárquico
+// (sintéticas + analíticas, indentado por nível), com a linha de resultado no PL e os totais
+// que fecham. ativo/passivo: [{ nome, saldo_final, grau, sintetica, resultado }] já ordenados.
+export function abreBalancoDominio({ empresa = '', cnpj = '', periodoIni = '', periodoFim = '', ativo = [], passivo = [], totAtivo = 0, totPassivo = 0 }) {
+  const esc = s => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))
+  const fmtP = v => { const n = Number(v) || 0; const a = Math.abs(n).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); return Math.abs(n) < 0.005 ? '0,00' : (n < 0 ? `(${a})` : a) }
+  const desc = l => { const ind = 4 + Math.max(0, (l.grau || 1) - 1) * 12; const b = l.sintetica || l.resultado; return `<td class="desc" style="padding-left:${ind}px${b ? ';font-weight:bold' : ''}${l.resultado ? ';font-style:italic' : ''}">${esc(l.nome || '')}</td>` }
+  const sal = l => `<td class="r"${(l.sintetica || l.resultado) ? ' style="font-weight:bold"' : ''}>${fmtP(l.saldo_final)}</td>`
+  const vazio = '<td class="desc"></td><td class="r"></td>'
+  const n = Math.max(ativo.length, passivo.length)
+  let corpo = ''
+  for (let i = 0; i < n; i++) { const a = ativo[i], p = passivo[i]; corpo += `<tr>${a ? desc(a) + sal(a) : vazio}<td class="sep"></td>${p ? desc(p) + sal(p) : vazio}</tr>` }
+  corpo += `<tr class="tot"><td class="desc">TOTAL DO ATIVO</td><td class="r">${fmtP(totAtivo)}</td><td class="sep"></td><td class="desc">TOTAL DO PASSIVO + PL</td><td class="r">${fmtP(totPassivo)}</td></tr>`
+
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Balanço - ${esc(empresa)}</title>
+    <style>
+      @page { margin: 22px 24px 30px; }
+      * { box-sizing: border-box; }
+      body { font-family: Arial, Helvetica, sans-serif; color:#000; margin:0; font-size:9.4px; }
+      .cab { border:1px solid #000; padding:0; margin-bottom:6px; }
+      .cab table { width:100%; border-collapse:collapse; }
+      .cab td { padding:3px 8px; border:none; font-size:10px; }
+      .cab .lab { color:#000; font-weight:bold; width:70px; }
+      .cab .folha { text-align:right; white-space:nowrap; }
+      .cab .row2 td { border-top:1px solid #000; }
+      h1 { text-align:center; font-size:13px; letter-spacing:2px; margin:10px 0 8px; }
+      table.bal { width:100%; border-collapse:collapse; }
+      table.bal thead th { border-top:1px solid #000; border-bottom:1px solid #000; padding:6px; font-size:9px; text-align:left; background:#eee; }
+      table.bal thead th.r { text-align:right; }
+      table.bal td { padding:4px 6px; vertical-align:top; font-variant-numeric: tabular-nums; line-height:1.3; }
+      table.bal td.r { text-align:right; white-space:nowrap; width:110px; }
+      table.bal td.sep { width:14px; border-left:1px solid #000; }
+      table.bal tr.tot td { border-top:1px solid #000; border-bottom:2px solid #000; font-weight:bold; background:#f2f2f2; }
+      thead { display: table-header-group; }
+      tr { page-break-inside: avoid; }
+    </style></head>
+    <body>
+      <div class="cab"><table>
+        <tr><td class="lab">Empresa:</td><td>${esc(empresa)}</td><td class="folha">Balanço encerrado em:&nbsp;&nbsp;${esc(periodoFim)}</td></tr>
+        <tr class="row2"><td class="lab">C.N.P.J.:</td><td>${esc(cnpj)}</td><td class="folha">&nbsp;</td></tr>
+        <tr class="row2"><td class="lab">Período:</td><td>${esc(periodoIni)} - ${esc(periodoFim)}</td><td class="folha">&nbsp;</td></tr>
+      </table></div>
+      <h1>BALANÇO PATRIMONIAL</h1>
+      <table class="bal">
+        <thead><tr>
+          <th>Descrição</th><th class="r">Saldo Atual</th><th class="sep"></th><th>Descrição</th><th class="r">Saldo Atual</th>
+        </tr></thead>
+        <tbody>${corpo}</tbody>
+      </table>
+      <p style="font-size:9px;margin:8px 2px 0">Ativo = Passivo + PL. O resultado do período entra no PL como Lucros/Prejuízo do Exercício. (−) contas redutoras entre parênteses.</p>
+      <script>window.onload=function(){setTimeout(function(){window.print()},250)}</script>
+    </body></html>`
+  const w = window.open('', '_blank')
+  if (!w) { alert('Permita pop-ups para gerar o PDF.'); return }
+  w.document.write(html); w.document.close()
+}
+
+// ---------------------------------------------------------------------------
 // CARTA DE PENDÊNCIAS ao cliente — documento apresentável, no papel timbrado, para
 // enviar ao cliente após o fechamento cobrando a documentação que falta. Traz um
 // texto de abertura, a relação dos itens pendentes (agrupados por origem) e um
