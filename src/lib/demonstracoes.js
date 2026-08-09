@@ -219,16 +219,19 @@ function apurarDFC(agg, cockpit) {
 // Monta TODOS os dados a partir dos balancetes mensais já lidos + razão de receita do período.
 // perMonth: [{ ano, mes, linhas }] em ordem cronológica (dados do PERÍODO).
 // anoPerMonth: meses do ANO (jan→mês do período) só p/ o gráfico do Cockpit + acumulado do ano.
-export function montarDadosDemonstracoes(perMonth, razaoReceita, anoPerMonth) {
+// perMonthComp: meses que alimentam o COMPARATIVO (colunas). Por padrão = perMonth (o período),
+// mas a tela pode passar uma faixa própria (botão de data do Comparativo).
+export function montarDadosDemonstracoes(perMonth, razaoReceita, anoPerMonth, perMonthComp) {
   const agg = agregarBalancete(perMonth)
   const primeiro = perMonth[0], ultimo = perMonth[perMonth.length - 1]
   const dre = montarDRE(agg)
   const cockpit = apurarCockpit(agg, perMonth, razaoReceita, primeiro, ultimo, anoPerMonth)
   const dfc = apurarDFC(agg, cockpit)
-  // Matriz do comparativo (contas de resultado, mês a mês)
-  const meses = perMonth.map(m => m.mes)
+  // Matriz do comparativo (contas de resultado, mês a mês) — usa a faixa própria se houver.
+  const pmComp = (perMonthComp && perMonthComp.length) ? perMonthComp : perMonth
+  const meses = pmComp.map(m => m.mes)
   const contasRes = {}
-  perMonth.forEach(mm => (mm.linhas || []).filter(l => !l.sintetica && ['3', '4', '5'].includes(g1(l))).forEach(l => {
+  pmComp.forEach(mm => (mm.linhas || []).filter(l => !l.sintetica && ['3', '4', '5'].includes(g1(l))).forEach(l => {
     const k = String(l.reduzido)
     if (!contasRes[k]) contasRes[k] = { cod: l.reduzido, nome: l.nome, grupo: g1(l), vals: {} }
     contasRes[k].vals[mm.mes] = (contasRes[k].vals[mm.mes] || 0) + num(l.saldo_final)
@@ -245,7 +248,7 @@ export function abrirDemonstracoesContabeis({ empresa, cnpj, periodoLabel, perio
   const c = cockpit
   const emissao = new Date().toLocaleDateString('pt-BR')
   // Nível de detalhe (igual ao Comparativo): 'tudo' = todas as contas; N = só sintéticas até o
-  // nível N (colapsa as analíticas e as sintéticas mais fundas). Aplica ao Balancete e ao Balanço.
+  // nível N (colapsa as analíticas e as sintéticas mais fundas). Aplica SÓ ao Balanço.
   const nvl = nivel === 'tudo' ? 'tudo' : Number(nivel)
   const passaNivel = l => nvl === 'tudo' || (l.sintetica && (l.grau || 1) <= nvl)
   let folha = 1 // a capa é a folha 1 (sem marca); os blocos seguintes começam na 2
@@ -391,7 +394,7 @@ export function abrirDemonstracoesContabeis({ empresa, cnpj, periodoLabel, perio
       return `<tr class="${cls}"><td>${esc(l.reduzido)}</td><td>${esc(l.classif)}</td><td class="${ind}">${esc(l.nome)}</td><td class="r">${dc(l.saldo_inicial)}</td><td class="r">${brl(l.debito)}</td><td class="r">${brl(l.credito)}</td><td class="r">${dc(l.saldo_final)}</td></tr>`
     }
     const folhaBal = (titulo, sub, h3, grupos, folhaNo, rodape) => {
-      const rows = agg.filter(l => temMov(l) && grupos.includes(g1(l)) && passaNivel(l)).map(linhaBal).join('')
+      const rows = agg.filter(l => temMov(l) && grupos.includes(g1(l))).map(linhaBal).join('')
       if (!rows) return
       paginas.push(`
   <div class="page">

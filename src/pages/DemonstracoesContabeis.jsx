@@ -43,7 +43,10 @@ export default function DemonstracoesContabeis() {
   const [marcados, setMarcados] = useState(new Set(BLOCOS.map(b => b.id)))
   const toggle = id => setMarcados(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
   const [modelo, setModelo] = useState('sistema') // 'sistema' (visual Attentive) | 'dominio' (fac-símile)
-  const [nivel, setNivel] = useState('tudo')      // 'tudo' | 1..5 — nível de detalhe do Balancete/Balanço
+  const [nivel, setNivel] = useState('tudo')      // 'tudo' | 1..5 — nível de detalhe do Balanço
+  // Faixa de meses do Comparativo de Movimento (colunas), independente do período do relatório.
+  const [compDe, setCompDe] = useState(`${anoAtual}-01`)
+  const [compAte, setCompAte] = useState(`${anoAtual}-${String(mesAtual).padStart(2, '0')}`)
 
   const [gerando, setGerando] = useState(false)
   const [msg, setMsg] = useState('')
@@ -95,7 +98,23 @@ export default function DemonstracoesContabeis() {
         }
       }
 
-      const dados = montarDadosDemonstracoes(perMonth, razaoReceita, anoPerMonth)
+      // Comparativo com faixa de meses própria (botão de data) — colunas independentes do período.
+      let perMonthComp = perMonth
+      if (marcados.has('comparativo') && compDe && compAte) {
+        const [ay, am] = compDe.split('-').map(Number)
+        const [by, bm] = compAte.split('-').map(Number)
+        const querComp = new Set()
+        let yy = ay, mm = am, guard = 0
+        while ((yy < by || (yy === by && mm <= bm)) && guard++ < 120) { querComp.add(`${yy}-${mm}`); mm++; if (mm > 12) { mm = 1; yy++ } }
+        const compsComp = (comps || []).filter(c => querComp.has(`${c.ano}-${c.mes}`)).sort((a, b) => (a.ano - b.ano) || (a.mes - b.mes))
+        for (const c of compsComp) if (!balCache[c.id]) {
+          const { linhas } = await montarBalancete(empresaId, c.id, 0, { comLancamentos: true })
+          balCache[c.id] = linhas || []
+        }
+        if (compsComp.length) perMonthComp = compsComp.map(c => ({ ano: c.ano, mes: c.mes, linhas: balCache[c.id] }))
+      }
+
+      const dados = montarDadosDemonstracoes(perMonth, razaoReceita, anoPerMonth, perMonthComp)
       const pri = doPeriodo[0], ult = doPeriodo[doPeriodo.length - 1]
       const ok = abrirDemonstracoesContabeis({
         empresa: empresaNome, cnpj: empresa?.cnpj || '',
@@ -209,15 +228,28 @@ export default function DemonstracoesContabeis() {
         </p>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 14, flexWrap: 'wrap' }}>
           <label style={{ fontSize: 12.5, color: theme.sub, fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-            <i className="ti ti-stack-2" /> Nível de detalhe (Balancete e Balanço):
+            <i className="ti ti-stack-2" /> Nível de detalhe (Balanço):
           </label>
           <select className="input" style={{ width: 'auto', fontSize: 12.5, padding: '6px 10px' }} value={String(nivel)}
             onChange={e => setNivel(e.target.value === 'tudo' ? 'tudo' : Number(e.target.value))}>
             <option value="tudo">Tudo (todas as contas)</option>
             {[1, 2, 3, 4, 5].map(n => <option key={n} value={n}>Até o nível {n}</option>)}
           </select>
-          <span style={{ fontSize: 11.5, color: theme.sub }}>igual ao Comparativo — nível 1 = só grupos; Tudo = até as analíticas.</span>
+          <span style={{ fontSize: 11.5, color: theme.sub }}>nível 1 = só grupos; Tudo = até as analíticas.</span>
         </div>
+        {marcados.has('comparativo') && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 12, flexWrap: 'wrap' }}>
+            <label style={{ fontSize: 12.5, color: theme.sub, fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <i className="ti ti-calendar-stats" /> Comparativo de Movimento — colunas de:
+            </label>
+            <input type="month" className="input" style={{ width: 'auto', fontSize: 12.5, padding: '6px 10px' }}
+              value={compDe} onChange={e => setCompDe(e.target.value)} />
+            <span style={{ fontSize: 12.5, color: theme.sub }}>até</span>
+            <input type="month" className="input" style={{ width: 'auto', fontSize: 12.5, padding: '6px 10px' }}
+              value={compAte} onChange={e => setCompAte(e.target.value)} />
+            <span style={{ fontSize: 11.5, color: theme.sub }}>os meses das colunas do comparativo — independente do período do relatório.</span>
+          </div>
+        )}
       </div>
 
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
