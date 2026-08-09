@@ -6,7 +6,7 @@ import { apurarBancoResultado } from '../lib/bancoResultado'
 import { apurarVariacoes } from '../lib/variacoes'
 import { parsePlano, contasConciliacaoAbertas, montarBalancete, apurarBalanco } from '../lib/balancete'
 import { gerarExcelTimbrado } from '../lib/excel'
-import { abreBalanceteDominio, abreDreDominio, abreCartaPendencias } from '../lib/pdf'
+import { abreBalanceteDominio, abreDreDominio, abreCartaPendencias, abreBalancoDominio } from '../lib/pdf'
 import { montarDRE, montarResumoBalancete } from '../lib/dre'
 import BookComposicoes from '../components/BookComposicoes'
 import ComparativoCompleto from '../components/ComparativoCompleto'
@@ -42,6 +42,8 @@ export default function Relatorios() {
   const cnpj = empresas?.find(e => e.id === empresaId)?.cnpj
   const [gerandoDom, setGerandoDom] = useState(false)
   const [nivelBal, setNivelBal] = useState(4)      // nível de detalhe do balancete (padrão: 4)
+  const [nivelBalco, setNivelBalco] = useState(4)  // nível de detalhe do Balanço (padrão: 4)
+  const [gerandoBalco, setGerandoBalco] = useState(false)
   const [aba, setAba] = useState('balancete')
   const [cardsAberto, setCardsAberto] = useState(true) // recolher a lista de cards p/ dar espaço ao relatório
 
@@ -131,13 +133,34 @@ export default function Relatorios() {
     conta: l.reduzido || '', nome: l.nome, grau: l.grau || 1, sintetica: l.sintetica,
     saldo_final: (flip ? -1 : 1) * (Number(l.saldo_final) || 0),
   }))
-  const ativo = ladoBal('1', false)
+  // Nível de detalhe do Balanço (igual ao balancete): 'tudo' = tudo; N = só sintéticas até N.
+  // A linha de resultado sempre aparece. Os totais ficam cheios (apurarBalanco).
+  const passaNivelBalco = l => l.resultado || nivelBalco === 'tudo' || (l.sintetica && (l.grau || 1) <= nivelBalco)
+  const ativo = ladoBal('1', false).filter(passaNivelBalco)
   const passivo = [
     ...ladoBal('2', true),
     { conta: '', nome: bal.labelResultado, saldo_final: bal.resultado, resultado: true, grau: 1 },
-  ]
+  ].filter(passaNivelBalco)
   const totAtivo = bal.totAtivo
   const totPassivo = bal.totPassivo
+
+  // Gera o Balanço no padrão Domínio (2 colunas, hierárquico) — respeita o nível escolhido.
+  function gerarBalancoDominioPDF() {
+    if (!compId || gerandoBalco) return
+    setGerandoBalco(true)
+    try {
+      const [mes, ano] = competencia.split('/').map(Number)
+      const ult = new Date(ano, mes, 0).getDate()
+      abreBalancoDominio({
+        empresa: empresaNome, cnpj: fmtCnpj(cnpj),
+        periodoIni: `01/${String(mes).padStart(2, '0')}/${ano}`,
+        periodoFim: `${String(ult).padStart(2, '0')}/${String(mes).padStart(2, '0')}/${ano}`,
+        ativo, passivo, totAtivo, totPassivo,
+      })
+    } finally {
+      setGerandoBalco(false)
+    }
+  }
 
   // Despesas indedutíveis (LALUR): justificativas com dedutibilidade indedutível.
   const indedutiveis = auditoria.filter(a => String(a.dedutibilidade || '').toLowerCase().startsWith('indedut'))
@@ -534,6 +557,21 @@ export default function Relatorios() {
       {/* Balanço Patrimonial */}
       {!carregando && temComp && linhas.length > 0 && aba === 'balanco' && (
         <Secao titulo="Balanço Patrimonial" onExportar={exportarBalanco}>
+          <div style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <button className="btn" onClick={gerarBalancoDominioPDF} disabled={!compId || gerandoBalco}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 8, opacity: gerandoBalco ? .6 : 1 }}>
+              <i className={`ti ${gerandoBalco ? 'ti-loader-2' : 'ti-file-type-pdf'}`} /> {gerandoBalco ? 'Gerando…' : 'Gerar balanço (padrão Domínio)'}
+            </button>
+            <label style={{ fontSize: 12, color: theme.sub, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <i className="ti ti-stack-2" /> Nível:
+              <select className="input" style={{ width: 'auto', fontSize: 12, padding: '6px 10px' }} value={String(nivelBalco)}
+                onChange={e => setNivelBalco(e.target.value === 'tudo' ? 'tudo' : Number(e.target.value))}>
+                <option value="tudo">Tudo (todas as contas)</option>
+                {[1, 2, 3, 4, 5].map(n => <option key={n} value={n}>Até o nível {n}</option>)}
+              </select>
+            </label>
+            <span style={{ fontSize: 12, color: theme.sub }}>2 colunas (Ativo | Passivo + PL), hierárquico. Nível 1 = só grupos; Tudo = até as analíticas.</span>
+          </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 14 }}>
             <GrupoBalanco titulo="Ativo" contas={ativo} total={totAtivo} />
             <GrupoBalanco titulo="Passivo + Patrimônio Líquido" contas={passivo} total={totPassivo} />
