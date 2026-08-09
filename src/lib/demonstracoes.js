@@ -12,7 +12,7 @@
 
 import { supabase } from './supabase'
 import { lerTudo } from './lerTudo'
-import { montarBalancete } from './balancete'
+import { montarBalancete, apurarBalanco } from './balancete'
 import { montarDRE } from './dre'
 import { extrairEntidade } from './financeiro'
 
@@ -430,6 +430,9 @@ export function abrirDemonstracoesContabeis({ empresa, cnpj, periodoLabel, perio
     const lado = grupo => agg.filter(l => g1(l) === grupo && Math.abs(num(l.saldo_final)) > 0.005 && passaNivel(l))
       .sort((a, b) => String(a.classifRaw || '').localeCompare(String(b.classifRaw || ''), 'pt-BR', { numeric: true }))
     const A = lado('1'), P = lado('2')
+    // FONTE ÚNICA (apurarBalanco) — mesmo cálculo do card Balanço dos Relatórios: o resultado do
+    // período entra no PL como Lucros/Prejuízo do Exercício e fecha (Ativo = Passivo + PL).
+    const balc = apurarBalanco(agg.filter(l => !l.sintetica))
     const cellDesc = l => {
       const ind = 6 + Math.max(0, (l.grau || 1) - 1) * 13
       return `<td style="padding-left:${ind}px${l.sintetica ? ';font-weight:bold' : ''}">${esc(l.nome)}</td>`
@@ -442,6 +445,9 @@ export function abrirDemonstracoesContabeis({ empresa, cnpj, periodoLabel, perio
       const a = A[i], p = P[i]
       corpo += `<tr>${a ? cellDesc(a) + cellSal(a) : vazio}<td class="sep">${p ? '' : ''}</td>${p ? cellDesc(p) + cellSal(p) : vazio}</tr>`
     }
+    // Resultado do exercício no PL (fecha o balanço) + linha de TOTAIS batendo dos dois lados.
+    corpo += `<tr>${vazio}<td class="sep"></td><td style="font-weight:bold;font-style:italic">${esc(balc.labelResultado)}</td><td class="r" style="font-weight:bold">${brl(balc.resultado)}</td></tr>`
+    corpo += `<tr class="s"><td>TOTAL DO ATIVO</td><td class="r">${brlR(balc.totAtivo)}</td><td class="sep"></td><td>TOTAL DO PASSIVO + PL</td><td class="r">${brlR(balc.totPassivo)}</td></tr>`
     paginas.push(`
   <div class="page">
     ${marca()}
@@ -458,7 +464,7 @@ export function abrirDemonstracoesContabeis({ empresa, cnpj, periodoLabel, perio
           ${corpo}
         </table></div>
       </div>
-      <p class="mut" style="font-size:10px;margin:8px 0 0">Conferência: <b>Ativo = Passivo + PL = ${brlR(Math.abs(c.totAtivo))}</b>. Saldos do fim do período (última coluna da conciliação). <i>(−) contas redutoras aparecem com o saldo na natureza invertida (ex.: depreciação em C).</i></p>
+      <p class="mut" style="font-size:10px;margin:8px 0 0">Conferência: <b>Ativo = Passivo + PL = ${brlR(balc.totAtivo)}</b> (inclui o <b>${esc(balc.labelResultado.toLowerCase())}</b> de ${brlR(balc.resultado)} apurado no resultado, lançado no PL). Saldos do fim do período. <i>(−) contas redutoras aparecem com o saldo na natureza invertida (ex.: depreciação em C).</i></p>
     </div>
     <div class="foot">Attentive Contabilidade · Demonstrações Contábeis · Valores em BRL</div>
   </div>`)
