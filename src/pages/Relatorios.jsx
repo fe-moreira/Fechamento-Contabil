@@ -41,6 +41,7 @@ export default function Relatorios() {
   const { empresaId, empresaNome, competencia, empresas } = useAppData()
   const cnpj = empresas?.find(e => e.id === empresaId)?.cnpj
   const [gerandoDom, setGerandoDom] = useState(false)
+  const [nivelBal, setNivelBal] = useState('tudo') // nível de detalhe do balancete (igual ao Comparativo)
   const [aba, setAba] = useState('balancete')
   const [cardsAberto, setCardsAberto] = useState(true) // recolher a lista de cards p/ dar espaço ao relatório
 
@@ -105,6 +106,11 @@ export default function Relatorios() {
   const dreRows = hier.length ? montarDRE(hier) : []
   const resumoBal = hier.length ? montarResumoBalancete(hier) : null
 
+  // Nível de detalhe do balancete (igual ao Comparativo): 'tudo' = todas as contas; N = só
+  // sintéticas até o nível N. Aplica na tela e no PDF Domínio; os totais/resumo ficam cheios.
+  const passaNivelBal = l => nivelBal === 'tudo' || (l.sintetica && (l.grau || 1) <= nivelBal)
+  const hierBal = hier.filter(passaNivelBal)
+
   // Balanço: Ativo (prefixo 1) × Passivo + PL (prefixo 2).
   const ativo = linhas.filter(l => String(l.conta || '').startsWith('1'))
   const passivo = linhas.filter(l => String(l.conta || '').startsWith('2'))
@@ -151,6 +157,7 @@ export default function Relatorios() {
     setGerandoDom(true)
     try {
       const linhasHier = hier.length ? hier : (await montarBalancete(empresaId, compId, 0, { comLancamentos: true })).linhas
+      const linhasNivel = linhasHier.filter(passaNivelBal) // respeita o Nível escolhido na tela
       const [mes, ano] = competencia.split('/').map(Number)
       const ult = new Date(ano, mes, 0).getDate()
       abreBalanceteDominio({
@@ -158,7 +165,7 @@ export default function Relatorios() {
         cnpj: cnpj || '',
         periodoIni: `01/${String(mes).padStart(2, '0')}/${ano}`,
         periodoFim: `${String(ult).padStart(2, '0')}/${String(mes).padStart(2, '0')}/${ano}`,
-        linhas: linhasHier,
+        linhas: linhasNivel,
         resumo: (hier.length ? resumoBal : montarResumoBalancete(linhasHier)),
       })
     } finally {
@@ -403,12 +410,20 @@ export default function Relatorios() {
       {/* Balancete */}
       {!carregando && temComp && linhas.length > 0 && aba === 'balancete' && (
         <Secao titulo="Balancete" onExportar={exportarBalancete}>
-          <div style={{ marginBottom: 12 }}>
+          <div style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
             <button className="btn" onClick={gerarBalanceteDominioPDF} disabled={!compId || gerandoDom}
               style={{ display: 'inline-flex', alignItems: 'center', gap: 8, opacity: gerandoDom ? .6 : 1 }}>
               <i className={`ti ${gerandoDom ? 'ti-loader-2' : 'ti-file-type-pdf'}`} /> {gerandoDom ? 'Gerando…' : 'Gerar balancete (padrão Domínio)'}
             </button>
-            <span style={{ marginLeft: 10, fontSize: 12, color: theme.sub }}>PDF com a mesma cara do relatório do Domínio (hierarquia, D/C, Saldo Anterior por arrasto).</span>
+            <label style={{ fontSize: 12, color: theme.sub, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <i className="ti ti-stack-2" /> Nível:
+              <select className="input" style={{ width: 'auto', fontSize: 12, padding: '6px 10px' }} value={String(nivelBal)}
+                onChange={e => setNivelBal(e.target.value === 'tudo' ? 'tudo' : Number(e.target.value))}>
+                <option value="tudo">Tudo (todas as contas)</option>
+                {[1, 2, 3, 4, 5].map(n => <option key={n} value={n}>Até o nível {n}</option>)}
+              </select>
+            </label>
+            <span style={{ fontSize: 12, color: theme.sub }}>PDF na cara do Domínio (hierarquia, D/C). Nível 1 = só grupos; Tudo = até as analíticas.</span>
           </div>
           <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'auto' }}>
             {hier.length === 0 ? (
@@ -427,7 +442,7 @@ export default function Relatorios() {
                 </tr>
               </thead>
               <tbody>
-                {hier.map((l, i) => (
+                {hierBal.map((l, i) => (
                   <tr key={i} style={{ borderTop: `1px solid ${theme.border}`, background: l.sintetica ? theme.input : 'transparent', fontWeight: l.sintetica ? 700 : 400 }}>
                     <td style={{ ...td, color: theme.sub }}>{l.reduzido || ''}</td>
                     <td style={{ ...td, color: theme.sub, fontSize: 11 }}>{l.classif}</td>
