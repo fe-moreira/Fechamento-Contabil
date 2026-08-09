@@ -111,11 +111,21 @@ export default function Relatorios() {
   const passaNivelBal = l => nivelBal === 'tudo' || (l.sintetica && (l.grau || 1) <= nivelBal)
   const hierBal = hier.filter(passaNivelBal)
 
-  // Balanço: Ativo (prefixo 1) × Passivo + PL (prefixo 2).
-  const ativo = linhas.filter(l => String(l.conta || '').startsWith('1'))
-  const passivo = linhas.filter(l => String(l.conta || '').startsWith('2'))
-  const totAtivo = ativo.reduce((s, l) => s + (Number(l.saldo_final) || 0), 0)
-  const totPassivo = passivo.reduce((s, l) => s + (Number(l.saldo_final) || 0), 0)
+  // Balanço: Ativo × Passivo + PL — agrupado pela CLASSIFICAÇÃO contábil (grupo 1 = Ativo,
+  // grupo 2 = Passivo+PL), a partir do balancete hierárquico (hier), que é completo.
+  // ANTES separava pelo 1º dígito do REDUZIDO — errado: o reduzido é só o número sequencial
+  // da conta, então CLIENTES (reduzido 23) caía no Passivo e Distribuição de Lucro (reduzido
+  // 1090) caía no Ativo, e o balanço não fechava. Agora usa a classificação (1.x / 2.x).
+  // Passivo/PL é mostrado na natureza (saldo credor invertido p/ ficar positivo); contas
+  // redutoras aparecem com o sinal trocado (ex.: distribuição de lucro negativa no PL).
+  const g1c = l => String(l.classif || '').replace(/\D/g, '').charAt(0)
+  const folhasBal = hier.filter(l => l.folha)
+  const ativo = folhasBal.filter(l => g1c(l) === '1')
+    .map(l => ({ conta: l.reduzido || '', nome: l.nome, saldo_final: Number(l.saldo_final) || 0 }))
+  const passivo = folhasBal.filter(l => g1c(l) === '2')
+    .map(l => ({ conta: l.reduzido || '', nome: l.nome, saldo_final: -(Number(l.saldo_final) || 0) }))
+  const totAtivo = ativo.reduce((s, l) => s + l.saldo_final, 0)
+  const totPassivo = passivo.reduce((s, l) => s + l.saldo_final, 0)
 
   // Despesas indedutíveis (LALUR): justificativas com dedutibilidade indedutível.
   const indedutiveis = auditoria.filter(a => String(a.dedutibilidade || '').toLowerCase().startsWith('indedut'))
