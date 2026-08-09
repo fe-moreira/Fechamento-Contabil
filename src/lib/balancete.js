@@ -154,6 +154,37 @@ export function applyMask(code, mask) {
   return out.join('.')
 }
 
+// ---------------------------------------------------------------------------
+// Apuração do BALANÇO PATRIMONIAL — FONTE ÚNICA usada pelo card Balanço (Relatórios) e pelo
+// Balanço das Demonstrações Contábeis, pra os dois fecharem igual.
+//
+// Recebe as ANALÍTICAS do balancete (cada uma com classif/classifRaw, saldo_final, nome, reduzido)
+// e separa pela CLASSIFICAÇÃO contábil: grupo 1 = Ativo, grupo 2 = Passivo + PL. Calcula o
+// RESULTADO do período pelos grupos de resultado (3=receita, 4=custo, 5=despesa):
+//   resultado = receita − custo − despesa
+// Esse resultado (que é igual a Ativo − Passivo+PL num razão fechado) entra no PL como
+// "Lucros do Exercício" (se ≥ 0) ou "Prejuízo do Exercício" (se < 0), fechando o balanço:
+//   Ativo = (Passivo + PL das contas) + Resultado.
+export function apurarBalanco(analiticas) {
+  const grp = l => String(l.classif ?? l.classifRaw ?? '').replace(/\D/g, '').charAt(0)
+  const val = l => Number(l.saldo_final) || 0
+  const somaGrupo = d => (analiticas || []).filter(l => grp(l) === d).reduce((s, l) => s + val(l), 0)
+  const receita = -somaGrupo('3'), custo = somaGrupo('4'), despesa = somaGrupo('5')
+  const resultado = receita - custo - despesa
+  const ativo = (analiticas || []).filter(l => grp(l) === '1')
+  const passivo = (analiticas || []).filter(l => grp(l) === '2')
+  const totAtivo = ativo.reduce((s, l) => s + val(l), 0)            // devedor (+)
+  const totPassivoContas = -passivo.reduce((s, l) => s + val(l), 0) // credor → positivo
+  return {
+    ativo, passivo, resultado,
+    labelResultado: resultado >= 0 ? 'Lucros do Exercício' : 'Prejuízo do Exercício',
+    receita, custo, despesa,
+    totAtivo,
+    totPassivoContas,
+    totPassivo: totPassivoContas + resultado, // com o resultado, fecha: = totAtivo
+  }
+}
+
 // Comprimentos acumulados de cada nível da máscara: "9.9.9.999.9999" → [1,2,3,6,10].
 function cortesDaMascara(mask) {
   const tams = String(mask || '').split('.').map(s => s.length).filter(Boolean)

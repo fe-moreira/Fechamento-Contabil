@@ -4,7 +4,7 @@ import { useAppData, useRelatorio } from '../lib/appData'
 import { apurarDistribuicao } from '../lib/distribuicao'
 import { apurarBancoResultado } from '../lib/bancoResultado'
 import { apurarVariacoes } from '../lib/variacoes'
-import { parsePlano, contasConciliacaoAbertas, montarBalancete } from '../lib/balancete'
+import { parsePlano, contasConciliacaoAbertas, montarBalancete, apurarBalanco } from '../lib/balancete'
 import { gerarExcelTimbrado } from '../lib/excel'
 import { abreBalanceteDominio, abreDreDominio, abreCartaPendencias } from '../lib/pdf'
 import { montarDRE, montarResumoBalancete } from '../lib/dre'
@@ -118,14 +118,17 @@ export default function Relatorios() {
   // 1090) caía no Ativo, e o balanço não fechava. Agora usa a classificação (1.x / 2.x).
   // Passivo/PL é mostrado na natureza (saldo credor invertido p/ ficar positivo); contas
   // redutoras aparecem com o sinal trocado (ex.: distribuição de lucro negativa no PL).
-  const g1c = l => String(l.classif || '').replace(/\D/g, '').charAt(0)
-  const folhasBal = hier.filter(l => l.folha)
-  const ativo = folhasBal.filter(l => g1c(l) === '1')
-    .map(l => ({ conta: l.reduzido || '', nome: l.nome, saldo_final: Number(l.saldo_final) || 0 }))
-  const passivo = folhasBal.filter(l => g1c(l) === '2')
-    .map(l => ({ conta: l.reduzido || '', nome: l.nome, saldo_final: -(Number(l.saldo_final) || 0) }))
-  const totAtivo = ativo.reduce((s, l) => s + l.saldo_final, 0)
-  const totPassivo = passivo.reduce((s, l) => s + l.saldo_final, 0)
+  // FONTE ÚNICA (apurarBalanco): separa Ativo/Passivo pela classificação e calcula o resultado
+  // do período, que entra no PL como Lucros/Prejuízo do Exercício e fecha o balanço. O mesmo
+  // cálculo alimenta o Balanço das Demonstrações Contábeis.
+  const bal = apurarBalanco(hier.filter(l => l.folha))
+  const ativo = bal.ativo.map(l => ({ conta: l.reduzido || '', nome: l.nome, saldo_final: Number(l.saldo_final) || 0 }))
+  const passivo = [
+    ...bal.passivo.map(l => ({ conta: l.reduzido || '', nome: l.nome, saldo_final: -(Number(l.saldo_final) || 0) })),
+    { conta: '', nome: bal.labelResultado, saldo_final: bal.resultado, resultado: true },
+  ]
+  const totAtivo = bal.totAtivo
+  const totPassivo = bal.totPassivo
 
   // Despesas indedutíveis (LALUR): justificativas com dedutibilidade indedutível.
   const indedutiveis = auditoria.filter(a => String(a.dedutibilidade || '').toLowerCase().startsWith('indedut'))
@@ -843,9 +846,11 @@ function GrupoBalanco({ titulo, contas, total }) {
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <tbody>
             {contas.map((l, i) => (
-              <tr key={i} style={{ borderTop: i ? `1px solid ${theme.border}` : 'none' }}>
-                <td style={td}><span style={{ color: theme.sub, fontSize: 11 }}>{l.conta}</span> {l.nome || ''}</td>
-                <td style={tdNum}>{money(l.saldo_final)}</td>
+              <tr key={i} style={{ borderTop: i ? `1px solid ${theme.border}` : 'none', background: l.resultado ? theme.input : 'transparent' }}>
+                <td style={{ ...td, fontWeight: l.resultado ? 700 : 400, fontStyle: l.resultado ? 'italic' : 'normal' }}>
+                  <span style={{ color: theme.sub, fontSize: 11 }}>{l.conta}</span> {l.nome || ''}
+                </td>
+                <td style={{ ...tdNum, fontWeight: l.resultado ? 700 : 400 }}>{money(l.saldo_final)}</td>
               </tr>
             ))}
           </tbody>
