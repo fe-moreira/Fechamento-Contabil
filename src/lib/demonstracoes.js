@@ -239,11 +239,15 @@ export function montarDadosDemonstracoes(perMonth, razaoReceita, anoPerMonth) {
 
 // ---------------------------------------------------------------------------
 // BUILDER do documento HTML (folhas). blocos: Set com 'cockpit','dre','balancete','balanco','dfc','comparativo'.
-export function abrirDemonstracoesContabeis({ empresa, cnpj, periodoLabel, periodoIni, periodoFim, blocos, dados, modelo = 'sistema' }) {
+export function abrirDemonstracoesContabeis({ empresa, cnpj, periodoLabel, periodoIni, periodoFim, blocos, dados, modelo = 'sistema', nivel = 'tudo' }) {
   const B = new Set(blocos)
   const { agg, dre, cockpit, dfc, meses, contasRes } = dados
   const c = cockpit
   const emissao = new Date().toLocaleDateString('pt-BR')
+  // Nível de detalhe (igual ao Comparativo): 'tudo' = todas as contas; N = só sintéticas até o
+  // nível N (colapsa as analíticas e as sintéticas mais fundas). Aplica ao Balancete e ao Balanço.
+  const nvl = nivel === 'tudo' ? 'tudo' : Number(nivel)
+  const passaNivel = l => nvl === 'tudo' || (l.sintetica && (l.grau || 1) <= nvl)
   let folha = 1 // a capa é a folha 1 (sem marca); os blocos seguintes começam na 2
   const marca = () => `<div class="pmark">Folha ${++folha}</div>`
   const bandCmp = per => `<div class="cmp"><div class="wm">Attentive</div><div class="per">Período</div><div class="perv">${esc(per)}</div></div>`
@@ -387,7 +391,7 @@ export function abrirDemonstracoesContabeis({ empresa, cnpj, periodoLabel, perio
       return `<tr class="${cls}"><td>${esc(l.reduzido)}</td><td>${esc(l.classif)}</td><td class="${ind}">${esc(l.nome)}</td><td class="r">${dc(l.saldo_inicial)}</td><td class="r">${brl(l.debito)}</td><td class="r">${brl(l.credito)}</td><td class="r">${dc(l.saldo_final)}</td></tr>`
     }
     const folhaBal = (titulo, sub, h3, grupos, folhaNo, rodape) => {
-      const rows = agg.filter(l => temMov(l) && grupos.includes(g1(l))).map(linhaBal).join('')
+      const rows = agg.filter(l => temMov(l) && grupos.includes(g1(l)) && passaNivel(l)).map(linhaBal).join('')
       if (!rows) return
       paginas.push(`
   <div class="page">
@@ -420,7 +424,7 @@ export function abrirDemonstracoesContabeis({ empresa, cnpj, periodoLabel, perio
   // ---- Balanço Patrimonial (modelo Domínio) — hierárquico, 2 colunas (Ativo | Passivo+PL) ----
   if (B.has('balanco')) {
     // Duas colunas independentes, top-down: grupo → subgrupo → sintéticas → analíticas, com D/C.
-    const lado = grupo => agg.filter(l => g1(l) === grupo && Math.abs(num(l.saldo_final)) > 0.005)
+    const lado = grupo => agg.filter(l => g1(l) === grupo && Math.abs(num(l.saldo_final)) > 0.005 && passaNivel(l))
       .sort((a, b) => String(a.classifRaw || '').localeCompare(String(b.classifRaw || ''), 'pt-BR', { numeric: true }))
     const A = lado('1'), P = lado('2')
     const cellDesc = l => {

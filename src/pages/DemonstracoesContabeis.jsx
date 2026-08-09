@@ -43,6 +43,7 @@ export default function DemonstracoesContabeis() {
   const [marcados, setMarcados] = useState(new Set(BLOCOS.map(b => b.id)))
   const toggle = id => setMarcados(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
   const [modelo, setModelo] = useState('sistema') // 'sistema' (visual Attentive) | 'dominio' (fac-símile)
+  const [nivel, setNivel] = useState('tudo')      // 'tudo' | 1..5 — nível de detalhe do Balancete/Balanço
 
   const [gerando, setGerando] = useState(false)
   const [msg, setMsg] = useState('')
@@ -99,7 +100,7 @@ export default function DemonstracoesContabeis() {
       const ok = abrirDemonstracoesContabeis({
         empresa: empresaNome, cnpj: empresa?.cnpj || '',
         periodoLabel: label, periodoIni: priBR(pri.ano, pri.mes), periodoFim: diaBR(ult.ano, ult.mes),
-        blocos: marcados, dados, modelo,
+        blocos: marcados, dados, modelo, nivel,
       })
       if (ok) setMsg(`Relatório gerado com ${doPeriodo.length} competência(s) — abriu a janela de impressão (salvar como PDF).`)
     } catch (e) {
@@ -206,6 +207,17 @@ export default function DemonstracoesContabeis() {
         <p style={{ fontSize: 11.5, color: theme.sub, margin: '10px 2px 0' }}>
           Muda só a <b>aparência</b> das demonstrações no padrão Domínio (DRE, Balancete, Balanço, Comparativo). Os dados e a estrutura são os mesmos. Capa e Cockpit ficam sempre no visual Attentive.
         </p>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 14, flexWrap: 'wrap' }}>
+          <label style={{ fontSize: 12.5, color: theme.sub, fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <i className="ti ti-stack-2" /> Nível de detalhe (Balancete e Balanço):
+          </label>
+          <select className="input" style={{ width: 'auto', fontSize: 12.5, padding: '6px 10px' }} value={String(nivel)}
+            onChange={e => setNivel(e.target.value === 'tudo' ? 'tudo' : Number(e.target.value))}>
+            <option value="tudo">Tudo (todas as contas)</option>
+            {[1, 2, 3, 4, 5].map(n => <option key={n} value={n}>Até o nível {n}</option>)}
+          </select>
+          <span style={{ fontSize: 11.5, color: theme.sub }}>igual ao Comparativo — nível 1 = só grupos; Tudo = até as analíticas.</span>
+        </div>
       </div>
 
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
