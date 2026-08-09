@@ -503,8 +503,8 @@ export default function Relatorios() {
                   borderTop: r.sub ? `1px solid ${theme.border}` : 'none',
                   background: r.sub ? theme.input : 'transparent',
                 }}>
-                  <span style={{ fontSize: r.sub ? 13.5 : 13, fontWeight: r.sub ? 700 : 400, color: r.sub ? theme.text : theme.sub, paddingLeft: r.sub ? 0 : 12 }}>{r.label}</span>
-                  <span style={{ fontSize: r.sub ? 14.5 : 13, fontWeight: r.sub ? 800 : 500, fontVariantNumeric: 'tabular-nums', color: r.valor < 0 ? theme.red : (r.sub ? theme.text : theme.text) }}>
+                  <span style={{ fontSize: r.sub ? 13.5 : 13, fontWeight: r.sub ? 700 : 400, color: (/lucro|preju[ií]zo|resultado/i.test(r.label) ? (r.valor >= 0 ? '#0a7d33' : '#c0341d') : (r.sub ? theme.text : theme.sub)), paddingLeft: r.sub ? 0 : 12 }}>{r.label}</span>
+                  <span style={{ fontSize: r.sub ? 14.5 : 13, fontWeight: r.sub ? 800 : 500, fontVariantNumeric: 'tabular-nums', color: (/lucro|preju[ií]zo|resultado/i.test(r.label) ? (r.valor >= 0 ? '#0a7d33' : '#c0341d') : (r.valor < 0 ? theme.red : theme.text)) }}>
                     {r.valor < 0 ? `(${money(Math.abs(r.valor)).replace('R$', 'R$ ').trim()})` : money(r.valor)}
                   </span>
                 </div>

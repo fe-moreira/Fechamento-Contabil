@@ -249,6 +249,8 @@ export default function ComparativoCompleto({ empresaId, empresaNome, competenci
   }
 
   const celTxt = v => (v == null || v === 0) ? '—' : moneyDC(v)
+  // Resultado: crédito (saldo < 0) = lucro → verde; débito (> 0) = prejuízo → vermelho.
+  const corRes = v => (v == null || Math.abs(v) < 0.005) ? theme.sub : (v < 0 ? '#0a7d33' : '#c0341d')
   const resumoMeses = mesesSel.size === 0 ? 'Todos os meses' : (mesesSel.size <= 3 ? meses.filter(m => mesesSel.has(m)).map(m => MES[m - 1]).join(', ') : `${mesesSel.size} meses`)
   const resumoGrupos = gruposSel.size === GRUPOS.length ? 'Todos os grupos' : (gruposSel.size <= 2 ? GRUPOS.filter(g => gruposSel.has(g.k)).map(g => g.nome).join(', ') : `${gruposSel.size} grupos`)
 
@@ -310,14 +312,14 @@ export default function ComparativoCompleto({ empresaId, empresaNome, competenci
             <tr style={{ borderTop: `2px solid ${theme.border}`, background: theme.input, fontWeight: 700 }}>
               <td style={{ ...td }} colSpan={3}>RESULTADO DO MÊS</td>
               {temAbertura && <td style={tdNum}>—</td>}
-              {mesesVis.map(m => <td key={m} style={tdNum}>{celTxt(resMes(m))}</td>)}
-              <td style={{ ...tdNum }}>{celTxt(resMesTotal)}</td>
+              {mesesVis.map(m => <td key={m} style={{ ...tdNum, color: corRes(resMes(m)) }}>{celTxt(resMes(m))}</td>)}
+              <td style={{ ...tdNum, color: corRes(resMesTotal) }}>{celTxt(resMesTotal)}</td>
             </tr>
             <tr style={{ borderTop: `1px solid ${theme.border}`, background: theme.input, fontWeight: 800 }}>
               <td style={{ ...td }} colSpan={3}>RESULTADO DO EXERCÍCIO</td>
               {temAbertura && <td style={tdNum}>—</td>}
-              {mesesVis.map(m => <td key={m} style={tdNum}>{celTxt(resExerc(m))}</td>)}
-              <td style={{ ...tdNum }}>{celTxt(resMesTotal)}</td>
+              {mesesVis.map(m => <td key={m} style={{ ...tdNum, color: corRes(resExerc(m)) }}>{celTxt(resExerc(m))}</td>)}
+              <td style={{ ...tdNum, color: corRes(resMesTotal) }}>{celTxt(resMesTotal)}</td>
             </tr>
           </tfoot>
         </table>
