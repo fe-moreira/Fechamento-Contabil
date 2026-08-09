@@ -239,7 +239,7 @@ export function montarDadosDemonstracoes(perMonth, razaoReceita, anoPerMonth) {
 
 // ---------------------------------------------------------------------------
 // BUILDER do documento HTML (folhas). blocos: Set com 'cockpit','dre','balancete','balanco','dfc','comparativo'.
-export function abrirDemonstracoesContabeis({ empresa, cnpj, periodoLabel, periodoIni, periodoFim, blocos, dados }) {
+export function abrirDemonstracoesContabeis({ empresa, cnpj, periodoLabel, periodoIni, periodoFim, blocos, dados, modelo = 'sistema' }) {
   const B = new Set(blocos)
   const { agg, dre, cockpit, dfc, meses, contasRes } = dados
   const c = cockpit
@@ -538,7 +538,7 @@ export function abrirDemonstracoesContabeis({ empresa, cnpj, periodoLabel, perio
   }
 
   const html = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Demonstrações Contábeis — ${esc(empresa)}</title>
-<style>${CSS}</style></head><body>${paginas.join('\n')}
+<style>${CSS}</style></head><body class="modelo-${modelo === 'dominio' ? 'dominio' : 'sistema'}">${paginas.join('\n')}
 <script>window.onload=function(){setTimeout(function(){window.print()},350)}</script>
 </body></html>`
   const w = window.open('', '_blank')
@@ -675,6 +675,19 @@ p.lead .up{color:var(--green);font-weight:700}
 .dtab td.i1{padding-left:16px}.dtab td.i2{padding-left:26px}
 .dtab td.sep,.dtab th.sep{width:14px;min-width:14px;border-left:1px solid #000;border-bottom:none;background:#fff;padding:0}
 .baltab td,.baltab th{font-size:10.5px}
+/* Modelo SISTEMA (padrão): reveste os quadros "Domínio" (DRE/Balancete/Balanço/Comparativo)
+   no visual Attentive — mesma estrutura, tipografia Calibri/Cambria e cores da marca.
+   Modelo DOMÍNIO: sem override → fica o fac-símile preto/branco em Arial. */
+.modelo-sistema .dominio{border:1px solid var(--line);border-radius:10px;background:var(--paper);color:var(--ink);font-family:var(--sans)}
+.modelo-sistema .dominio .cab{border-bottom:1px solid var(--line);background:var(--soft)}
+.modelo-sistema .dominio .cab tr+tr td{border-top:1px solid var(--line)}
+.modelo-sistema .dominio h3{font-family:var(--serif);color:var(--band);letter-spacing:.2px}
+.modelo-sistema .dtab th{background:var(--soft);border-top:none;border-bottom:1.5px solid var(--band);color:var(--sub);font-weight:700}
+.modelo-sistema .dtab td{border-bottom:1px solid var(--line)}
+.modelo-sistema .dtab tr.g td{background:rgba(74,124,255,.09);color:var(--band);border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.modelo-sistema .dtab tr.n td{background:#f7f9fe}
+.modelo-sistema .dtab tr.s td{background:var(--soft);border-top:1px solid var(--band);border-bottom:1.5px solid var(--band);color:var(--band)}
+.modelo-sistema .dtab td.sep,.modelo-sistema .dtab th.sep{border-left:1px solid var(--line);background:transparent}
 /* Impressão: cada folha vira uma página; comparativo em paisagem */
 @page{size:A4 portrait;margin:14mm}
 @page land{size:A4 landscape;margin:12mm}

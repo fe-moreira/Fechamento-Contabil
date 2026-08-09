@@ -42,6 +42,7 @@ export default function DemonstracoesContabeis() {
   const setR = (k, v) => setRef(o => ({ ...o, [k]: v }))
   const [marcados, setMarcados] = useState(new Set(BLOCOS.map(b => b.id)))
   const toggle = id => setMarcados(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
+  const [modelo, setModelo] = useState('sistema') // 'sistema' (visual Attentive) | 'dominio' (fac-símile)
 
   const [gerando, setGerando] = useState(false)
   const [msg, setMsg] = useState('')
@@ -98,7 +99,7 @@ export default function DemonstracoesContabeis() {
       const ok = abrirDemonstracoesContabeis({
         empresa: empresaNome, cnpj: empresa?.cnpj || '',
         periodoLabel: label, periodoIni: priBR(pri.ano, pri.mes), periodoFim: diaBR(ult.ano, ult.mes),
-        blocos: marcados, dados,
+        blocos: marcados, dados, modelo,
       })
       if (ok) setMsg(`Relatório gerado com ${doPeriodo.length} competência(s) — abriu a janela de impressão (salvar como PDF).`)
     } catch (e) {
@@ -177,6 +178,33 @@ export default function DemonstracoesContabeis() {
         </div>
         <p style={{ fontSize: 11.5, color: theme.sub, margin: '10px 2px 0' }}>
           O relatório segue a sequência: Capa/desempenho → Cockpit → DRE → Balancete → Balanço → DFC → Comparativo (paisagem).
+        </p>
+      </div>
+
+      {/* Modelo do relatório (só o visual de DRE/Balancete/Balanço/Comparativo) */}
+      <div style={card}>
+        <div style={secTit}>Modelo do relatório</div>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          {[
+            { id: 'sistema', label: 'Sistema', desc: 'visual Attentive — tabelas limpas (Cambria/Calibri)' },
+            { id: 'dominio', label: 'Domínio', desc: 'fac-símile preto/branco, igual ao Domínio (Arial)' },
+          ].map(m => {
+            const on = modelo === m.id
+            return (
+              <button key={m.id} onClick={() => setModelo(m.id)}
+                style={{ flex: 1, minWidth: 200, textAlign: 'left', cursor: 'pointer',
+                  border: `1px solid ${on ? theme.accent : theme.cb}`, background: on ? 'rgba(74,124,255,.08)' : theme.card,
+                  borderRadius: 10, padding: '11px 13px' }}>
+                <span style={{ display: 'block', fontSize: 13.5, fontWeight: 600, color: theme.text }}>
+                  {on ? '● ' : '○ '}{m.label}
+                </span>
+                <span style={{ fontSize: 11.5, color: theme.sub }}>{m.desc}</span>
+              </button>
+            )
+          })}
+        </div>
+        <p style={{ fontSize: 11.5, color: theme.sub, margin: '10px 2px 0' }}>
+          Muda só a <b>aparência</b> das demonstrações no padrão Domínio (DRE, Balancete, Balanço, Comparativo). Os dados e a estrutura são os mesmos. Capa e Cockpit ficam sempre no visual Attentive.
         </p>
       </div>
 
