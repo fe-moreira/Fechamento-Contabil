@@ -230,10 +230,18 @@ export function montarDadosDemonstracoes(perMonth, razaoReceita, anoPerMonth, pe
   // Matriz do comparativo (contas de resultado, mês a mês) — usa a faixa própria se houver.
   const pmComp = (perMonthComp && perMonthComp.length) ? perMonthComp : perMonth
   const meses = pmComp.map(m => m.mes)
+  // Estrutura da CLASSIFICAÇÃO (igual ao Comparativo de Movimento dos Relatórios): inclui
+  // sintéticas E analíticas dos grupos de resultado (3/4/5), com classif/grau, para render
+  // hierárquico ordenado pela classificação (não pelo código).
   const contasRes = {}
-  pmComp.forEach(mm => (mm.linhas || []).filter(l => !l.sintetica && ['3', '4', '5'].includes(g1(l))).forEach(l => {
-    const k = String(l.reduzido)
-    if (!contasRes[k]) contasRes[k] = { cod: l.reduzido, nome: l.nome, grupo: g1(l), vals: {} }
+  pmComp.forEach(mm => (mm.linhas || []).filter(l => ['3', '4', '5'].includes(g1(l))).forEach(l => {
+    const classifRaw = String(l.classifRaw || l.classif || '')
+    const k = l.sintetica ? ('S:' + classifRaw) : ('#' + String(l.reduzido))
+    if (!contasRes[k]) contasRes[k] = {
+      cod: l.reduzido || '', nome: l.nome, grupo: g1(l),
+      classif: l.classif, classifRaw, grau: l.grau || classifRaw.split('.').length, sintetica: !!l.sintetica,
+      vals: {},
+    }
     contasRes[k].vals[mm.mes] = (contasRes[k].vals[mm.mes] || 0) + num(l.saldo_final)
     contasRes[k].nome = l.nome
   }))
@@ -359,8 +367,11 @@ export function abrirDemonstracoesContabeis({ empresa, cnpj, periodoLabel, perio
 
   // ---- DRE (Domínio) ----
   if (B.has('dre')) {
+    // Linhas de resultado (lucro/prejuízo) destacadas: lucro (≥0) verde, prejuízo (<0) vermelho.
+    const ehResultado = lbl => /lucro|preju[ií]zo|resultado/i.test(lbl)
+    const corDre = (lbl, v) => ehResultado(lbl) ? ` style="color:${(Number(v) || 0) >= 0 ? '#0a7d33' : '#c0341d'};font-weight:bold"` : ''
     const linhasDre = dre.map(r => r.sub
-      ? `<tr class="s"><td>${esc(r.label)}</td><td class="r"></td><td class="r">${par(r.valor)}</td></tr>`
+      ? `<tr class="s"><td${corDre(r.label, r.valor)}>${esc(r.label)}</td><td class="r"></td><td class="r"${corDre(r.label, r.valor)}>${par(r.valor)}</td></tr>`
       : `<tr><td>${esc(r.label)}</td><td class="r">${par(r.valor)}</td><td class="r">${par(r.valor)}</td></tr>`).join('')
     paginas.push(`
   <div class="page">
@@ -501,32 +512,35 @@ export function abrirDemonstracoesContabeis({ empresa, cnpj, periodoLabel, perio
   // ---- Comparativo de Movimento (paisagem) ----
   if (B.has('comparativo')) {
     const thMeses = meses.map(m => `<th class="r">${MESES[m - 1]}</th>`).join('')
-    const grupoLabel = { '3': 'RECEITAS', '4': 'CUSTOS', '5': 'DESPESAS' }
-    let corpo = ''
-    const porMesResultado = {}
-    for (const grp of ['3', '4', '5']) {
-      const contas = Object.values(contasRes).filter(x => x.grupo === grp).sort((a, b) => String(a.cod).localeCompare(String(b.cod)))
-      const tot = {}; meses.forEach(m => { tot[m] = contas.reduce((s, x) => s + (x.vals[m] || 0), 0) })
-      const totGeral = meses.reduce((s, m) => s + tot[m], 0)
-      corpo += `<tr class="g"><td>${grp}</td><td>${grupoLabel[grp]}</td>${meses.map(m => `<td class="r">${brl(Math.abs(tot[m]))}</td>`).join('')}<td class="r">${brl(Math.abs(totGeral))}</td></tr>`
-      corpo += contas.map(x => {
-        const tt = meses.reduce((s, m) => s + (x.vals[m] || 0), 0)
-        return `<tr><td>${esc(x.cod)}</td><td>${esc(x.nome)}</td>${meses.map(m => `<td class="r">${brl(Math.abs(x.vals[m] || 0))}</td>`).join('')}<td class="r">${brl(Math.abs(tt))}</td></tr>`
-      }).join('')
-      meses.forEach(m => { porMesResultado[m] = (porMesResultado[m] || 0) + (grp === '3' ? -tot[m] : -tot[m]) })
-    }
-    // resultado do mês = -(receita+custo+despesa somados com sinal do saldo_final): receita credora(neg), custo/desp devedora(pos)
+    // Cada valor sai com a natureza do saldo (padrão Domínio): devedor = D, credor = C.
+    const dcv = v => { const a = Math.abs(v || 0); return a < 0.005 ? '—' : `${brl(a)} ${v > 0 ? 'D' : 'C'}` }
+    // Resultado: lucro (≥0) verde, prejuízo (<0) vermelho — pra destacar pro cliente.
+    const cor = v => v >= 0 ? '#0a7d33' : '#c0341d'
+    const brlCor = v => `<span style="color:${cor(v)};font-weight:bold">${brl(v)}</span>`
+    // Estrutura da classificação: sintéticas + analíticas ordenadas pela CLASSIFICAÇÃO (igual ao
+    // Comparativo de Movimento dos Relatórios), indentado por nível, com D/C em cada valor.
+    const contas = Object.values(contasRes)
+      .sort((a, b) => String(a.classifRaw || '').localeCompare(String(b.classifRaw || ''), 'pt-BR', { numeric: true }))
+    let corpo = contas.map(x => {
+      const tt = meses.reduce((s, m) => s + (x.vals[m] || 0), 0)
+      const ind = 4 + Math.max(0, (x.grau || 1) - 1) * 12
+      const badge = x.sintetica ? `<span class="niv">N${x.grau || 1}</span> ` : ''
+      return `<tr class="${x.sintetica ? 'g' : ''}"><td>${esc(x.cod || '')}</td><td>${esc(x.classif || '')}</td>` +
+        `<td style="padding-left:${ind}px${x.sintetica ? ';font-weight:bold' : ''}">${badge}${esc(x.nome)}</td>` +
+        `${meses.map(m => `<td class="r">${dcv(x.vals[m] || 0)}</td>`).join('')}<td class="r">${dcv(tt)}</td></tr>`
+    }).join('')
+    // Resultado do mês/exercício das ANALÍTICAS (receita credora neg, custo/despesa devedora pos).
     const resMes = {}; let acum = 0; const acumMes = {}
+    const analitRes = Object.values(contasRes).filter(x => !x.sintetica)
     meses.forEach(m => {
-      const contas = Object.values(contasRes)
-      const r = -contas.filter(x => x.grupo === '3').reduce((s, x) => s + (x.vals[m] || 0), 0)
-      const cu = contas.filter(x => x.grupo === '4').reduce((s, x) => s + (x.vals[m] || 0), 0)
-      const de = contas.filter(x => x.grupo === '5').reduce((s, x) => s + (x.vals[m] || 0), 0)
+      const r = -analitRes.filter(x => x.grupo === '3').reduce((s, x) => s + (x.vals[m] || 0), 0)
+      const cu = analitRes.filter(x => x.grupo === '4').reduce((s, x) => s + (x.vals[m] || 0), 0)
+      const de = analitRes.filter(x => x.grupo === '5').reduce((s, x) => s + (x.vals[m] || 0), 0)
       resMes[m] = r - cu - de; acum += resMes[m]; acumMes[m] = acum
     })
     const totRes = meses.reduce((s, m) => s + resMes[m], 0)
-    corpo += `<tr class="s"><td></td><td>RESULTADO DO MÊS</td>${meses.map(m => `<td class="r">${brl(resMes[m])}</td>`).join('')}<td class="r">${brl(totRes)}</td></tr>`
-    corpo += `<tr class="s"><td></td><td>RESULTADO DO EXERCÍCIO (acumulado)</td>${meses.map(m => `<td class="r">${brl(acumMes[m])}</td>`).join('')}<td class="r">${brl(totRes)}</td></tr>`
+    corpo += `<tr class="s"><td></td><td></td><td>RESULTADO DO MÊS</td>${meses.map(m => `<td class="r">${brlCor(resMes[m])}</td>`).join('')}<td class="r">${brlCor(totRes)}</td></tr>`
+    corpo += `<tr class="s"><td></td><td></td><td>RESULTADO DO EXERCÍCIO (acumulado)</td>${meses.map(m => `<td class="r">${brlCor(acumMes[m])}</td>`).join('')}<td class="r">${brlCor(totRes)}</td></tr>`
     paginas.push(`
   <div class="page land">
     ${marca().replace('</div>', ' · paisagem</div>')}
@@ -540,7 +554,7 @@ export function abrirDemonstracoesContabeis({ empresa, cnpj, periodoLabel, perio
         </table></div>
         <h3>COMPARATIVO DE MOVIMENTO — CONTAS DE RESULTADO</h3>
         <div style="overflow:auto"><table class="dtab">
-          <tr><th>Código</th><th>Descrição da conta</th>${thMeses}<th class="r">Total</th></tr>
+          <tr><th>Conta</th><th>Classificação</th><th>Nome da conta</th>${thMeses}<th class="r">Total</th></tr>
           ${corpo}
         </table></div>
       </div>
@@ -688,6 +702,7 @@ p.lead .up{color:var(--green);font-weight:700}
 .dtab td.i1{padding-left:16px}.dtab td.i2{padding-left:26px}
 .dtab td.sep,.dtab th.sep{width:14px;min-width:14px;border-left:1px solid #000;border-bottom:none;background:#fff;padding:0}
 .baltab td,.baltab th{font-size:10.5px}
+.dtab .niv{font-size:8px;background:#e6ecfb;color:#3355aa;border-radius:4px;padding:1px 4px;font-weight:bold;vertical-align:middle}
 /* Modelo SISTEMA (padrão): reveste os quadros "Domínio" (DRE/Balancete/Balanço/Comparativo)
    no visual Attentive — mesma estrutura, tipografia Calibri/Cambria e cores da marca.
    Modelo DOMÍNIO: sem override → fica o fac-símile preto/branco em Arial. */

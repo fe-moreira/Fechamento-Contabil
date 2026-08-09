@@ -67,8 +67,10 @@ export function abreDreDominio({ empresa = '', cnpj = '', periodoIni = '', perio
   const esc = s => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))
   const fmtP = v => { const n = Number(v) || 0; const a = Math.abs(n).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); return n < -0.005 ? `(${a})` : a }
 
+  // Linhas de resultado (lucro/prejuízo) coloridas: lucro (≥0) verde, prejuízo (<0) vermelho.
+  const corR = (lbl, v) => /lucro|preju[ií]zo|resultado/i.test(lbl) ? ` style="color:${(Number(v) || 0) >= 0 ? '#0a7d33' : '#c0341d'};font-weight:bold"` : ''
   const corpo = (rows || []).map(r => r.sub
-    ? `<tr class="sub"><td class="desc">${esc(r.label)}</td><td class="r"></td><td class="r">${fmtP(r.valor)}</td></tr>`
+    ? `<tr class="sub"><td class="desc"${corR(r.label, r.valor)}>${esc(r.label)}</td><td class="r"></td><td class="r"${corR(r.label, r.valor)}>${fmtP(r.valor)}</td></tr>`
     : `<tr><td class="desc">${esc(r.label)}</td><td class="r">${fmtP(r.valor)}</td><td class="r">${fmtP(r.valor)}</td></tr>`
   ).join('') || `<tr><td colspan="3">Sem dados de resultado.</td></tr>`
 
@@ -119,12 +121,17 @@ export function abreComparativoDominio({ empresa = '', cnpj = '', periodoIni = '
   const esc = s => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))
   const dc = v => { if (v == null) return ''; const n = Number(v) || 0; return Math.abs(n) < 0.005 ? '0,00' : Math.abs(n).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + (n >= 0 ? 'D' : 'C') }
   const thMeses = meses.map(m => `<th class="r">${esc(m)}</th>`).join('')
-  const corpo = (rows || []).map(r => `<tr class="${r.sintetica ? 'sint' : ''}">
+  // Nas linhas de RESULTADO, o valor sai colorido: crédito (lucro) verde, débito (prejuízo) vermelho.
+  const cel = (v, res) => res ? `<td class="r" style="color:${(Number(v) || 0) < -0.005 ? '#0a7d33' : (Number(v) || 0) > 0.005 ? '#c0341d' : '#666'};font-weight:bold">${dc(v)}</td>` : `<td class="r">${dc(v)}</td>`
+  const corpo = (rows || []).map(r => {
+    const res = r.sintetica && /resultado/i.test(r.nome || '')
+    return `<tr class="${r.sintetica ? 'sint' : ''}">
       <td class="cod">${esc(r.cod || '')}</td>
       <td class="cla">${esc(r.classif || '')}</td>
       <td class="desc">${esc(r.nome || '')}</td>
-      ${r.vals.map(v => `<td class="r">${dc(v)}</td>`).join('')}
-    </tr>`).join('') || `<tr><td colspan="${3 + meses.length}">Sem dados no comparativo.</td></tr>`
+      ${r.vals.map(v => cel(v, res)).join('')}
+    </tr>`
+  }).join('') || `<tr><td colspan="${3 + meses.length}">Sem dados no comparativo.</td></tr>`
 
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>Comparativo de Movimento - ${esc(empresa)}</title>
     <style>
