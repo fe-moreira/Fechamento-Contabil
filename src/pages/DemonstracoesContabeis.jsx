@@ -43,7 +43,7 @@ export default function DemonstracoesContabeis() {
   const [marcados, setMarcados] = useState(new Set(BLOCOS.map(b => b.id)))
   const toggle = id => setMarcados(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
   const [modelo, setModelo] = useState('sistema') // 'sistema' (visual Attentive) | 'dominio' (fac-símile)
-  const [nivel, setNivel] = useState('tudo')      // 'tudo' | 1..5 — nível de detalhe do Balanço
+  const [nivel, setNivel] = useState(4)           // 'tudo' | 1..5 — nível de detalhe do Balanço (padrão: 4)
   // Faixa de meses do Comparativo de Movimento (colunas), independente do período do relatório.
   const [compDe, setCompDe] = useState(`${anoAtual}-01`)
   const [compAte, setCompAte] = useState(`${anoAtual}-${String(mesAtual).padStart(2, '0')}`)

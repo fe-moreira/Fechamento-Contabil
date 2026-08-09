@@ -41,7 +41,7 @@ export default function Relatorios() {
   const { empresaId, empresaNome, competencia, empresas } = useAppData()
   const cnpj = empresas?.find(e => e.id === empresaId)?.cnpj
   const [gerandoDom, setGerandoDom] = useState(false)
-  const [nivelBal, setNivelBal] = useState('tudo') // nível de detalhe do balancete (igual ao Comparativo)
+  const [nivelBal, setNivelBal] = useState(4)      // nível de detalhe do balancete (padrão: 4)
   const [aba, setAba] = useState('balancete')
   const [cardsAberto, setCardsAberto] = useState(true) // recolher a lista de cards p/ dar espaço ao relatório
 
@@ -122,10 +122,19 @@ export default function Relatorios() {
   // do período, que entra no PL como Lucros/Prejuízo do Exercício e fecha o balanço. O mesmo
   // cálculo alimenta o Balanço das Demonstrações Contábeis.
   const bal = apurarBalanco(hier.filter(l => !l.sintetica))
-  const ativo = bal.ativo.map(l => ({ conta: l.reduzido || '', nome: l.nome, saldo_final: Number(l.saldo_final) || 0 }))
+  // EXIBIÇÃO com NÍVEIS (sintéticas + analíticas), igual ao Comparativo/demonstrativo: mostra
+  // toda a hierarquia do grupo, ordenada pela classificação e indentada por nível. Os TOTAIS e o
+  // resultado vêm do apurarBalanco (só analíticas — as sintéticas são agregados e não somam).
+  const g1c = l => String(l.classif ?? l.classifRaw ?? '').replace(/\D/g, '').charAt(0)
+  const byClassif = (a, b) => String(a.classifRaw || a.classif || '').localeCompare(String(b.classifRaw || b.classif || ''), 'pt-BR', { numeric: true })
+  const ladoBal = (grupo, flip) => hier.filter(l => g1c(l) === grupo).sort(byClassif).map(l => ({
+    conta: l.reduzido || '', nome: l.nome, grau: l.grau || 1, sintetica: l.sintetica,
+    saldo_final: (flip ? -1 : 1) * (Number(l.saldo_final) || 0),
+  }))
+  const ativo = ladoBal('1', false)
   const passivo = [
-    ...bal.passivo.map(l => ({ conta: l.reduzido || '', nome: l.nome, saldo_final: -(Number(l.saldo_final) || 0) })),
-    { conta: '', nome: bal.labelResultado, saldo_final: bal.resultado, resultado: true },
+    ...ladoBal('2', true),
+    { conta: '', nome: bal.labelResultado, saldo_final: bal.resultado, resultado: true, grau: 1 },
   ]
   const totAtivo = bal.totAtivo
   const totPassivo = bal.totPassivo
@@ -845,14 +854,17 @@ function GrupoBalanco({ titulo, contas, total }) {
       ) : (
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <tbody>
-            {contas.map((l, i) => (
-              <tr key={i} style={{ borderTop: i ? `1px solid ${theme.border}` : 'none', background: l.resultado ? theme.input : 'transparent' }}>
-                <td style={{ ...td, fontWeight: l.resultado ? 700 : 400, fontStyle: l.resultado ? 'italic' : 'normal' }}>
-                  <span style={{ color: theme.sub, fontSize: 11 }}>{l.conta}</span> {l.nome || ''}
-                </td>
-                <td style={{ ...tdNum, fontWeight: l.resultado ? 700 : 400 }}>{money(l.saldo_final)}</td>
-              </tr>
-            ))}
+            {contas.map((l, i) => {
+              const forte = l.sintetica || l.resultado
+              return (
+                <tr key={i} style={{ borderTop: i ? `1px solid ${theme.border}` : 'none', background: (l.resultado || l.sintetica) ? theme.input : 'transparent' }}>
+                  <td style={{ ...td, fontWeight: forte ? 700 : 400, fontStyle: l.resultado ? 'italic' : 'normal', paddingLeft: 10 + Math.max(0, (l.grau || 1) - 1) * 15 }}>
+                    <span style={{ color: theme.sub, fontSize: 11 }}>{l.conta}</span> {l.nome || ''}
+                  </td>
+                  <td style={{ ...tdNum, fontWeight: forte ? 700 : 400 }}>{money(l.saldo_final)}</td>
+                </tr>
+              )
+            })}
           </tbody>
           <tfoot>
             <tr style={{ borderTop: `1px solid ${theme.border}`, background: theme.input }}>
