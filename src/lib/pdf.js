@@ -276,7 +276,7 @@ export function abreBalanceteDominio({ empresa = '', cnpj = '', periodoIni = '',
 export function abreBalancoDominio({ empresa = '', cnpj = '', periodoIni = '', periodoFim = '', ativo = [], passivo = [], totAtivo = 0, totPassivo = 0 }) {
   const esc = s => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))
   const fmtP = v => { const n = Number(v) || 0; const a = Math.abs(n).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); return Math.abs(n) < 0.005 ? '0,00' : (n < 0 ? `(${a})` : a) }
-  const desc = l => { const ind = 4 + Math.max(0, (l.grau || 1) - 1) * 12; const b = l.sintetica || l.resultado; return `<td class="desc" style="padding-left:${ind}px${b ? ';font-weight:bold' : ''}${l.resultado ? ';font-style:italic' : ''}">${esc(l.nome || '')}</td>` }
+  const desc = l => { const ind = 4 + Math.max(0, (l.grau || 1) - 1) * 12; const b = l.sintetica || l.resultado; return `<td class="desc" style="padding-left:${ind}px${b ? ';font-weight:bold' : ''}">${esc(l.nome || '')}</td>` }
   const sal = l => `<td class="r"${(l.sintetica || l.resultado) ? ' style="font-weight:bold"' : ''}>${fmtP(l.saldo_final)}</td>`
   const vazio = '<td class="desc"></td><td class="r"></td>'
   const n = Math.max(ativo.length, passivo.length)
