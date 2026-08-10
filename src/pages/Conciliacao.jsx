@@ -676,6 +676,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const [aberturaAj, setAberturaAj] = useState({}) // ajustes por item de saldo inicial: {chave:{nf,entidade,historico}}
   const [acertoNomes, setAcertoNomes] = useState({}) // nome de fornecedor por lançamento de acerto: {uuid: nome}
   const [baixasReabertas, setBaixasReabertas] = useState(new Set()) // baixas por NF que o usuário PUXOU de volta p/ em aberto: {`conta·nfKey`} — não baixa de novo no automático
+  const [conciliadosReabertos, setConciliadosReabertos] = useState(new Set()) // grupos que ZERARAM por NOME e o usuário reabriu: {chaveReabrir} — NÃO conciliam sozinhos de novo (compõem o saldo até baixa manual)
   const [sugestoesRejeitadas, setSugestoesRejeitadas] = useState(new Set()) // sugestões de vínculo que o usuário NÃO aprovou: {chaveSug} — não sugere de novo
   const [modoPorNome, setModoPorNome] = useState({}) // por conta: força "conciliar por nome" ligado/desligado {conta: true|false} — sobrepõe a detecção pelo nome
   // Chave ESTÁVEL de um item de saldo inicial (não muda ao editar NF/nome/histórico): conta +
@@ -695,15 +696,16 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     setAberturaAj(d.aberturaAjustes && typeof d.aberturaAjustes === 'object' ? d.aberturaAjustes : {})
     setAcertoNomes(d.acertoNomes && typeof d.acertoNomes === 'object' ? d.acertoNomes : {})
     setBaixasReabertas(new Set(Array.isArray(d.baixasReabertas) ? d.baixasReabertas : []))
+    setConciliadosReabertos(new Set(Array.isArray(d.conciliadosReabertos) ? d.conciliadosReabertos : []))
     setSugestoesRejeitadas(new Set(Array.isArray(d.sugestoesRejeitadas) ? d.sugestoesRejeitadas : []))
     setModoPorNome(d.modoPorNome && typeof d.modoPorNome === 'object' ? d.modoPorNome : {})
     setSeparados(new Set(Array.isArray(d.separados) ? d.separados : []))
   }
   useEffect(() => { if (empresaId) carregarNomes() }, [empresaId]) // eslint-disable-line react-hooks/exhaustive-deps
-  async function salvarNomes(conf, iso, aliases = nomesAlias, aberAj = aberturaAj, acNomes = acertoNomes, baixasReab = baixasReabertas, sugRej = sugestoesRejeitadas, modoPN = modoPorNome, sep = separados, aliasF = aliasesForcados) {
+  async function salvarNomes(conf, iso, aliases = nomesAlias, aberAj = aberturaAj, acNomes = acertoNomes, baixasReab = baixasReabertas, sugRej = sugestoesRejeitadas, modoPN = modoPorNome, sep = separados, aliasF = aliasesForcados, concReab = conciliadosReabertos) {
     await supabase.from('cargas_cadastro').delete().eq('cliente_id', empresaId).eq('tipo', 'conciliacao_nomes')
     // vigencia é NOT NULL — usa a competência atual (o registro é único por cliente, lido sempre o mais recente).
-    const { error } = await supabase.from('cargas_cadastro').insert({ cliente_id: empresaId, tipo: 'conciliacao_nomes', vigencia: competencia || '00/0000', dados: { confiaveis: [...conf], isolados: [...iso], aliases: aliases || {}, aberturaAjustes: aberAj || {}, acertoNomes: acNomes || {}, baixasReabertas: [...baixasReab], sugestoesRejeitadas: [...sugRej], modoPorNome: modoPN || {}, separados: [...(sep || [])], aliasesForcados: aliasF || {} }, usuario })
+    const { error } = await supabase.from('cargas_cadastro').insert({ cliente_id: empresaId, tipo: 'conciliacao_nomes', vigencia: competencia || '00/0000', dados: { confiaveis: [...conf], isolados: [...iso], aliases: aliases || {}, aberturaAjustes: aberAj || {}, acertoNomes: acNomes || {}, baixasReabertas: [...baixasReab], sugestoesRejeitadas: [...sugRej], modoPorNome: modoPN || {}, separados: [...(sep || [])], aliasesForcados: aliasF || {}, conciliadosReabertos: [...(concReab || [])] }, usuario })
     if (error) { setMsg('Não consegui salvar: ' + error.message); return error }
   }
   // Chave estável de uma linha (para "separar" determinístico): razão pelo id, abertura pela
@@ -817,6 +819,11 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // SAI SEMPRE do em aberto — não depende do grupo do nome zerar inteiro (o resto do nome pode
   // seguir aberto). É a régua do usuário: "cliquei e conciliei → tem que baixar". Ver ATTENTIVE.
   const ehConexaoManual = l => conexoesManuais.has(chaveTrat(l)) || (!l._abertura && !l.acerto && itemUnico(l) && conexoesManuais.has(itemConc(l)))
+  // REABERTO pelo usuário: um grupo que ZEROU POR NOME (automático) e o usuário mandou reabrir
+  // porque não era um par de verdade (NF/valor diferentes). Chave ESTÁVEL (sobrevive à reimport):
+  // abertura → chaveAbertura; razão → item (conta·data·NF); acerto → uuid do acerto.
+  const chaveReabrir = l => l._abertura ? chaveAbertura(l) : (l.acerto ? 'ac:' + String(l.id).replace(/^ac_/, '') : itemConc(l))
+  const reaberto = l => conciliadosReabertos.has(chaveReabrir(l))
   useEffect(() => { carregarTratados() }, [compId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Contas cujo razão compõe esta linha: a própria conta e — quando ela é SINTÉTICA — todas
@@ -1171,7 +1178,9 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // Régua do usuário: "em aberto = só COMPOSIÇÃO (o que NÃO zera); tudo que zera vai pro relatório
   // de conciliação." Então um grupo identificado que SOMA ZERO já é conciliado (título + baixa se
   // compensam) — sem exigir confirmação linha a linha. Mesma lógica de conciliacaoCore.classificarGrupos.
-  const ehResolvida = g => !g.unk && Math.abs(g.total) < 0.005 && g.lancs.length > 0
+  // MAS: um grupo que o usuário REABRIU (zerou por nome mas não era par de verdade) NÃO concilia
+  // sozinho — fica compondo o saldo até uma baixa MANUAL (aí vira conexão manual e sai como par).
+  const ehResolvida = g => !g.unk && Math.abs(g.total) < 0.005 && g.lancs.length > 0 && !g.lancs.some(reaberto)
   const resolvidasEnt = listaTodas.filter(ehResolvida)
   const lista = listaTodas.filter(g => !ehResolvida(g))
 
@@ -1982,6 +1991,17 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       if (!l._abertura && !l.acerto && itemUnico(l)) {
         await supabase.from('auditoria').delete().eq('competencia_id', compId).eq('modulo', 'Conciliação').eq('item', itemConc(l))
       }
+    }
+    // PERSISTE o reabrir: os que zeraram POR NOME (automático, sem par de verdade — NF/valor
+    // diferentes) voltam pro em aberto e NÃO conciliam sozinhos de novo. Ficam compondo o saldo
+    // até você baixar à mão (que aí vira conexão manual). autoConc (estorno↔origem) já foi
+    // desfeito acima, não precisa marcar. A marca some quando a linha some do razão.
+    const paraMarcar = lancs.filter(l => !autoConc.has(l))
+    if (paraMarcar.length) {
+      const s = new Set(conciliadosReabertos)
+      for (const l of paraMarcar) s.add(chaveReabrir(l))
+      setConciliadosReabertos(s)
+      await salvarNomes(nomesConf, nomesIsolados, nomesAlias, aberturaAj, acertoNomes, baixasReabertas, sugestoesRejeitadas, modoPorNome, separados, aliasesForcados, s)
     }
     setMsg(`${lancs.length} lançamento(s) reaberto(s) — voltaram para o em aberto.`)
     carregarTratados(); carregarLanc(); onMudou && onMudou()
