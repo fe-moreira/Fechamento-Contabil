@@ -298,6 +298,7 @@ export default function BaseInformacoes() {
   const [cargaSaldos, setCargaSaldos] = useState(false)   // empresa tem saldo inicial (não é nova)
   const [cargaFeita, setCargaFeita] = useState(false)     // carga inicial já lançada
   const [dist, setDist] = useState(null)   // linha de dist_lucros_config
+  const [resPL, setResPL] = useState(null) // linha de resultado_pl_config (contas de lucro/prejuízo)
   const [regime, setRegime] = useState('') // regime tributário do cliente (habilita o LALUR)
   const [modal, setModal] = useState(null)
   const [aberturaTravada, setAberturaTravada] = useState(false) // competência de abertura fechada
@@ -323,10 +324,17 @@ export default function BaseInformacoes() {
       .eq('cliente_id', empresaId).order('created_at', { ascending: false }).limit(1).maybeSingle()
     setDist(data || null)
   }
+  // Contas de lucro/prejuízo. Tolerante a falha: se a tabela ainda não existir (SQL não rodado),
+  // apenas fica sem config — não quebra a tela.
+  async function carregarResPL() {
+    const { data, error } = await supabase.from('resultado_pl_config').select('*')
+      .eq('cliente_id', empresaId).order('created_at', { ascending: false }).limit(1).maybeSingle()
+    setResPL(error ? null : (data || null))
+  }
   useEffect(() => {
-    setParticularidades([]); setContatos([]); setCargas({}); setPeriodo(''); setDist(null); setCargaSaldos(false); setCargaFeita(false)
+    setParticularidades([]); setContatos([]); setCargas({}); setPeriodo(''); setDist(null); setResPL(null); setCargaSaldos(false); setCargaFeita(false)
     if (!empresaId) return
-    carregarCargas(); carregarDist()
+    carregarCargas(); carregarDist(); carregarResPL()
     supabase.from('clientes').select('particularidades, contatos, competencia_inicio, carga_saldos, carga_inicial_feita, regime_tributario').eq('id', empresaId).single()
       .then(({ data }) => {
         setParticularidades(data?.particularidades || [])
@@ -433,6 +441,14 @@ export default function BaseInformacoes() {
     else await supabase.from('dist_lucros_config').insert({ cliente_id: empresaId, usuario: user?.email, ...cfg })
     await carregarDist(); setModal(null)
   }
+  async function salvarResPL(cfg) {
+    const payload = { conta_lucro: cfg.conta_lucro || null, conta_prejuizo: cfg.conta_prejuizo || null }
+    let error
+    if (resPL) ({ error } = await supabase.from('resultado_pl_config').update(payload).eq('id', resPL.id))
+    else ({ error } = await supabase.from('resultado_pl_config').insert({ cliente_id: empresaId, usuario: user?.email, ...payload }))
+    if (error) { alert('Não foi possível salvar. Rode o SQL de "resultado_pl_config" no Supabase (supabase/schema.sql) e tente de novo.\n\n' + error.message); return }
+    await carregarResPL(); setModal(null)
+  }
 
   return (
     <Wrapper nome={empresaNome}>
@@ -492,6 +508,9 @@ export default function BaseInformacoes() {
         <SimplesCard icon="ti-users" title="Distribuição de lucros" sub="Limite, alíquota e sócios (IRRF 2026)"
           badge={dist ? { txt: 'configurado', cor: theme.green, bg: 'rgba(48,164,108,0.15)' } : null}
           onClick={() => setModal({ tipo: 'dist' })} />
+        <SimplesCard icon="ti-scale" title="Contas de lucros e prejuízos" sub="Amarra o resultado ao PL do balanço"
+          badge={(resPL?.conta_lucro || resPL?.conta_prejuizo) ? { txt: 'configurado', cor: theme.green, bg: 'rgba(48,164,108,0.15)' } : null}
+          onClick={() => setModal({ tipo: 'resultadoPL' })} />
         {(() => {
           const ehLR = /LUCRO REAL/i.test(regime)
           const cfgLalur = cargas.lalur?.at(-1)
@@ -567,6 +586,9 @@ export default function BaseInformacoes() {
       )}
       {modal?.tipo === 'dist' && (
         <ModalDist inicial={dist} empresaId={empresaId} competencia={competencia} empresaNome={empresaNome} planoMap={planoMap} onClose={() => setModal(null)} onSalvar={salvarDist} />
+      )}
+      {modal?.tipo === 'resultadoPL' && (
+        <ModalResultadoPL inicial={resPL} plano={plano} onClose={() => setModal(null)} onSalvar={salvarResPL} />
       )}
       {modal?.tipo === 'lalur' && (
         <ModalLalurConfig empresaId={empresaId} usuario={user?.email} competencia={competencia} regime={regime}
@@ -1730,6 +1752,48 @@ function LinhaTitulo({ titulo, onAdd }) {
       <span style={{ color: theme.sub, fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: .4 }}>{titulo}</span>
       <button className="btn btn-ghost" style={{ fontSize: 12, padding: '4px 10px' }} onClick={onAdd}><i className="ti ti-plus" /> Adicionar</button>
     </div>
+  )
+}
+
+// Config das contas de lucro/prejuízo: uma conta analítica do PL recebe o resultado do exercício
+// no balanço (credor → lucro; devedor → prejuízo). Só efeito visual do balanço.
+function ModalResultadoPL({ inicial, plano = [], onClose, onSalvar }) {
+  const [lucro, setLucro] = useState(inicial?.conta_lucro || '')
+  const [prejuizo, setPrejuizo] = useState(inicial?.conta_prejuizo || '')
+  const info = cod => {
+    if (!cod) return null
+    const p = (plano || []).find(x => String(x.reduzido) === String(cod))
+    if (!p) return { erro: 'conta não encontrada no plano' }
+    return { nome: p.nome, sintetica: p.sintetica, grupo: String(p.classif || '').replace(/\D/g, '').charAt(0) }
+  }
+  const alerta = i => {
+    if (!i) return null
+    if (i.erro) return <span style={{ color: theme.yellow }}> · {i.erro}</span>
+    if (i.sintetica) return <span style={{ color: theme.yellow }}> · é sintética — use uma analítica</span>
+    if (i.grupo !== '2') return <span style={{ color: theme.yellow }}> · fora do Passivo/PL (grupo {i.grupo || '—'})</span>
+    return <span style={{ color: theme.sub }}> · {i.nome}</span>
+  }
+  return (
+    <Modal titulo="Contas de lucros e prejuízos" sub="Amarra o resultado do exercício a uma conta do PL no balanço (efeito virtual)" onClose={onClose} largura={560}>
+      <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 16px', lineHeight: 1.55 }}>
+        No balanço, o resultado deixa de aparecer solto fora do Patrimônio Líquido e passa a somar a
+        conta <b>analítica</b> escolhida — subindo pela estrutura (sintéticas → PL). É só efeito de
+        balanço: <b>nada é lançado</b> no razão nem exportado para o Domínio.
+      </p>
+      <div style={{ display: 'grid', gap: 14 }}>
+        <div>
+          <label>Conta de <b>lucro</b> <span style={{ color: theme.sub, fontWeight: 400 }}>— quando o resultado fica credor</span></label>
+          <CampoConta value={lucro} onChange={setLucro} onPick={p => setLucro(p.cod)} plano={plano} placeholder="Conta de lucro (F4)" />
+          <p style={{ fontSize: 11.5, margin: '4px 0 0' }}>{alerta(info(lucro))}</p>
+        </div>
+        <div>
+          <label>Conta de <b>prejuízo</b> <span style={{ color: theme.sub, fontWeight: 400 }}>— quando o resultado fica devedor</span></label>
+          <CampoConta value={prejuizo} onChange={setPrejuizo} onPick={p => setPrejuizo(p.cod)} plano={plano} placeholder="Conta de prejuízo (F4)" />
+          <p style={{ fontSize: 11.5, margin: '4px 0 0' }}>{alerta(info(prejuizo))}</p>
+        </div>
+      </div>
+      <Rodape onClose={onClose} onSalvar={() => onSalvar({ conta_lucro: lucro.trim(), conta_prejuizo: prejuizo.trim() })} />
+    </Modal>
   )
 }
 

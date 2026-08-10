@@ -250,7 +250,38 @@ export function montarDadosDemonstracoes(perMonth, razaoReceita, anoPerMonth, pe
 
 // ---------------------------------------------------------------------------
 // BUILDER do documento HTML (folhas). blocos: Set com 'cockpit','dre','balancete','balanco','dfc','comparativo'.
-export function abrirDemonstracoesContabeis({ empresa, cnpj, periodoLabel, periodoIni, periodoFim, blocos, dados, modelo = 'sistema', nivel = 'tudo' }) {
+// Injeta o resultado do exercício (delta no saldo_final, na convenção credor = negativo) na
+// conta ANALÍTICA de lucro/prejuízo e sobe pela estrutura (todas as sintéticas ancestrais do
+// plano, por prefixo da classificação). Muta `agg` (use uma cópia). Retorna true se conseguiu —
+// só aceita conta do grupo 2 (Passivo/PL) existente no plano; senão false (cai no comportamento
+// antigo, resultado como linha solta).
+function injetarResultadoNaConta(agg, plano, cod, delta) {
+  const dig = s => String(s ?? '').replace(/\D/g, '')
+  const alvo = (plano || []).find(p => String(p.reduzido) === String(cod) && p.classif)
+  if (!alvo) return false
+  const dAlvo = dig(alvo.classif)
+  if (dAlvo.charAt(0) !== '2') return false // resultado só faz sentido dentro do Passivo/PL
+  const ancestrais = (plano || []).filter(p => {
+    if (!p.sintetica || !p.classif) return false
+    const dp = dig(p.classif)
+    return dp.length > 0 && dp.length < dAlvo.length && dAlvo.startsWith(dp)
+  })
+  for (const p of [...ancestrais, alvo]) {
+    const dp = dig(p.classif)
+    let ln = agg.find(l => p.sintetica
+      ? (l.sintetica && dig(l.classifRaw || l.classif) === dp)
+      : (!l.sintetica && String(l.reduzido) === String(p.reduzido)))
+    if (!ln) {
+      ln = { reduzido: p.reduzido, cod: p.reduzido, nome: p.nome, classif: p.classif, classifRaw: p.classif,
+        sintetica: !!p.sintetica, grau: String(p.classif).split('.').length, saldo_inicial: 0, debito: 0, credito: 0, saldo_final: 0 }
+      agg.push(ln)
+    }
+    ln.saldo_final = (Number(ln.saldo_final) || 0) + delta
+  }
+  return true
+}
+
+export function abrirDemonstracoesContabeis({ empresa, cnpj, periodoLabel, periodoIni, periodoFim, blocos, dados, modelo = 'sistema', nivel = 'tudo', plano = [], contasResultado = null }) {
   const B = new Set(blocos)
   const { agg, dre, cockpit, dfc, meses, contasRes } = dados
   const c = cockpit
@@ -437,16 +468,28 @@ export function abrirDemonstracoesContabeis({ empresa, cnpj, periodoLabel, perio
 
   // ---- Balanço Patrimonial (modelo Domínio) — hierárquico, 2 colunas (Ativo | Passivo+PL) ----
   if (B.has('balanco')) {
-    // Duas colunas independentes, top-down: grupo → subgrupo → sintéticas → analíticas, com D/C.
-    const lado = grupo => agg.filter(l => g1(l) === grupo && Math.abs(num(l.saldo_final)) > 0.005 && passaNivel(l))
-      .sort((a, b) => String(a.classifRaw || '').localeCompare(String(b.classifRaw || ''), 'pt-BR', { numeric: true }))
-    const A = lado('1'), P = lado('2')
     // FONTE ÚNICA (apurarBalanco) — mesmo cálculo do card Balanço. O resultado ACUMULADO vem do
     // Comparativo de Movimento (soma dos movimentos de resultado no período, = RESULTADO DO
     // EXERCÍCIO), entra no PL e soma no total do Passivo.
     const resAcumComp = -Object.values(contasRes).filter(x => !x.sintetica)
       .reduce((s, x) => s + meses.reduce((a, m) => a + (x.vals[m] || 0), 0), 0)
-    const balc = apurarBalanco(agg.filter(l => !l.sintetica), { resultado: resAcumComp })
+    // Se o cliente amarrou as contas de lucro/prejuízo (Base de Informações), roteia o resultado
+    // para a conta ANALÍTICA correspondente e deixa somar a estrutura do PL. Trabalha numa CÓPIA
+    // do agg (não afeta o balancete/DFC). Sem amarração → comportamento antigo (linha solta).
+    const aggBal = agg.map(l => ({ ...l }))
+    let contaAloc = null
+    if (contasResultado && Math.abs(resAcumComp) > 0.005) {
+      const cod = resAcumComp >= 0 ? contasResultado.conta_lucro : contasResultado.conta_prejuizo
+      if (cod && injetarResultadoNaConta(aggBal, plano, cod, -resAcumComp)) {
+        const pc = (plano || []).find(p => String(p.reduzido) === String(cod))
+        contaAloc = { cod, nome: pc?.nome || '', lucro: resAcumComp >= 0 }
+      }
+    }
+    // Duas colunas independentes, top-down: grupo → subgrupo → sintéticas → analíticas, com D/C.
+    const lado = grupo => aggBal.filter(l => g1(l) === grupo && Math.abs(num(l.saldo_final)) > 0.005 && passaNivel(l))
+      .sort((a, b) => String(a.classifRaw || '').localeCompare(String(b.classifRaw || ''), 'pt-BR', { numeric: true }))
+    const A = lado('1'), P = lado('2')
+    const balc = apurarBalanco(aggBal.filter(l => !l.sintetica), contaAloc ? {} : { resultado: resAcumComp })
     const cellDesc = l => {
       const ind = 6 + Math.max(0, (l.grau || 1) - 1) * 13
       return `<td style="padding-left:${ind}px${l.sintetica ? ';font-weight:bold' : ''}">${esc(l.nome)}</td>`
@@ -460,7 +503,10 @@ export function abrirDemonstracoesContabeis({ empresa, cnpj, periodoLabel, perio
       corpo += `<tr>${a ? cellDesc(a) + cellSal(a) : vazio}<td class="sep">${p ? '' : ''}</td>${p ? cellDesc(p) + cellSal(p) : vazio}</tr>`
     }
     // Resultado do exercício no PL (fecha o balanço) + linha de TOTAIS batendo dos dois lados.
-    corpo += `<tr class="g"><td></td><td class="r"></td><td class="sep"></td><td style="font-weight:bold">${esc(balc.labelResultado)}</td><td class="r" style="font-weight:bold">${brl(balc.resultado)}</td></tr>`
+    // Com conta amarrada, o resultado já está DENTRO do PL (na conta analítica), então não repete
+    // a linha solta.
+    if (!contaAloc)
+      corpo += `<tr class="g"><td></td><td class="r"></td><td class="sep"></td><td style="font-weight:bold">${esc(balc.labelResultado)}</td><td class="r" style="font-weight:bold">${brl(balc.resultado)}</td></tr>`
     corpo += `<tr class="s"><td>TOTAL DO ATIVO</td><td class="r">${brlR(balc.totAtivo)}</td><td class="sep"></td><td>TOTAL DO PASSIVO + PL</td><td class="r">${brlR(balc.totPassivo)}</td></tr>`
     paginas.push(`
   <div class="page">
@@ -478,9 +524,11 @@ export function abrirDemonstracoesContabeis({ empresa, cnpj, periodoLabel, perio
           ${corpo}
         </table></div>
       </div>
-      <p class="mut" style="font-size:10px;margin:8px 0 0">${Math.abs(balc.diferenca) < 0.01
-        ? `Conferência: <b>Ativo = Passivo + PL = ${brlR(balc.totAtivo)}</b> (inclui o <b>${esc(balc.labelResultado.toLowerCase())}</b> de ${brlR(balc.resultado)}, vindo do Comparativo de Movimento).`
-        : `<b style="color:#c0341d">Diferença de ${brlR(balc.diferenca)}</b> entre Ativo (${brlR(balc.totAtivo)}) e Passivo + PL (${brlR(balc.totPassivo)}) — o resultado do Comparativo (${brlR(balc.resultado)}) não fecha o patrimônio. Conferir conciliação/classificação.`} Saldos do fim do período. <i>(−) contas redutoras aparecem com o saldo na natureza invertida.</i></p>
+      <p class="mut" style="font-size:10px;margin:8px 0 0">${contaAloc
+        ? `Conferência: <b>Ativo = Passivo + PL = ${brlR(balc.totAtivo)}</b> — o <b>${contaAloc.lucro ? 'lucro' : 'prejuízo'} do exercício</b> de ${brlR(resAcumComp)} (Comparativo de Movimento) foi alocado na conta <b>${esc(contaAloc.cod)}${contaAloc.nome ? ' · ' + esc(contaAloc.nome) : ''}</b>, somando dentro do Patrimônio Líquido.`
+        : (Math.abs(balc.diferenca) < 0.01
+          ? `Conferência: <b>Ativo = Passivo + PL = ${brlR(balc.totAtivo)}</b> (inclui o <b>${esc(balc.labelResultado.toLowerCase())}</b> de ${brlR(balc.resultado)}, vindo do Comparativo de Movimento).`
+          : `<b style="color:#c0341d">Diferença de ${brlR(balc.diferenca)}</b> entre Ativo (${brlR(balc.totAtivo)}) e Passivo + PL (${brlR(balc.totPassivo)}) — o resultado do Comparativo (${brlR(balc.resultado)}) não fecha o patrimônio. Conferir conciliação/classificação.`)} Saldos do fim do período. <i>(−) contas redutoras aparecem com o saldo na natureza invertida.</i></p>
     </div>
     <div class="foot">Attentive Contabilidade · Demonstrações Contábeis · Valores em BRL</div>
   </div>`)

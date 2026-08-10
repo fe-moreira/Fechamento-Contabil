@@ -28,7 +28,7 @@ const TIPOS = [
 ]
 
 export default function DemonstracoesContabeis() {
-  const { empresaId, empresaNome, empresas, competencia } = useAppData()
+  const { empresaId, empresaNome, empresas, competencia, plano } = useAppData()
   const empresa = empresas.find(e => e.id === empresaId)
   // Defaults do período a partir da competência atual (MM/AAAA).
   const [cMes, cAno] = String(competencia || '').split('/').map(Number)
@@ -116,10 +116,18 @@ export default function DemonstracoesContabeis() {
 
       const dados = montarDadosDemonstracoes(perMonth, razaoReceita, anoPerMonth, perMonthComp)
       const pri = doPeriodo[0], ult = doPeriodo[doPeriodo.length - 1]
+      // Contas de lucro/prejuízo (Base de Informações) — amarram o resultado ao PL no balanço.
+      // Tolerante a falha: sem config (ou tabela ausente) o balanço mantém o comportamento antigo.
+      let contasResultado = null
+      try {
+        const { data: cfgPL } = await supabase.from('resultado_pl_config').select('conta_lucro, conta_prejuizo')
+          .eq('cliente_id', empresaId).order('created_at', { ascending: false }).limit(1).maybeSingle()
+        contasResultado = cfgPL || null
+      } catch { /* tabela ainda não criada — segue sem amarração */ }
       const ok = abrirDemonstracoesContabeis({
         empresa: empresaNome, cnpj: empresa?.cnpj || '',
         periodoLabel: label, periodoIni: priBR(pri.ano, pri.mes), periodoFim: diaBR(ult.ano, ult.mes),
-        blocos: marcados, dados, modelo, nivel,
+        blocos: marcados, dados, modelo, nivel, plano, contasResultado,
       })
       if (ok) setMsg(`Relatório gerado com ${doPeriodo.length} competência(s) — abriu a janela de impressão (salvar como PDF).`)
     } catch (e) {

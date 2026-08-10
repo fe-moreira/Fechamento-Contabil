@@ -396,6 +396,26 @@ create policy "auth_all_modelos_relatorio_gerencial" on public.modelos_relatorio
 alter table public.clientes add column if not exists modelo_rel_gerencial_id uuid references public.modelos_relatorio_gerencial(id) on delete set null;
 
 -- ============================================================
+-- Contas de LUCROS e PREJUÍZOS (amarração do resultado ao PL do balanço).
+-- Por cliente: qual conta ANALÍTICA do plano recebe o resultado do exercício
+-- quando ele é CREDOR (conta_lucro) e quando é DEVEDOR (conta_prejuizo).
+-- Efeito é só de balanço (virtual): o resultado deixa de flutuar fora do PL e
+-- passa a somar a estrutura (sobe pelas sintéticas). Nada é lançado no razão/Domínio.
+-- ============================================================
+create table if not exists public.resultado_pl_config (
+  id             uuid primary key default gen_random_uuid(),
+  cliente_id     uuid not null references public.clientes(id) on delete cascade,
+  conta_lucro    text,
+  conta_prejuizo text,
+  usuario        text,
+  created_at     timestamptz default now()
+);
+create index if not exists resultado_pl_config_idx on public.resultado_pl_config(cliente_id);
+alter table public.resultado_pl_config enable row level security;
+drop policy if exists "auth_all_resultado_pl_config" on public.resultado_pl_config;
+create policy "auth_all_resultado_pl_config" on public.resultado_pl_config for all to authenticated using (true) with check (true);
+
+-- ============================================================
 -- (Opcional) Seed mínimo para testar o cadastro de clientes.
 -- Descomente se quiser dados de exemplo.
 -- ============================================================
