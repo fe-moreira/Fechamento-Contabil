@@ -2102,11 +2102,23 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         <Tile label="Crédito" v={money((Number(conta.credito) || 0) + ajCred)} cor={theme.red} />
         <Tile label="Saldo atual" v={moneyDC((Number(conta.saldo_final) || 0) + ajNet)} hint="Ver a composição do saldo final (o que segue em aberto — arrasta para o próximo mês)"
           onClick={() => setVerComposic({ titulo: `Composição do saldo final · ${conta.conta} ${conta.nome}`, itens: emAbertoTodos })} />
-        <Tile label="Diferença (amarração)" v={money(dif)} cor={Math.abs(dif) < 0.01 ? theme.green : theme.yellow} />
+        <Tile label="Diferença (amarração)" v={money(dif)} cor={Math.abs(dif) < 0.01 ? theme.green : theme.yellow}
+          hint={`O que fica EM ABERTO tem que somar exatamente o Saldo atual (o do Painel). Verde = bate. Diferente de zero = tem baixa errada (quase sempre uma baixa automática que não era par).`} />
       </div>
       {Math.abs(ajNet) > 0.005 && <p style={{ color: theme.accent, fontSize: 11.5, margin: '0 0 16px' }}>
         <i className="ti ti-adjustments-alt" /> Débito, crédito e saldo já incluem {moneyDC(ajNet)} de correções pendentes de contabilização (balancete: débito {money(conta.debito)} · crédito {money(conta.credito)} · saldo {moneyDC(conta.saldo_final)}).
       </p>}
+      {/* Amarração explícita nos termos do usuário: a soma do que está EM ABERTO tem que bater com o
+          saldo do Painel. Se não bate, quase sempre é uma baixa automática que não era par de verdade. */}
+      {tipoCta !== 'saldo' && (Math.abs(dif) < 0.01 ? (
+        <p style={{ color: theme.green, fontSize: 11.5, margin: '0 0 16px', display: 'flex', alignItems: 'center', gap: 6 }}>
+          <i className="ti ti-circle-check" /> <span>Em aberto <b>bate</b> com o Painel: a composição soma <b>{moneyDC((Number(conta.saldo_final) || 0) + ajNet)}</b> — igual ao saldo final.</span>
+        </p>
+      ) : (
+        <p style={{ color: theme.yellow, fontSize: 12, margin: '0 0 16px', display: 'flex', alignItems: 'flex-start', gap: 6 }}>
+          <i className="ti ti-alert-triangle" style={{ marginTop: 2 }} /> <span>Em aberto <b>NÃO bate</b> com o Painel: a composição soma <b>{moneyDC((Number(conta.saldo_final) || 0) + ajNet - dif)}</b>, mas o saldo é <b>{moneyDC((Number(conta.saldo_final) || 0) + ajNet)}</b> — <b>diferença de {money(dif)}</b>. Isso costuma ser uma <b>baixa automática errada</b> (par que não era par): abra <b>“Conferidos neste mês”</b> e <b>Reabra</b> o item, depois baixe à mão o par certo.</span>
+        </p>
+      ))}
 
       {/* Natureza do saldo: Ativo credor / Passivo devedor (sem ser redutora) */}
       {(() => {
