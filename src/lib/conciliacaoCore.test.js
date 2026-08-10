@@ -134,3 +134,16 @@ describe('G) correção-DEPOIS-link (o caso que quebrou antes)', () => {
     expect(grupoDe(conciliados, 'MEGA CORP CANONICAL').total).toBeCloseTo(0, 3)
   })
 })
+
+describe('H) correção é SOBERANA sobre TUDO (apelido normal, vínculo forçado — e, na tela, o nome do fiscal)', () => {
+  it('linha corrigida NÃO é trocada por apelido normal do mesmo cliente', () => {
+    const aliasNormal = { 'gf4 assessoria': 'GF4 ASSESSORIA EMPRESARIAL LTDA' }
+    // Com correção: o nome que o usuário pôs manda.
+    expect(resolverEntidade('GF4 ASSESSORIA', { corrigido: true, aliasNormal })).toBe('GF4 ASSESSORIA')
+    // Contraprova: SEM correção, o apelido do mesmo cliente aplica normalmente.
+    expect(resolverEntidade('GF4 ASSESSORIA', { corrigido: false, aliasNormal })).toBe('GF4 ASSESSORIA EMPRESARIAL LTDA')
+  })
+  it('linha corrigida NÃO é trocada por vínculo forçado nem por apelido', () => {
+    expect(resolverEntidade('GF4', { corrigido: true, aliasNormal: { gf4: 'X' }, aliasForcado: { gf4: 'ALLAN KENNEDY' } })).toBe('GF4')
+  })
+})

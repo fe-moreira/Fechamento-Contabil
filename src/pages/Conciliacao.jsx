@@ -921,7 +921,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       // Nome OFICIAL do Fiscal pela NF: é o nome da nota, então SOBREPÕE a leitura do histórico
       // (ex.: "COFINS MIRAGE ..." → nome correto do fiscal). Só não sobrepõe um ajuste manual
       // do saldo inicial; apelidos (renomear em todo lugar) ainda vêm depois.
-      if (leitura.nf && !manualAbert) {
+      if (leitura.nf && !manualAbert && !leitura.ajustado) {
         const nfn = String(leitura.nf).replace(/\D/g, '').replace(/^0+/, '')
         const fn = nfn && nfFiscal[nfn]
         if (fn) leitura = { ...leitura, entidade: fn, ident: true }
@@ -929,7 +929,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       // Sem casar por NF (típico das SAÍDAS/clientes, que não têm NF na planilha fiscal):
       // se o nome lido CONTÉM um nome oficial do fiscal, adota o do fiscal (limpo). Assim o
       // "REVENDA DE MERCADORIA – REDES/FACHADEIRO HM 26 …" vira "HM 26 …". Não mexe em ajuste manual.
-      if (!manualAbert && leitura.entidade) {
+      if (!manualAbert && !leitura.ajustado && leitura.entidade) {
         const rec = nomeDoFiscal(leitura.entidade)
         if (rec && rec !== leitura.entidade) leitura = { ...leitura, entidade: rec, ident: true }
       }

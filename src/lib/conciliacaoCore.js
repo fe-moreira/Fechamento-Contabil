@@ -56,14 +56,16 @@ export const ovDC = l => (Number(l.debito) || 0) - (Number(l.credito) || 0)
 export function resolverEntidade(nomeLido, { corrigido = false, aliasNormal = {}, aliasForcado = {} } = {}) {
   let nome = String(nomeLido ?? '').trim()
   if (!nome) return nome
+  // CORREÇÃO MANUAL é SOBERANA: uma linha que o usuário corrigiu não é sobrescrita por NADA
+  // (nem apelido normal, nem vínculo forçado — e, na tela, nem pelo nome do fiscal por NF). O
+  // nome fica exatamente o que o usuário pôs. Ver testes C, D, G e "correção-vence-tudo".
+  if (corrigido) return nome
   // a) apelido normal (com trava do "mesmo cliente")
   const al = aliasNormal[chaveNome(nome)]
   if (al && al !== nome && mesmoCliente(tokensNome(nome), tokensNome(al))) nome = al
-  // b) vínculo forçado — pula linhas corrigidas à mão (correção é soberana)
-  if (!corrigido) {
-    const alF = aliasForcado[chaveNome(nome)]
-    if (alF && alF !== nome) nome = alF
-  }
+  // b) vínculo forçado (o usuário mandou juntar) — aplica mesmo entre nomes diferentes
+  const alF = aliasForcado[chaveNome(nome)]
+  if (alF && alF !== nome) nome = alF
   return nome
 }
 
