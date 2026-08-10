@@ -942,11 +942,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         leitura = { ...leitura, entidade: al, ident: true }
       }
       // Vínculo MANUAL forçado: aplica mesmo entre nomes diferentes (o usuário mandou juntar).
-      // MAS a CORREÇÃO da própria linha é soberana: se o usuário corrigiu o nome desta linha
-      // (ajuste de leitura no razão → leitura.ajustado, ou ajuste do saldo inicial → manualAbert),
-      // a correção TIRA a linha da união forçada. Só força quem NÃO foi corrigido individualmente.
-      const corrigidaManual = manualAbert || leitura.ajustado
-      const alF = (!corrigidaManual && leitura.entidade) ? aliasForcadoMap[chaveNome(leitura.entidade)] : null
+      const alF = leitura.entidade ? aliasForcadoMap[chaveNome(leitura.entidade)] : null
       if (alF && alF !== leitura.entidade) leitura = { ...leitura, entidade: alF, ident: true }
       // Rede de segurança: seja qual for a origem do nome (histórico, fiscal, alias), tira
       // prefixo de tipo de conta / imposto colado no começo (ex.: "ADIANTAMENTO DE CLIENTES …").
