@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase'
 import { lerTudo } from '../lib/lerTudo'
 import { montarBalancete } from '../lib/balancete'
 import { mesesDoPeriodo, montarDadosDemonstracoes, abrirDemonstracoesContabeis } from '../lib/demonstracoes'
+import { apurarDistribuicao } from '../lib/distribuicao'
 import { useAppData } from '../lib/appData'
 import { theme } from '../lib/theme'
 import InfoTela from '../components/InfoTela'
@@ -124,10 +125,15 @@ export default function DemonstracoesContabeis() {
           .eq('cliente_id', empresaId).order('created_at', { ascending: false }).limit(1).maybeSingle()
         contasResultado = cfgPL || null
       } catch { /* tabela ainda não criada — segue sem amarração */ }
+      // Distribuição de lucros / ATA — para os cards do Balanço no Cockpit do PDF (só se marcado).
+      let distribuicao = null
+      if (marcados.has('cockpit')) {
+        distribuicao = await apurarDistribuicao(empresaId, ult0.id, ult0.ano, ult0.mes).catch(() => null)
+      }
       const ok = abrirDemonstracoesContabeis({
         empresa: empresaNome, cnpj: empresa?.cnpj || '',
         periodoLabel: label, periodoIni: priBR(pri.ano, pri.mes), periodoFim: diaBR(ult.ano, ult.mes),
-        blocos: marcados, dados, modelo, nivel, plano, contasResultado,
+        blocos: marcados, dados, modelo, nivel, plano, contasResultado, distribuicao,
       })
       if (ok) setMsg(`Relatório gerado com ${doPeriodo.length} competência(s) — abriu a janela de impressão (salvar como PDF).`)
     } catch (e) {

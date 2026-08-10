@@ -250,7 +250,7 @@ export function montarDadosDemonstracoes(perMonth, razaoReceita, anoPerMonth, pe
 
 // ---------------------------------------------------------------------------
 // BUILDER do documento HTML (folhas). blocos: Set com 'cockpit','dre','balancete','balanco','dfc','comparativo'.
-export function abrirDemonstracoesContabeis({ empresa, cnpj, periodoLabel, periodoIni, periodoFim, blocos, dados, modelo = 'sistema', nivel = 'tudo', plano = [], contasResultado = null }) {
+export function abrirDemonstracoesContabeis({ empresa, cnpj, periodoLabel, periodoIni, periodoFim, blocos, dados, modelo = 'sistema', nivel = 'tudo', plano = [], contasResultado = null, distribuicao = null }) {
   const B = new Set(blocos)
   const { agg, dre, cockpit, dfc, meses, contasRes } = dados
   const c = cockpit
@@ -331,8 +331,11 @@ export function abrirDemonstracoesContabeis({ empresa, cnpj, periodoLabel, perio
       <div class="tiles">
         <div class="tile"><div class="k">Total do ativo</div><div class="v">${brlR(c.totAtivo)}</div></div>
         <div class="tile"><div class="k">Total do passivo + PL</div><div class="v">${brlR(Math.abs(c.totPassivo))}</div></div>
+        <div class="tile"><div class="k">Resultado acumulado</div><div class="v ${c.acumuladoAno >= 0 ? 'g' : 'r'}">${brlR(c.acumuladoAno)}</div><div class="s">acumulado do ano</div></div>
         <div class="tile"><div class="k">Clientes (a receber)</div><div class="v g">${brlR(c.clientes)}</div></div>
         <div class="tile"><div class="k">Fornecedores (a pagar)</div><div class="v r">${brlR(c.fornecedores)}</div></div>
+        <div class="tile"><div class="k">Distribuição de lucros (mês)</div><div class="v">${brlR(distribuicao?.ata?.pagoMes || 0)}</div><div class="s">pago aos sócios no mês</div></div>
+        <div class="tile"><div class="k">ATA — saldo a pagar</div><div class="v y">${brlR(distribuicao?.ata?.saldo || 0)}</div><div class="s">distribuído ${brlR(distribuicao?.ata?.distribuido || 0)} · pago ${brlR(distribuicao?.ata?.pago || 0)}</div></div>
       </div>
       <h2 class="sec">Financeiro — disponibilidades e geração de caixa</h2>
       <div class="fin2">
