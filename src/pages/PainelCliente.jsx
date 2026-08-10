@@ -335,7 +335,7 @@ function BlocoResultado({ d }) {
           <b style={{ fontSize: 34, fontWeight: 800, color: corResultado(d.resultado), letterSpacing: -.5 }}>{money(d.resultado)}</b>
           <div style={{ display: 'flex', gap: 18, marginTop: 8, flexWrap: 'wrap' }}>
             <Mini label="Faturamento" v={money(d.faturamento)} />
-            <Mini label="Acumulado do ano" v={money(d.acumulado)} />
+            <Mini label="Resultado acumulado no ano" v={money(d.acumulado)} />
             <Mini label="Margem líquida" v={fmtPct(d.indices.margem)} />
           </div>
           <span style={{ fontSize: 11, color: theme.sub, marginTop: 8 }}>Mesmo valor da última linha do Comparativo de Movimento (lucro positivo, prejuízo negativo).</span>

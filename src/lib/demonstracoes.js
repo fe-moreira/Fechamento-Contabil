@@ -286,7 +286,7 @@ export function abrirDemonstracoesContabeis({ empresa, cnpj, periodoLabel, perio
         <div class="kpi"><div class="k">Receita do período</div><div class="v">${brlR(c.receita)}</div></div>
         <div class="kpi"><div class="k">Resultado</div><div class="v ${c.resultado >= 0 ? 'g' : 'r'}">${brlR(c.resultado)}</div></div>
         <div class="kpi"><div class="k">Margem líquida</div><div class="v ${c.resultado >= 0 ? 'g' : 'r'}">${pctBR(ix.margem)}</div></div>
-        <div class="kpi"><div class="k">Acumulado do ano</div><div class="v">${brlR(c.acumuladoAno)}</div></div>
+        <div class="kpi"><div class="k">Resultado acumulado no ano</div><div class="v">${brlR(c.acumuladoAno)}</div></div>
       </div>
       <h2 class="sec">Indicadores</h2>
       <table class="gtab">
