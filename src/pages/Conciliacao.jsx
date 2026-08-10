@@ -1124,7 +1124,11 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // Agrupa só o que está EM ABERTO (não baixado) por nome; incerto cai em "(não identificado)".
   const grupos = {}, nomes = [], nomeExib = {}, sepKeys = new Set()
   for (const l of lanc) {
-    if (baixados.has(l) || foiConfirmado(l) || autoConc.has(l)) continue // baixado por NF, confirmado em lote ou correção que anulou a origem → saiu
+    // baixado por NF ou correção que anulou a origem → saiu do em aberto. O CONFIRMADO em lote:
+    // em contas NÃO-entidade sai direto; em contas de ENTIDADE (cliente/fornecedor) ele ENTRA no
+    // agrupamento por nome para reverificar se o grupo REALMENTE zerou (link vira união forçada e
+    // zera junto; saldo inicial sem par NÃO zera → volta pro em aberto até você linkar).
+    if (baixados.has(l) || (foiConfirmado(l) && !ehEntidadeConta) || autoConc.has(l)) continue
     if (Math.abs(ov(l)) < 0.005) continue
     const ent = l.leitura.ident && l.leitura.entidade ? l.leitura.entidade
       : ehCartaoCredito(l) ? 'Cartão de crédito' : '(não identificado)'
@@ -1202,7 +1206,11 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const emAbertoTodos = ehEntidade ? lista.flatMap(g => g.lancs) : lanc.filter(l => Math.abs(ov(l)) >= 0.005 && !autoConc.has(l) && !foiConfirmado(l))
   // Conciliados (saíram do em aberto): confirmados em lote + entidades que zeraram e foram
   // tratadas + pares de correção que se anularam com a origem. Ficam numa seção colapsável.
-  const confirmadosLancs = lanc.filter(l => foiConfirmado(l) && Math.abs(ov(l)) >= 0.005)
+  // Em contas de ENTIDADE, o confirmado é reavaliado pelo agrupamento (resolvida = grupo zerou):
+  // só entra em Conciliados se o grupo do nome realmente zerar; senão fica no em aberto. Um link
+  // manual vira união forçada, então o par cai num grupo que zera → Conciliados. Contas
+  // NÃO-entidade mantêm o comportamento antigo (confirmado individual sai do em aberto).
+  const confirmadosLancs = ehEntidade ? [] : lanc.filter(l => foiConfirmado(l) && Math.abs(ov(l)) >= 0.005)
   const autoConcLancs = lanc.filter(l => autoConc.has(l) && Math.abs(ov(l)) >= 0.005)
   const conferidosLancs = [...new Set([...confirmadosLancs, ...resolvidasEnt.flatMap(g => g.lancs).filter(l => Math.abs(ov(l)) >= 0.005), ...autoConcLancs])]
   const zerados = [...new Set([...baixados, ...conferidosLancs])] // sem repetir (uma linha pode ser baixada E confirmada)
@@ -1556,12 +1564,15 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     const nomes = [...new Set((alvo || []).filter(l => l.leitura?.ident && String(l.leitura.entidade || '').trim()).map(l => l.leitura.entidade.trim()))]
     if (nomes.length < 2) return null
     const canonical = nomes.slice().sort((a, b) => b.length - a.length)[0] // o mais completo
-    const aliases = { ...nomesAlias }
+    // VÍNCULO FORÇADO: o usuário CONECTOU explicitamente (e o par ZERA), então junta os nomes SEM
+    // a trava do "mesmo cliente" — assim o par cai num grupo só que zera e vai para Conciliados,
+    // mesmo entre nomes de clientes diferentes. (Correção de nome depois ainda vence — bug #2.)
+    const forc = { ...aliasesForcados }
     let mudou = false
-    for (const n of nomes) { const k = chaveNome(n); if (k && k !== chaveNome(canonical)) { aliases[k] = canonical; mudou = true } }
+    for (const n of nomes) { const k = chaveNome(n); if (k && k !== chaveNome(canonical)) { forc[k] = canonical; mudou = true } }
     if (!mudou) return null
-    setNomesAlias(aliases)
-    await salvarNomes(nomesConf, nomesIsolados, aliases)
+    setAliasesForcados(forc)
+    await salvarNomes(nomesConf, nomesIsolados, undefined, undefined, undefined, undefined, undefined, undefined, undefined, forc)
     return canonical
   }
   // Marca as linhas da conexão como confirmadas (saem para Conciliados). `extraRazaoId` é o
