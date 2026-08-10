@@ -2191,7 +2191,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
                   <span style={{ color: theme.sub, textDecoration: 'line-through' }}>{s.atual}</span>
                   <i className="ti ti-arrow-right" style={{ margin: '0 7px', color: theme.accent }} />
                   <b>{s.sugerido}</b>
-                  <span style={{ marginLeft: 8, fontSize: 10.5, fontWeight: 700, color: theme.sub, background: theme.input, borderRadius: 20, padding: '1px 7px', textTransform: 'uppercase', letterSpacing: .3 }}>{s.tipo === 'cliente' ? 'mesmo cliente' : 'mesmo padrão'}</span>
+                  <span style={{ marginLeft: 8, fontSize: 10.5, fontWeight: 700, color: theme.sub, background: theme.input, borderRadius: 20, padding: '1px 7px', textTransform: 'uppercase', letterSpacing: .3 }}>{s.tipo === 'cliente' ? `mesmo ${lab}` : 'mesmo padrão'}</span>
                 </span>
                 <button className="btn" style={{ fontSize: 12, padding: '4px 12px', background: theme.green, borderColor: theme.green }} onClick={() => aprovarSugestoesNome([s], false)}><i className="ti ti-check" /> Aprovar</button>
                 <button className="btn btn-ghost" style={{ fontSize: 12, padding: '4px 12px', color: theme.sub }} onClick={() => setSugDismiss(prev => new Set(prev).add(chaveNome(s.atual)))} title="Não é o mesmo — descartar esta sugestão"><i className="ti ti-x" /> Não</button>
