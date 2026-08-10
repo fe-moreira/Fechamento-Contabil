@@ -5,6 +5,7 @@ import { apurarDistribuicao } from '../lib/distribuicao'
 import { apurarBancoResultado } from '../lib/bancoResultado'
 import { apurarVariacoes } from '../lib/variacoes'
 import { parsePlano, contasConciliacaoAbertas, montarBalancete, apurarBalanco } from '../lib/balancete'
+import { injetarResultadoNaConta } from '../lib/demonstracoes'
 import { gerarExcelTimbrado } from '../lib/excel'
 import { abreBalanceteDominio, abreDreDominio, abreCartaPendencias, abreBalancoDominio } from '../lib/pdf'
 import { montarDRE, montarResumoBalancete } from '../lib/dre'
@@ -38,7 +39,7 @@ const RELATORIOS = [
 ]
 
 export default function Relatorios() {
-  const { empresaId, empresaNome, competencia, empresas } = useAppData()
+  const { empresaId, empresaNome, competencia, empresas, plano } = useAppData()
   const cnpj = empresas?.find(e => e.id === empresaId)?.cnpj
   const [gerandoDom, setGerandoDom] = useState(false)
   const [nivelBal, setNivelBal] = useState(4)      // nível de detalhe do balancete (padrão: 4)
@@ -77,13 +78,20 @@ export default function Relatorios() {
       const dist = await apurarDistribuicao(empresaId, cId)
       const br = await apurarBancoResultado(empresaId, cId)
       const comparativo = await apurarVariacoes(empresaId, { comLancamentos: true })
-      return { compId: cId, documentos, hier, concOk, linhas: bal || [], auditoria: aud || [], concPend, dist, br, comparativo }
+      // Contas de lucro/prejuízo (Base de Informações) — amarram o resultado ao PL do balanço.
+      let resultadoPL = null
+      try {
+        const { data: cfgPL } = await supabase.from('resultado_pl_config').select('conta_lucro, conta_prejuizo')
+          .eq('cliente_id', empresaId).order('created_at', { ascending: false }).limit(1).maybeSingle()
+        resultadoPL = cfgPL || null
+      } catch { /* tabela ainda não criada — segue sem amarração */ }
+      return { compId: cId, documentos, hier, concOk, linhas: bal || [], auditoria: aud || [], concPend, dist, br, comparativo, resultadoPL }
     },
   })
   const temComp = semComp ? false : (dados ? true : null)
   const {
     compId = null, documentos = [], hier = [], concOk = null, linhas = [],
-    auditoria = [], concPend = [], dist = null, br = null, comparativo = null,
+    auditoria = [], concPend = [], dist = null, br = null, comparativo = null, resultadoPL = null,
   } = dados || {}
 
 
@@ -132,13 +140,25 @@ export default function Relatorios() {
     ? -Math.round(Object.values(comparativo.matriz).reduce((s, linha) =>
         s + Object.entries(linha || {}).reduce((a, [m, v]) => a + (Number(m) <= mesAtual ? (Number(v) || 0) : 0), 0), 0) * 100) / 100
     : null
-  const bal = apurarBalanco(hier.filter(l => !l.sintetica), { resultado: resAcumComp })
+  // Amarração lucro/prejuízo (Base de Informações): se o cliente indicou a conta analítica do
+  // PL, roteia o resultado do exercício para ela (numa CÓPIA de hier) e deixa somar a estrutura
+  // — em vez de aparecer como linha solta. Sem config, mantém o comportamento antigo.
+  const hierBalco = hier.map(l => ({ ...l }))
+  let contaAloc = null
+  if (resultadoPL && resAcumComp != null && Math.abs(resAcumComp) > 0.005) {
+    const cod = resAcumComp >= 0 ? resultadoPL.conta_lucro : resultadoPL.conta_prejuizo
+    if (cod && injetarResultadoNaConta(hierBalco, plano, cod, -resAcumComp)) {
+      const pc = (plano || []).find(p => String(p.cod) === String(cod))
+      contaAloc = { cod, nome: pc?.nome || '', lucro: resAcumComp >= 0 }
+    }
+  }
+  const bal = apurarBalanco(hierBalco.filter(l => !l.sintetica), contaAloc ? {} : { resultado: resAcumComp })
   // EXIBIÇÃO com NÍVEIS (sintéticas + analíticas), igual ao Comparativo/demonstrativo: mostra
   // toda a hierarquia do grupo, ordenada pela classificação e indentada por nível. Os TOTAIS e o
   // resultado vêm do apurarBalanco (só analíticas — as sintéticas são agregados e não somam).
   const g1c = l => String(l.classif ?? l.classifRaw ?? '').replace(/\D/g, '').charAt(0)
   const byClassif = (a, b) => String(a.classifRaw || a.classif || '').localeCompare(String(b.classifRaw || b.classif || ''), 'pt-BR', { numeric: true })
-  const ladoBal = (grupo, flip) => hier.filter(l => g1c(l) === grupo).sort(byClassif).map(l => ({
+  const ladoBal = (grupo, flip) => hierBalco.filter(l => g1c(l) === grupo).sort(byClassif).map(l => ({
     conta: l.reduzido || '', nome: l.nome, grau: l.grau || 1, sintetica: l.sintetica,
     saldo_final: (flip ? -1 : 1) * (Number(l.saldo_final) || 0),
   }))
@@ -148,7 +168,8 @@ export default function Relatorios() {
   const ativo = ladoBal('1', false).filter(passaNivelBalco)
   const passivo = [
     ...ladoBal('2', true),
-    { conta: '', nome: bal.labelResultado, saldo_final: bal.resultado, resultado: true, grau: 1 },
+    // Com conta amarrada, o resultado já está DENTRO do PL (na conta) — não repete a linha solta.
+    ...(contaAloc ? [] : [{ conta: '', nome: bal.labelResultado, saldo_final: bal.resultado, resultado: true, grau: 1 }]),
   ].filter(passaNivelBalco)
   const totAtivo = bal.totAtivo
   const totPassivo = bal.totPassivo
@@ -585,7 +606,12 @@ export default function Relatorios() {
             <GrupoBalanco titulo="Ativo" contas={ativo} total={totAtivo} />
             <GrupoBalanco titulo="Passivo + Patrimônio Líquido" contas={passivo} total={totPassivo} />
           </div>
-          {Math.abs(bal.diferenca) < 0.01 ? (
+          {contaAloc ? (
+            <p style={{ fontSize: 12, color: theme.sub, marginTop: 10 }}>
+              <i className="ti ti-circle-check" style={{ color: '#0a7d33', marginRight: 5 }} />
+              Balanço fecha: <b>Ativo = Passivo + PL = {money(totAtivo)}</b> — o {contaAloc.lucro ? 'lucro' : 'prejuízo'} do exercício de {money(resAcumComp)} (Comparativo de Movimento) foi alocado na conta <b>{contaAloc.cod}{contaAloc.nome ? ' · ' + contaAloc.nome : ''}</b>, somando dentro do Patrimônio Líquido.
+            </p>
+          ) : Math.abs(bal.diferenca) < 0.01 ? (
             <p style={{ fontSize: 12, color: theme.sub, marginTop: 10 }}>
               <i className="ti ti-circle-check" style={{ color: '#0a7d33', marginRight: 5 }} />
               Balanço fecha: <b>Ativo = Passivo + PL = {money(totAtivo)}</b> (inclui o {bal.labelResultado.toLowerCase()} de {money(bal.resultado)}, do Comparativo de Movimento).

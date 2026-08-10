@@ -255,7 +255,7 @@ export function montarDadosDemonstracoes(perMonth, razaoReceita, anoPerMonth, pe
 // plano, por prefixo da classificação). Muta `agg` (use uma cópia). Retorna true se conseguiu —
 // só aceita conta do grupo 2 (Passivo/PL) existente no plano; senão false (cai no comportamento
 // antigo, resultado como linha solta).
-function injetarResultadoNaConta(agg, plano, cod, delta) {
+export function injetarResultadoNaConta(agg, plano, cod, delta) {
   // O plano do useAppData usa o campo `cod` (código reduzido); as linhas do balancete (agg)
   // usam `reduzido` — mesmo valor. Por isso casamos plano.cod × agg.reduzido.
   const dig = s => String(s ?? '').replace(/\D/g, '')
