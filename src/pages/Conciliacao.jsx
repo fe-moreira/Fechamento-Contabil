@@ -783,7 +783,9 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // (ex.: duas mensalidades de R$ 154,90 do mesmo fornecedor em datas diferentes): tratar,
   // reclassificar ou conferir UM não pode marcar o outro. Cada linha é sempre individual.
   const dataAb = l => (l.data && l.data !== 'abertura') ? String(l.data) : ''
-  const chaveAbertura = l => `AB·${conta.conta}·${dataAb(l)}·${nfKey(l.leitura?.nf)}·${baixaTxt(l.leitura?.entidade || '')}·${Math.round(((Number(l.debito) || 0) - (Number(l.credito) || 0)) * 100)}`
+  // `nome` opcional: força a chave pelo nome FINAL (ex.: após vincular, a abertura passa a se
+  // chamar `alvo` na releitura). Sem `nome`, usa o nome atual da linha (comportamento original).
+  const chaveAbertura = (l, nome) => `AB·${conta.conta}·${dataAb(l)}·${nfKey(l.leitura?.nf)}·${baixaTxt(nome != null ? nome : (l.leitura?.entidade || ''))}·${Math.round(((Number(l.debito) || 0) - (Number(l.credito) || 0)) * 100)}`
   // Formato ANTIGO (sem data) — só para reconhecer conferências gravadas ANTES desta mudança,
   // e apenas quando a linha é ÚNICA por esse formato (senão marcaria o gêmeo de novo).
   const chaveAberturaLegacy = l => `AB·${conta.conta}·${nfKey(l.leitura?.nf)}·${baixaTxt(l.leitura?.entidade || '')}·${Math.round(((Number(l.debito) || 0) - (Number(l.credito) || 0)) * 100)}`
@@ -1576,9 +1578,13 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // lançamento de acerto da diferença (desconto/juros), que também deve sair do em aberto.
   async function baixarConexao(alvo, extraRazaoId) {
     const id = await getCompetenciaId()
+    // Nome FINAL do vínculo (o mais longo, salvo digitado): a abertura passa a se chamar assim na
+    // releitura, então o "Confirmado" dela tem que ser chaveado por esse nome — senão não bate e
+    // ela volta pro em aberto. (Mesma régua do vincularLote.)
+    const canonicalPre = aplicarLink(alvo, [], aliasesForcados).canonical || ''
     const rows = alvo.map(l => ({
       competencia_id: id, modulo: 'Conciliação',
-      item: l._abertura ? chaveAbertura(l) : `${conta.conta} · ${l.data || ''} · NF ${l.leitura?.nf || '—'}`,
+      item: l._abertura ? chaveAbertura(l, canonicalPre || undefined) : `${conta.conta} · ${l.data || ''} · NF ${l.leitura?.nf || '—'}`,
       tipo: 'Justificativa',
       detalhe: `Confirmado em lote — conexão manual (nota + pagamento).`,
       // Acerto (estorno/lançamento) é identificado pelo uuid do próprio lançamento (sem "ac_").
@@ -1802,9 +1808,32 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       const id = await getCompetenciaId()
       if (id) await supabase.from('ajuste_leitura').upsert(razaoIds.map(rid => ({ competencia_id: id, razao_id: rid, entidade: alvo, usuario })), { onConflict: 'razao_id' })
     }
+    // Régua do usuário: "tudo o que eu linko E que ZERA, você tem que baixar." Se o conjunto
+    // vinculado SOMA ZERO, além de unir o nome, CONCILIA (grava "Confirmado em lote") — os dois
+    // saem do em aberto e vão para "Conciliados". Vale para qualquer origem: saldo anterior
+    // (abertura, sem id), estorno/reclassificação (acerto) ou lançamento do razão. A abertura é
+    // chaveada pelo nome FINAL (alvo), para o "Confirmado" bater na releitura.
+    const net = comNome.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
+    let baixou = false
+    if (comNome.length >= 2 && Math.abs(net) < 0.005) {
+      const cid = await getCompetenciaId()
+      if (cid) {
+        const rows = comNome.map(l => ({
+          competencia_id: cid, modulo: 'Conciliação',
+          item: l._abertura ? chaveAbertura(l, alvo) : `${conta.conta} · ${l.data || ''} · NF ${l.leitura?.nf || '—'}`,
+          tipo: 'Justificativa',
+          detalhe: 'Confirmado em lote — vínculo manual (o par zera).',
+          razao_id: l._abertura ? null : (l.acerto ? String(l.id).replace(/^ac_/, '') : l.id), usuario,
+        }))
+        const { error } = await supabase.from('auditoria').insert(rows)
+        if (!error) { marcarTratadas(comNome); baixou = true }
+      }
+    }
     setSelLin(new Set()); setLoteForn(null)
-    setMsg(`${comNome.length} lançamento(s) vinculados em "${alvo}".`)
-    carregarLanc()
+    setMsg(baixou
+      ? `${comNome.length} lançamento(s) vinculados em "${alvo}" e conciliados (zeraram) — foram para Conciliados.`
+      : `${comNome.length} lançamento(s) vinculados em "${alvo}".`)
+    carregarLanc(); onMudou && onMudou()
   }
 
   // Corrige o FORNECEDOR/CLIENTE de vários lançamentos de uma vez (ajuste de leitura em
