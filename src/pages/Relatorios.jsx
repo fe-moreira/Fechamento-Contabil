@@ -4,8 +4,7 @@ import { useAppData, useRelatorio } from '../lib/appData'
 import { apurarDistribuicao } from '../lib/distribuicao'
 import { apurarBancoResultado } from '../lib/bancoResultado'
 import { apurarVariacoes } from '../lib/variacoes'
-import { parsePlano, contasConciliacaoAbertas, montarBalancete, apurarBalanco } from '../lib/balancete'
-import { injetarResultadoNaConta } from '../lib/demonstracoes'
+import { parsePlano, contasConciliacaoAbertas, montarBalancete, apurarBalanco, prepararBalanco } from '../lib/balancete'
 import { gerarExcelTimbrado } from '../lib/excel'
 import { abreBalanceteDominio, abreDreDominio, abreCartaPendencias, abreBalancoDominio } from '../lib/pdf'
 import { montarDRE, montarResumoBalancete } from '../lib/dre'
@@ -143,16 +142,7 @@ export default function Relatorios() {
   // Amarração lucro/prejuízo (Base de Informações): se o cliente indicou a conta analítica do
   // PL, roteia o resultado do exercício para ela (numa CÓPIA de hier) e deixa somar a estrutura
   // — em vez de aparecer como linha solta. Sem config, mantém o comportamento antigo.
-  const hierBalco = hier.map(l => ({ ...l }))
-  let contaAloc = null
-  if (resultadoPL && resAcumComp != null && Math.abs(resAcumComp) > 0.005) {
-    const cod = resAcumComp >= 0 ? resultadoPL.conta_lucro : resultadoPL.conta_prejuizo
-    if (cod && injetarResultadoNaConta(hierBalco, plano, cod, -resAcumComp)) {
-      const pc = (plano || []).find(p => String(p.cod) === String(cod))
-      contaAloc = { cod, nome: pc?.nome || '', lucro: resAcumComp >= 0 }
-    }
-  }
-  const bal = apurarBalanco(hierBalco.filter(l => !l.sintetica), contaAloc ? {} : { resultado: resAcumComp })
+  const { linhas: hierBalco, bal, contaAloc } = prepararBalanco({ linhas: hier, plano, resultadoPL, resAcumComp })
   // EXIBIÇÃO com NÍVEIS (sintéticas + analíticas), igual ao Comparativo/demonstrativo: mostra
   // toda a hierarquia do grupo, ordenada pela classificação e indentada por nível. Os TOTAIS e o
   // resultado vêm do apurarBalanco (só analíticas — as sintéticas são agregados e não somam).

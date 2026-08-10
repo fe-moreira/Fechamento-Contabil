@@ -12,7 +12,7 @@
 
 import { supabase } from './supabase'
 import { lerTudo } from './lerTudo'
-import { montarBalancete, apurarBalanco } from './balancete'
+import { montarBalancete, apurarBalanco, prepararBalanco } from './balancete'
 import { montarDRE } from './dre'
 import { extrairEntidade } from './financeiro'
 
@@ -250,39 +250,6 @@ export function montarDadosDemonstracoes(perMonth, razaoReceita, anoPerMonth, pe
 
 // ---------------------------------------------------------------------------
 // BUILDER do documento HTML (folhas). blocos: Set com 'cockpit','dre','balancete','balanco','dfc','comparativo'.
-// Injeta o resultado do exercício (delta no saldo_final, na convenção credor = negativo) na
-// conta ANALÍTICA de lucro/prejuízo e sobe pela estrutura (todas as sintéticas ancestrais do
-// plano, por prefixo da classificação). Muta `agg` (use uma cópia). Retorna true se conseguiu —
-// só aceita conta do grupo 2 (Passivo/PL) existente no plano; senão false (cai no comportamento
-// antigo, resultado como linha solta).
-export function injetarResultadoNaConta(agg, plano, cod, delta) {
-  // O plano do useAppData usa o campo `cod` (código reduzido); as linhas do balancete (agg)
-  // usam `reduzido` — mesmo valor. Por isso casamos plano.cod × agg.reduzido.
-  const dig = s => String(s ?? '').replace(/\D/g, '')
-  const alvo = (plano || []).find(p => String(p.cod) === String(cod) && p.classif)
-  if (!alvo) return false
-  const dAlvo = dig(alvo.classif)
-  if (dAlvo.charAt(0) !== '2') return false // resultado só faz sentido dentro do Passivo/PL
-  const ancestrais = (plano || []).filter(p => {
-    if (!p.sintetica || !p.classif) return false
-    const dp = dig(p.classif)
-    return dp.length > 0 && dp.length < dAlvo.length && dAlvo.startsWith(dp)
-  })
-  for (const p of [...ancestrais, alvo]) {
-    const dp = dig(p.classif)
-    let ln = agg.find(l => p.sintetica
-      ? (l.sintetica && dig(l.classifRaw || l.classif) === dp)
-      : (!l.sintetica && String(l.reduzido) === String(p.cod)))
-    if (!ln) {
-      ln = { reduzido: p.cod, cod: p.cod, nome: p.nome, classif: p.classif, classifRaw: p.classif,
-        sintetica: !!p.sintetica, grau: String(p.classif).split('.').length, saldo_inicial: 0, debito: 0, credito: 0, saldo_final: 0 }
-      agg.push(ln)
-    }
-    ln.saldo_final = (Number(ln.saldo_final) || 0) + delta
-  }
-  return true
-}
-
 export function abrirDemonstracoesContabeis({ empresa, cnpj, periodoLabel, periodoIni, periodoFim, blocos, dados, modelo = 'sistema', nivel = 'tudo', plano = [], contasResultado = null }) {
   const B = new Set(blocos)
   const { agg, dre, cockpit, dfc, meses, contasRes } = dados
@@ -475,23 +442,14 @@ export function abrirDemonstracoesContabeis({ empresa, cnpj, periodoLabel, perio
     // EXERCÍCIO), entra no PL e soma no total do Passivo.
     const resAcumComp = -Object.values(contasRes).filter(x => !x.sintetica)
       .reduce((s, x) => s + meses.reduce((a, m) => a + (x.vals[m] || 0), 0), 0)
-    // Se o cliente amarrou as contas de lucro/prejuízo (Base de Informações), roteia o resultado
-    // para a conta ANALÍTICA correspondente e deixa somar a estrutura do PL. Trabalha numa CÓPIA
-    // do agg (não afeta o balancete/DFC). Sem amarração → comportamento antigo (linha solta).
-    const aggBal = agg.map(l => ({ ...l }))
-    let contaAloc = null
-    if (contasResultado && Math.abs(resAcumComp) > 0.005) {
-      const cod = resAcumComp >= 0 ? contasResultado.conta_lucro : contasResultado.conta_prejuizo
-      if (cod && injetarResultadoNaConta(aggBal, plano, cod, -resAcumComp)) {
-        const pc = (plano || []).find(p => String(p.cod) === String(cod))
-        contaAloc = { cod, nome: pc?.nome || '', lucro: resAcumComp >= 0 }
-      }
-    }
+    // FONTE ÚNICA (prepararBalanco em balancete.js): mesma lógica do card Balanço dos Relatórios —
+    // roteia o resultado para a conta amarrada (se houver) numa cópia, sobe a estrutura e devolve o
+    // apurarBalanco. Assim o Demonstrativo é só um REFLEXO do Relatório (não diverge).
+    const { linhas: aggBal, bal: balc, contaAloc } = prepararBalanco({ linhas: agg, plano, resultadoPL: contasResultado, resAcumComp })
     // Duas colunas independentes, top-down: grupo → subgrupo → sintéticas → analíticas, com D/C.
     const lado = grupo => aggBal.filter(l => g1(l) === grupo && Math.abs(num(l.saldo_final)) > 0.005 && passaNivel(l))
       .sort((a, b) => String(a.classifRaw || '').localeCompare(String(b.classifRaw || ''), 'pt-BR', { numeric: true }))
     const A = lado('1'), P = lado('2')
-    const balc = apurarBalanco(aggBal.filter(l => !l.sintetica), contaAloc ? {} : { resultado: resAcumComp })
     const cellDesc = l => {
       const ind = 6 + Math.max(0, (l.grau || 1) - 1) * 13
       return `<td style="padding-left:${ind}px${l.sintetica ? ';font-weight:bold' : ''}">${esc(l.nome)}</td>`

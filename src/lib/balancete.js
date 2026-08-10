@@ -192,6 +192,58 @@ export function apurarBalanco(analiticas, opts = {}) {
   }
 }
 
+// Injeta o resultado do exercício (delta no saldo_final, convenção credor = negativo) na conta
+// ANALÍTICA de lucro/prejuízo e sobe pela estrutura (todas as sintéticas ancestrais do plano, por
+// prefixo da classificação). Muta `linhas` (passe uma cópia). Retorna true se conseguiu — só
+// aceita conta do grupo 2 (Passivo/PL) existente no plano; senão false (mantém o comportamento
+// antigo, resultado como linha solta). O plano do useAppData usa `cod`; as linhas do balancete
+// usam `reduzido` — mesmo valor, por isso casamos plano.cod × linha.reduzido.
+export function injetarResultadoNaConta(linhas, plano, cod, delta) {
+  const dig = s => String(s ?? '').replace(/\D/g, '')
+  const alvo = (plano || []).find(p => String(p.cod) === String(cod) && p.classif)
+  if (!alvo) return false
+  const dAlvo = dig(alvo.classif)
+  if (dAlvo.charAt(0) !== '2') return false // resultado só faz sentido dentro do Passivo/PL
+  const ancestrais = (plano || []).filter(p => {
+    if (!p.sintetica || !p.classif) return false
+    const dp = dig(p.classif)
+    return dp.length > 0 && dp.length < dAlvo.length && dAlvo.startsWith(dp)
+  })
+  for (const p of [...ancestrais, alvo]) {
+    const dp = dig(p.classif)
+    let ln = linhas.find(l => p.sintetica
+      ? (l.sintetica && dig(l.classifRaw || l.classif) === dp)
+      : (!l.sintetica && String(l.reduzido) === String(p.cod)))
+    if (!ln) {
+      ln = { reduzido: p.cod, cod: p.cod, nome: p.nome, classif: p.classif, classifRaw: p.classif,
+        sintetica: !!p.sintetica, grau: String(p.classif).split('.').length, saldo_inicial: 0, debito: 0, credito: 0, saldo_final: 0 }
+      linhas.push(ln)
+    }
+    ln.saldo_final = (Number(ln.saldo_final) || 0) + delta
+  }
+  return true
+}
+
+// FONTE ÚNICA da apuração do balanço (card Relatórios E Demonstrações). Recebe as linhas do
+// balancete hierárquico (`linhas`), o `plano`, a config de amarração (`resultadoPL`) e o resultado
+// acumulado do Comparativo (`resAcumComp`). Se houver conta amarrada, roteia o resultado para ela
+// (numa cópia — não muta a entrada) e devolve as linhas já com o resultado dentro da estrutura,
+// junto do apurarBalanco e da conta alocada. Assim os dois lados (relatório e demonstrativo)
+// calculam IGUAL — o demonstrativo é só um reflexo.
+export function prepararBalanco({ linhas, plano, resultadoPL, resAcumComp }) {
+  const copia = (linhas || []).map(l => ({ ...l }))
+  let contaAloc = null
+  if (resultadoPL && resAcumComp != null && Math.abs(resAcumComp) > 0.005) {
+    const cod = resAcumComp >= 0 ? resultadoPL.conta_lucro : resultadoPL.conta_prejuizo
+    if (cod && injetarResultadoNaConta(copia, plano, cod, -resAcumComp)) {
+      const pc = (plano || []).find(p => String(p.cod) === String(cod))
+      contaAloc = { cod, nome: pc?.nome || '', lucro: resAcumComp >= 0 }
+    }
+  }
+  const bal = apurarBalanco(copia.filter(l => !l.sintetica), contaAloc ? {} : { resultado: resAcumComp })
+  return { linhas: copia, bal, contaAloc }
+}
+
 // Comprimentos acumulados de cada nível da máscara: "9.9.9.999.9999" → [1,2,3,6,10].
 function cortesDaMascara(mask) {
   const tams = String(mask || '').split('.').map(s => s.length).filter(Boolean)
