@@ -189,6 +189,23 @@ describe('J) LINK do SALDO ANTERIOR (sem id) — abertura entra no vínculo e o 
     expect(grupoDe(conciliados, 'AMAZON AWS SERVICOS BRASIL LTDA').total).toBeCloseTo(0, 3)
   })
 
+  it('SUBCONJUNTO conectado sai; o RESTO do mesmo nome segue aberto (ATTENTIVE + 3ª linha)', () => {
+    // Grupo do nome ATTENTIVE com 3 linhas: o par NF 44049 (saldo anterior + pagamento) zera e
+    // foi CONECTADO manualmente; a 3ª linha (NF 44155, despesa) segue aberta. O par conectado
+    // (passado como já-baixado) sai para Conciliados; o grupo do nome NÃO precisa zerar inteiro.
+    const NM = 'ATTENTIVE CONTABILIDADE E SERVICOS S/S LTDA'
+    const saldo = L({ abertura: true, credito: 5349.36, entidade: NM })
+    const pag = L({ id: 'p1', debito: 5349.36, entidade: NM, ajustado: true })
+    const desp = L({ id: 'd1', debito: 1200, entidade: NM })                 // 3ª linha, aberta
+    const conectados = new Set([saldo, pag])                                 // par explícito (baixados)
+    const { emAberto, conciliados, jaBaixados } = classificarGrupos([saldo, pag, desp], { ov: ovDC, baixados: conectados })
+    expect(jaBaixados).toEqual(expect.arrayContaining([saldo, pag]))         // o par saiu
+    expect(nomes(emAberto)).toEqual([NM])                                    // sobra o nome, só com a despesa
+    expect(grupoDe(emAberto, NM).lancs).toEqual([desp])
+    expect(grupoDe(emAberto, NM).total).toBeCloseTo(1200, 3)
+    expect(nomes(conciliados)).toEqual([])                                   // a despesa sozinha não zera
+  })
+
   it('abertura (sem id) MESMO NOME do pagamento — link não quebra e o par zera (ATTENTIVE)', () => {
     // ATTENTIVE: mesmo nome dos dois lados; o link só serve para BAIXAR o par (que zera).
     const abertura = L({ abertura: true, credito: 5349.36, entidade: 'ATTENTIVE CONTABILIDADE E SERVICOS S/S LTDA' })

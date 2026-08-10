@@ -656,6 +656,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const [tratados, setTratados] = useState(new Set()) // razao_ids já corrigidos/estornados/justificados
   const [tratadosAb, setTratadosAb] = useState(new Set()) // itens de ABERTURA já conferidos (sem razao_id, chave AB·…)
   const [confirmados, setConfirmados] = useState(new Set()) // linhas confirmadas EM LOTE — saem do em aberto (Conciliados)
+  const [conexoesManuais, setConexoesManuais] = useState(new Set()) // linhas de VÍNCULO/CONEXÃO manual (par explícito que zera) — saem SEMPRE, mesmo que o resto do nome siga aberto
   const [verConferidos, setVerConferidos] = useState(false) // mostra a seção "Conferidos" (p/ reabrir)
   const [verBaixados, setVerBaixados] = useState(false) // mostra a seção "Baixados por NF" (p/ reabrir e vincular à mão)
   const [buscaNome, setBuscaNome] = useState('') // busca por nome na composição de clientes/fornecedores
@@ -763,7 +764,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     // justificativas individuais continuam na composição (não escondem título aberto).
     const { data } = await supabase.from('auditoria').select('razao_id, item, detalhe')
       .eq('competencia_id', compId).eq('modulo', 'Conciliação')
-    const rz = new Set(), ab = new Set(), conf = new Set()
+    const rz = new Set(), ab = new Set(), conf = new Set(), conx = new Set()
     for (const a of (data || [])) {
       const abItem = String(a.item || '').startsWith('AB·') ? a.item : null
       const chave = a.razao_id || abItem
@@ -774,9 +775,14 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       // do par (ex.: o pagamento) vira órfão e o "Conciliados" desbalanceia. Só a baixa em
       // lote usa isso — as demais tratativas (ajuste/correção) seguem pelo razao_id, para
       // não mexer nos filtros/leitura incerta.
-      if (String(a.detalhe || '').startsWith('Confirmado em lote')) { conf.add(chave); if (a.item && !abItem) conf.add(a.item) }
+      const det = String(a.detalhe || '')
+      if (det.startsWith('Confirmado em lote')) { conf.add(chave); if (a.item && !abItem) conf.add(a.item) }
+      // CONEXÃO/VÍNCULO manual: o usuário selecionou N linhas que ZERAM entre si e mandou baixar.
+      // Esse par explícito SAI SEMPRE do em aberto (vai para Conciliados), mesmo que OUTRAS linhas
+      // do mesmo nome sigam abertas — o grupo do nome não precisa zerar inteiro. Ver caso ATTENTIVE.
+      if (/conex[aã]o manual|v[ií]nculo manual/.test(det)) { conx.add(chave); if (a.item && !abItem) conx.add(a.item) }
     }
-    setTratados(rz); setTratadosAb(ab); setConfirmados(conf)
+    setTratados(rz); setTratadosAb(ab); setConfirmados(conf); setConexoesManuais(conx)
   }
   // Chave estável de uma linha de abertura (saldo inicial) e testes de "já tratada"/"confirmada".
   // Inclui a DATA do título para NÃO confundir dois títulos iguais em valor/entidade e SEM NF
@@ -807,6 +813,10 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const chaveTrat = l => l.acerto ? String(l.id).replace(/^ac_/, '') : (l._abertura ? chaveAbertura(l) : l.id)
   const jaTratada = l => l._abertura ? (tratadosAb.has(chaveAbertura(l)) || trataAbLegacy(l)) : tratados.has(l.id)
   const foiConfirmado = l => confirmados.has(chaveTrat(l)) || (l._abertura && legacyAbUnico(l) && confirmados.has(chaveAberturaLegacy(l))) || (!l._abertura && !l.acerto && itemUnico(l) && confirmados.has(itemConc(l))) // saiu do em aberto (conciliado)
+  // VÍNCULO/CONEXÃO manual: o par explícito que o usuário linkou e mandou baixar (zera entre si).
+  // SAI SEMPRE do em aberto — não depende do grupo do nome zerar inteiro (o resto do nome pode
+  // seguir aberto). É a régua do usuário: "cliquei e conciliei → tem que baixar". Ver ATTENTIVE.
+  const ehConexaoManual = l => conexoesManuais.has(chaveTrat(l)) || (!l._abertura && !l.acerto && itemUnico(l) && conexoesManuais.has(itemConc(l)))
   useEffect(() => { carregarTratados() }, [compId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Contas cujo razão compõe esta linha: a própria conta e — quando ela é SINTÉTICA — todas
@@ -1122,7 +1132,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     // direto; em contas de ENTIDADE ele ENTRA no agrupamento para reverificar se o grupo do nome
     // REALMENTE zerou (link vira união forçada e zera junto; saldo inicial sem par NÃO zera →
     // volta pro em aberto). Ver conciliacaoCore.classificarGrupos (bug #1) e testes A/F.
-    if (baixados.has(l) || (foiConfirmado(l) && !ehEntidadeConta) || autoConc.has(l)) continue
+    if (baixados.has(l) || ehConexaoManual(l) || (foiConfirmado(l) && !ehEntidadeConta) || autoConc.has(l)) continue
     if (Math.abs(ov(l)) < 0.005) continue
     const ent = l.leitura.ident && l.leitura.entidade ? l.leitura.entidade
       : ehCartaoCredito(l) ? 'Cartão de crédito' : '(não identificado)'
@@ -1200,14 +1210,17 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // Em aberto = o que compõe o saldo. Nas contas normais também tira o que foi CONFIRMADO em
   // lote (conexão manual que zerou) — assim, igual a clientes/fornecedores, some o que zerou e
   // fica só o que compõe o saldo.
-  const emAbertoTodos = ehEntidade ? lista.flatMap(g => g.lancs) : lanc.filter(l => Math.abs(ov(l)) >= 0.005 && !autoConc.has(l) && !foiConfirmado(l))
+  const emAbertoTodos = ehEntidade ? lista.flatMap(g => g.lancs) : lanc.filter(l => Math.abs(ov(l)) >= 0.005 && !autoConc.has(l) && !foiConfirmado(l) && !ehConexaoManual(l))
   // Conciliados (saíram do em aberto): confirmados em lote + entidades que zeraram e foram
   // tratadas + pares de correção que se anularam com a origem. Ficam numa seção colapsável.
   // Em contas de ENTIDADE o confirmado é reavaliado pelo agrupamento (resolvida = grupo zerou);
   // o link vira união forçada e cai num grupo que zera. Contas NÃO-entidade mantêm o antigo.
   const confirmadosLancs = ehEntidade ? [] : lanc.filter(l => foiConfirmado(l) && Math.abs(ov(l)) >= 0.005)
+  // Pares de conexão/vínculo manual: saem SEMPRE (em qualquer tipo de conta) para os Conciliados,
+  // independentemente do grupo do nome zerar — foram baixados explicitamente pelo usuário.
+  const conexaoManualLancs = lanc.filter(l => ehConexaoManual(l) && Math.abs(ov(l)) >= 0.005)
   const autoConcLancs = lanc.filter(l => autoConc.has(l) && Math.abs(ov(l)) >= 0.005)
-  const conferidosLancs = [...new Set([...confirmadosLancs, ...resolvidasEnt.flatMap(g => g.lancs).filter(l => Math.abs(ov(l)) >= 0.005), ...autoConcLancs])]
+  const conferidosLancs = [...new Set([...confirmadosLancs, ...conexaoManualLancs, ...resolvidasEnt.flatMap(g => g.lancs).filter(l => Math.abs(ov(l)) >= 0.005), ...autoConcLancs])]
   const zerados = [...new Set([...baixados, ...conferidosLancs])] // sem repetir (uma linha pode ser baixada E confirmada)
   const conferidosPorNome = {}, confExib = {}
   for (const l of conferidosLancs) {
