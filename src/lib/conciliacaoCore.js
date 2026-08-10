@@ -117,8 +117,12 @@ export function classificarGrupos(lancs, { ov = ovDC, jaTratada = () => false, b
 // Não muta a entrada; devolve novos objetos.
 // ===========================================================================================
 export function aplicarLink(lancs, ids, aliasForcado = {}, nomeAlvo = '') {
-  const idSet = new Set(ids || [])
-  const selecionados = (lancs || []).filter(l => idSet.has(l.id))
+  // `lancs` JÁ é o conjunto SELECIONADO (a barra passa as linhas escolhidas). NÃO filtramos por
+  // id — senão o SALDO ANTERIOR (abertura), que NÃO tem id, ficaria de fora do vínculo e o título
+  // nunca juntaria com o pagamento/reclassificação. `ids` fica só como referência (compat); a
+  // limpeza de correção usa o id da própria linha (só razão tem id).
+  void ids
+  const selecionados = (lancs || [])
   const comNome = selecionados.filter(l => String(l?.leitura?.entidade || '').trim() || l.acerto)
   // Canônico: o digitado; senão o nome identificado MAIS LONGO entre os selecionados.
   let alvo = String(nomeAlvo || '').trim()
@@ -136,7 +140,9 @@ export function aplicarLink(lancs, ids, aliasForcado = {}, nomeAlvo = '') {
     const k = chaveNome(nome)
     if (k && k !== kAlvo) {
       novoAliasForcado[k] = alvo                       // força o vínculo para os próximos meses
-      if (l?.leitura?.ajustado) correcoesLimpas.push(l.id)  // link vence correção anterior
+      // link vence correção anterior — mas só há o que limpar em linha de RAZÃO (tem id).
+      // Abertura (saldo anterior) não tem id nem ajuste_leitura, então nunca entra aqui.
+      if (l?.leitura?.ajustado && l.id != null) correcoesLimpas.push(l.id)
     }
   }
   return { aliasForcado: novoAliasForcado, correcoesLimpas, canonical: alvo }

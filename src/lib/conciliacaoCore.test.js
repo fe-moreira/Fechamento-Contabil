@@ -165,3 +165,38 @@ describe('I) em aberto = só composição — grupo que ZERA vai pra conciliados
     expect(nomes(emAberto)).toEqual(['DELTA'])
   })
 })
+
+describe('J) LINK do SALDO ANTERIOR (sem id) — abertura entra no vínculo e o grupo zera', () => {
+  it('abertura (sem id) + reclassificação de nome diferente, opostos → aplicarLink une e zera', () => {
+    // Caso AMAZON/ATTENTIVE: "Saldo anterior" (abertura, SEM id) de um lado e a
+    // reclassificação/pagamento (nome diferente) do outro, somando zero. O usuário linka os dois.
+    const abertura = L({ abertura: true, credito: 7269.17, entidade: 'AMAZON AWS SERVICOS BRASIL LTDA' }) // id undefined
+    const reclass = L({ id: 'r1', acerto: true, debito: 7269.17, entidade: 'FORNECEDORES NACIONAIS' })
+
+    // aplicarLink NÃO pode filtrar por id — senão a abertura (sem id) ficaria de fora do vínculo.
+    const { aliasForcado, correcoesLimpas, canonical } = aplicarLink([abertura, reclass], [], {})
+    expect(canonical).toBe('AMAZON AWS SERVICOS BRASIL LTDA')                 // mais longo entre os selecionados
+    expect(aliasForcado).toEqual({ 'fornecedores nacionais': 'AMAZON AWS SERVICOS BRASIL LTDA' })
+    expect(correcoesLimpas).toEqual([])                                       // nada corrigido; e NUNCA um undefined
+
+    // Com o alias forçado do link, os dois caem no MESMO grupo e zeram → CONCILIADOS.
+    const estado = { aliasNormal: {}, aliasForcado }
+    const lancs = [resolver(abertura, estado), resolver(reclass, estado)]
+    expect(lancs.map(l => l.leitura.entidade)).toEqual(['AMAZON AWS SERVICOS BRASIL LTDA', 'AMAZON AWS SERVICOS BRASIL LTDA'])
+    const { emAberto, conciliados } = classificarGrupos(lancs, { ov: ovDC, jaTratada: () => false })
+    expect(nomes(emAberto)).toEqual([])
+    expect(nomes(conciliados)).toEqual(['AMAZON AWS SERVICOS BRASIL LTDA'])
+    expect(grupoDe(conciliados, 'AMAZON AWS SERVICOS BRASIL LTDA').total).toBeCloseTo(0, 3)
+  })
+
+  it('abertura (sem id) MESMO NOME do pagamento — link não quebra e o par zera (ATTENTIVE)', () => {
+    // ATTENTIVE: mesmo nome dos dois lados; o link só serve para BAIXAR o par (que zera).
+    const abertura = L({ abertura: true, credito: 5349.36, entidade: 'ATTENTIVE CONTABILIDADE E SERVICOS S/S LTDA' })
+    const pag = L({ id: 'p1', debito: 5349.36, entidade: 'ATTENTIVE CONTABILIDADE E SERVICOS S/S LTDA', ajustado: true })
+    const { correcoesLimpas } = aplicarLink([abertura, pag], [], {})
+    expect(correcoesLimpas).toEqual([])                                       // mesmo nome → nada a limpar, sem undefined
+    const { emAberto, conciliados } = classificarGrupos([abertura, pag], { ov: ovDC, jaTratada: () => false })
+    expect(nomes(emAberto)).toEqual([])
+    expect(nomes(conciliados)).toEqual(['ATTENTIVE CONTABILIDADE E SERVICOS S/S LTDA'])
+  })
+})

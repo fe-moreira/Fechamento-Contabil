@@ -1530,18 +1530,20 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
 
   // Conecta (baixa manual) os lançamentos SELECIONADOS — nota + pagamento que o sistema
   // não casou sozinho (NF diferente, sem NF, ou nomes separados). Vão para Conciliados.
-  const toggleSelLin = l => setSelLin(prev => { const s = new Set(prev); s.has(l.id) ? s.delete(l.id) : s.add(l.id); return s })
+  // Seleção para conectar/baixar: a chave é sepKey(l) (não l.id), porque o SALDO ANTERIOR
+  // (abertura) NÃO tem id — e ele precisa ser selecionável para linkar com o pagamento do mês.
+  const toggleSelLin = l => setSelLin(prev => { const s = new Set(prev); const k = sepKey(l); s.has(k) ? s.delete(k) : s.add(k); return s })
   // Selecionar tudo / desmarcar tudo (as linhas passadas): se todas já estão marcadas, limpa;
-  // senão, marca todas as selecionáveis (id != null).
+  // senão, marca todas (inclui abertura, via sepKey).
   const selecionarTodos = linhas => setSelLin(prev => {
-    const ids = linhas.map(l => l.id).filter(x => x != null)
-    const todos = ids.length > 0 && ids.every(id => prev.has(id))
+    const ks = (linhas || []).map(l => sepKey(l))
+    const todos = ks.length > 0 && ks.every(k => prev.has(k))
     const s = new Set(prev)
-    if (todos) ids.forEach(id => s.delete(id)); else ids.forEach(id => s.add(id))
+    if (todos) ks.forEach(k => s.delete(k)); else ks.forEach(k => s.add(k))
     return s
   })
   async function conectarSelecionados() {
-    const alvo = lanc.filter(l => selLin.has(l.id) && l.id != null)
+    const alvo = lanc.filter(l => selLin.has(sepKey(l)))
     if (alvo.length < 2) { setMsg('Selecione ao menos 2 lançamentos (a nota e o pagamento) para conectar.'); return }
     const net = alvo.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
     // Conectar SÓ quando ZERA. Se sobra diferença, não conecta (o botão já fica desabilitado).
@@ -2292,8 +2294,8 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
             <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }}>
               <thead>
                 <tr style={{ borderTop: `1px solid ${theme.border}` }}>
-                  <th style={{ ...th, width: 26 }} title={grp.every(l => selLin.has(l.id)) ? 'Desmarcar todos deste' : 'Selecionar tudo deste'}>
-                    {grp.length > 0 && <input type="checkbox" checked={grp.every(l => selLin.has(l.id))} onChange={() => selecionarTodos(grp)} style={{ cursor: 'pointer', width: 15, height: 15 }} />}
+                  <th style={{ ...th, width: 26 }} title={grp.every(l => selLin.has(sepKey(l))) ? 'Desmarcar todos deste' : 'Selecionar tudo deste'}>
+                    {grp.length > 0 && <input type="checkbox" checked={grp.every(l => selLin.has(sepKey(l)))} onChange={() => selecionarTodos(grp)} style={{ cursor: 'pointer', width: 15, height: 15 }} />}
                   </th>
                   <th style={th}>Data</th><th style={th}>NF</th><th style={th}>Histórico</th><th style={th}>Contrapartida</th>
                   <th style={thR}>Débito</th><th style={thR}>Crédito</th><th style={{ ...th, textAlign: 'center' }}>Conf.</th>
@@ -2309,7 +2311,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
                       style={{ borderTop: `1px solid ${theme.border}`, cursor: 'pointer', opacity: (l.acerto || jaTratada(l)) ? 0.7 : 1, background: (l.acerto || jaTratada(l)) ? 'rgba(48,164,108,0.08)' : semNF ? 'rgba(229,72,77,0.08)' : 'transparent' }}
                       title={l.acerto ? `${tagAcertoLanc(l).titulo} — clique para ver ou desfazer` : jaTratada(l) ? 'Já conferido — clique para ver ou desfazer' : semNF ? 'Baixa com NF que não confere com o título — justifique ou corrija' : 'Justificar ou corrigir este lançamento'}>
                       <td style={{ ...td, textAlign: 'center' }} onClick={e => e.stopPropagation()}>
-                        <input type="checkbox" title="Conectar com outro (baixa manual)" checked={selLin.has(l.id)} onChange={() => toggleSelLin(l)} style={{ cursor: 'pointer', width: 15, height: 15 }} />
+                        <input type="checkbox" title="Conectar com outro (baixa manual)" checked={selLin.has(sepKey(l))} onChange={() => toggleSelLin(l)} style={{ cursor: 'pointer', width: 15, height: 15 }} />
                       </td>
                       <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{fmtDataBR(l.data) || '—'}</td>
                       <td style={{ ...td, color: semNF ? theme.red : theme.sub, fontWeight: 600 }}>NF {l.leitura.nf || '—'}</td>
@@ -2393,7 +2395,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       ) : (
         <>
         <ListaLancamentos lanc={emAbertoTodos} carregando={carregando} contraDe={contraDe} planoMap={planoMap} tratados={tratados} onTratar={abrirLinha}
-          selLin={selLin} onToggleSel={toggleSelLin} onSelTodos={selecionarTodos} onExcluirAbertura={excluirAbertura} podeExcluirAbertura={abertura.inicial} aberturaFechada={abertura.fechada} />
+          selLin={selLin} selKey={sepKey} onToggleSel={toggleSelLin} onSelTodos={selecionarTodos} onExcluirAbertura={excluirAbertura} podeExcluirAbertura={abertura.inicial} aberturaFechada={abertura.fechada} />
         {conferidosGrupos.length > 0 && (
           <div style={{ marginTop: 6 }}>
             <button onClick={() => setVerConferidos(v => !v)} style={{ background: 'none', border: 'none', color: theme.sub, cursor: 'pointer', fontSize: 12.5, padding: '6px 2px', display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -2427,7 +2429,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       )}
 
       {(() => {
-        const selLancs = lanc.filter(l => selLin.has(l.id) && l.id != null)
+        const selLancs = lanc.filter(l => selLin.has(sepKey(l)))
         if (!selLancs.length) return null
         const net = selLancs.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
         const zera = Math.abs(net) < 0.005
@@ -2569,7 +2571,7 @@ function ModalComposicao({ titulo, itens, onClose }) {
 
 // Lista simples dos lançamentos de uma conta de composição que NÃO é por entidade
 // (ex.: IRRF s/ aplicação): sem nome/NF/agrupamento; cada lançamento é clicável.
-function ListaLancamentos({ lanc, carregando, contraDe, planoMap, tratados = new Set(), onTratar, selLin, onToggleSel, onSelTodos, onExcluirAbertura, podeExcluirAbertura, aberturaFechada }) {
+function ListaLancamentos({ lanc, carregando, contraDe, planoMap, tratados = new Set(), onTratar, selLin, selKey = (l => l.id), onToggleSel, onSelTodos, onExcluirAbertura, podeExcluirAbertura, aberturaFechada }) {
   const selectable = !!onToggleSel // permite marcar linhas p/ conectar (baixa manual)
   const nCols = selectable ? 7 : 6
   // Filtro/busca (em TODA conta, como clientes/fornecedores): casa por histórico,
@@ -2583,8 +2585,8 @@ function ListaLancamentos({ lanc, carregando, contraDe, planoMap, tratados = new
     const valTxt = `${Number(l.debito) ? money(l.debito) : ''} ${Number(l.credito) ? money(l.credito) : ''}`
     return norm(`${l.data || ''} ${l.historico || ''} ${contraTxt} ${valTxt}`).includes(termo)
   }))
-  const selecionaveis = filtr.filter(l => l.id != null)
-  const todosMarcados = selecionaveis.length > 0 && selecionaveis.every(l => selLin?.has(l.id))
+  const selecionaveis = filtr   // inclui o saldo anterior (abertura), que também pode ser linkado
+  const todosMarcados = selecionaveis.length > 0 && selecionaveis.every(l => selLin?.has(selKey(l)))
   return (
     <>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', margin: '4px 0 10px' }}>
@@ -2618,7 +2620,7 @@ function ListaLancamentos({ lanc, carregando, contraDe, planoMap, tratados = new
                 <tr key={i} onClick={() => onTratar(l)} style={{ borderTop: `1px solid ${theme.border}`, cursor: 'pointer', opacity: (l.acerto || tratados.has(l.id)) ? 0.7 : 1, background: (l.acerto || tratados.has(l.id)) ? 'rgba(48,164,108,0.08)' : 'transparent' }} title={l.acerto ? `${tagAcertoLanc(l).titulo} — clique para ver ou desfazer` : tratados.has(l.id) ? 'Já tratado — clique para ver ou desfazer' : 'Justificar ou corrigir este lançamento'}>
                   {selectable && (
                     <td style={{ ...td, textAlign: 'center' }} onClick={e => e.stopPropagation()}>
-                      {l.id != null && <input type="checkbox" title="Conectar com outro (baixa manual)" checked={selLin?.has(l.id)} onChange={() => onToggleSel(l)} style={{ cursor: 'pointer', width: 15, height: 15 }} />}
+                      <input type="checkbox" title="Conectar com outro (baixa manual)" checked={selLin?.has(selKey(l))} onChange={() => onToggleSel(l)} style={{ cursor: 'pointer', width: 15, height: 15 }} />}
                     </td>
                   )}
                   <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{fmtDataBR(l.data) || '—'}</td>
