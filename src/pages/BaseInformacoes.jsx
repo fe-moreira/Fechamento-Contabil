@@ -1762,7 +1762,7 @@ function ModalResultadoPL({ inicial, plano = [], onClose, onSalvar }) {
   const [prejuizo, setPrejuizo] = useState(inicial?.conta_prejuizo || '')
   const info = cod => {
     if (!cod) return null
-    const p = (plano || []).find(x => String(x.reduzido) === String(cod))
+    const p = (plano || []).find(x => String(x.cod) === String(cod))
     if (!p) return { erro: 'conta não encontrada no plano' }
     return { nome: p.nome, sintetica: p.sintetica, grupo: String(p.classif || '').replace(/\D/g, '').charAt(0) }
   }

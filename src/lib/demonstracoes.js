@@ -256,8 +256,10 @@ export function montarDadosDemonstracoes(perMonth, razaoReceita, anoPerMonth, pe
 // só aceita conta do grupo 2 (Passivo/PL) existente no plano; senão false (cai no comportamento
 // antigo, resultado como linha solta).
 function injetarResultadoNaConta(agg, plano, cod, delta) {
+  // O plano do useAppData usa o campo `cod` (código reduzido); as linhas do balancete (agg)
+  // usam `reduzido` — mesmo valor. Por isso casamos plano.cod × agg.reduzido.
   const dig = s => String(s ?? '').replace(/\D/g, '')
-  const alvo = (plano || []).find(p => String(p.reduzido) === String(cod) && p.classif)
+  const alvo = (plano || []).find(p => String(p.cod) === String(cod) && p.classif)
   if (!alvo) return false
   const dAlvo = dig(alvo.classif)
   if (dAlvo.charAt(0) !== '2') return false // resultado só faz sentido dentro do Passivo/PL
@@ -270,9 +272,9 @@ function injetarResultadoNaConta(agg, plano, cod, delta) {
     const dp = dig(p.classif)
     let ln = agg.find(l => p.sintetica
       ? (l.sintetica && dig(l.classifRaw || l.classif) === dp)
-      : (!l.sintetica && String(l.reduzido) === String(p.reduzido)))
+      : (!l.sintetica && String(l.reduzido) === String(p.cod)))
     if (!ln) {
-      ln = { reduzido: p.reduzido, cod: p.reduzido, nome: p.nome, classif: p.classif, classifRaw: p.classif,
+      ln = { reduzido: p.cod, cod: p.cod, nome: p.nome, classif: p.classif, classifRaw: p.classif,
         sintetica: !!p.sintetica, grau: String(p.classif).split('.').length, saldo_inicial: 0, debito: 0, credito: 0, saldo_final: 0 }
       agg.push(ln)
     }
@@ -481,7 +483,7 @@ export function abrirDemonstracoesContabeis({ empresa, cnpj, periodoLabel, perio
     if (contasResultado && Math.abs(resAcumComp) > 0.005) {
       const cod = resAcumComp >= 0 ? contasResultado.conta_lucro : contasResultado.conta_prejuizo
       if (cod && injetarResultadoNaConta(aggBal, plano, cod, -resAcumComp)) {
-        const pc = (plano || []).find(p => String(p.reduzido) === String(cod))
+        const pc = (plano || []).find(p => String(p.cod) === String(cod))
         contaAloc = { cod, nome: pc?.nome || '', lucro: resAcumComp >= 0 }
       }
     }
