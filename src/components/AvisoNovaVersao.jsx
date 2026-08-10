@@ -38,7 +38,10 @@ export default function AvisoNovaVersao() {
   }, [])
   if (!novo) return null
   return (
-    <div style={{ position: 'fixed', left: '50%', bottom: 20, transform: 'translateX(-50%)', zIndex: 9999, display: 'flex', alignItems: 'center', gap: 12, background: theme.card, border: `1px solid ${theme.accent}`, borderRadius: 12, padding: '10px 16px', boxShadow: '0 8px 30px rgba(0,0,0,0.45)', maxWidth: '94vw' }}>
+    // No TOPO (não embaixo): a barra de seleção/"Conectar (baixar)" da Conciliação também fica
+    // fixa embaixo-centro — se este aviso ficasse embaixo, cobria o botão de baixar e dava a
+    // impressão de que "não dá para baixar". Aqui em cima, nunca sobrepõe uma ação.
+    <div style={{ position: 'fixed', left: '50%', top: 14, transform: 'translateX(-50%)', zIndex: 9999, display: 'flex', alignItems: 'center', gap: 12, background: theme.card, border: `1px solid ${theme.accent}`, borderRadius: 12, padding: '10px 16px', boxShadow: '0 8px 30px rgba(0,0,0,0.45)', maxWidth: '94vw' }}>
       <i className="ti ti-rocket" style={{ color: theme.accent, fontSize: 18, flexShrink: 0 }} />
       <span style={{ color: theme.text, fontSize: 13 }}>Saiu uma <b>versão nova</b> do sistema. Atualize para pegar as últimas melhorias.</span>
       <button className="btn" style={{ fontSize: 12.5, padding: '5px 12px', flexShrink: 0 }} onClick={() => window.location.reload()}><i className="ti ti-refresh" /> Atualizar agora</button>
