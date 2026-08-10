@@ -129,7 +129,14 @@ export default function DemonstracoesContabeis() {
         periodoLabel: label, periodoIni: priBR(pri.ano, pri.mes), periodoFim: diaBR(ult.ano, ult.mes),
         blocos: marcados, dados, modelo, nivel, plano, contasResultado,
       })
-      if (ok) setMsg(`Relatório gerado com ${doPeriodo.length} competência(s) — abriu a janela de impressão (salvar como PDF).`)
+      // DIAGNÓSTICO TEMPORÁRIO (amarração lucro/prejuízo) — remover depois de validar.
+      let diag
+      if (!contasResultado) diag = 'amarração: NENHUMA config lida do banco (resultado_pl_config vazia p/ este cliente)'
+      else {
+        const info = c => { const pc = (plano || []).find(p => String(p.cod) === String(c)); return !c ? '(vazio)' : pc ? `${pc.classif} ${pc.sintetica ? 'SINTÉTICA' : 'analítica'}` : 'NÃO está no plano carregado' }
+        diag = `amarração: lucro="${contasResultado.conta_lucro}" (${info(contasResultado.conta_lucro)}) · prejuízo="${contasResultado.conta_prejuizo}" (${info(contasResultado.conta_prejuizo)}) · plano carregado=${(plano || []).length} contas`
+      }
+      if (ok) setMsg(`Relatório gerado com ${doPeriodo.length} competência(s). [DIAG] ${diag}`)
     } catch (e) {
       setMsg('Erro ao gerar: ' + (e?.message || e))
     } finally { setGerando(false) }
