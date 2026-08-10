@@ -487,10 +487,13 @@ export default function Conciliacao() {
   const analiticasExtra = Object.keys(acertos)
     .filter(cod => !baseSet.has(String(cod)) && planoRed[String(cod)] && !planoRed[String(cod)].sintetica && ['1', '2'].includes(dig(planoRed[String(cod)].classif)[0]))
     .map(cod => {
-      const p = planoRed[String(cod)]; const raw = dig(p.classif); const ac = acertos[String(cod)] || { deb: 0, cred: 0 }
-      // O movimento do lançamento manual entra nas colunas Débito/Crédito (o saldo já
-      // vem por ajNet). saldo_final fica 0 para não duplicar o valor no saldo efetivo.
-      return { reduzido: String(cod), conta: String(cod), classif: mk(p.classif), classifRaw: raw, nome: p.nome || '', sintetica: false, folha: true, saldo_final: 0, saldo_inicial: 0, debito: ac.deb || 0, credito: ac.cred || 0 }
+      const p = planoRed[String(cod)]; const raw = dig(p.classif)
+      // Débito/Crédito/Saldo destas contas (que só têm lançamento) JÁ são somados na exibição
+      // por ajDebOf/ajCredOf/ajTotal (que vêm de `acertos`). Por isso a base fica ZERADA em
+      // débito/crédito/saldo — senão o movimento entrava duas vezes (a coluna somava a base +
+      // o ajuste do MESMO lançamento, dobrando o crédito). Ex.: crédito de 39.417,66 aparecia
+      // como 78.835,32. O saldo já vinha certo (usa o ajuste uma vez), o que expunha a dobra.
+      return { reduzido: String(cod), conta: String(cod), classif: mk(p.classif), classifRaw: raw, nome: p.nome || '', sintetica: false, folha: true, saldo_final: 0, saldo_inicial: 0, debito: 0, credito: 0 }
     })
   // Sintéticas ANCESTRAIS dessas analíticas que ainda não estão na lista — para amarrar a
   // analítica à(s) sintética(s) no painel, igual às demais contas. Saldo vem da soma das
