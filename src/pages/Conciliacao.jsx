@@ -10,6 +10,7 @@ import { montarBalancete, parsePlano, composicaoAbertura, difConciliacao, applyM
 import { abrePdfTimbrado } from '../lib/pdf'
 import { gerarExcelTimbrado } from '../lib/excel'
 import { listarComentariosConta, adicionarComentario, excluirComentario } from '../lib/comentarios'
+import { resolverEntidade, aplicarLink } from '../lib/conciliacaoCore'
 import { aberturaComp, excluirSaldoInicialTudo } from '../lib/cargaInicial'
 import CampoConta from '../components/CampoConta'
 
@@ -932,18 +933,13 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         const rec = nomeDoFiscal(leitura.entidade)
         if (rec && rec !== leitura.entidade) leitura = { ...leitura, entidade: rec, ident: true }
       }
-      const al = leitura.entidade ? aliasMap[chaveNome(leitura.entidade)] : null
-      // Só aplica o APELIDO se o nome final for do MESMO cliente (compartilha token distintivo).
-      // Assim, apelidos criados por uma UNIFICAÇÃO ERRADA antiga — quando o sistema juntava
-      // nomes totalmente diferentes num grupo e o Conectar/Confirmar salvava todos apelidados
-      // pelo nome mais longo (ex.: "PHARUS…" virou apelido de "NOVA CONTABILIDADE…") — deixam de
-      // forçar o agrupamento depois que a leitura passou a extrair o cliente certo.
-      if (al && al !== leitura.entidade && mesmoCliente(tokensNome(leitura.entidade), tokensNome(al))) {
-        leitura = { ...leitura, entidade: al, ident: true }
+      // Apelido normal (só MESMO cliente) + vínculo MANUAL forçado (mesmo entre nomes diferentes),
+      // com a CORREÇÃO manual da própria linha SOBERANA sobre o forçado (linha corrigida sai da
+      // união). Lógica única e provada em conciliacaoCore.resolverEntidade (testes: bug #2 + G).
+      if (leitura.entidade) {
+        const ent = resolverEntidade(leitura.entidade, { corrigido: manualAbert || !!leitura.ajustado, aliasNormal: aliasMap, aliasForcado: aliasForcadoMap })
+        if (ent && ent !== leitura.entidade) leitura = { ...leitura, entidade: ent, ident: true }
       }
-      // Vínculo MANUAL forçado: aplica mesmo entre nomes diferentes (o usuário mandou juntar).
-      const alF = leitura.entidade ? aliasForcadoMap[chaveNome(leitura.entidade)] : null
-      if (alF && alF !== leitura.entidade) leitura = { ...leitura, entidade: alF, ident: true }
       // Rede de segurança: seja qual for a origem do nome (histórico, fiscal, alias), tira
       // prefixo de tipo de conta / imposto colado no começo (ex.: "ADIANTAMENTO DE CLIENTES …").
       if (leitura.entidade) { const limpo = limparNomeEntidade(leitura.entidade); if (limpo && limpo !== leitura.entidade) leitura = { ...leitura, entidade: limpo } }
@@ -1120,7 +1116,11 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // Agrupa só o que está EM ABERTO (não baixado) por nome; incerto cai em "(não identificado)".
   const grupos = {}, nomes = [], nomeExib = {}, sepKeys = new Set()
   for (const l of lanc) {
-    if (baixados.has(l) || foiConfirmado(l) || autoConc.has(l)) continue // baixado por NF, confirmado em lote ou correção que anulou a origem → saiu
+    // baixado por NF / autoConc → já saiu. O CONFIRMADO em lote: em contas NÃO-entidade sai
+    // direto; em contas de ENTIDADE ele ENTRA no agrupamento para reverificar se o grupo do nome
+    // REALMENTE zerou (link vira união forçada e zera junto; saldo inicial sem par NÃO zera →
+    // volta pro em aberto). Ver conciliacaoCore.classificarGrupos (bug #1) e testes A/F.
+    if (baixados.has(l) || (foiConfirmado(l) && !ehEntidadeConta) || autoConc.has(l)) continue
     if (Math.abs(ov(l)) < 0.005) continue
     const ent = l.leitura.ident && l.leitura.entidade ? l.leitura.entidade
       : ehCartaoCredito(l) ? 'Cartão de crédito' : '(não identificado)'
@@ -1198,7 +1198,9 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const emAbertoTodos = ehEntidade ? lista.flatMap(g => g.lancs) : lanc.filter(l => Math.abs(ov(l)) >= 0.005 && !autoConc.has(l) && !foiConfirmado(l))
   // Conciliados (saíram do em aberto): confirmados em lote + entidades que zeraram e foram
   // tratadas + pares de correção que se anularam com a origem. Ficam numa seção colapsável.
-  const confirmadosLancs = lanc.filter(l => foiConfirmado(l) && Math.abs(ov(l)) >= 0.005)
+  // Em contas de ENTIDADE o confirmado é reavaliado pelo agrupamento (resolvida = grupo zerou);
+  // o link vira união forçada e cai num grupo que zera. Contas NÃO-entidade mantêm o antigo.
+  const confirmadosLancs = ehEntidade ? [] : lanc.filter(l => foiConfirmado(l) && Math.abs(ov(l)) >= 0.005)
   const autoConcLancs = lanc.filter(l => autoConc.has(l) && Math.abs(ov(l)) >= 0.005)
   const conferidosLancs = [...new Set([...confirmadosLancs, ...resolvidasEnt.flatMap(g => g.lancs).filter(l => Math.abs(ov(l)) >= 0.005), ...autoConcLancs])]
   const zerados = [...new Set([...baixados, ...conferidosLancs])] // sem repetir (uma linha pode ser baixada E confirmada)
@@ -1549,16 +1551,21 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // mais COMPLETO como o "fornecedor final" e APRENDE que os outros são o mesmo (apelido) —
   // vale para os próximos meses e agrupa sozinho. Assim a plataforma vai aprendendo.
   async function unificarNomesConectados(alvo) {
-    const nomes = [...new Set((alvo || []).filter(l => l.leitura?.ident && String(l.leitura.entidade || '').trim()).map(l => l.leitura.entidade.trim()))]
-    if (nomes.length < 2) return null
-    const canonical = nomes.slice().sort((a, b) => b.length - a.length)[0] // o mais completo
-    const aliases = { ...nomesAlias }
-    let mudou = false
-    for (const n of nomes) { const k = chaveNome(n); if (k && k !== chaveNome(canonical)) { aliases[k] = canonical; mudou = true } }
-    if (!mudou) return null
-    setNomesAlias(aliases)
-    await salvarNomes(nomesConf, nomesIsolados, aliases)
-    return canonical
+    // VÍNCULO FORÇADO (o usuário conectou explicitamente e o par ZERA): junta os nomes num
+    // canônico SEM a trava do "mesmo cliente" — o par cai num grupo só que zera, mesmo entre
+    // clientes diferentes. Além disso, o link é a ação MAIS RECENTE: LIMPA a correção anterior
+    // (ajuste_leitura) das linhas linkadas que não são o canônico, para o vínculo poder recolhê-
+    // las (correção-depois-link volta a funcionar). Lógica provada em conciliacaoCore.aplicarLink.
+    const ids = (alvo || []).map(l => l.id).filter(x => x != null)
+    const { aliasForcado, correcoesLimpas, canonical } = aplicarLink(alvo, ids, aliasesForcados)
+    const mudou = JSON.stringify(aliasForcado) !== JSON.stringify(aliasesForcados)
+    if (correcoesLimpas.length) {
+      try { await supabase.from('ajuste_leitura').delete().eq('competencia_id', await getCompetenciaId()).in('razao_id', correcoesLimpas) } catch { /* segue mesmo se falhar a limpeza */ }
+    }
+    if (!mudou && !correcoesLimpas.length) return null
+    setAliasesForcados(aliasForcado)
+    await salvarNomes(nomesConf, nomesIsolados, undefined, undefined, undefined, undefined, undefined, undefined, undefined, aliasForcado)
+    return canonical || null
   }
   // Marca as linhas da conexão como confirmadas (saem para Conciliados). `extraRazaoId` é o
   // lançamento de acerto da diferença (desconto/juros), que também deve sair do em aberto.
