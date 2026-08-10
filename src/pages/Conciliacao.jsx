@@ -1120,7 +1120,11 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // Agrupa só o que está EM ABERTO (não baixado) por nome; incerto cai em "(não identificado)".
   const grupos = {}, nomes = [], nomeExib = {}, sepKeys = new Set()
   for (const l of lanc) {
-    if (baixados.has(l) || foiConfirmado(l) || autoConc.has(l)) continue // baixado por NF, confirmado em lote ou correção que anulou a origem → saiu
+    // baixado por NF ou correção que anulou a origem → saiu do em aberto. O CONFIRMADO em lote:
+    // em contas NÃO-entidade sai direto (individual); em contas de ENTIDADE (cliente/fornecedor)
+    // ele ENTRA no agrupamento para reverificar se o grupo do nome realmente zerou — assim algo
+    // confirmado que NÃO zera (ex.: saldo inicial sem o par do mês seguinte) volta ao em aberto.
+    if (baixados.has(l) || (foiConfirmado(l) && !ehEntidadeConta) || autoConc.has(l)) continue
     if (Math.abs(ov(l)) < 0.005) continue
     const ent = l.leitura.ident && l.leitura.entidade ? l.leitura.entidade
       : ehCartaoCredito(l) ? 'Cartão de crédito' : '(não identificado)'
@@ -1198,7 +1202,10 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const emAbertoTodos = ehEntidade ? lista.flatMap(g => g.lancs) : lanc.filter(l => Math.abs(ov(l)) >= 0.005 && !autoConc.has(l) && !foiConfirmado(l))
   // Conciliados (saíram do em aberto): confirmados em lote + entidades que zeraram e foram
   // tratadas + pares de correção que se anularam com a origem. Ficam numa seção colapsável.
-  const confirmadosLancs = lanc.filter(l => foiConfirmado(l) && Math.abs(ov(l)) >= 0.005)
+  // Em contas de ENTIDADE, o confirmado é reavaliado pelo agrupamento (resolvida = grupo zerou):
+  // só entra em Conciliados se o grupo do nome realmente zerar; senão fica no em aberto. Em contas
+  // NÃO-entidade mantém o comportamento antigo (confirmado individual sai do em aberto).
+  const confirmadosLancs = ehEntidade ? [] : lanc.filter(l => foiConfirmado(l) && Math.abs(ov(l)) >= 0.005)
   const autoConcLancs = lanc.filter(l => autoConc.has(l) && Math.abs(ov(l)) >= 0.005)
   const conferidosLancs = [...new Set([...confirmadosLancs, ...resolvidasEnt.flatMap(g => g.lancs).filter(l => Math.abs(ov(l)) >= 0.005), ...autoConcLancs])]
   const zerados = [...new Set([...baixados, ...conferidosLancs])] // sem repetir (uma linha pode ser baixada E confirmada)
