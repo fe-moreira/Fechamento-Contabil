@@ -639,7 +639,7 @@ function svgDesempenho(s) {
 
 // CSS do documento (estilo CEMIG: Cambria/Calibri; Domínio em Arial, intocado).
 const CSS = `
-*{box-sizing:border-box}
+*{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}
 :root{--paper:#fff;--ink:#1c2430;--sub:#5a6785;--line:#e6e9ef;--band:#101a2e;--bandsub:#8fa3c4;--accent:#4A7CFF;--green:#1f9d63;--amber:#8a5a12;--soft:#f6f8fb;--serif:"Cambria",Georgia,"Times New Roman",serif;--sans:"Calibri","Segoe UI",system-ui,-apple-system,sans-serif}
 html,body{margin:0;background:#e9edf3;color:var(--ink);font-family:var(--sans)}
 body{padding:20px 12px 60px}
@@ -736,6 +736,9 @@ p.lead .up{color:var(--green);font-weight:700}
 @page{size:A4 portrait;margin:14mm}
 @page land{size:A4 landscape;margin:12mm}
 @media print{
+  /* Mantém TODOS os fundos e cores no PDF (Chrome os remove por padrão). É o que faz o PDF
+     sair igual à tela: faixa navy, cards, barras do gráfico, cores de texto e linhas coloridas. */
+  *{ -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important }
   html,body{background:#fff;padding:0}
   .page{width:auto;margin:0;border-radius:0;box-shadow:none;page-break-after:always}
   .page.land{page:land}
