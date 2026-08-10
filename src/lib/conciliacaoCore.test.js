@@ -147,3 +147,21 @@ describe('H) correção é SOBERANA sobre TUDO (apelido normal, vínculo forçad
     expect(resolverEntidade('GF4', { corrigido: true, aliasNormal: { gf4: 'X' }, aliasForcado: { gf4: 'ALLAN KENNEDY' } })).toBe('GF4')
   })
 })
+
+describe('I) em aberto = só composição — grupo que ZERA vai pra conciliados mesmo sem confirmar linha a linha', () => {
+  it('título + pagamento mesmo nome, mesmo valor, opostos → CONCILIADOS mesmo com jaTratada=false', () => {
+    // Ex.: ATTENTIVE/GMMG — o pagamento foi só "corrigido" (nome), nenhuma linha "confirmada".
+    const titulo = L({ id: 'I1', abertura: true, credito: 27200, entidade: 'GMMG SOLUCOES ADM LTDA' })
+    const pag = L({ id: 'I2', debito: 27200, entidade: 'GMMG SOLUCOES ADM LTDA', ajustado: true })
+    const { emAberto, conciliados } = classificarGrupos([titulo, pag], { ov: ovDC, jaTratada: () => false })
+    expect(nomes(emAberto)).toEqual([])
+    expect(nomes(conciliados)).toEqual(['GMMG SOLUCOES ADM LTDA'])
+    expect(grupoDe(conciliados, 'GMMG SOLUCOES ADM LTDA').total).toBeCloseTo(0, 3)
+  })
+  it('o que NÃO zera continua em aberto (composição)', () => {
+    const soTitulo = L({ id: 'I3', abertura: true, credito: 5000, entidade: 'DELTA' })
+    const { emAberto, conciliados } = classificarGrupos([soTitulo], { ov: ovDC, jaTratada: () => false })
+    expect(nomes(conciliados)).toEqual([])
+    expect(nomes(emAberto)).toEqual(['DELTA'])
+  })
+})

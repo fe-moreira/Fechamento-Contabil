@@ -95,7 +95,12 @@ export function classificarGrupos(lancs, { ov = ovDC, jaTratada = () => false, b
     const total = gl.reduce((s, l) => s + ov(l), 0)
     const grupo = { nome, lancs: gl, total }
     const unk = nome === NAO_IDENT
-    const zerou = Math.abs(total) < 0.005 && gl.length > 0 && gl.every(l => l.acerto || jaTratada(l))
+    // Régua do usuário: "em aberto = só COMPOSIÇÃO (o que NÃO zera). Tudo que zera vai pro
+    // relatório de conciliação." Então um grupo IDENTIFICADO que soma ZERO já é conciliado —
+    // título + baixa se compensam — sem exigir confirmação linha a linha. O que sobra (não zera)
+    // fica em aberto compondo o saldo. jaTratada segue disponível para outros usos.
+    void jaTratada
+    const zerou = Math.abs(total) < 0.005 && gl.length > 0
     if (!unk && zerou) conciliados.push(grupo)
     else emAberto.push(grupo)
   }

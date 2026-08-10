@@ -1156,7 +1156,10 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   listaTodas.sort((a, b) => (a.unk ? 1 : 0) - (b.unk ? 1 : 0) || a.nome.localeCompare(b.nome, 'pt-BR'))
   // Entidade RESOLVIDA: zerou e TODAS as linhas já foram tratadas (conferido/corrigido/baixa)
   // → sai do em aberto e vai para os Conciliados (o que zerou). É o caso "bateu e está certo".
-  const ehResolvida = g => !g.unk && Math.abs(g.total) < 0.005 && g.lancs.length > 0 && g.lancs.every(l => l.acerto || jaTratada(l))
+  // Régua do usuário: "em aberto = só COMPOSIÇÃO (o que NÃO zera); tudo que zera vai pro relatório
+  // de conciliação." Então um grupo identificado que SOMA ZERO já é conciliado (título + baixa se
+  // compensam) — sem exigir confirmação linha a linha. Mesma lógica de conciliacaoCore.classificarGrupos.
+  const ehResolvida = g => !g.unk && Math.abs(g.total) < 0.005 && g.lancs.length > 0
   const resolvidasEnt = listaTodas.filter(ehResolvida)
   const lista = listaTodas.filter(g => !ehResolvida(g))
 
