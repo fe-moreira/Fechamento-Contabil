@@ -1362,6 +1362,13 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         || (termoDig && g.lancs.some(l => String(l.leitura?.nf || '').replace(/\D/g, '').includes(termoDig)))
         || (termoDig.length >= 3 && g.lancs.some(l => valDig(l).includes(termoDig))))
     : listaBase
+  // A busca TAMBÉM alcança os CONCILIADOS (conferido neste mês / conciliado automaticamente):
+  // quando você procura um nome, NF ou valor, os grupos que JÁ SAÍRAM também aparecem — para
+  // você achar e REABRIR o que foi baixado errado, sem precisar vasculhar a seção fechada.
+  const casaBusca = g => baixaTxt(g.nome).includes(termoBusca) || g.lancs.some(l => baixaTxt(l.historico).includes(termoBusca))
+    || (termoDig && g.lancs.some(l => String(l.leitura?.nf || '').replace(/\D/g, '').includes(termoDig)))
+    || (termoDig.length >= 3 && g.lancs.some(l => valDig(l).includes(termoDig)))
+  const conferidosVis = termoBusca ? conferidosGrupos.filter(casaBusca) : conferidosGrupos
 
   async function registrar(tipo, payload) {
     const id = await getCompetenciaId()
@@ -2434,10 +2441,10 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       })}
       {conferidosGrupos.length > 0 && (
         <div style={{ marginTop: 6 }}>
-          <button onClick={() => setVerConferidos(v => !v)} style={{ background: 'none', border: 'none', color: theme.sub, cursor: 'pointer', fontSize: 12.5, padding: '6px 2px', display: 'flex', alignItems: 'center', gap: 6 }}>
-            <i className={`ti ${verConferidos ? 'ti-chevron-down' : 'ti-chevron-right'}`} /> <i className="ti ti-circle-check" style={{ color: theme.green }} /> Conferidos neste mês ({conferidosLancs.length}) — {verConferidos ? 'clique para ocultar' : 'clique para ver e reabrir'}
+          <button onClick={() => setVerConferidos(v => !v)} style={{ background: 'none', border: 'none', color: termoBusca ? theme.accent : theme.sub, cursor: 'pointer', fontSize: 12.5, padding: '6px 2px', display: 'flex', alignItems: 'center', gap: 6 }}>
+            <i className={`ti ${(verConferidos || termoBusca) ? 'ti-chevron-down' : 'ti-chevron-right'}`} /> <i className="ti ti-circle-check" style={{ color: theme.green }} /> Conciliados / conferidos neste mês ({conferidosLancs.length}){termoBusca ? ` — ${conferidosVis.length} com “${buscaNome}” (reabra aqui)` : verConferidos ? ' — clique para ocultar' : ' — clique para ver e reabrir'}
           </button>
-          {verConferidos && conferidosGrupos.map((g, gi) => (
+          {(verConferidos || termoBusca) && conferidosVis.map((g, gi) => (
             <div key={gi} style={{ background: theme.card, border: `1px solid ${theme.cb}`, borderRadius: 12, overflow: 'hidden', marginBottom: 10, opacity: 0.9 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', background: theme.input, gap: 8 }}>
                 <span style={{ color: theme.text, fontSize: 13, fontWeight: 600 }}><i className="ti ti-circle-check" style={{ color: theme.green, marginRight: 6 }} />{g.nome}</span>
@@ -2472,10 +2479,10 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
           selLin={selLin} selKey={sepKey} onToggleSel={toggleSelLin} onSelTodos={selecionarTodos} onExcluirAbertura={excluirAbertura} podeExcluirAbertura={abertura.inicial} aberturaFechada={abertura.fechada} />
         {conferidosGrupos.length > 0 && (
           <div style={{ marginTop: 6 }}>
-            <button onClick={() => setVerConferidos(v => !v)} style={{ background: 'none', border: 'none', color: theme.sub, cursor: 'pointer', fontSize: 12.5, padding: '6px 2px', display: 'flex', alignItems: 'center', gap: 6 }}>
-              <i className={`ti ${verConferidos ? 'ti-chevron-down' : 'ti-chevron-right'}`} /> <i className="ti ti-circle-check" style={{ color: theme.green }} /> Conferidos neste mês ({conferidosLancs.length}) — {verConferidos ? 'clique para ocultar' : 'clique para ver e reabrir'}
+            <button onClick={() => setVerConferidos(v => !v)} style={{ background: 'none', border: 'none', color: termoBusca ? theme.accent : theme.sub, cursor: 'pointer', fontSize: 12.5, padding: '6px 2px', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <i className={`ti ${(verConferidos || termoBusca) ? 'ti-chevron-down' : 'ti-chevron-right'}`} /> <i className="ti ti-circle-check" style={{ color: theme.green }} /> Conciliados / conferidos neste mês ({conferidosLancs.length}){termoBusca ? ` — ${conferidosVis.length} com “${buscaNome}” (reabra aqui)` : verConferidos ? ' — clique para ocultar' : ' — clique para ver e reabrir'}
             </button>
-            {verConferidos && conferidosGrupos.map((g, gi) => (
+            {(verConferidos || termoBusca) && conferidosVis.map((g, gi) => (
               <div key={gi} style={{ background: theme.card, border: `1px solid ${theme.cb}`, borderRadius: 12, overflow: 'hidden', marginBottom: 10, opacity: 0.9 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', background: theme.input, gap: 8 }}>
                   <span style={{ color: theme.text, fontSize: 13, fontWeight: 600 }}><i className="ti ti-circle-check" style={{ color: theme.green, marginRight: 6 }} />{g.nome}</span>
