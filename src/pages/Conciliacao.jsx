@@ -1182,9 +1182,14 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // Régua do usuário: "em aberto = só COMPOSIÇÃO (o que NÃO zera); tudo que zera vai pro relatório
   // de conciliação." Então um grupo identificado que SOMA ZERO já é conciliado (título + baixa se
   // compensam) — sem exigir confirmação linha a linha. Mesma lógica de conciliacaoCore.classificarGrupos.
-  // MAS: um grupo que o usuário REABRIU (zerou por nome mas não era par de verdade) NÃO concilia
-  // sozinho — fica compondo o saldo até uma baixa MANUAL (aí vira conexão manual e sai como par).
-  const ehResolvida = g => !g.unk && Math.abs(g.total) < 0.005 && g.lancs.length > 0 && !g.lancs.some(reaberto)
+  // Régua do usuário: a baixa AUTOMÁTICA só acontece por NF+fornecedor+valor (tratada em
+  // `baixados`, antes daqui). Um grupo que zera SÓ POR NOME NÃO baixa sozinho: só é "resolvido"
+  // (vai para Conciliados) quando NÃO há linha pendente — ou seja, todas já foram tratadas/
+  // confirmadas à mão (conferir/confirmar/estornar). Enquanto houver pendente, fica EM ABERTO e
+  // aparece o botão "Confirmar" (a sugestão). Abertura (sem id) e acerto não contam como pendente.
+  // E um grupo REABERTO pelo usuário também nunca concilia sozinho.
+  const semPendente = g => g.lancs.every(l => !l.id || l.acerto || jaTratada(l))
+  const ehResolvida = g => !g.unk && Math.abs(g.total) < 0.005 && g.lancs.length > 0 && !g.lancs.some(reaberto) && semPendente(g)
   const resolvidasEnt = listaTodas.filter(ehResolvida)
   const lista = listaTodas.filter(g => !ehResolvida(g))
 

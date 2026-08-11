@@ -148,21 +148,49 @@ describe('H) correção é SOBERANA sobre TUDO (apelido normal, vínculo forçad
   })
 })
 
-describe('I) em aberto = só composição — grupo que ZERA vai pra conciliados mesmo sem confirmar linha a linha', () => {
-  it('título + pagamento mesmo nome, mesmo valor, opostos → CONCILIADOS mesmo com jaTratada=false', () => {
-    // Ex.: ATTENTIVE/GMMG — o pagamento foi só "corrigido" (nome), nenhuma linha "confirmada".
+describe('I) automático SÓ por NF+fornecedor+valor — zerar SÓ POR NOME não baixa sozinho', () => {
+  it('título + pagamento mesmo nome, zera, mas NÃO confirmado → EM ABERTO (sugestão, não baixa)', () => {
+    // Ex.: GMMG — o pagamento foi só "corrigido" (nome), nenhuma linha confirmada à mão. Como NÃO
+    // casou por NF nem foi confirmado, NÃO pode baixar sozinho: fica em aberto (aparece "Confirmar").
     const titulo = L({ id: 'I1', abertura: true, credito: 27200, entidade: 'GMMG SOLUCOES ADM LTDA' })
     const pag = L({ id: 'I2', debito: 27200, entidade: 'GMMG SOLUCOES ADM LTDA', ajustado: true })
     const { emAberto, conciliados } = classificarGrupos([titulo, pag], { ov: ovDC, jaTratada: () => false })
+    expect(nomes(conciliados)).toEqual([])                       // NÃO baixa sozinho
+    expect(nomes(emAberto)).toEqual(['GMMG SOLUCOES ADM LTDA'])  // fica compondo, como sugestão
+    expect(grupoDe(emAberto, 'GMMG SOLUCOES ADM LTDA').total).toBeCloseTo(0, 3)
+  })
+  it('o MESMO grupo, DEPOIS de confirmado à mão (jaTratada) → CONCILIADOS', () => {
+    const titulo = L({ id: 'I1', abertura: true, credito: 27200, entidade: 'GMMG SOLUCOES ADM LTDA' })
+    const pag = L({ id: 'I2', debito: 27200, entidade: 'GMMG SOLUCOES ADM LTDA', ajustado: true })
+    // Usuário clicou "Confirmar" → a linha de razão vira tratada.
+    const { emAberto, conciliados } = classificarGrupos([titulo, pag], { ov: ovDC, jaTratada: l => l.id === 'I2' })
     expect(nomes(emAberto)).toEqual([])
     expect(nomes(conciliados)).toEqual(['GMMG SOLUCOES ADM LTDA'])
-    expect(grupoDe(conciliados, 'GMMG SOLUCOES ADM LTDA').total).toBeCloseTo(0, 3)
   })
   it('o que NÃO zera continua em aberto (composição)', () => {
     const soTitulo = L({ id: 'I3', abertura: true, credito: 5000, entidade: 'DELTA' })
     const { emAberto, conciliados } = classificarGrupos([soTitulo], { ov: ovDC, jaTratada: () => false })
     expect(nomes(conciliados)).toEqual([])
     expect(nomes(emAberto)).toEqual(['DELTA'])
+  })
+})
+
+describe('K) NOTAS DIFERENTES / VALORES DIFERENTES não baixam sozinhos (a regra do usuário)', () => {
+  it('mesmo fornecedor, NFs DIFERENTES, que só se anulam, SEM confirmar → EM ABERTO', () => {
+    // Título NF 100 (crédito) + pagamento NF 200 (débito), mesmo nome, se anulam — mas notas
+    // diferentes e sem confirmação. NÃO pode baixar sozinho.
+    const titulo = L({ id: 'K1', nf: '100', credito: 9000, entidade: 'ACME LTDA' })
+    const pag = L({ id: 'K2', nf: '200', debito: 9000, entidade: 'ACME LTDA' })
+    const { emAberto, conciliados } = classificarGrupos([titulo, pag], { ov: ovDC, jaTratada: () => false })
+    expect(nomes(conciliados)).toEqual([])
+    expect(nomes(emAberto)).toEqual(['ACME LTDA'])
+  })
+  it('quando o usuário CONFIRMA/linka à mão (jaTratada) → aí sim CONCILIADOS', () => {
+    const titulo = L({ id: 'K1', nf: '100', credito: 9000, entidade: 'ACME LTDA' })
+    const pag = L({ id: 'K2', nf: '200', debito: 9000, entidade: 'ACME LTDA' })
+    const { emAberto, conciliados } = classificarGrupos([titulo, pag], { ov: ovDC, jaTratada: () => true })
+    expect(nomes(emAberto)).toEqual([])
+    expect(nomes(conciliados)).toEqual(['ACME LTDA'])
   })
 })
 
@@ -212,7 +240,8 @@ describe('J) LINK do SALDO ANTERIOR (sem id) — abertura entra no vínculo e o 
     const pag = L({ id: 'p1', debito: 5349.36, entidade: 'ATTENTIVE CONTABILIDADE E SERVICOS S/S LTDA', ajustado: true })
     const { correcoesLimpas } = aplicarLink([abertura, pag], [], {})
     expect(correcoesLimpas).toEqual([])                                       // mesmo nome → nada a limpar, sem undefined
-    const { emAberto, conciliados } = classificarGrupos([abertura, pag], { ov: ovDC, jaTratada: () => false })
+    // Link/baixa MANUAL = linhas tratadas à mão (jaTratada) → aí o par vai para Conciliados.
+    const { emAberto, conciliados } = classificarGrupos([abertura, pag], { ov: ovDC, jaTratada: () => true })
     expect(nomes(emAberto)).toEqual([])
     expect(nomes(conciliados)).toEqual(['ATTENTIVE CONTABILIDADE E SERVICOS S/S LTDA'])
   })

@@ -95,12 +95,15 @@ export function classificarGrupos(lancs, { ov = ovDC, jaTratada = () => false, b
     const total = gl.reduce((s, l) => s + ov(l), 0)
     const grupo = { nome, lancs: gl, total }
     const unk = nome === NAO_IDENT
-    // Régua do usuário: "em aberto = só COMPOSIÇÃO (o que NÃO zera). Tudo que zera vai pro
-    // relatório de conciliação." Então um grupo IDENTIFICADO que soma ZERO já é conciliado —
-    // título + baixa se compensam — sem exigir confirmação linha a linha. O que sobra (não zera)
-    // fica em aberto compondo o saldo. jaTratada segue disponível para outros usos.
-    void jaTratada
-    const zerou = Math.abs(total) < 0.005 && gl.length > 0
+    // Régua do usuário (revista): a baixa AUTOMÁTICA só acontece por NF+fornecedor+valor — e isso
+    // é tratado FORA daqui (as linhas casadas por NF entram como `baixados`). Aqui, um grupo que
+    // zera SÓ POR NOME (título + baixa de notas/valores que apenas se anulam) NÃO pode baixar
+    // sozinho: só vai para os Conciliados se TODAS as linhas já foram tratadas/confirmadas à mão
+    // (l.acerto, ou jaTratada — conferido/confirmado/estornado). A abertura (saldo anterior, sem
+    // id) não bloqueia. Enquanto não confirmar, o grupo fica EM ABERTO (aparece como sugestão para
+    // o usuário aprovar/linkar). Assim nunca baixamos notas diferentes/valores diferentes sozinhos.
+    const tratadas = gl.every(l => l.acerto || l._abertura || jaTratada(l))
+    const zerou = Math.abs(total) < 0.005 && gl.length > 0 && tratadas
     if (!unk && zerou) conciliados.push(grupo)
     else emAberto.push(grupo)
   }
