@@ -234,7 +234,11 @@ export function prepararBalanco({ linhas, plano, resultadoPL, resAcumComp }) {
   const copia = (linhas || []).map(l => ({ ...l }))
   let contaAloc = null
   if (resultadoPL && resAcumComp != null && Math.abs(resAcumComp) > 0.005) {
-    const cod = resAcumComp >= 0 ? resultadoPL.conta_lucro : resultadoPL.conta_prejuizo
+    // Conta do ano: lucro (resultado ≥ 0) ou prejuízo (< 0). Se a específica não estiver
+    // preenchida, usa a OUTRA que estiver — é comum o usuário pôr a MESMA conta para os dois.
+    // Sem isso, um ano de PREJUÍZO com só a conta de lucro preenchida caía na linha solta.
+    const cod = (resAcumComp >= 0 ? resultadoPL.conta_lucro : resultadoPL.conta_prejuizo)
+      || resultadoPL.conta_prejuizo || resultadoPL.conta_lucro
     if (cod && injetarResultadoNaConta(copia, plano, cod, -resAcumComp)) {
       const pc = (plano || []).find(p => String(p.cod) === String(cod))
       contaAloc = { cod, nome: pc?.nome || '', lucro: resAcumComp >= 0 }
