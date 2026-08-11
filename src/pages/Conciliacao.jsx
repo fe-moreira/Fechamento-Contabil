@@ -1110,6 +1110,9 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const pref = `${conta.conta}·`
   const nfsReabertas = new Set([...baixasReabertas].filter(k => k.startsWith(pref)).map(k => k.slice(pref.length)))
   const { baixados, aproximadas } = ehEntidadeConta ? baixadosPorNF(lanc, nfsReabertas) : { baixados: new Set(), aproximadas: [] }
+  // Linha REABERTA pelo usuário não volta a baixar por NENHUM automático (nem por NF): tira do
+  // conjunto de baixados. Assim o "Reabrir" cola mesmo quando a linha também casava por NF.
+  for (const l of lanc) if (reaberto(l)) baixados.delete(l)
 
   // Correção que se ANULA com a origem: o lançamento de acerto (estorno/reclassificação)
   // aponta para a linha original que corrige (razaoRef → id). Quando os dois se anulam
@@ -1231,6 +1234,14 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const autoConcLancs = lanc.filter(l => autoConc.has(l) && Math.abs(ov(l)) >= 0.005)
   const conferidosLancs = [...new Set([...confirmadosLancs, ...conexaoManualLancs, ...resolvidasEnt.flatMap(g => g.lancs).filter(l => Math.abs(ov(l)) >= 0.005), ...autoConcLancs])]
   const zerados = [...new Set([...baixados, ...conferidosLancs])] // sem repetir (uma linha pode ser baixada E confirmada)
+  // Termos de busca (nome / NF / valor) — definidos AQUI (antes das seções de reabrir) para que
+  // a busca alcance também os CONCILIADOS e os BAIXADOS por NF, e não só o em aberto.
+  const termoBusca = baixaTxt(buscaNome).trim()
+  const termoDig = String(buscaNome || '').replace(/\D/g, '')
+  const valDig = l => String(Math.round(Math.abs((Number(l.debito) || 0) - (Number(l.credito) || 0)) * 100))
+  const casaBusca = g => baixaTxt(g.nome).includes(termoBusca) || g.lancs.some(l => baixaTxt(l.historico).includes(termoBusca))
+    || (termoDig && g.lancs.some(l => String(l.leitura?.nf || '').replace(/\D/g, '').includes(termoDig)))
+    || (termoDig.length >= 3 && g.lancs.some(l => valDig(l).includes(termoDig)))
   const conferidosPorNome = {}, confExib = {}
   for (const l of conferidosLancs) {
     const base = autoConc.has(l) ? 'Correções conciliadas (estorno ↔ origem)' : (l.leitura?.entidade || '(sem nome)')
@@ -1241,17 +1252,19 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     ;(conferidosPorNome[k] = conferidosPorNome[k] || []).push(l)
   }
   const conferidosGrupos = Object.entries(conferidosPorNome).map(([nome, lancs]) => ({ nome: confExib[nome] || nome, lancs }))
+  const conferidosVis = termoBusca ? conferidosGrupos.filter(casaBusca) : conferidosGrupos
   // Baixados AUTOMATICAMENTE por NF (par título + pagamento com a mesma NF). Também podem ser
   // REABERTOS: o usuário puxa a NF de volta para o em aberto para vincular do jeito certo à mão.
   const baixadosPorNome = {}
   for (const l of [...baixados]) { if (Math.abs(ov(l)) < 0.005) continue; const k = l.leitura?.entidade || '(sem nome)'; (baixadosPorNome[k] = baixadosPorNome[k] || []).push(l) }
   const baixadosGrupos = Object.entries(baixadosPorNome).map(([nome, lancs]) => ({ nome, lancs }))
+  const baixadosVis = termoBusca ? baixadosGrupos.filter(casaBusca) : baixadosGrupos
   const blocoReabrirBaixados = baixadosGrupos.length > 0 ? (
     <div style={{ marginTop: 6 }}>
-      <button onClick={() => setVerBaixados(v => !v)} style={{ background: 'none', border: 'none', color: theme.sub, cursor: 'pointer', fontSize: 12.5, padding: '6px 2px', display: 'flex', alignItems: 'center', gap: 6 }}>
-        <i className={`ti ${verBaixados ? 'ti-chevron-down' : 'ti-chevron-right'}`} /> <i className="ti ti-link" style={{ color: theme.accent }} /> Baixados automaticamente por NF ({[...baixados].filter(l => Math.abs(ov(l)) >= 0.005).length}) — {verBaixados ? 'clique para ocultar' : 'clique para ver e reabrir (vincular à mão)'}
+      <button onClick={() => setVerBaixados(v => !v)} style={{ background: 'none', border: 'none', color: termoBusca ? theme.accent : theme.sub, cursor: 'pointer', fontSize: 12.5, padding: '6px 2px', display: 'flex', alignItems: 'center', gap: 6 }}>
+        <i className={`ti ${(verBaixados || termoBusca) ? 'ti-chevron-down' : 'ti-chevron-right'}`} /> <i className="ti ti-link" style={{ color: theme.accent }} /> Baixados automaticamente por NF ({[...baixados].filter(l => Math.abs(ov(l)) >= 0.005).length}){termoBusca ? ` — ${baixadosVis.length} com “${buscaNome}” (reabra aqui)` : verBaixados ? ' — clique para ocultar' : ' — clique para ver e reabrir (vincular à mão)'}
       </button>
-      {verBaixados && baixadosGrupos.map((g, gi) => (
+      {(verBaixados || termoBusca) && baixadosVis.map((g, gi) => (
         <div key={gi} style={{ background: theme.card, border: `1px solid ${theme.cb}`, borderRadius: 12, overflow: 'hidden', marginBottom: 10, opacity: 0.9 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', background: theme.input, gap: 8 }}>
             <span style={{ color: theme.text, fontSize: 13, fontWeight: 600 }}><i className="ti ti-link" style={{ color: theme.accent, marginRight: 6 }} />{g.nome}</span>
@@ -1352,23 +1365,12 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     confirmaveis: podeConfirmarEnt,
   }
   const listaBase = (filtroSit && sitPred[filtroSit]) ? lista.filter(sitPred[filtroSit]) : lista
-  // Busca por nome: mostra as entidades cujo nome (ou variação) OU algum histórico contém o texto.
-  const termoBusca = baixaTxt(buscaNome).trim()
-  // Busca também por NF e VALOR (dígitos): se digitar um número, casa NF ou valor da linha.
-  const termoDig = String(buscaNome || '').replace(/\D/g, '')
-  const valDig = l => String(Math.round(Math.abs((Number(l.debito) || 0) - (Number(l.credito) || 0)) * 100))
+  // Busca por nome/NF/valor (termos definidos acima). Também alcança Conciliados e Baixados por NF.
   const listaVis = termoBusca
     ? listaBase.filter(g => baixaTxt(g.nome).includes(termoBusca) || (g.variacoes || []).some(v => baixaTxt(v).includes(termoBusca)) || g.lancs.some(l => baixaTxt(l.historico).includes(termoBusca))
         || (termoDig && g.lancs.some(l => String(l.leitura?.nf || '').replace(/\D/g, '').includes(termoDig)))
         || (termoDig.length >= 3 && g.lancs.some(l => valDig(l).includes(termoDig))))
     : listaBase
-  // A busca TAMBÉM alcança os CONCILIADOS (conferido neste mês / conciliado automaticamente):
-  // quando você procura um nome, NF ou valor, os grupos que JÁ SAÍRAM também aparecem — para
-  // você achar e REABRIR o que foi baixado errado, sem precisar vasculhar a seção fechada.
-  const casaBusca = g => baixaTxt(g.nome).includes(termoBusca) || g.lancs.some(l => baixaTxt(l.historico).includes(termoBusca))
-    || (termoDig && g.lancs.some(l => String(l.leitura?.nf || '').replace(/\D/g, '').includes(termoDig)))
-    || (termoDig.length >= 3 && g.lancs.some(l => valDig(l).includes(termoDig)))
-  const conferidosVis = termoBusca ? conferidosGrupos.filter(casaBusca) : conferidosGrupos
 
   async function registrar(tipo, payload) {
     const id = await getCompetenciaId()
