@@ -147,7 +147,10 @@ export default function Relatorios() {
   // toda a hierarquia do grupo, ordenada pela classificação e indentada por nível. Os TOTAIS e o
   // resultado vêm do apurarBalanco (só analíticas — as sintéticas são agregados e não somam).
   const g1c = l => String(l.classif ?? l.classifRaw ?? '').replace(/\D/g, '').charAt(0)
-  const byClassif = (a, b) => String(a.classifRaw || a.classif || '').localeCompare(String(b.classifRaw || b.classif || ''), 'pt-BR', { numeric: true })
+  // Ordem da ÁRVORE do plano: compara o classifRaw (código bruto, largura fixa por nível) como
+  // STRING — igual ao balancete.js e ao Comparativo da tela. NUNCA com { numeric:true }: o código
+  // sem pontos vira UM número só e joga grupo 5 (6 díg.) antes do grupo 3 (10 díg.).
+  const byClassif = (a, b) => { const x = String(a.classifRaw || a.classif || ''), y = String(b.classifRaw || b.classif || ''); return x < y ? -1 : x > y ? 1 : 0 }
   const ladoBal = (grupo, flip) => hierBalco.filter(l => g1c(l) === grupo).sort(byClassif).map(l => ({
     conta: l.reduzido || '', nome: l.nome, grau: l.grau || 1, sintetica: l.sintetica,
     saldo_final: (flip ? -1 : 1) * (Number(l.saldo_final) || 0),

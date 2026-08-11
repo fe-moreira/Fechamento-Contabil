@@ -451,7 +451,7 @@ export function abrirDemonstracoesContabeis({ empresa, cnpj, periodoLabel, perio
     const { linhas: aggBal, bal: balc, contaAloc } = prepararBalanco({ linhas: agg, plano, resultadoPL: contasResultado, resAcumComp })
     // Duas colunas independentes, top-down: grupo → subgrupo → sintéticas → analíticas, com D/C.
     const lado = grupo => aggBal.filter(l => g1(l) === grupo && Math.abs(num(l.saldo_final)) > 0.005 && passaNivel(l))
-      .sort((a, b) => String(a.classifRaw || '').localeCompare(String(b.classifRaw || ''), 'pt-BR', { numeric: true }))
+      .sort((a, b) => { const x = String(a.classifRaw || ''), y = String(b.classifRaw || ''); return x < y ? -1 : x > y ? 1 : 0 })
     const A = lado('1'), P = lado('2')
     const cellDesc = l => {
       const ind = 6 + Math.max(0, (l.grau || 1) - 1) * 13
@@ -536,7 +536,7 @@ export function abrirDemonstracoesContabeis({ empresa, cnpj, periodoLabel, perio
     // Estrutura da classificação: sintéticas + analíticas ordenadas pela CLASSIFICAÇÃO (igual ao
     // Comparativo de Movimento dos Relatórios), indentado por nível, com D/C em cada valor.
     const contas = Object.values(contasRes)
-      .sort((a, b) => String(a.classifRaw || '').localeCompare(String(b.classifRaw || ''), 'pt-BR', { numeric: true }))
+      .sort((a, b) => { const x = String(a.classifRaw || ''), y = String(b.classifRaw || ''); return x < y ? -1 : x > y ? 1 : 0 })
     let corpo = contas.map(x => {
       const tt = meses.reduce((s, m) => s + (x.vals[m] || 0), 0)
       const ind = 4 + Math.max(0, (x.grau || 1) - 1) * 12
