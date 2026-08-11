@@ -820,9 +820,10 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // seguir aberto). É a régua do usuário: "cliquei e conciliei → tem que baixar". Ver ATTENTIVE.
   const ehConexaoManual = l => conexoesManuais.has(chaveTrat(l)) || (!l._abertura && !l.acerto && itemUnico(l) && conexoesManuais.has(itemConc(l)))
   // REABERTO pelo usuário: um grupo que ZEROU POR NOME (automático) e o usuário mandou reabrir
-  // porque não era um par de verdade (NF/valor diferentes). Chave ESTÁVEL (sobrevive à reimport):
-  // abertura → chaveAbertura; razão → item (conta·data·NF); acerto → uuid do acerto.
-  const chaveReabrir = l => l._abertura ? chaveAbertura(l) : (l.acerto ? 'ac:' + String(l.id).replace(/^ac_/, '') : itemConc(l))
+  // porque não era um par de verdade (NF/valor diferentes). Chave ÚNICA POR LINHA — razão pelo
+  // uuid (NUNCA por conta·data·NF: linhas SEM NF colidem e reabriam o que já estava certo);
+  // abertura pela chave AB· (valor+nome+data); acerto pelo uuid do acerto.
+  const chaveReabrir = l => l._abertura ? chaveAbertura(l) : (l.acerto ? 'ac:' + String(l.id).replace(/^ac_/, '') : 'rz:' + l.id)
   const reaberto = l => conciliadosReabertos.has(chaveReabrir(l))
   useEffect(() => { carregarTratados() }, [compId]) // eslint-disable-line react-hooks/exhaustive-deps
 
