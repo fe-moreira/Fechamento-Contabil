@@ -99,7 +99,17 @@ export function AppDataProvider({ children }) {
   }
   useEffect(() => { refreshStatusCompetencia() }, [empresaId, competencia]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const empresaNome = empresas.find(e => e.id === empresaId)?.razao_social || ''
+  const empresaNomeReal = empresas.find(e => e.id === empresaId)?.razao_social || ''
+  // "Ocultar cliente": para apresentar em reunião sem expor o nome real do cliente. Quando ligado,
+  // TODO lugar que mostra empresaNome (topo, telas, relatórios, PDFs) sai com um rótulo genérico.
+  // O nome REAL fica em empresaNomeReal (para o seletor, onde o usuário ainda precisa se achar).
+  const [ocultarCliente, setOcultarClienteState] = useState(() => localStorage.getItem('ocultarCliente') === '1')
+  const setOcultarCliente = v => setOcultarClienteState(prev => {
+    const nv = typeof v === 'function' ? v(prev) : v
+    localStorage.setItem('ocultarCliente', nv ? '1' : '0')
+    return nv
+  })
+  const empresaNome = (ocultarCliente && empresaNomeReal) ? 'Cliente exemplo' : empresaNomeReal
 
   // --- Timesheet: registra o tempo trabalhado por cliente enquanto a empresa está ativa ---
   const { user } = useAuth()
@@ -286,7 +296,7 @@ export function AppDataProvider({ children }) {
   const value = {
     empresas, empresaId, setEmpresaId,
     competencia, setCompetencia, competencias: COMPETENCIAS,
-    empresaNome, getCompetenciaId, carregarEmpresas,
+    empresaNome, empresaNomeReal, ocultarCliente, setOcultarCliente, getCompetenciaId, carregarEmpresas,
     pendencias, recalcularPendencias, isAdmin,
     fechamentoAtivo, setFechamentoAtivo, abrirFechamento,
     plano, recarregarPlano,

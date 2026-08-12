@@ -80,6 +80,35 @@ function ThemeToggle({ colapsado }) {
   )
 }
 
+// Ocultar o NOME do cliente — para apresentar em reunião/demonstração sem expor o cliente real.
+// Fica ao lado do tema. Só mascara o nome (o resto continua igual); persiste no localStorage.
+function PrivacyToggle({ colapsado }) {
+  const { ocultarCliente, setOcultarCliente } = useAppData()
+  const on = !!ocultarCliente
+  const flip = () => setOcultarCliente(v => !v)
+  if (colapsado) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', padding: '0 12px 8px' }}>
+        <i className={`ti ${on ? 'ti-eye-off' : 'ti-eye'}`} onClick={flip} title={on ? 'Cliente oculto — clique para mostrar' : 'Ocultar o nome do cliente'}
+          style={{ color: on ? theme.accent : '#C5CFE3', cursor: 'pointer', fontSize: 19, background: '#141A2A', borderRadius: 10, width: 42, height: 42, display: 'flex', alignItems: 'center', justifyContent: 'center' }} />
+      </div>
+    )
+  }
+  return (
+    <div style={{ padding: '0 14px 8px' }}>
+      <div onClick={flip} title="Ocultar o nome do cliente — para apresentar sem expor o cliente real"
+        style={{ background: '#141A2A', borderRadius: 10, padding: '10px 14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}>
+        <span style={{ color: '#C5CFE3', fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <i className={`ti ${on ? 'ti-eye-off' : 'ti-eye'}`} /> {on ? 'Cliente oculto' : 'Ocultar cliente'}
+        </span>
+        <span style={{ width: 38, height: 22, borderRadius: 20, background: on ? theme.accent : '#3A4356', position: 'relative', transition: 'background .15s', flexShrink: 0, display: 'inline-block' }}>
+          <span style={{ position: 'absolute', top: 2, left: on ? 18 : 2, width: 18, height: 18, borderRadius: '50%', background: '#fff', transition: 'left .15s' }} />
+        </span>
+      </div>
+    </div>
+  )
+}
+
 // Indicador de tempo da sessão atual (zera ao trocar de empresa).
 function TimerSessao() {
   const [s, setS] = useState(0)
@@ -217,7 +246,8 @@ export default function Layout() {
           {SISTEMA.map(i => <Item key={i.to} {...i} colapsado={colapsado} />)}
         </nav>
 
-        {/* Tema claro/escuro */}
+        {/* Ocultar cliente (apresentação) + tema claro/escuro */}
+        <PrivacyToggle colapsado={colapsado} />
         <ThemeToggle colapsado={colapsado} />
 
         {/* Usuário */}
