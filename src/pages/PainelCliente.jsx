@@ -5,6 +5,7 @@ import { useAppData, useRelatorio } from '../lib/appData'
 import { apurarVariacoes } from '../lib/variacoes'
 import { apurarDistribuicao } from '../lib/distribuicao'
 import { montarBalancete } from '../lib/balancete'
+import { apurarResultadoSimples } from '../lib/dre'
 import { extrairEntidade } from '../lib/financeiro'
 import { gerarExcelTimbrado } from '../lib/excel'
 import { theme, money } from '../lib/theme'
@@ -80,8 +81,12 @@ export default function PainelCliente() {
             if (grp === '3') g3 += sf; else if (grp === '4') g4 += sf; else g5 += sf
           }
           const receita = -g3, custo = g4, despesa = g5 // grupo 3 credor → receita positiva; 4/5 devedores
+          // EBITDA correto (resultado OPERACIONAL): separa depreciação, resultado financeiro (grupo
+          // 5.5 — juros/rendimentos) e IR/CSLL pelo NOME da conta, igual à DRE. Sem isso o EBITDA
+          // vinha = receita − custo (ignorando as despesas do grupo 5) e a margem dava ~100%.
+          const dreN = apurarResultadoSimples(res)
           meses.push(c.mes)
-          porMes[c.mes] = { receita, custo, despesa, resultado: receita - custo - despesa }
+          porMes[c.mes] = { receita, custo, despesa, resultado: receita - custo - despesa, ebitda: dreN.ebitda }
         }
         meses.sort((a, b) => a - b)
         const receitaMes = m => porMes[m]?.receita || 0
@@ -92,16 +97,16 @@ export default function PainelCliente() {
         const resultado = resMes(mes)
         const acumulado = meses.filter(m => m <= mes).reduce((s, m) => s + resMes(m), 0)
 
-        // Gráfico de desempenho (combo): usa a MESMA base do painel (grupos por 1º dígito —
-        // 3 = receita, 4 = custo, 5 = despesa), e não o montarDRE detalhado (que assume a
-        // estrutura do Domínio 31/43/51… e, num plano simples, perde o custo/despesa e faz
-        // EBITDA e Lucro darem iguais à Receita — margem 100%).
+        // Gráfico de desempenho (combo). Base: grupos por 1º dígito (3=receita, 4=custo, 5=despesa),
+        // com o EBITDA calculado como a DRE (apurarResultadoSimples): resultado OPERACIONAL, que
+        // TIRA da conta o resultado financeiro (grupo 5.5), o IR/CSLL e a depreciação — assim a
+        // Margem EBITDA para de dar ~100%.
         //   Receita Líquida = receita (grupo 3)
-        //   EBITDA (resultado operacional) = receita − custo (grupo 3 − grupo 4)
-        //   Lucro Líquido = receita − custo − despesa (grupo 3 − 4 − 5)
+        //   EBITDA = resultado operacional (receita − custo − despesas operacionais)
+        //   Lucro Líquido = receita − custo − despesa (grupo 3 − 4 − 5, tudo)
         const serieCombo = meses.map(m => {
-          const p = porMes[m] || { receita: 0, custo: 0, despesa: 0, resultado: 0 }
-          const receitaLiq = p.receita, ebitda = p.receita - p.custo, lucroLiq = p.resultado
+          const p = porMes[m] || { receita: 0, custo: 0, despesa: 0, resultado: 0, ebitda: 0 }
+          const receitaLiq = p.receita, ebitda = p.ebitda ?? (p.receita - p.custo), lucroLiq = p.resultado
           return {
             mes: m, rotulo: MESES[m - 1], receitaLiq, ebitda, lucroLiq,
             margemEbitda: receitaLiq ? (ebitda / receitaLiq) * 100 : 0,

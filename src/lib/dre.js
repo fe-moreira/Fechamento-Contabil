@@ -83,31 +83,36 @@ export function montarDRE(linhas) {
 // DRE SIMPLES por grupo (1º dígito): 3 = receita, 4 = custo, 5 = despesa. Separa dedução
 // (deve/haver dentro do grupo 3), depreciação, resultado financeiro e IR pelo NOME da conta.
 // Reconcilia sempre: Lucro líquido = −Σ(saldo_final dos grupos 3/4/5).
-function dreSimples(analit) {
-  const g = d => analit.filter(l => flat(l)[0] === String(d))
+// NÚMEROS da DRE simples (por grupo: 3=receita, 4=custo, 5=despesa). Separa depreciação,
+// resultado financeiro e IR/CSLL pelo NOME da conta — para o EBITDA sair certo (resultado
+// OPERACIONAL, sem financeiro/juros, sem IR e sem depreciação). Exportado para o painel e o
+// cockpit calcularem EBITDA/margens do mesmo jeito que a DRE, sem depender da estrutura Domínio.
+export function apurarResultadoSimples(analit) {
+  const g = d => (analit || []).filter(l => flat(l)[0] === String(d))
   const somaNeg = arr => -arr.reduce((s, l) => s + num(l.saldo_final), 0) // −Σ (credor → +)
   const g3 = g('3'), g4 = g('4'), g5 = g('5')
-
   // Grupo 3: receita (credora, saldo_final < 0) × deduções (devedora, saldo_final > 0).
   const receitaBruta = somaNeg(g3.filter(l => num(l.saldo_final) < 0))
   const deducoes = somaNeg(g3.filter(l => num(l.saldo_final) >= 0))
   const receitaLiquida = receitaBruta + deducoes
-
   // Custos (grupo 4) — separa depreciação do custo p/ o EBITDA.
   const deprecCusto = somaNeg(g4.filter(l => RE_DEPREC.test(l.nome || '')))
   const csv = somaNeg(g4.filter(l => !RE_DEPREC.test(l.nome || '')))
   const lucroBruto = receitaLiquida + csv
-
   // Despesas (grupo 5) — separa financeiro, IR/CSLL e depreciação pelo nome; o resto é operacional.
   const financeiro = somaNeg(g5.filter(l => RE_FIN.test(l.nome || '') && !RE_IR.test(l.nome || '')))
   const ir = somaNeg(g5.filter(l => RE_IR.test(l.nome || '')))
   const deprecDesp = somaNeg(g5.filter(l => RE_DEPREC.test(l.nome || '') && !RE_FIN.test(l.nome || '') && !RE_IR.test(l.nome || '')))
   const despOper = somaNeg(g5.filter(l => !RE_FIN.test(l.nome || '') && !RE_IR.test(l.nome || '') && !RE_DEPREC.test(l.nome || '')))
   const deprec = deprecCusto + deprecDesp
-
-  const ebitda = lucroBruto + despOper
+  const ebitda = lucroBruto + despOper                 // resultado OPERACIONAL (sem fin/IR/deprec)
   const lair = ebitda + deprec + financeiro
   const lucroLiquido = lair + ir
+  return { receitaBruta, deducoes, receitaLiquida, csv, lucroBruto, despOper, ebitda, deprec, financeiro, lair, ir, lucroLiquido }
+}
+
+function dreSimples(analit) {
+  const { receitaBruta, deducoes, receitaLiquida, csv, lucroBruto, despOper, ebitda, deprec, financeiro, lair, ir, lucroLiquido } = apurarResultadoSimples(analit)
 
   const rows = []
   const grp = (label, valor) => rows.push({ label, valor, sub: false })

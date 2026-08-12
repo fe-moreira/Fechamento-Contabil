@@ -13,7 +13,7 @@
 import { supabase } from './supabase'
 import { lerTudo } from './lerTudo'
 import { montarBalancete, apurarBalanco, prepararBalanco } from './balancete'
-import { montarDRE } from './dre'
+import { montarDRE, apurarResultadoSimples } from './dre'
 import { extrairEntidade } from './financeiro'
 
 const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
@@ -126,8 +126,11 @@ function apurarCockpit(agg, perMonth, razaoReceita, primeiro, ultimo, serieMonth
     const r = -an.filter(l => g1(l) === '3').reduce((s, l) => s + num(l.saldo_final), 0)
     const c = an.filter(l => g1(l) === '4').reduce((s, l) => s + num(l.saldo_final), 0)
     const d = an.filter(l => g1(l) === '5').reduce((s, l) => s + num(l.saldo_final), 0)
-    return { rotulo: MESES[mm.mes - 1], receitaLiq: r, ebitda: r - c, lucroLiq: r - c - d,
-      margemEbitda: r ? ((r - c) / r) * 100 : 0, margemLiquida: r ? ((r - c - d) / r) * 100 : 0 }
+    // EBITDA = resultado OPERACIONAL (igual à DRE): tira o resultado financeiro (grupo 5.5), o
+    // IR/CSLL e a depreciação — senão o EBITDA vinha = receita − custo e a margem dava ~100%.
+    const eb = apurarResultadoSimples(an).ebitda
+    return { rotulo: MESES[mm.mes - 1], receitaLiq: r, ebitda: eb, lucroLiq: r - c - d,
+      margemEbitda: r ? (eb / r) * 100 : 0, margemLiquida: r ? ((r - c - d) / r) * 100 : 0 }
   })
   // Acumulado do ano = soma dos resultados dos meses da série (jan→mês do período).
   const acumuladoAno = serie.reduce((s, m) => s + m.lucroLiq, 0)
