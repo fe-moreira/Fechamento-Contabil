@@ -6,10 +6,12 @@ function bundleCarregado() {
   const s = document.querySelector('script[type="module"][src*="/assets/index-"]')
   try { return s ? new URL(s.src, location.origin).pathname : null } catch { return null }
 }
-// Caminho do bundle principal do index.html PUBLICADO agora (sem cache).
+// Caminho do bundle principal do index.html PUBLICADO agora (sem cache). Além de `no-store`,
+// coloca um parâmetro único na URL — alguns proxies/CDN ignoram o no-store e devolvem o
+// index.html velho; o ?t=... fura esse cache e garante que a gente veja a versão publicada.
 async function bundlePublicado() {
   try {
-    const html = await fetch('/index.html', { cache: 'no-store' }).then(r => r.text())
+    const html = await fetch(`/index.html?t=${Date.now()}`, { cache: 'no-store' }).then(r => r.text())
     const m = html.match(/src="([^"]*\/assets\/index-[^"]+\.js)"/)
     return m ? m[1] : null
   } catch { return null }
@@ -31,10 +33,12 @@ export default function AvisoNovaVersao() {
       if (pub && pub !== carregado) { setNovo(true); parado = true }
     }
     checar()
-    const id = setInterval(checar, 3 * 60 * 1000) // a cada 3 min
-    const onFocus = () => checar()                // e quando o usuário volta para a aba
+    const id = setInterval(checar, 60 * 1000)     // a cada 1 min (antes 3 min) — nota mais rápido
+    const onFocus = () => checar()                // quando volta o foco da janela
+    const onVis = () => { if (document.visibilityState === 'visible') checar() } // e quando a ABA reaparece
     window.addEventListener('focus', onFocus)
-    return () => { clearInterval(id); window.removeEventListener('focus', onFocus) }
+    document.addEventListener('visibilitychange', onVis)
+    return () => { clearInterval(id); window.removeEventListener('focus', onFocus); document.removeEventListener('visibilitychange', onVis) }
   }, [])
   if (!novo) return null
   return (

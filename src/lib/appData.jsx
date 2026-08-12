@@ -110,6 +110,9 @@ export function AppDataProvider({ children }) {
     return nv
   })
   const empresaNome = (ocultarCliente && empresaNomeReal) ? 'Cliente exemplo' : empresaNomeReal
+  // CNPJ também é mascarado junto com o nome (mesma régua "ocultar cliente"). Real fica à parte.
+  const empresaCnpjReal = empresas.find(e => e.id === empresaId)?.cnpj || ''
+  const empresaCnpj = ocultarCliente ? '' : empresaCnpjReal
 
   // --- Timesheet: registra o tempo trabalhado por cliente enquanto a empresa está ativa ---
   const { user } = useAuth()
@@ -296,7 +299,7 @@ export function AppDataProvider({ children }) {
   const value = {
     empresas, empresaId, setEmpresaId,
     competencia, setCompetencia, competencias: COMPETENCIAS,
-    empresaNome, empresaNomeReal, ocultarCliente, setOcultarCliente, getCompetenciaId, carregarEmpresas,
+    empresaNome, empresaNomeReal, empresaCnpj, empresaCnpjReal, ocultarCliente, setOcultarCliente, getCompetenciaId, carregarEmpresas,
     pendencias, recalcularPendencias, isAdmin,
     fechamentoAtivo, setFechamentoAtivo, abrirFechamento,
     plano, recarregarPlano,

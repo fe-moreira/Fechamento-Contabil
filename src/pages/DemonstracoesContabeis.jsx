@@ -29,7 +29,7 @@ const TIPOS = [
 ]
 
 export default function DemonstracoesContabeis() {
-  const { empresaId, empresaNome, empresas, competencia, plano } = useAppData()
+  const { empresaId, empresaNome, empresaCnpj, empresas, competencia, plano } = useAppData()
   const empresa = empresas.find(e => e.id === empresaId)
   // Defaults do período a partir da competência atual (MM/AAAA).
   const [cMes, cAno] = String(competencia || '').split('/').map(Number)
@@ -131,7 +131,7 @@ export default function DemonstracoesContabeis() {
         distribuicao = await apurarDistribuicao(empresaId, ult0.id, ult0.ano, ult0.mes).catch(() => null)
       }
       const ok = abrirDemonstracoesContabeis({
-        empresa: empresaNome, cnpj: empresa?.cnpj || '',
+        empresa: empresaNome, cnpj: empresaCnpj || '',
         periodoLabel: label, periodoIni: priBR(pri.ano, pri.mes), periodoFim: diaBR(ult.ano, ult.mes),
         blocos: marcados, dados, modelo, nivel, plano, contasResultado, distribuicao,
       })

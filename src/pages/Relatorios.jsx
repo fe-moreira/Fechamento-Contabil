@@ -38,8 +38,8 @@ const RELATORIOS = [
 ]
 
 export default function Relatorios() {
-  const { empresaId, empresaNome, competencia, empresas, plano } = useAppData()
-  const cnpj = empresas?.find(e => e.id === empresaId)?.cnpj
+  const { empresaId, empresaNome, empresaCnpj, competencia, empresas, plano } = useAppData()
+  const cnpj = empresaCnpj   // mascarado quando "ocultar cliente" está ligado
   const [gerandoDom, setGerandoDom] = useState(false)
   const [nivelBal, setNivelBal] = useState(4)      // nível de detalhe do balancete (padrão: 4)
   const [nivelBalco, setNivelBalco] = useState(4)  // nível de detalhe do Balanço (padrão: 4)

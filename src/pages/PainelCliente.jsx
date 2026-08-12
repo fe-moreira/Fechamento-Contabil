@@ -38,7 +38,7 @@ const RE_PAGAR = /fornec|\ba\s*pagar|duplicat.*pag|obrig.*pag/i
 const RE_DISP = /\bcaixa\b|banc|aplica|dispon|financeir|conta\s*corrente/i
 
 export default function PainelCliente() {
-  const { empresaId, empresaNome, competencia, empresas, plano } = useAppData()
+  const { empresaId, empresaNome, empresaCnpj, competencia, empresas, plano } = useAppData()
   const empresa = empresas.find(e => e.id === empresaId)
   const compSlug = competencia.replace('/', '-')
 
@@ -216,7 +216,7 @@ export default function PainelCliente() {
 
   function exportarExcel() {
     if (!d) return
-    const sub = `${empresaNome} · CNPJ ${fmtCnpj(empresa?.cnpj)} · competência ${competencia}`
+    const sub = `${empresaNome} · CNPJ ${fmtCnpj(empresaCnpj)} · competência ${competencia}`
     const secoes = []
 
     secoes.push({
@@ -293,7 +293,7 @@ export default function PainelCliente() {
         <div>
           <p style={{ fontSize: 15, fontWeight: 600, margin: 0 }}>{empresaNome}</p>
           <p style={{ color: theme.sub, fontSize: 12.5, margin: '3px 0 0' }}>
-            CNPJ {fmtCnpj(empresa?.cnpj)} · competência <b style={{ color: theme.text }}>{competencia}</b>
+            CNPJ {fmtCnpj(empresaCnpj)} · competência <b style={{ color: theme.text }}>{competencia}</b>
           </p>
         </div>
         <div className="no-print" style={{ display: 'flex', gap: 8 }}>
