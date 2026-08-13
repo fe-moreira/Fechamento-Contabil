@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { supabase } from '../lib/supabase'
 import { lerTudo } from '../lib/lerTudo'
 import { useAppData, useRelatorio } from '../lib/appData'
@@ -38,6 +38,39 @@ const RE_RECEBER = /client|duplicat.*receb|\ba\s*receber|receb.*client|cart[aã]
 const RE_PAGAR = /fornec|\ba\s*pagar|duplicat.*pag|obrig.*pag/i
 const RE_DISP = /\bcaixa\b|banc|aplica|dispon|financeir|conta\s*corrente/i
 
+// Agrega o Cockpit para um intervalo [a..b]. FLUXO (receita/custo/despesa/resultado) SOMA o
+// intervalo; ESTOQUE (balanço/disponibilidades/índices/clientes) = FOTO do mês final b; geração de
+// caixa = fim(b) − início(a). Se a==b==mês da competência, devolve o próprio objeto (idêntico a hoje).
+function agregarPeriodo(d, a, b) {
+  if (!d || (a === d.focusMes && b === d.focusMes)) return d
+  const meses = (d.meses || []).filter(m => m >= a && m <= b)
+  if (!meses.length) return d
+  const soma = campo => meses.reduce((s, m) => s + (Number(d.porMes?.[m]?.[campo]) || 0), 0)
+  const faturamento = soma('receita'), custo = soma('custo'), despesa = soma('despesa')
+  const resultado = soma('resultado')
+  const acumulado = (d.meses || []).filter(m => m <= b).reduce((s, m) => s + (Number(d.porMes?.[m]?.resultado) || 0), 0)
+  const snapB = d.porMesSnap?.[b] || {}, snapA = d.porMesSnap?.[a] || {}
+  const indices = {
+    margem: faturamento ? ((faturamento - custo - despesa) / faturamento) * 100 : null,
+    cargaTrib: faturamento ? ((snapB.impostos || 0) / faturamento) * 100 : null,
+    liquidez: snapB.indices?.liquidez ?? null,
+    endividamento: snapB.indices?.endividamento ?? null,
+    prazoReceb: faturamento ? Math.round(((snapB.clientes || 0) / faturamento) * 30) : null,
+  }
+  return {
+    ...d,
+    faturamento, custo, despesa, resultado, lucro: resultado, acumulado,
+    totAtivo: snapB.totAtivo, totPassivo: snapB.totPassivo, clientes: snapB.clientes, fornecedores: snapB.fornecedores,
+    impostos: snapB.impostos, disponiveis: snapB.disponiveis || [], totDispFim: snapB.totDispFim,
+    totDispIni: snapA.totDispIni, geracaoCaixa: (snapB.totDispFim || 0) - (snapA.totDispIni || 0),
+    dataIni: snapA.dataIni, dataFim: snapB.dataFim,
+    indices, dist: snapB.dist, distTotal: snapB.distTotal, ata: snapB.ata || { distribuido: 0, pago: 0, pagoMes: 0, saldo: 0 },
+    topClientes: snapB.topClientes || [], totReceitaRazao: snapB.totReceitaRazao || 0,
+    periodo: { a, b, umMes: a === b },
+    // serie/serieCombo/comparativo/variacoesConta ficam do ano inteiro (o gráfico não muda).
+  }
+}
+
 export default function PainelCliente() {
   const { empresaId, empresaNome, empresaCnpj, competencia, empresas, plano } = useAppData()
   const empresa = empresas.find(e => e.id === empresaId)
@@ -47,7 +80,7 @@ export default function PainelCliente() {
   // Cockpit COM CACHE: sai e volta da tela e aparece a última versão na hora; só reprocessa
   // se algum dado do fechamento mudou (o carimbo de versaoRelatorio detecta). Fonte VIVA
   // (razão + lançamentos confirmados) — mesma base da Conciliação e do Comparativo.
-  const { carregando, dados: d, semComp } = useRelatorio({
+  const { carregando, dados: dRaw, semComp } = useRelatorio({
     tela: 'cockpit', empresaId, competencia, extraDep: plano,
     computar: async (compId, { mes, ano }) => {
         // Balancete hierárquico VIVO (razão + lançamentos confirmados) — MESMA fonte da
@@ -70,7 +103,83 @@ export default function PainelCliente() {
         // Ativo − (Passivo + PL) = Resultado acumulado.
         const { data: compsAno } = await supabase.from('competencias').select('id, mes')
           .eq('cliente_id', empresaId).eq('ano', ano).order('mes', { ascending: true })
-        const porMes = {}, meses = []
+
+        // ETAPA 1b — FOTO (estoque) por mês: reproduz EXATAMENTE o cálculo do bloco de balanço/
+        // disponibilidades/índices/clientes abaixo, parametrizado por mês. Guardado em porMesSnap
+        // para o seletor de período mostrar a posição do MÊS FINAL do intervalo sem recarregar.
+        // O bloco do mês da competência (abaixo) segue intacto, então um intervalo de 1 mês bate
+        // 100% com o Cockpit de hoje.
+        const snapMes = async (linhasM, compIdM, mesM, flowM) => {
+          const gg = l => String(l.classifRaw || '')[0]
+          const analitM = (linhasM || []).filter(l => !l.sintetica)
+          const ativoL = analitM.filter(l => gg(l) === '1')
+          const passivoL = analitM.filter(l => gg(l) === '2')
+          const totAtivo = ativoL.reduce((s, l) => s + num(l.saldo_final), 0)
+          const totPassivo = passivoL.reduce((s, l) => s + num(l.saldo_final), 0)
+          const somaFiltro = (arr, re) => arr.filter(l => re.test(l.nome || '')).reduce((s, l) => s + Math.abs(num(l.saldo_final)), 0)
+          const clientes = somaFiltro(ativoL, RE_RECEBER)
+          const fornecedores = somaFiltro(passivoL, RE_PAGAR)
+          const impostos = somaFiltro(passivoL, RE_IMPOSTO)
+          const sintDisp = (linhasM || []).filter(l => l.sintetica && gg(l) === '1' && /dispon|caixa\s*e\s*equival|disponibilidad/i.test(l.nome || ''))
+            .sort((a, b) => String(a.classifRaw || '').length - String(b.classifRaw || '').length)[0]
+          let dispPrefix = sintDisp?.classifRaw
+          if (!dispPrefix && analitM.some(l => String(l.classifRaw || '').startsWith('111'))) dispPrefix = '111'
+          const ehDisp = l => dispPrefix ? String(l.classifRaw || '').startsWith(dispPrefix) : RE_DISP.test(l.nome || '')
+          const disponiveis = ativoL.filter(ehDisp).map(l => ({ nome: l.nome || l.reduzido, ini: num(l.saldo_inicial), fim: num(l.saldo_final) }))
+            .filter(l => Math.abs(l.ini) > 0.005 || Math.abs(l.fim) > 0.005).sort((a, b) => b.fim - a.fim)
+          const totDispIni = disponiveis.reduce((s, l) => s + l.ini, 0)
+          const totDispFim = disponiveis.reduce((s, l) => s + l.fim, 0)
+          const ultDia = (a, m) => new Date(a, m, 0).getDate()
+          const fmtDia = (a, m) => `${String(ultDia(a, m)).padStart(2, '0')}/${String(m).padStart(2, '0')}/${a}`
+          const mAntM = mesM === 1 ? 12 : mesM - 1, aAntM = mesM === 1 ? ano - 1 : ano
+          const norm = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+          const somaClassif = pref => analitM.filter(l => String(l.classif || '').startsWith(pref)).reduce((s, l) => s + num(l.saldo_final), 0)
+          const somaPrefixoRaw = pref => analitM.filter(l => String(l.classifRaw || '').startsWith(pref)).reduce((s, l) => s + num(l.saldo_final), 0)
+          const prefSintetica = (grupo, re, exc) => {
+            const s = (linhasM || []).filter(l => l.sintetica && gg(l) === grupo && re.test(norm(l.nome || '')) && !(exc && exc.test(norm(l.nome || ''))))
+              .sort((a, b) => String(a.classifRaw || '').length - String(b.classifRaw || '').length)[0]
+            return s?.classifRaw || null
+          }
+          const NAOCIRC = /n[ao] circulante|nao-circulante|longo prazo/
+          const ac = prefSintetica('1', /circulante/, NAOCIRC) ? somaPrefixoRaw(prefSintetica('1', /circulante/, NAOCIRC)) : somaClassif('1.1')
+          const pc = prefSintetica('2', /circulante/, NAOCIRC) ? somaPrefixoRaw(prefSintetica('2', /circulante/, NAOCIRC)) : somaClassif('2.1')
+          const pnc = prefSintetica('2', NAOCIRC, null) ? somaPrefixoRaw(prefSintetica('2', NAOCIRC, null)) : somaClassif('2.2')
+          const fat = flowM.receita, cus = flowM.custo, des = flowM.despesa
+          const indices = {
+            margem: fat ? ((fat - cus - des) / fat) * 100 : null,
+            cargaTrib: fat ? (impostos / fat) * 100 : null,
+            liquidez: pc ? ac / Math.abs(pc) : null,
+            endividamento: totAtivo ? pct(Math.abs(pc) + Math.abs(pnc), Math.abs(totAtivo)) : null,
+            prazoReceb: fat ? Math.round((clientes / fat) * 30) : null,
+          }
+          const distM = await apurarDistribuicao(empresaId, compIdM, ano, mesM)
+          const distTotalM = (distM?.socios || []).reduce((s, x) => s + num(x.total), 0)
+          const receitaCods = [...new Set(analitM.filter(l => gg(l) === '3').map(l => String(l.reduzido)))]
+          let topClientes = [], totReceitaRazao = 0
+          if (receitaCods.length) {
+            const rz = await lerTudo(() => supabase.from('razao').select('conta, historico, debito, credito').eq('competencia_id', compIdM).in('conta', receitaCods))
+            const mapa = {}
+            for (const l of (rz || [])) {
+              const v = num(l.credito) - num(l.debito)
+              if (v <= 0) continue
+              totReceitaRazao += v
+              const ent = extrairEntidade(l.historico)
+              if (!ent || /^[\d.,\s]+$/.test(ent) || ent.replace(/[^A-Za-zÀ-ú]/g, '').length < 3) continue
+              if (!ehCliente(ent)) continue
+              mapa[ent] = (mapa[ent] || 0) + v
+            }
+            topClientes = Object.entries(mapa).map(([nome, valor]) => ({ nome, valor })).sort((a, b) => b.valor - a.valor).slice(0, 6)
+          }
+          return {
+            totAtivo, totPassivo, clientes, fornecedores, impostos,
+            disponiveis, totDispIni, totDispFim, geracaoCaixa: totDispFim - totDispIni,
+            dataIni: fmtDia(aAntM, mAntM), dataFim: fmtDia(ano, mesM),
+            indices, dist: distM, distTotal: distTotalM, ata: distM?.ata || { distribuido: 0, pago: 0, pagoMes: 0, saldo: 0 },
+            topClientes, totReceitaRazao,
+          }
+        }
+
+        const porMes = {}, meses = [], porMesSnap = {}
         for (const c of (compsAno || [])) {
           const linhasC = c.id === compId ? hier : (await montarBalancete(empresaId, c.id, 0, { comLancamentos: true })).linhas // vivo (com correções)
           const res = (linhasC || []).filter(l => !l.sintetica && ['3', '4', '5'].includes(String(l.classifRaw || '')[0]))
@@ -88,6 +197,7 @@ export default function PainelCliente() {
           const dreN = apurarResultadoSimples(res)
           meses.push(c.mes)
           porMes[c.mes] = { receita, custo, despesa, resultado: receita - custo - despesa, ebitda: dreN.ebitda }
+          porMesSnap[c.mes] = await snapMes(linhasC, c.id, c.mes, porMes[c.mes])
         }
         meses.sort((a, b) => a - b)
         const receitaMes = m => porMes[m]?.receita || 0
@@ -209,7 +319,7 @@ export default function PainelCliente() {
         }
 
         return {
-          porMes, meses, // por mês (fluxo) — base do painel "Resultado por período (intervalo)"
+          porMes, porMesSnap, meses, focusMes: mes, // por mês (fluxo + foto) — base do seletor de período
           faturamento, custo, despesa, resultado, lucro, acumulado, serie, serieCombo,
           totAtivo, totPassivo, clientes, fornecedores,
           impostos, disponiveis, totDispIni, totDispFim, geracaoCaixa, dataIni, dataFim,
@@ -220,6 +330,19 @@ export default function PainelCliente() {
         }
     },
   })
+
+  // ETAPA 1b — SELETOR DE PERÍODO. `periodo` nulo = mês da competência (idêntico a hoje). Quando
+  // escolhe um intervalo, o `d` exibido passa a somar o fluxo e usar a FOTO do mês final para o
+  // balanço/índices. Como agregarPeriodo devolve o próprio dRaw quando a==b==competência, o Cockpit
+  // padrão continua exatamente igual. Todos os blocos e o Excel usam `d`, então tudo acompanha.
+  const [periodo, setPeriodo] = useState(null) // { ini, fim } | null
+  useEffect(() => { setPeriodo(null) }, [empresaId, competencia])
+  const mesesPer = dRaw?.meses || []
+  const focoPer = dRaw?.focusMes ?? mesFoco
+  const perA = periodo ? Math.min(periodo.ini, periodo.fim) : focoPer
+  const perB = periodo ? Math.max(periodo.ini, periodo.fim) : focoPer
+  const d = useMemo(() => (dRaw ? agregarPeriodo(dRaw, perA, perB) : dRaw), [dRaw, perA, perB])
+  const rotMes = m => `${MESES[m - 1]}/${String(anoFoco).slice(2)}`
 
   function exportarExcel() {
     if (!d) return
@@ -315,12 +438,27 @@ export default function PainelCliente() {
         </div>
       </div>
 
+      {/* Seletor de PERÍODO — vale para todos os blocos: fluxo soma o intervalo; balanço/índices na foto do mês final. */}
+      {dRaw && mesesPer.length > 0 && (
+        <div className="no-print" style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 16 }}>
+          <span style={{ fontSize: 12, color: theme.sub, display: 'inline-flex', alignItems: 'center', gap: 6 }}><i className="ti ti-calendar-stats" /> Período:</span>
+          <select className="input" style={{ width: 'auto', fontSize: 12, padding: '6px 10px' }} value={perA} onChange={e => setPeriodo({ ini: Number(e.target.value), fim: perB })}>
+            {mesesPer.map(m => <option key={m} value={m}>{rotMes(m)}</option>)}
+          </select>
+          <span style={{ fontSize: 12, color: theme.sub }}>até</span>
+          <select className="input" style={{ width: 'auto', fontSize: 12, padding: '6px 10px' }} value={perB} onChange={e => setPeriodo({ ini: perA, fim: Number(e.target.value) })}>
+            {mesesPer.map(m => <option key={m} value={m}>{rotMes(m)}</option>)}
+          </select>
+          {(perA !== focoPer || perB !== focoPer) && <button className="btn-ghost" style={{ fontSize: 11.5, padding: '4px 10px', display: 'inline-flex', alignItems: 'center', gap: 5 }} onClick={() => setPeriodo(null)}><i className="ti ti-rotate-2" /> Competência</button>}
+          <span style={{ fontSize: 11.5, color: theme.sub }}>{perA === perB ? `Mês de ${rotMes(perA)}` : `Fluxo somando ${rotMes(perA)}–${rotMes(perB)} · balanço/índices na foto de ${rotMes(perB)}`}</span>
+        </div>
+      )}
+
       {carregando && <p style={{ color: theme.sub, fontSize: 13 }}>Carregando painel do cliente…</p>}
       {semComp && <Aviso icon="ti-file-import" texto="Sem competência importada. Importe o razão desta competência primeiro." />}
       {!carregando && d && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
           <BlocoResultado d={d} />
-          <BlocoPeriodo key={compSlug} d={d} focusMes={mesFoco} ano={anoFoco} />
           <BlocoComparativo d={d} />
           <BlocoBalanco d={d} />
           <BlocoFinanceiro d={d} />
@@ -339,7 +477,7 @@ function BlocoResultado({ d }) {
     <Secao titulo="Resultado do período">
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1.9fr)', gap: 14 }}>
         <div style={{ ...card, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-          <span style={{ color: theme.sub, fontSize: 11, textTransform: 'uppercase', letterSpacing: .5 }}>Resultado da competência</span>
+          <span style={{ color: theme.sub, fontSize: 11, textTransform: 'uppercase', letterSpacing: .5 }}>{d.periodo && !d.periodo.umMes ? 'Resultado do período' : 'Resultado da competência'}</span>
           <b style={{ fontSize: 34, fontWeight: 800, color: corResultado(d.resultado), letterSpacing: -.5 }}>{money(d.resultado)}</b>
           <div style={{ display: 'flex', gap: 18, marginTop: 8, flexWrap: 'wrap' }}>
             <Mini label="Faturamento" v={money(d.faturamento)} />
@@ -353,57 +491,6 @@ function BlocoResultado({ d }) {
           <GraficoDesempenho s={d.serieCombo} />
         </div>
       </div>
-    </Secao>
-  )
-}
-
-// ETAPA 1a — Resultado por PERÍODO (intervalo). Aditivo e sem risco: soma os blocos de FLUXO
-// (receita, custo, despesa, resultado, EBITDA) do intervalo escolhido, a partir do porMes que o
-// Cockpit já calcula. O Balanço/Índices continuam na posição do mês (foto) — o intervalo entra
-// neles na etapa 1b. Padrão do intervalo: do 1º mês com dados até o mês da competência (acum. no ano).
-function BlocoPeriodo({ d, focusMes, ano }) {
-  const meses = (d.meses || [])
-  const disponivel = meses.length > 0
-  const last = disponivel ? meses[meses.length - 1] : 1
-  const fimPadrao = meses.includes(focusMes) ? focusMes : last
-  const [ini, setIni] = useState(disponivel ? meses[0] : 1)
-  const [fim, setFim] = useState(fimPadrao)
-  if (!disponivel) return null
-  const a = Math.min(ini, fim), b = Math.max(ini, fim)
-  const dentro = meses.filter(m => m >= a && m <= b)
-  const soma = campo => dentro.reduce((s, m) => s + (Number(d.porMes?.[m]?.[campo]) || 0), 0)
-  const receita = soma('receita'), custo = soma('custo'), despesa = soma('despesa')
-  const resultado = soma('resultado'), ebitda = soma('ebitda')
-  const margem = receita ? (resultado / receita) * 100 : null
-  const margEbitda = receita ? (ebitda / receita) * 100 : null
-  const rot = m => `${MESES[m - 1]}/${String(ano).slice(2)}`
-  const selStyle = { fontSize: 12.5, padding: '5px 10px', width: 'auto' }
-  const umMes = a === b
-  return (
-    <Secao titulo="Resultado por período (intervalo)" flag="fluxo">
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
-        <label style={{ fontSize: 12, color: theme.sub, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-          <i className="ti ti-calendar-stats" /> De:
-          <select className="input" style={selStyle} value={a} onChange={e => setIni(Number(e.target.value))}>
-            {meses.map(m => <option key={m} value={m}>{rot(m)}</option>)}
-          </select>
-        </label>
-        <label style={{ fontSize: 12, color: theme.sub, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-          até:
-          <select className="input" style={selStyle} value={b} onChange={e => setFim(Number(e.target.value))}>
-            {meses.map(m => <option key={m} value={m}>{rot(m)}</option>)}
-          </select>
-        </label>
-        <span style={{ fontSize: 11.5, color: theme.sub }}>{umMes ? `Somente ${rot(a)}` : `Somando ${rot(a)} a ${rot(b)} · ${dentro.length} meses`}</span>
-      </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12 }}>
-        <Tile label="Faturamento" valor={money(receita)} />
-        <Tile label="(−) Custos" valor={money(custo)} />
-        <Tile label="(−) Despesas" valor={money(despesa)} />
-        <Tile label="Resultado do período" valor={money(resultado)} cor={corResultado(resultado)} sub={margem == null ? '' : `Margem líquida ${fmtPct(margem)}`} />
-        <Tile label="EBITDA" valor={money(ebitda)} sub={margEbitda == null ? '' : `Margem EBITDA ${fmtPct(margEbitda)}`} />
-      </div>
-      <span style={{ fontSize: 11, color: theme.sub, display: 'block', marginTop: 8 }}>Soma do fluxo (receita/custo/despesa/EBITDA) no intervalo. Balanço e índices continuam na posição do mês da competência — o intervalo entra neles na próxima etapa.</span>
     </Secao>
   )
 }
