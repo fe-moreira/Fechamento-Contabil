@@ -24,9 +24,10 @@ export default function CompMovimentoConsolidado() {
   const [nivel, setNivel] = useState('tudo')
   const [agrupar, setAgrupar] = useState('mes')
   const [mesesSel, setMesesSel] = useState(() => new Set()) // vazio = todos
+  const [erro, setErro] = useState(null)
 
   useEffect(() => {
-    setBase(null); setEmpresasSel(null)
+    setBase(null); setEmpresasSel(null); setErro(null)
     if (!empresaId) return
     let vivo = true
     ;(async () => {
@@ -70,12 +71,14 @@ export default function CompMovimentoConsolidado() {
         const meses = [...mesesSet].sort((a, b) => a - b)
         const empresas = grupoIds.map(id => ({ id, nome: nomeEmp[id] || id }))
         if (vivo) setBase({ matByEmp, meta, meses, empresas, semGrupo })
-      } finally { if (vivo) { setCarregando(false); setProg('') } }
+      } catch (e) { if (vivo) setErro(e?.message || String(e)) }
+      finally { if (vivo) { setCarregando(false); setProg('') } }
     })()
     return () => { vivo = false }
   }, [empresaId])
 
   if (!empresaId) return <Wrap><Vazio icon="ti-building" txt="Selecione uma empresa (mãe) no menu lateral." /></Wrap>
+  if (erro) return <Wrap><div style={{ ...cardVazio, borderColor: theme.red }}><i className="ti ti-alert-triangle" style={{ fontSize: 22, color: theme.red }} /><p style={{ fontSize: 13.5, color: theme.text }}>Não consegui montar o consolidado: <b>{erro}</b></p></div></Wrap>
   if (carregando || base === null) return <Wrap><p style={{ color: theme.sub, fontSize: 13 }}>{prog || 'Consolidando o comparativo do grupo…'}</p></Wrap>
 
   const { matByEmp, meta, meses, empresas, semGrupo } = base
