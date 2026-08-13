@@ -42,6 +42,7 @@ export default function PainelCliente() {
   const { empresaId, empresaNome, empresaCnpj, competencia, empresas, plano } = useAppData()
   const empresa = empresas.find(e => e.id === empresaId)
   const compSlug = competencia.replace('/', '-')
+  const [mesFoco, anoFoco] = competencia.split('/').map(Number)
 
   // Cockpit COM CACHE: sai e volta da tela e aparece a última versão na hora; só reprocessa
   // se algum dado do fechamento mudou (o carimbo de versaoRelatorio detecta). Fonte VIVA
@@ -208,6 +209,7 @@ export default function PainelCliente() {
         }
 
         return {
+          porMes, meses, // por mês (fluxo) — base do painel "Resultado por período (intervalo)"
           faturamento, custo, despesa, resultado, lucro, acumulado, serie, serieCombo,
           totAtivo, totPassivo, clientes, fornecedores,
           impostos, disponiveis, totDispIni, totDispFim, geracaoCaixa, dataIni, dataFim,
@@ -318,6 +320,7 @@ export default function PainelCliente() {
       {!carregando && d && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
           <BlocoResultado d={d} />
+          <BlocoPeriodo key={compSlug} d={d} focusMes={mesFoco} ano={anoFoco} />
           <BlocoComparativo d={d} />
           <BlocoBalanco d={d} />
           <BlocoFinanceiro d={d} />
@@ -350,6 +353,57 @@ function BlocoResultado({ d }) {
           <GraficoDesempenho s={d.serieCombo} />
         </div>
       </div>
+    </Secao>
+  )
+}
+
+// ETAPA 1a — Resultado por PERÍODO (intervalo). Aditivo e sem risco: soma os blocos de FLUXO
+// (receita, custo, despesa, resultado, EBITDA) do intervalo escolhido, a partir do porMes que o
+// Cockpit já calcula. O Balanço/Índices continuam na posição do mês (foto) — o intervalo entra
+// neles na etapa 1b. Padrão do intervalo: do 1º mês com dados até o mês da competência (acum. no ano).
+function BlocoPeriodo({ d, focusMes, ano }) {
+  const meses = (d.meses || [])
+  const disponivel = meses.length > 0
+  const last = disponivel ? meses[meses.length - 1] : 1
+  const fimPadrao = meses.includes(focusMes) ? focusMes : last
+  const [ini, setIni] = useState(disponivel ? meses[0] : 1)
+  const [fim, setFim] = useState(fimPadrao)
+  if (!disponivel) return null
+  const a = Math.min(ini, fim), b = Math.max(ini, fim)
+  const dentro = meses.filter(m => m >= a && m <= b)
+  const soma = campo => dentro.reduce((s, m) => s + (Number(d.porMes?.[m]?.[campo]) || 0), 0)
+  const receita = soma('receita'), custo = soma('custo'), despesa = soma('despesa')
+  const resultado = soma('resultado'), ebitda = soma('ebitda')
+  const margem = receita ? (resultado / receita) * 100 : null
+  const margEbitda = receita ? (ebitda / receita) * 100 : null
+  const rot = m => `${MESES[m - 1]}/${String(ano).slice(2)}`
+  const selStyle = { fontSize: 12.5, padding: '5px 10px', width: 'auto' }
+  const umMes = a === b
+  return (
+    <Secao titulo="Resultado por período (intervalo)" flag="fluxo">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
+        <label style={{ fontSize: 12, color: theme.sub, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <i className="ti ti-calendar-stats" /> De:
+          <select className="input" style={selStyle} value={a} onChange={e => setIni(Number(e.target.value))}>
+            {meses.map(m => <option key={m} value={m}>{rot(m)}</option>)}
+          </select>
+        </label>
+        <label style={{ fontSize: 12, color: theme.sub, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          até:
+          <select className="input" style={selStyle} value={b} onChange={e => setFim(Number(e.target.value))}>
+            {meses.map(m => <option key={m} value={m}>{rot(m)}</option>)}
+          </select>
+        </label>
+        <span style={{ fontSize: 11.5, color: theme.sub }}>{umMes ? `Somente ${rot(a)}` : `Somando ${rot(a)} a ${rot(b)} · ${dentro.length} meses`}</span>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12 }}>
+        <Tile label="Faturamento" valor={money(receita)} />
+        <Tile label="(−) Custos" valor={money(custo)} />
+        <Tile label="(−) Despesas" valor={money(despesa)} />
+        <Tile label="Resultado do período" valor={money(resultado)} cor={corResultado(resultado)} sub={margem == null ? '' : `Margem líquida ${fmtPct(margem)}`} />
+        <Tile label="EBITDA" valor={money(ebitda)} sub={margEbitda == null ? '' : `Margem EBITDA ${fmtPct(margEbitda)}`} />
+      </div>
+      <span style={{ fontSize: 11, color: theme.sub, display: 'block', marginTop: 8 }}>Soma do fluxo (receita/custo/despesa/EBITDA) no intervalo. Balanço e índices continuam na posição do mês da competência — o intervalo entra neles na próxima etapa.</span>
     </Secao>
   )
 }
