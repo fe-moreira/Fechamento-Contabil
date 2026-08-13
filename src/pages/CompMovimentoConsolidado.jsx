@@ -143,13 +143,6 @@ export default function CompMovimentoConsolidado() {
 
   return (
     <Wrap>
-      <InfoTela titulo="Comparativo de Movimento — Consolidado">
-        Mesmo layout e comportamento do <b>Comparativo de Movimento</b> (clique na célula → razão), somando o grupo.
-        Só <b>unifica</b> contas quando <b>conta + classificação + nome</b> são iguais; o que diverge entra separado
-        (pra montar o de-para). Use o filtro <b>Empresas</b> para <b>consolidar/desconsolidar</b>. É só leitura — a
-        justificativa da oscilação continua individual em cada empresa. No razão, cada lançamento diz de qual empresa é.
-      </InfoTela>
-
       {semGrupo && <div style={{ ...cardVazio, borderColor: theme.yellow, margin: '4px 0 14px' }}>
         <i className="ti ti-info-circle" style={{ fontSize: 20, color: theme.yellow }} />
         <p style={{ fontSize: 13, color: theme.text }}>Esta empresa ainda <b>não consolida ninguém</b> (mostrando só ela). Marque o grupo no <b>cadastro da empresa mãe</b>.</p>
@@ -360,11 +353,27 @@ function ModalRazaoConsolidado({ detalhe, onClose }) {
   )
 }
 
+// Mesma casca do Comp. Movimento (Wrapper): <div> puro que preenche a área toda — sem maxWidth
+// nem centralização, senão sobra faixa branca à esquerda e não fica "idêntico".
 function Wrap({ children }) {
-  return <div style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto' }}>
-    <h1 style={{ fontSize: 20, fontWeight: 600, margin: '0 0 4px' }}>Comparativo de Movimento — Consolidado</h1>
-    <div style={{ marginTop: 14 }}>{children}</div>
-  </div>
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+        <h1 style={{ fontSize: 22, fontWeight: 500, margin: 0 }}>Comp. Mov. Consolidado</h1>
+        <InfoTela titulo="Comp. Mov. Consolidado">
+          Mesmo layout e comportamento do <b>Comp. Movimento</b> (clique num valor para ver o razão), somando o grupo.
+          Só <b>unifica</b> contas quando <b>conta + classificação + nome</b> são iguais; o que diverge entra separado
+          (para montar o de-para). Use o filtro <b>Empresas</b> para <b>consolidar/desconsolidar</b> — ver todas, algumas
+          ou uma só. É <b>só leitura</b> — a justificativa da oscilação continua individual em cada empresa. No razão,
+          cada lançamento mostra <b>de qual empresa</b> é.
+        </InfoTela>
+      </div>
+      <p style={{ color: theme.sub, fontSize: 13, marginBottom: 22 }}>
+        Comparativo mês a mês do grupo: soma das contas de resultado das empresas ligadas, com as mesmas variações e o mesmo razão do Comp. Movimento.
+      </p>
+      {children}
+    </div>
+  )
 }
 function Vazio({ icon, txt }) {
   return <div style={cardVazio}><i className={`ti ${icon}`} style={{ fontSize: 22, color: theme.accent }} /><p style={{ fontSize: 14, color: theme.text }}>{txt}</p></div>
