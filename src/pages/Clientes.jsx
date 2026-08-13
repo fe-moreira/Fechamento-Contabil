@@ -458,20 +458,41 @@ export default function Clientes() {
               <Campo label="Observações" full><textarea className="input" rows={2} value={form.observacoes || ''} onChange={set('observacoes')} /></Campo>
               <Campo label="Consolida os balancetes destas empresas (grupo)" full>
                 <div style={{ border: `1px solid ${theme.cb}`, borderRadius: 8, padding: 8 }}>
+                  {/* SELECIONADAS em destaque no topo — para ficar CLARO o que já está no grupo
+                      (a lista é alfabética e a empresa marcada pode ficar fora da área visível). */}
+                  {consolidaIds.length > 0 && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8, paddingBottom: 8, borderBottom: `1px solid ${theme.border}` }}>
+                      <span style={{ fontSize: 11, color: theme.sub, alignSelf: 'center' }}>No grupo:</span>
+                      {consolidaIds.map(id => {
+                        const c = lista.find(x => x.id === id)
+                        return (
+                          <span key={id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'rgba(74,124,255,0.14)', border: `1px solid ${theme.accent}`, borderRadius: 16, padding: '3px 6px 3px 10px', fontSize: 12 }}>
+                            {c ? `${c.razao_social} · ${c.codigo_dominio}` : id}
+                            <button type="button" title="Tirar do grupo" onClick={() => setConsolidaIds(ids => ids.filter(x => x !== id))} style={{ background: 'none', border: 'none', color: theme.sub, cursor: 'pointer', fontSize: 13, padding: 0, display: 'inline-flex' }}><i className="ti ti-x" /></button>
+                          </span>
+                        )
+                      })}
+                    </div>
+                  )}
                   <input className="input" value={buscaCons} onChange={e => setBuscaCons(e.target.value)} placeholder="Buscar empresa por nome ou código…" style={{ marginBottom: 8, fontSize: 12.5 }} />
                   <div style={{ maxHeight: 150, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
                     {(() => {
                       const t = norm(buscaCons)
                       const opts = lista.filter(c => c.id !== editId && (!t || norm(`${c.razao_social} ${c.codigo_dominio} ${c.nome_fantasia || ''}`).includes(t)))
+                        // marcadas primeiro, para aparecerem no topo da lista também
+                        .sort((a, b) => (consolidaIds.includes(b.id) ? 1 : 0) - (consolidaIds.includes(a.id) ? 1 : 0))
                       if (!opts.length) return <span style={{ color: theme.sub, fontSize: 12 }}>Nenhuma empresa para listar.</span>
-                      return opts.map(c => (
-                        <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, cursor: 'pointer', padding: '3px 4px' }}>
-                          <input type="checkbox" checked={consolidaIds.includes(c.id)}
-                            onChange={() => setConsolidaIds(ids => ids.includes(c.id) ? ids.filter(x => x !== c.id) : [...ids, c.id])}
-                            style={{ cursor: 'pointer' }} />
-                          <span>{c.razao_social} <span style={{ color: theme.sub }}>· {c.codigo_dominio}</span></span>
-                        </label>
-                      ))
+                      return opts.map(c => {
+                        const on = consolidaIds.includes(c.id)
+                        return (
+                          <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, cursor: 'pointer', padding: '3px 6px', borderRadius: 6, background: on ? 'rgba(74,124,255,0.12)' : 'transparent' }}>
+                            <input type="checkbox" checked={on}
+                              onChange={() => setConsolidaIds(ids => ids.includes(c.id) ? ids.filter(x => x !== c.id) : [...ids, c.id])}
+                              style={{ cursor: 'pointer' }} />
+                            <span style={{ fontWeight: on ? 600 : 400 }}>{c.razao_social} <span style={{ color: theme.sub, fontWeight: 400 }}>· {c.codigo_dominio}</span></span>
+                          </label>
+                        )
+                      })
                     })()}
                   </div>
                   <p style={{ color: theme.sub, fontSize: 11.5, margin: '6px 0 0' }}>
