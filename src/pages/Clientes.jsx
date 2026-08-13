@@ -275,21 +275,47 @@ export default function Clientes() {
     if (editId) res = await supabase.from('clientes').update(payload).eq('id', editId)
     else { res = await supabase.from('clientes').insert(payload).select('id').single(); novoId = res.data?.id }
     if (res.error) { setSalvando(false); setErro(traduzErro(res.error.message)); return }
-    // Consolidação de grupo (fase 1): regrava a lista de empresas que esta mãe consolida.
-    // Tolerante — se a tabela ainda não existir, o cadastro do cliente é salvo do mesmo jeito.
+    // Consolidação de grupo: regrava a lista de empresas que esta mãe consolida. O Supabase
+    // NÃO lança exceção em erro (devolve { error }) — então checamos o erro e AVISAMOS (o cliente
+    // já foi salvo; só a consolidação pode falhar se a tabela ainda não existir no banco).
     if (novoId) {
-      try {
-        await supabase.from('consolidacao_grupo').delete().eq('matriz_id', novoId)
-        const alvos = consolidaIds.filter(x => x && x !== novoId)
-        if (alvos.length) await supabase.from('consolidacao_grupo').insert(alvos.map(empresa_id => ({ matriz_id: novoId, empresa_id })))
-      } catch { /* tabela ainda não criada — ignora a consolidação */ }
+      const delRes = await supabase.from('consolidacao_grupo').delete().eq('matriz_id', novoId)
+      const alvos = consolidaIds.filter(x => x && x !== novoId)
+      let insErr = null
+      if (!delRes.error && alvos.length) {
+        const insRes = await supabase.from('consolidacao_grupo').insert(alvos.map(empresa_id => ({ matriz_id: novoId, empresa_id })))
+        insErr = insRes.error
+      }
+      const cErr = delRes.error || insErr
+      if (cErr) {
+        setSalvando(false)
+        const faltaTabela = /does not exist|relation|schema cache|could not find the table/i.test(cErr.message || '')
+        setErro(faltaTabela
+          ? 'O cliente foi salvo, MAS a consolidação não gravou: falta criar a tabela "consolidacao_grupo" no Supabase. Rode o SQL informado e salve de novo.'
+          : 'O cliente foi salvo, mas a consolidação não gravou: ' + cErr.message)
+        carregar()
+        return   // mantém o modal aberto para você ver o aviso (o cliente já está salvo)
+      }
     }
     setSalvando(false)
     setAberto(false); carregar()
   }
 
   async function excluir(c) {
-    if (!confirm(`Excluir ${c.razao_social}?`)) return
+    setErro('')
+    // NUNCA excluir cliente que já tem movimento contábil (razão/lançamentos). Dado contábil
+    // não se apaga — se precisar tirar da lista, INATIVE o cliente, não exclua.
+    const { data: comps } = await supabase.from('competencias').select('id').eq('cliente_id', c.id)
+    const ids = (comps || []).map(x => x.id)
+    if (ids.length) {
+      const { count: nRaz } = await supabase.from('razao').select('id', { count: 'exact', head: true }).in('competencia_id', ids)
+      const { count: nLan } = await supabase.from('lancamentos').select('id', { count: 'exact', head: true }).in('competencia_id', ids)
+      if ((nRaz || 0) + (nLan || 0) > 0) {
+        setErro(`Não é permitido excluir "${c.razao_social}": já tem lançamentos/razão importados (${(nRaz || 0) + (nLan || 0)} registro(s)). Dado contábil não se apaga — inative o cliente em vez de excluir.`)
+        return
+      }
+    }
+    if (!confirm(`Excluir ${c.razao_social}? (não tem lançamentos)`)) return
     const { error } = await supabase.from('clientes').delete().eq('id', c.id)
     if (error) setErro(error.message); else carregar()
   }

@@ -7,44 +7,48 @@ import InfoTela from '../components/InfoTela'
 
 const ANO = 2026
 const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
+const AGRUP = [{ k: 'mes', n: 'Mês' }, { k: 'trimestre', n: 'Trimestre' }, { k: 'semestre', n: 'Semestre' }, { k: 'ano', n: 'Ano' }]
 const num = v => Number(v) || 0
 
-// COMPARATIVO DE MOVIMENTO CONSOLIDADO (fase 2 da consolidação).
-// Soma, POR CLASSIFICAÇÃO, as contas de resultado (grupos 3/4/5) da empresa MÃE + as empresas
-// que ela consolida (cadastro → consolidacao_grupo). É READ-ONLY: a análise/justificativa da
-// oscilação continua individual em cada empresa; aqui é só a visão somada do grupo.
-// Contas com a MESMA classificação somam numa linha; o que não casar aparece na sua própria
-// linha (nada some) — o de-para conta↔conta vem numa fase seguinte.
+// COMPARATIVO DE MOVIMENTO CONSOLIDADO. Mesmo layout/filtros do Comparativo de Movimento
+// (nível, meses, agrupamento), MAIS um filtro de EMPRESAS: a lista da mãe + o grupo, onde você
+// liga/desliga cada empresa (ver todas, algumas ou uma só). Soma POR CLASSIFICAÇÃO as contas de
+// resultado (grupos 3/4/5). É read-only — a justificativa da oscilação continua individual.
+// Os dados são guardados POR EMPRESA, então alternar no filtro é instantâneo (não recarrega).
 export default function CompMovimentoConsolidado() {
   const { empresaId, empresaNome } = useAppData()
   const [carregando, setCarregando] = useState(false)
   const [prog, setProg] = useState('')
-  const [dados, setDados] = useState(null) // { meses, contas, mat, empresas, semGrupo }
+  const [base, setBase] = useState(null)          // { matByEmp, meta, meses, empresas, semGrupo }
+  const [empresasSel, setEmpresasSel] = useState(null) // Set de empId ligados; null = todas
   const [nivel, setNivel] = useState('tudo')
+  const [agrupar, setAgrupar] = useState('mes')
+  const [mesesSel, setMesesSel] = useState(() => new Set()) // vazio = todos
 
   useEffect(() => {
-    setDados(null)
+    setBase(null); setEmpresasSel(null)
     if (!empresaId) return
     let vivo = true
     ;(async () => {
       setCarregando(true); setProg('')
       try {
-        // 1) Grupo = a própria mãe + as empresas marcadas no cadastro dela.
+        // Grupo = a própria mãe + as empresas marcadas no cadastro dela.
         let grupoIds = [empresaId], semGrupo = true
         try {
           const { data: g } = await supabase.from('consolidacao_grupo').select('empresa_id').eq('matriz_id', empresaId)
           const extras = (g || []).map(r => r.empresa_id).filter(id => id && id !== empresaId)
           if (extras.length) { grupoIds = [empresaId, ...extras]; semGrupo = false }
-        } catch { /* tabela ainda não criada — consolida só a própria empresa */ }
+        } catch { /* tabela ainda não criada — só a própria empresa */ }
         grupoIds = [...new Set(grupoIds)]
         const { data: emps } = await supabase.from('clientes').select('id, razao_social').in('id', grupoIds)
         const nomeEmp = Object.fromEntries((emps || []).map(e => [e.id, e.razao_social]))
 
-        // 2) Soma por CLASSIFICAÇÃO × mês, percorrendo cada empresa e cada competência do ano.
-        const meta = {}, mat = {}, mesesSet = new Set()
+        // Guarda POR EMPRESA (para o filtro alternar sem recarregar) e o meta (união das contas).
+        const matByEmp = {}, meta = {}, mesesSet = new Set()
         for (let i = 0; i < grupoIds.length; i++) {
           const cid = grupoIds[i]
-          if (vivo) setProg(`Somando ${i + 1}/${grupoIds.length}: ${nomeEmp[cid] || ''}…`)
+          if (vivo) setProg(`Carregando ${i + 1}/${grupoIds.length}: ${nomeEmp[cid] || ''}…`)
+          matByEmp[cid] = {}
           const { data: comps } = await supabase.from('competencias').select('id, mes').eq('cliente_id', cid).eq('ano', ANO).order('mes', { ascending: true })
           for (const c of (comps || [])) {
             const { linhas } = await montarBalancete(cid, c.id, 0, { comLancamentos: true })
@@ -53,77 +57,133 @@ export default function CompMovimentoConsolidado() {
             if (!res.length) continue
             mesesSet.add(c.mes)
             for (const l of res) {
-              const key = String(l.classifRaw || l.classif)     // consolida POR CLASSIFICAÇÃO
+              const key = String(l.classifRaw || l.classif)  // consolida POR CLASSIFICAÇÃO
               if (!meta[key]) meta[key] = { key, classif: l.classif, classifRaw: key, nome: l.nome, grau: l.grau || String(key).replace(/\D/g, '').length, sintetica: !!l.sintetica }
               else { if (!meta[key].nome && l.nome) meta[key].nome = l.nome; meta[key].sintetica = meta[key].sintetica && l.sintetica }
-              ;(mat[key] ||= {})[c.mes] = (mat[key][c.mes] || 0) + num(l.saldo_final)
+              ;(matByEmp[cid][key] ||= {})[c.mes] = (matByEmp[cid][key][c.mes] || 0) + num(l.saldo_final)
             }
           }
           if (!vivo) return
         }
         const meses = [...mesesSet].sort((a, b) => a - b)
-        // Ordem da ÁRVORE do plano: classifRaw como string (igual ao balancete/comparativo).
-        const contas = Object.values(meta).sort((a, b) => a.classifRaw < b.classifRaw ? -1 : a.classifRaw > b.classifRaw ? 1 : 0)
-        if (vivo) setDados({ meses, contas, mat, empresas: grupoIds.map(id => nomeEmp[id] || id), semGrupo })
+        const empresas = grupoIds.map(id => ({ id, nome: nomeEmp[id] || id }))
+        if (vivo) setBase({ matByEmp, meta, meses, empresas, semGrupo })
       } finally { if (vivo) { setCarregando(false); setProg('') } }
     })()
     return () => { vivo = false }
   }, [empresaId])
 
-  if (!empresaId) return (
-    <Wrap>
-      <div style={cardVazio}><i className="ti ti-building" style={{ fontSize: 24, color: theme.accent }} />
-        <p style={{ fontSize: 14, color: theme.text }}>Selecione uma empresa (mãe) no menu lateral.</p></div>
-    </Wrap>
-  )
-  if (carregando || dados === null) return <Wrap><p style={{ color: theme.sub, fontSize: 13 }}>{prog || 'Consolidando o comparativo do grupo…'}</p></Wrap>
+  if (!empresaId) return <Wrap><Vazio icon="ti-building" txt="Selecione uma empresa (mãe) no menu lateral." /></Wrap>
+  if (carregando || base === null) return <Wrap><p style={{ color: theme.sub, fontSize: 13 }}>{prog || 'Consolidando o comparativo do grupo…'}</p></Wrap>
 
-  const { meses, contas, mat, empresas, semGrupo } = dados
+  const { matByEmp, meta, meses, empresas, semGrupo } = base
+  const ativas = empresasSel || new Set(empresas.map(e => e.id))   // null = todas ligadas
+  const toggleEmp = id => setEmpresasSel(prev => {
+    const cur = prev || new Set(empresas.map(e => e.id))
+    const n = new Set(cur); n.has(id) ? n.delete(id) : n.add(id)
+    return n.size ? n : cur   // nunca deixa zerar (some tudo) — mantém a anterior
+  })
+  const soUma = id => setEmpresasSel(new Set([id]))
+  const todas = () => setEmpresasSel(null)
+
+  // Valor de uma conta num mês = soma das empresas LIGADAS.
+  const val = (key, m) => {
+    let s = 0, has = false
+    for (const e of empresas) if (ativas.has(e.id)) { const v = matByEmp[e.id]?.[key]?.[m]; if (v != null) { s += v; has = true } }
+    return has ? s : null
+  }
+
+  const contas = Object.values(meta).sort((a, b) => a.classifRaw < b.classifRaw ? -1 : a.classifRaw > b.classifRaw ? 1 : 0)
   const niveisSint = [...new Set(contas.filter(c => c.sintetica).map(c => c.grau))].sort((a, b) => a - b)
   const contasVis = contas.filter(c => nivel === 'tudo' ? true : (c.sintetica && c.grau <= nivel))
-  const val = (key, m) => { const v = mat[key]?.[m]; return v == null ? null : v }
-  const totalConta = key => meses.reduce((s, m) => s + (val(key, m) || 0), 0)
-  const temMov = key => meses.some(m => { const v = val(key, m); return v != null && Number(v) !== 0 })
-  // Resultado do período = −Σ(saldo das analíticas de resultado). Lucro (crédito) positivo.
   const analit = contas.filter(c => !c.sintetica)
-  const resMes = m => -analit.reduce((s, c) => s + (val(c.key, m) || 0), 0)
-  const resExerc = m => meses.filter(x => x <= m).reduce((s, x) => s + resMes(x), 0)
-  const resTotal = meses.reduce((s, m) => s + resMes(m), 0)
+
+  // Colunas conforme o agrupamento + filtro de meses (igual ao Comparativo de Movimento).
+  const colunas = (() => {
+    const b = mesesSel.size ? meses.filter(m => mesesSel.has(m)) : meses
+    if (agrupar === 'mes') return b.map(m => ({ key: 'm' + m, label: MESES[m - 1], meses: [m] }))
+    const per = agrupar === 'trimestre' ? 3 : agrupar === 'semestre' ? 6 : 12
+    const bk = new Map()
+    for (const m of b) { const idx = per === 12 ? 1 : Math.floor((m - 1) / per) + 1; if (!bk.has(idx)) bk.set(idx, { idx, meses: [] }); bk.get(idx).meses.push(m) }
+    return [...bk.values()].sort((x, y) => x.idx - y.idx).map(g => ({ key: 'g' + g.idx, label: agrupar === 'ano' ? String(ANO) : `${agrupar === 'trimestre' ? 'T' : 'S'}${g.idx}`, meses: g.meses }))
+  })()
+  const mostraTotal = colunas.length > 1
+  const valCol = (key, col) => { let s = 0, has = false; for (const m of col.meses) { const v = val(key, m); if (v != null) { s += v; has = true } } return has ? s : null }
+  const totalConta = key => colunas.reduce((s, col) => s + (valCol(key, col) || 0), 0)
+  const temMov = key => colunas.some(col => { const v = valCol(key, col); return v != null && Number(v) !== 0 })
+  const resCol = col => -analit.reduce((s, c) => s + (valCol(c.key, col) || 0), 0)
+  const resExercCol = col => { const ate = col.meses[col.meses.length - 1]; let s = 0; for (const m of meses) { if (m > ate) break; s += -analit.reduce((a, c) => a + (val(c.key, m) || 0), 0) } return s }
+  const resTotal = colunas.reduce((s, col) => s + resCol(col), 0)
+
   const celTxt = v => (v == null || Math.abs(v) < 0.005) ? '—' : moneyDC(v)
   const corRes = v => (v == null || Math.abs(v) < 0.005) ? theme.sub : (v < 0 ? '#0a7d33' : '#c0341d')
+  const toggleMes = m => setMesesSel(prev => { const n = new Set(prev); n.has(m) ? n.delete(m) : n.add(m); return n })
 
   return (
     <Wrap>
       <InfoTela titulo="Comparativo de Movimento — Consolidado">
-        Soma as contas de <b>resultado</b> (receitas, custos e despesas) da empresa <b>mãe</b> e das empresas que ela
-        consolida, mês a mês, <b>por classificação</b>. É só leitura — a <b>oscilação/justificativa</b> continua
-        individual em cada empresa. Configure o grupo no <b>cadastro da empresa mãe</b>.
+        Mesmo layout do <b>Comparativo de Movimento</b>, somando <b>por classificação</b> as contas de resultado da
+        empresa <b>mãe</b> + as empresas do grupo. Use o filtro <b>Empresas</b> para <b>consolidar/desconsolidar</b> —
+        ver todas, algumas ou uma só. É só leitura; a justificativa da oscilação continua individual em cada empresa.
       </InfoTela>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', margin: '4px 0 14px' }}>
-        <span style={{ fontSize: 13, color: theme.text }}>
-          <b>{empresaNome}</b> · consolidando <b>{empresas.length}</b> empresa(s)
-        </span>
-        {niveisSint.length > 0 && (
+      {semGrupo && <div style={{ ...cardVazio, borderColor: theme.yellow, margin: '4px 0 14px' }}>
+        <i className="ti ti-info-circle" style={{ fontSize: 20, color: theme.yellow }} />
+        <p style={{ fontSize: 13, color: theme.text }}>Esta empresa ainda <b>não consolida ninguém</b> (mostrando só ela). Marque o grupo no <b>cadastro da empresa mãe</b>.</p>
+      </div>}
+
+      {/* Filtro de EMPRESAS: liga/desliga cada uma; "Só esta" isola; "Todas" volta. */}
+      <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 10, padding: '10px 14px', marginBottom: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 12, fontWeight: 700, color: theme.sub, textTransform: 'uppercase', letterSpacing: .4 }}><i className="ti ti-building-community" style={{ color: theme.accent }} /> Empresas ({ativas.size}/{empresas.length})</span>
+          <button className="btn btn-ghost" style={{ fontSize: 11.5, padding: '3px 10px' }} onClick={todas}>Todas</button>
+        </div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {empresas.map(e => {
+            const on = ativas.has(e.id)
+            return (
+              <span key={e.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: `1px solid ${on ? theme.accent : theme.cb}`, background: on ? 'rgba(74,124,255,0.12)' : theme.input, borderRadius: 20, padding: '4px 6px 4px 10px', fontSize: 12.5 }}>
+                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                  <input type="checkbox" checked={on} onChange={() => toggleEmp(e.id)} style={{ cursor: 'pointer' }} />
+                  {e.nome}{e.id === empresaId ? <b style={{ color: theme.accent }}> (mãe)</b> : ''}
+                </label>
+                <button title="Ver só esta" onClick={() => soUma(e.id)} style={{ background: 'none', border: 'none', color: theme.sub, cursor: 'pointer', fontSize: 13, padding: 0 }}><i className="ti ti-focus-2" /></button>
+              </span>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* Filtros de layout — iguais ao Comparativo de Movimento */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', marginBottom: 12 }}>
+        <span style={{ fontSize: 12, color: theme.text }}><b>{empresaNome}</b></span>
+        <label style={{ fontSize: 12, color: theme.sub, display: 'inline-flex', alignItems: 'center', gap: 6 }}>Agrupar:
+          <select className="input" value={agrupar} onChange={e => setAgrupar(e.target.value)} style={{ fontSize: 12.5, padding: '5px 10px', width: 'auto' }}>
+            {AGRUP.map(a => <option key={a.k} value={a.k}>{a.n}</option>)}
+          </select>
+        </label>
+        <label style={{ fontSize: 12, color: theme.sub, display: 'inline-flex', alignItems: 'center', gap: 6 }}>Nível:
           <select className="input" value={nivel} onChange={e => setNivel(e.target.value === 'tudo' ? 'tudo' : Number(e.target.value))} style={{ fontSize: 12.5, padding: '5px 10px', width: 'auto' }}>
             <option value="tudo">Todas as contas</option>
             {niveisSint.map(n => <option key={n} value={n}>Sintéticas até nível {n}</option>)}
           </select>
+        </label>
+        {agrupar === 'mes' && meses.length > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 12, color: theme.sub }}>Meses:</span>
+            <button className="btn btn-ghost" style={{ fontSize: 11, padding: '2px 8px', color: mesesSel.size ? theme.sub : theme.accent }} onClick={() => setMesesSel(new Set())}>Todos</button>
+            {meses.map(m => {
+              const on = mesesSel.size === 0 || mesesSel.has(m)
+              return <button key={m} onClick={() => toggleMes(m)} style={{ fontSize: 11.5, padding: '3px 9px', borderRadius: 16, border: `1px solid ${on ? theme.accent : theme.cb}`, background: on ? 'rgba(74,124,255,0.12)' : theme.input, color: theme.text, cursor: 'pointer' }}>{MESES[m - 1]}</button>
+            })}
+          </div>
         )}
       </div>
 
-      {semGrupo && (
-        <div style={{ ...cardVazio, borderColor: theme.yellow, marginBottom: 14 }}>
-          <i className="ti ti-info-circle" style={{ fontSize: 20, color: theme.yellow }} />
-          <p style={{ fontSize: 13, color: theme.text }}>Esta empresa ainda <b>não consolida ninguém</b> — está mostrando só ela mesma. Marque as empresas do grupo no <b>cadastro da empresa mãe</b> (campo “Consolida os balancetes destas empresas”).</p>
-        </div>
-      )}
-
-      <p style={{ color: theme.sub, fontSize: 12, margin: '0 0 10px' }}><i className="ti ti-building-community" style={{ color: theme.accent }} /> Empresas do consolidado: {empresas.join(' · ')}</p>
+      <p style={{ color: theme.sub, fontSize: 12, margin: '0 0 10px' }}>Consolidando: {empresas.filter(e => ativas.has(e.id)).map(e => e.nome).join(' · ') || '—'}</p>
 
       {!meses.length ? (
-        <div style={cardVazio}><i className="ti ti-database-off" style={{ fontSize: 22, color: theme.accent }} />
-          <p style={{ fontSize: 14, color: theme.text }}>Nenhuma das empresas do grupo tem razão importado em {ANO}.</p></div>
+        <Vazio icon="ti-database-off" txt={`Nenhuma das empresas do grupo tem razão importado em ${ANO}.`} />
       ) : (
         <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }}>
@@ -131,8 +191,8 @@ export default function CompMovimentoConsolidado() {
               <tr style={{ background: theme.input }}>
                 <th style={{ ...th, textAlign: 'left' }}>Classificação</th>
                 <th style={{ ...th, textAlign: 'left' }}>Descrição da conta</th>
-                {meses.map(m => <th key={m} style={thR}>{MESES[m - 1]}</th>)}
-                <th style={thR}>Total</th>
+                {colunas.map(col => <th key={col.key} style={thR}>{col.label}</th>)}
+                {mostraTotal && <th style={thR}>Total</th>}
               </tr>
             </thead>
             <tbody>
@@ -140,19 +200,19 @@ export default function CompMovimentoConsolidado() {
                 <tr key={i} style={{ borderTop: `1px solid ${theme.border}`, background: c.sintetica ? theme.input : 'transparent' }}>
                   <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{c.classif}</td>
                   <td style={{ ...td, paddingLeft: 8 + Math.max(0, (c.grau || 1) - 1) * 12, fontWeight: c.sintetica ? 700 : 400 }}>{c.nome}</td>
-                  {meses.map(m => <td key={m} style={tdR}>{celTxt(val(c.key, m))}</td>)}
-                  <td style={{ ...tdR, fontWeight: 600 }}>{celTxt(totalConta(c.key))}</td>
+                  {colunas.map(col => <td key={col.key} style={tdR}>{celTxt(valCol(c.key, col))}</td>)}
+                  {mostraTotal && <td style={{ ...tdR, fontWeight: 600 }}>{celTxt(totalConta(c.key))}</td>}
                 </tr>
               ))}
               <tr style={{ borderTop: `2px solid ${theme.border}`, background: theme.input }}>
                 <td style={td}></td><td style={{ ...td, fontWeight: 700 }}>RESULTADO DO MÊS</td>
-                {meses.map(m => <td key={m} style={{ ...tdR, fontWeight: 700, color: corRes(-resMes(m)) }}>{celTxt(resMes(m))}</td>)}
-                <td style={{ ...tdR, fontWeight: 700, color: corRes(-resTotal) }}>{celTxt(resTotal)}</td>
+                {colunas.map(col => <td key={col.key} style={{ ...tdR, fontWeight: 700, color: corRes(-resCol(col)) }}>{celTxt(resCol(col))}</td>)}
+                {mostraTotal && <td style={{ ...tdR, fontWeight: 700, color: corRes(-resTotal) }}>{celTxt(resTotal)}</td>}
               </tr>
               <tr style={{ background: theme.input }}>
                 <td style={td}></td><td style={{ ...td, fontWeight: 700 }}>RESULTADO DO EXERCÍCIO (acumulado)</td>
-                {meses.map(m => <td key={m} style={{ ...tdR, fontWeight: 700, color: corRes(-resExerc(m)) }}>{celTxt(resExerc(m))}</td>)}
-                <td style={{ ...tdR, fontWeight: 700, color: corRes(-resTotal) }}>{celTxt(resTotal)}</td>
+                {colunas.map(col => <td key={col.key} style={{ ...tdR, fontWeight: 700, color: corRes(-resExercCol(col)) }}>{celTxt(resExercCol(col))}</td>)}
+                {mostraTotal && <td style={{ ...tdR, fontWeight: 700, color: corRes(-resTotal) }}>{celTxt(resTotal)}</td>}
               </tr>
             </tbody>
           </table>
@@ -168,7 +228,10 @@ function Wrap({ children }) {
     <div style={{ marginTop: 14 }}>{children}</div>
   </div>
 }
-const cardVazio = { background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: '22px 20px', display: 'flex', alignItems: 'center', gap: 14, maxWidth: 620 }
+function Vazio({ icon, txt }) {
+  return <div style={cardVazio}><i className={`ti ${icon}`} style={{ fontSize: 22, color: theme.accent }} /><p style={{ fontSize: 14, color: theme.text }}>{txt}</p></div>
+}
+const cardVazio = { background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: '22px 20px', display: 'flex', alignItems: 'center', gap: 14, maxWidth: 640 }
 const th = { padding: '10px 12px', fontSize: 11, fontWeight: 700, color: theme.sub, textTransform: 'uppercase', letterSpacing: .4, whiteSpace: 'nowrap' }
 const thR = { ...th, textAlign: 'right' }
 const td = { padding: '7px 12px', fontSize: 12.5, color: theme.text }
