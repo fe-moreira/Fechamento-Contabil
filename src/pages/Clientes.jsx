@@ -244,14 +244,20 @@ export default function Clientes() {
   function abrirNovo() { setForm(vazio); setEditId(null); setErro(''); setConsolidaIds([]); setBuscaCons(''); setConsolidaErro(null); setAberto(true); carregarConsolida(null) }
   function abrirEdit(c) { setForm({ ...vazio, ...c }); setEditId(c.id); setErro(''); setConsolidaIds([]); setBuscaCons(''); setConsolidaErro(null); setAberto(true); carregarConsolida(c.id) }
   // Lista de empresas que esta mãe consolida — guardada em cargas_cadastro (tabela que JÁ existe,
-  // sem precisar criar nada), tipo 'consolidacao', dados { empresas: [ids] }, por cliente (a mãe).
+  // sem SQL). Formato principal: tipo 'consolidacao'. Se o banco recusar esse tipo (CHECK antigo),
+  // cai para tipo 'depara' + obs 'consolidacao_grupo' (tipo garantidamente aceito). Lê os dois.
   async function carregarConsolida(id) {
     setConsolidaErro(null)
     if (!id) return
-    const { data, error } = await supabase.from('cargas_cadastro').select('dados')
+    let { data } = await supabase.from('cargas_cadastro').select('dados')
       .eq('cliente_id', id).eq('tipo', 'consolidacao').order('created_at', { ascending: false }).limit(1).maybeSingle()
-    if (error) { setConsolidaErro(error.message || 'erro'); setConsolidaIds([]) }
-    else { const e = data?.dados?.empresas; setConsolidaIds(Array.isArray(e) ? e : []) }
+    if (!data) {
+      const r = await supabase.from('cargas_cadastro').select('dados')
+        .eq('cliente_id', id).eq('tipo', 'depara').eq('obs', 'consolidacao_grupo').order('created_at', { ascending: false }).limit(1).maybeSingle()
+      data = r.data
+    }
+    const e = data?.dados?.empresas
+    setConsolidaIds(Array.isArray(e) ? e : [])
   }
 
   async function salvar(e) {
@@ -278,23 +284,26 @@ export default function Clientes() {
     if (editId) res = await supabase.from('clientes').update(payload).eq('id', editId)
     else { res = await supabase.from('clientes').insert(payload).select('id').single(); novoId = res.data?.id }
     if (res.error) { setSalvando(false); setErro(traduzErro(res.error.message)); return }
-    // Consolidação de grupo: regrava a lista de empresas que esta mãe consolida em cargas_cadastro
-    // (tipo 'consolidacao') — tabela que já existe, sem SQL. O Supabase NÃO lança exceção em erro
-    // (devolve { error }); então checamos e avisamos (o cliente já foi salvo).
+    // Consolidação de grupo: grava em cargas_cadastro (tabela que já existe, sem SQL). Tenta o
+    // tipo 'consolidacao'; se o banco recusar (CHECK antigo), cai para 'depara' + obs marcador,
+    // que é garantidamente aceito. Assim funciona sem SQL, dê no que der.
     if (novoId) {
       const alvos = consolidaIds.filter(x => x && x !== novoId)
-      const delRes = await supabase.from('cargas_cadastro').delete().eq('cliente_id', novoId).eq('tipo', 'consolidacao')
-      let insErr = null
-      if (!delRes.error && alvos.length) {
-        const insRes = await supabase.from('cargas_cadastro').insert({ cliente_id: novoId, tipo: 'consolidacao', vigencia: '00/0000', dados: { empresas: alvos } })
-        insErr = insRes.error
+      // limpa registros anteriores nos dois formatos
+      await supabase.from('cargas_cadastro').delete().eq('cliente_id', novoId).eq('tipo', 'consolidacao')
+      await supabase.from('cargas_cadastro').delete().eq('cliente_id', novoId).eq('tipo', 'depara').eq('obs', 'consolidacao_grupo')
+      let cErr = null
+      if (alvos.length) {
+        let ins = await supabase.from('cargas_cadastro').insert({ cliente_id: novoId, tipo: 'consolidacao', vigencia: '00/0000', dados: { empresas: alvos } })
+        if (ins.error) ins = await supabase.from('cargas_cadastro').insert({ cliente_id: novoId, tipo: 'depara', obs: 'consolidacao_grupo', vigencia: '00/0000', dados: { empresas: alvos } })
+        cErr = ins.error
       }
-      const cErr = delRes.error || insErr
       if (cErr) {
         setSalvando(false)
-        setErro('O cliente foi salvo, mas a consolidação não gravou: ' + cErr.message)
-        carregar(); return   // mantém o modal aberto para você ver o aviso
+        setErro('O cliente foi salvo, mas a consolidação NÃO gravou: ' + (cErr.message || cErr))
+        carregar(); return   // mantém o modal aberto para você ver o erro exato
       }
+      setImportMsg(alvos.length ? `Grupo de consolidação salvo: ${alvos.length} empresa(s).` : 'Grupo de consolidação limpo.')
     }
     setSalvando(false)
     setAberto(false); carregar()

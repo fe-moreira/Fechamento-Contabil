@@ -33,9 +33,12 @@ export default function CompMovimentoConsolidado() {
       setCarregando(true); setProg('')
       try {
         // Grupo = a própria mãe + as empresas marcadas no cadastro dela (cargas_cadastro).
+        // Lê o formato 'consolidacao' e, se não houver, o fallback 'depara' + obs marcador.
         let grupoIds = [empresaId], semGrupo = true
-        const { data: cfg } = await supabase.from('cargas_cadastro').select('dados')
-          .eq('cliente_id', empresaId).eq('tipo', 'consolidacao').order('created_at', { ascending: false }).limit(1).maybeSingle()
+        let cfg = (await supabase.from('cargas_cadastro').select('dados')
+          .eq('cliente_id', empresaId).eq('tipo', 'consolidacao').order('created_at', { ascending: false }).limit(1).maybeSingle()).data
+        if (!cfg) cfg = (await supabase.from('cargas_cadastro').select('dados')
+          .eq('cliente_id', empresaId).eq('tipo', 'depara').eq('obs', 'consolidacao_grupo').order('created_at', { ascending: false }).limit(1).maybeSingle()).data
         const extras = (Array.isArray(cfg?.dados?.empresas) ? cfg.dados.empresas : []).filter(id => id && id !== empresaId)
         if (extras.length) { grupoIds = [empresaId, ...extras]; semGrupo = false }
         grupoIds = [...new Set(grupoIds)]
