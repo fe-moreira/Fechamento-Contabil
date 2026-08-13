@@ -604,34 +604,48 @@ function svgDesempenho(s) {
   const x0 = mL, x1 = W - mR, y1 = H - mB
   const plotH = y1 - mT, plotW = x1 - x0
   const n = s.length, gw = plotW / n
-  const maxR = Math.max(1, ...s.map(p => Math.max(p.receitaLiq, p.ebitda, p.lucroLiq))) * 1.12
-  const maxPctR = Math.max(10, Math.ceil(Math.max(...s.flatMap(p => [p.margemEbitda, p.margemLiquida, 0])) / 10) * 10)
-  const yR = v => y1 - (Math.max(0, v) / maxR) * plotH
-  const yP = v => y1 - (v / maxPctR) * plotH
+  // Escala com LINHA DO ZERO (igual ao GraficoDesempenho da tela): aceita negativos, então barra de
+  // prejuízo desce e a margem negativa fica no gráfico em vez de sair pra baixo. R$ e % dividem o zero.
+  const allR = s.flatMap(p => [p.receitaLiq, p.ebitda, p.lucroLiq])
+  let rMin = Math.min(0, ...allR), rMax = Math.max(0, ...allR)
+  const rPad = (rMax - rMin || 1) * 0.08; rMin -= rPad; rMax += rPad
+  const zeroFrac = (0 - rMin) / (rMax - rMin), zeroY = y1 - zeroFrac * plotH
+  const yR = v => y1 - ((v - rMin) / (rMax - rMin)) * plotH
+  const allP = s.flatMap(p => [p.margemEbitda, p.margemLiquida])
+  const pPos = (Math.max(0, ...allP) * 1.15) || 1, pNeg = (Math.max(0, -Math.min(0, ...allP)) * 1.15) || 1
+  const yP = v => v >= 0 ? zeroY - (v / pPos) * (plotH * (1 - zeroFrac)) : zeroY + (-v / pNeg) * (plotH * zeroFrac)
   const cx = i => x0 + gw * i + gw / 2
   const bars = [['receitaLiq', ACC], ['ebitda', VERM], ['lucroLiq', VERD]]
   const linhas = [['margemEbitda', VERM, '7 4'], ['margemLiquida', VERD, '2 4']]
   const bw = (gw * 0.62) / 3
   const money0 = v => `R$ ${Math.round(v).toLocaleString('pt-BR')}`
   let g = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto">`
-  // grades + eixo R$ (esq) e % (dir)
+  // grades + eixo R$ (esq)
   for (let i = 0; i < 6; i++) {
-    const vR = maxR * i / 5, y = yR(vR), vP = maxPctR * i / 5
+    const vR = rMin + (rMax - rMin) * i / 5, y = yR(vR)
     g += `<line x1="${x0}" y1="${y.toFixed(1)}" x2="${x1}" y2="${y.toFixed(1)}" stroke="${GRID}"/>`
     g += `<text x="${x0 - 8}" y="${(y + 3.5).toFixed(1)}" text-anchor="end" font-size="10" fill="${SUB}">${money0(vR)}</text>`
-    g += `<text x="${x1 + 8}" y="${(yP(vP) + 3.5).toFixed(1)}" text-anchor="start" font-size="10" fill="${SUB}">${vP.toFixed(0)}%</text>`
   }
-  // barras
+  // eixo % (dir): topo, zero e base
+  ;[[pPos, zeroY - plotH * (1 - zeroFrac)], [0, zeroY], [-pNeg, zeroY + plotH * zeroFrac]].forEach(([vP, y]) => {
+    g += `<text x="${x1 + 8}" y="${(y + 3.5).toFixed(1)}" text-anchor="start" font-size="10" fill="${SUB}">${vP.toFixed(0)}%</text>`
+  })
+  // barras — a partir da linha do zero (lucro pra cima, prejuízo pra baixo)
   s.forEach((p, i) => bars.forEach(([k, cor], bi) => {
     const v = p[k], y = yR(v), bx = cx(i) - (bw * 3) / 2 + bi * bw
-    g += `<rect x="${bx.toFixed(1)}" y="${y.toFixed(1)}" width="${Math.max(1, bw - 1).toFixed(1)}" height="${Math.max(0, y1 - y).toFixed(1)}" fill="${cor}" rx="1"/>`
+    const top = Math.min(y, zeroY), h = Math.max(1, Math.abs(zeroY - y))
+    g += `<rect x="${bx.toFixed(1)}" y="${top.toFixed(1)}" width="${Math.max(1, bw - 1).toFixed(1)}" height="${h.toFixed(1)}" fill="${cor}" rx="1"${v < 0 ? ' opacity="0.82"' : ''}/>`
   }))
-  // linhas de margem + rótulos
+  // linha do ZERO (destaque)
+  g += `<line x1="${x0}" y1="${zeroY.toFixed(1)}" x2="${x1}" y2="${zeroY.toFixed(1)}" stroke="${SUB}" stroke-width="1.3"/>`
+  // linhas de margem + rótulos (no PDF é estático, então mantém o valor em cada ponto; acima se
+  // positivo, abaixo se negativo, pra não colar na linha)
   linhas.forEach(([k, cor, dash]) => {
     g += `<polyline points="${s.map((p, i) => `${cx(i).toFixed(1)},${yP(p[k]).toFixed(1)}`).join(' ')}" fill="none" stroke="${cor}" stroke-width="2" stroke-dasharray="${dash}"/>`
     s.forEach((p, i) => {
-      g += `<circle cx="${cx(i).toFixed(1)}" cy="${yP(p[k]).toFixed(1)}" r="2.6" fill="${cor}"/>`
-      g += `<text x="${cx(i).toFixed(1)}" y="${(yP(p[k]) - 7).toFixed(1)}" text-anchor="middle" font-size="9.5" font-weight="600" fill="${INK}">${p[k].toFixed(2)}%</text>`
+      const yy = yP(p[k]), off = p[k] < 0 ? 13 : -7
+      g += `<circle cx="${cx(i).toFixed(1)}" cy="${yy.toFixed(1)}" r="2.6" fill="${cor}"/>`
+      g += `<text x="${cx(i).toFixed(1)}" y="${(yy + off).toFixed(1)}" text-anchor="middle" font-size="9.5" font-weight="600" fill="${INK}">${p[k].toFixed(2)}%</text>`
     })
   })
   // meses + eixos

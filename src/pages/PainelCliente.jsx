@@ -470,10 +470,17 @@ function GraficoDesempenho({ s }) {
   const x0 = mL, x1 = W - mR, y1 = H - mB
   const plotH = y1 - mT, plotW = x1 - x0
   const n = s.length, gw = plotW / n
-  const maxR = Math.max(1, ...s.map(p => Math.max(p.receitaLiq, p.ebitda, p.lucroLiq))) * 1.12
-  const maxPctR = Math.max(10, Math.ceil(Math.max(...s.flatMap(p => [p.margemEbitda, p.margemLiquida, 0])) / 10) * 10)
-  const yR = v => y1 - (Math.max(0, v) / maxR) * plotH
-  const yP = v => y1 - (v / maxPctR) * plotH
+  // Escala com LINHA DO ZERO: aceita valores negativos (prejuízo/margem negativa). O eixo R$ (esq)
+  // e o % (dir) compartilham o mesmo zero, então a barra de prejuízo desce e a linha de margem
+  // negativa não sai do gráfico (antes tudo era grudado em 0 e só o mês positivo aparecia).
+  const allR = s.flatMap(p => [p.receitaLiq, p.ebitda, p.lucroLiq])
+  let rMin = Math.min(0, ...allR), rMax = Math.max(0, ...allR)
+  const rPad = (rMax - rMin || 1) * 0.08; rMin -= rPad; rMax += rPad
+  const zeroFrac = (0 - rMin) / (rMax - rMin), zeroY = y1 - zeroFrac * plotH
+  const yR = v => y1 - ((v - rMin) / (rMax - rMin)) * plotH
+  const allP = s.flatMap(p => [p.margemEbitda, p.margemLiquida])
+  const pPos = (Math.max(0, ...allP) * 1.15) || 1, pNeg = (Math.max(0, -Math.min(0, ...allP)) * 1.15) || 1
+  const yP = v => v >= 0 ? zeroY - (v / pPos) * (plotH * (1 - zeroFrac)) : zeroY + (-v / pNeg) * (plotH * zeroFrac)
   const cx = i => x0 + gw * i + gw / 2
   const bars = [
     { key: 'receitaLiq', label: 'Receita Líquida', cor: theme.accent },
@@ -490,34 +497,35 @@ function GraficoDesempenho({ s }) {
     <>
       <div style={{ overflowX: 'auto', marginTop: 8 }}>
         <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ minWidth: 460, display: 'block' }}>
-          {/* grades + eixo R$ (esq) e % (dir) */}
+          {/* grades + eixo R$ (esq) */}
           {Array.from({ length: 6 }).map((_, i) => {
-            const vR = maxR * i / 5, y = yR(vR), vP = maxPctR * i / 5
+            const vR = rMin + (rMax - rMin) * i / 5, y = yR(vR)
             return (
               <g key={i}>
-                <line x1={x0} y1={y} x2={x1} y2={y} stroke={theme.border} strokeWidth="1" />
+                <line x1={x0} y1={y} x2={x1} y2={y} stroke={theme.border} strokeWidth="1" opacity="0.55" />
                 <text x={x0 - 8} y={y + 3.5} textAnchor="end" fontSize="10" fill={theme.sub}>{money0(vR)}</text>
-                <text x={x1 + 8} y={yP(vP) + 3.5} textAnchor="start" fontSize="10" fill={theme.sub}>{vP.toFixed(0)}%</text>
               </g>
             )
           })}
-          {/* barras */}
+          {/* eixo % (dir): topo, zero e base */}
+          {[[pPos, zeroY - plotH * (1 - zeroFrac)], [0, zeroY], [-pNeg, zeroY + plotH * zeroFrac]].map(([vP, y], i) => (
+            <text key={'p' + i} x={x1 + 8} y={y + 3.5} textAnchor="start" fontSize="10" fill={theme.sub}>{vP.toFixed(0)}%</text>
+          ))}
+          {/* barras — a partir da linha do zero (lucro pra cima, prejuízo pra baixo) */}
           {s.map((p, i) => bars.map((b, bi) => {
             const v = p[b.key], y = yR(v), bx = cx(i) - (bw * 3) / 2 + bi * bw
-            return <rect key={i + b.key} x={bx} y={y} width={Math.max(1, bw - 1)} height={Math.max(0, y1 - y)} fill={b.cor} rx="1">
+            const top = Math.min(y, zeroY), h = Math.max(1, Math.abs(zeroY - y))
+            return <rect key={i + b.key} x={bx} y={top} width={Math.max(1, bw - 1)} height={h} fill={b.cor} rx="1" opacity={v < 0 ? 0.82 : 1}>
               <title>{`${p.rotulo} · ${b.label}: ${money(v)}`}</title>
             </rect>
           }))}
-          {/* linhas de margem + rótulos */}
+          {/* linha do ZERO (destaque) */}
+          <line x1={x0} y1={zeroY} x2={x1} y2={zeroY} stroke={theme.sub} strokeWidth="1.3" />
+          {/* linhas de margem contínuas — valores no tooltip (sem rótulo fixo, evita poluição) */}
           {linhas.map(ln => (
             <g key={ln.key}>
               <polyline points={s.map((p, i) => `${cx(i)},${yP(p[ln.key])}`).join(' ')} fill="none" stroke={ln.cor} strokeWidth="2" strokeDasharray={ln.dash} />
-              {s.map((p, i) => (
-                <g key={i}>
-                  <circle cx={cx(i)} cy={yP(p[ln.key])} r="2.6" fill={ln.cor} />
-                  <text x={cx(i)} y={yP(p[ln.key]) - 7} textAnchor="middle" fontSize="9.5" fontWeight="600" fill={theme.text}>{p[ln.key].toFixed(2)}%</text>
-                </g>
-              ))}
+              {s.map((p, i) => <circle key={i} cx={cx(i)} cy={yP(p[ln.key])} r="2.6" fill={ln.cor} />)}
             </g>
           ))}
           {/* meses + eixos */}
