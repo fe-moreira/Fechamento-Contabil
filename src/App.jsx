@@ -18,6 +18,7 @@ import DocumentosRecebidos from './pages/DocumentosRecebidos'
 import Integracao from './pages/Integracao'
 import Conciliacao from './pages/Conciliacao'
 import CompMovimento from './pages/CompMovimento'
+import CompMovimentoConsolidado from './pages/CompMovimentoConsolidado'
 import Contabilizar from './pages/Contabilizar'
 import OutrasContabilizacoes from './pages/OutrasContabilizacoes'
 import SugestoesContabilizacao from './pages/SugestoesContabilizacao'
@@ -56,6 +57,7 @@ function Rotas() {
         <Route path="integracao" element={<Integracao />} />
         <Route path="conciliacao" element={<Conciliacao />} />
         <Route path="comparativo" element={<CompMovimento />} />
+        <Route path="comparativo-consolidado" element={<CompMovimentoConsolidado />} />
         <Route path="sugestoes" element={<SugestoesContabilizacao />} />
         <Route path="outras" element={<OutrasContabilizacoes />} />
         <Route path="contabilizar" element={<Contabilizar />} />

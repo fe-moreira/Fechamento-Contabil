@@ -6,7 +6,7 @@ import SeletorEmpresa from './SeletorEmpresa'
 import { theme, applyThemeMode, getThemeMode } from '../lib/theme'
 
 // Rotas (funções do fechamento) que só liberam com um fechamento aberto.
-const ROTAS_FECHAMENTO = new Set(['/razao', '/documentos', '/integracao', '/conciliacao', '/comparativo', '/sugestoes', '/outras', '/contabilizar', '/relatorios', '/painel-cliente', '/status', '/base'])
+const ROTAS_FECHAMENTO = new Set(['/razao', '/documentos', '/integracao', '/conciliacao', '/comparativo', '/comparativo-consolidado', '/sugestoes', '/outras', '/contabilizar', '/relatorios', '/painel-cliente', '/status', '/base'])
 
 const PRINCIPAL = [
   { to: '/', end: true, icon: 'ti-layout-dashboard', label: 'Dashboard' },
@@ -22,6 +22,7 @@ const FECHAMENTO = [
   { to: '/integracao', icon: 'ti-plug-connected', label: 'Integração' },
   { to: '/conciliacao', icon: 'ti-checklist', label: 'Conciliação' },
   { to: '/comparativo', icon: 'ti-arrows-diff', label: 'Comp. Movimento' },
+  { to: '/comparativo-consolidado', icon: 'ti-arrows-join', label: 'Comp. Mov. Consolidado' },
   { to: '/status', icon: 'ti-traffic-lights', label: 'Status' },
   { to: '/relatorios', icon: 'ti-report', label: 'Relatórios' },
   { to: '/painel-cliente', icon: 'ti-presentation-analytics', label: 'Cockpit Financeiro' },
