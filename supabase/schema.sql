@@ -416,6 +416,23 @@ drop policy if exists "auth_all_resultado_pl_config" on public.resultado_pl_conf
 create policy "auth_all_resultado_pl_config" on public.resultado_pl_config for all to authenticated using (true) with check (true);
 
 -- ============================================================
+-- CONSOLIDAÇÃO DE GRUPO: quais empresas a "empresa mãe" (matriz) consolida.
+-- Fase 1 (cadastro): só a lista do grupo. A soma dos balancetes e o de-para vêm depois.
+-- ============================================================
+create table if not exists public.consolidacao_grupo (
+  id          uuid primary key default gen_random_uuid(),
+  matriz_id   uuid not null references public.clientes(id) on delete cascade,  -- a empresa "mãe"
+  empresa_id  uuid not null references public.clientes(id) on delete cascade,  -- empresa consolidada no grupo
+  usuario     text,
+  created_at  timestamptz default now(),
+  unique (matriz_id, empresa_id)
+);
+create index if not exists consolidacao_grupo_idx on public.consolidacao_grupo(matriz_id);
+alter table public.consolidacao_grupo enable row level security;
+drop policy if exists "auth_all_consolidacao_grupo" on public.consolidacao_grupo;
+create policy "auth_all_consolidacao_grupo" on public.consolidacao_grupo for all to authenticated using (true) with check (true);
+
+-- ============================================================
 -- (Opcional) Seed mínimo para testar o cadastro de clientes.
 -- Descomente se quiser dados de exemplo.
 -- ============================================================

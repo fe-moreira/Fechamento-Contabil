@@ -75,6 +75,8 @@ export default function Clientes() {
   const [importMsg, setImportMsg] = useState('')
   const [busca, setBusca] = useState('')
   const [modelosRG, setModelosRG] = useState([])
+  const [consolidaIds, setConsolidaIds] = useState([]) // empresas que ESTE cliente (mãe) consolida
+  const [buscaCons, setBuscaCons] = useState('')       // filtro da lista de empresas do grupo
   const [preview, setPreview] = useState(null)   // resumo da importação p/ confirmação
   const [aplicando, setAplicando] = useState(false)
   const fileRef = useRef(null)
@@ -238,8 +240,16 @@ export default function Clientes() {
     }
   }
 
-  function abrirNovo() { setForm(vazio); setEditId(null); setErro(''); setAberto(true) }
-  function abrirEdit(c) { setForm({ ...vazio, ...c }); setEditId(c.id); setErro(''); setAberto(true) }
+  function abrirNovo() { setForm(vazio); setEditId(null); setErro(''); setConsolidaIds([]); setBuscaCons(''); setAberto(true) }
+  function abrirEdit(c) { setForm({ ...vazio, ...c }); setEditId(c.id); setErro(''); setConsolidaIds([]); setBuscaCons(''); setAberto(true); carregarConsolida(c.id) }
+  // Lista de empresas que esta mãe consolida (fase 1). Tolerante: se a tabela ainda não existir, ignora.
+  async function carregarConsolida(id) {
+    if (!id) return
+    try {
+      const { data } = await supabase.from('consolidacao_grupo').select('empresa_id').eq('matriz_id', id)
+      setConsolidaIds((data || []).map(r => r.empresa_id))
+    } catch { /* tabela ainda não criada — segue sem consolidação */ }
+  }
 
   async function salvar(e) {
     e.preventDefault(); setErro('')
@@ -261,11 +271,20 @@ export default function Clientes() {
     payload.competencia_inicio = normalizaCompetencia(payload.competencia_inicio) || payload.competencia_inicio
     payload.prazo_entrega = payload.prazo_entrega ? Number(payload.prazo_entrega) : null
     payload.modelo_rel_gerencial_id = payload.modelo_rel_gerencial_id || null
-    let res
+    let res, novoId = editId
     if (editId) res = await supabase.from('clientes').update(payload).eq('id', editId)
-    else res = await supabase.from('clientes').insert(payload)
+    else { res = await supabase.from('clientes').insert(payload).select('id').single(); novoId = res.data?.id }
+    if (res.error) { setSalvando(false); setErro(traduzErro(res.error.message)); return }
+    // Consolidação de grupo (fase 1): regrava a lista de empresas que esta mãe consolida.
+    // Tolerante — se a tabela ainda não existir, o cadastro do cliente é salvo do mesmo jeito.
+    if (novoId) {
+      try {
+        await supabase.from('consolidacao_grupo').delete().eq('matriz_id', novoId)
+        const alvos = consolidaIds.filter(x => x && x !== novoId)
+        if (alvos.length) await supabase.from('consolidacao_grupo').insert(alvos.map(empresa_id => ({ matriz_id: novoId, empresa_id })))
+      } catch { /* tabela ainda não criada — ignora a consolidação */ }
+    }
     setSalvando(false)
-    if (res.error) { setErro(traduzErro(res.error.message)); return }
     setAberto(false); carregar()
   }
 
@@ -411,6 +430,29 @@ export default function Clientes() {
               </Campo>
               <Campo label="Analista" req><input className="input" value={form.analista || ''} onChange={set('analista')} required /></Campo>
               <Campo label="Observações" full><textarea className="input" rows={2} value={form.observacoes || ''} onChange={set('observacoes')} /></Campo>
+              <Campo label="Consolida os balancetes destas empresas (grupo)" full>
+                <div style={{ border: `1px solid ${theme.cb}`, borderRadius: 8, padding: 8 }}>
+                  <input className="input" value={buscaCons} onChange={e => setBuscaCons(e.target.value)} placeholder="Buscar empresa por nome ou código…" style={{ marginBottom: 8, fontSize: 12.5 }} />
+                  <div style={{ maxHeight: 150, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    {(() => {
+                      const t = norm(buscaCons)
+                      const opts = lista.filter(c => c.id !== editId && (!t || norm(`${c.razao_social} ${c.codigo_dominio} ${c.nome_fantasia || ''}`).includes(t)))
+                      if (!opts.length) return <span style={{ color: theme.sub, fontSize: 12 }}>Nenhuma empresa para listar.</span>
+                      return opts.map(c => (
+                        <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, cursor: 'pointer', padding: '3px 4px' }}>
+                          <input type="checkbox" checked={consolidaIds.includes(c.id)}
+                            onChange={() => setConsolidaIds(ids => ids.includes(c.id) ? ids.filter(x => x !== c.id) : [...ids, c.id])}
+                            style={{ cursor: 'pointer' }} />
+                          <span>{c.razao_social} <span style={{ color: theme.sub }}>· {c.codigo_dominio}</span></span>
+                        </label>
+                      ))
+                    })()}
+                  </div>
+                  <p style={{ color: theme.sub, fontSize: 11.5, margin: '6px 0 0' }}>
+                    {consolidaIds.length ? `${consolidaIds.length} empresa(s) no grupo.` : 'Vazio = esta empresa não consolida ninguém.'} O consolidado soma por <b>classificação</b>; o que não casar aparece para você montar o <b>de-para</b>.
+                  </p>
+                </div>
+              </Campo>
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
               <button type="button" className="btn btn-ghost" onClick={() => setAberto(false)}>Cancelar</button>
