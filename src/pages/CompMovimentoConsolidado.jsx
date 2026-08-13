@@ -100,7 +100,7 @@ export default function CompMovimentoConsolidado() {
   // Colunas conforme o agrupamento + filtro de meses (igual ao Comparativo de Movimento).
   const colunas = (() => {
     const b = mesesSel.size ? meses.filter(m => mesesSel.has(m)) : meses
-    if (agrupar === 'mes') return b.map(m => ({ key: 'm' + m, label: MESES[m - 1], meses: [m] }))
+    if (agrupar === 'mes') return b.map(m => ({ key: 'm' + m, label: `${MESES[m - 1]}/${String(ANO).slice(2)}`, meses: [m] }))
     const per = agrupar === 'trimestre' ? 3 : agrupar === 'semestre' ? 6 : 12
     const bk = new Map()
     for (const m of b) { const idx = per === 12 ? 1 : Math.floor((m - 1) / per) + 1; if (!bk.has(idx)) bk.set(idx, { idx, meses: [] }); bk.get(idx).meses.push(m) }
@@ -184,34 +184,46 @@ export default function CompMovimentoConsolidado() {
       {!meses.length ? (
         <Vazio icon="ti-database-off" txt={`Nenhuma das empresas do grupo tem razão importado em ${ANO}.`} />
       ) : (
-        <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }}>
+        <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'auto', maxWidth: '100%' }}>
+          <table style={{ borderCollapse: 'collapse', width: '100%' }}>
             <thead>
               <tr style={{ background: theme.input }}>
-                <th style={{ ...th, textAlign: 'left' }}>Classificação</th>
-                <th style={{ ...th, textAlign: 'left' }}>Descrição da conta</th>
-                {colunas.map(col => <th key={col.key} style={thR}>{col.label}</th>)}
-                {mostraTotal && <th style={thR}>Total</th>}
+                <th style={{ ...th, minWidth: 70 }}>Conta</th>
+                <th style={{ ...th, minWidth: 110 }}>Classificação</th>
+                <th style={{ ...th, minWidth: 220 }}>Nome da Conta</th>
+                {colunas.map(col => <th key={col.key} style={{ ...th, textAlign: 'right' }}>{col.label}</th>)}
+                {mostraTotal && <th style={{ ...th, textAlign: 'right', color: theme.text }}>Total</th>}
               </tr>
             </thead>
             <tbody>
-              {contasVis.filter(c => c.sintetica || temMov(c.key)).map((c, i) => (
-                <tr key={i} style={{ borderTop: `1px solid ${theme.border}`, background: c.sintetica ? theme.input : 'transparent' }}>
-                  <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{c.classif}</td>
-                  <td style={{ ...td, paddingLeft: 8 + Math.max(0, (c.grau || 1) - 1) * 12, fontWeight: c.sintetica ? 700 : 400 }}>{c.nome}</td>
-                  {colunas.map(col => <td key={col.key} style={tdR}>{celTxt(valCol(c.key, col))}</td>)}
-                  {mostraTotal && <td style={{ ...tdR, fontWeight: 600 }}>{celTxt(totalConta(c.key))}</td>}
-                </tr>
-              ))}
+              {contasVis.filter(c => c.sintetica || temMov(c.key)).map(c => {
+                const grau = c.grau || 1
+                const bgNivel = !c.sintetica ? 'transparent' : grau <= 1 ? theme.input : grau === 2 ? 'rgba(74,124,255,0.07)' : 'rgba(74,124,255,0.035)'
+                const peso = c.sintetica ? (grau <= 1 ? 800 : grau === 2 ? 700 : 600) : 400
+                const recuo = 14 + Math.max(0, grau - 1) * 16
+                const tot = totalConta(c.key)
+                return (
+                  <tr key={c.key} style={{ borderTop: `1px solid ${theme.border}`, background: bgNivel, fontWeight: peso }}>
+                    <td style={{ ...td, color: theme.sub, fontSize: 11 }}>{c.reduzido || ''}</td>
+                    <td style={{ ...td, color: theme.sub, fontSize: 11 }}>{c.classif}</td>
+                    <td style={{ ...td, fontWeight: peso, maxWidth: 320, paddingLeft: recuo }}>
+                      {c.sintetica && <span style={{ fontSize: 9.5, fontWeight: 700, color: theme.accent, background: 'rgba(74,124,255,0.14)', borderRadius: 4, padding: '1px 5px', marginRight: 6 }}>N{grau}</span>}
+                      {c.nome || '—'}
+                    </td>
+                    {colunas.map(col => { const v = valCol(c.key, col); const vazio = v == null || Number(v) === 0; return <td key={col.key} style={{ ...td, textAlign: 'right', fontWeight: c.sintetica ? 700 : undefined, color: vazio ? theme.sub : undefined }}>{vazio ? '—' : moneyDC(v)}</td> })}
+                    {mostraTotal && <td style={{ ...td, textAlign: 'right', fontWeight: 700, color: (tot == null || tot === 0) ? theme.sub : undefined }}>{(tot == null || tot === 0) ? '—' : moneyDC(tot)}</td>}
+                  </tr>
+                )
+              })}
               <tr style={{ borderTop: `2px solid ${theme.border}`, background: theme.input }}>
-                <td style={td}></td><td style={{ ...td, fontWeight: 700 }}>RESULTADO DO MÊS</td>
-                {colunas.map(col => <td key={col.key} style={{ ...tdR, fontWeight: 700, color: corRes(-resCol(col)) }}>{celTxt(resCol(col))}</td>)}
-                {mostraTotal && <td style={{ ...tdR, fontWeight: 700, color: corRes(-resTotal) }}>{celTxt(resTotal)}</td>}
+                <td style={td}></td><td style={td}></td><td style={{ ...td, fontWeight: 700 }}>RESULTADO DO MÊS</td>
+                {colunas.map(col => <td key={col.key} style={{ ...td, textAlign: 'right', fontWeight: 700, color: corRes(-resCol(col)) }}>{celTxt(resCol(col))}</td>)}
+                {mostraTotal && <td style={{ ...td, textAlign: 'right', fontWeight: 700, color: corRes(-resTotal) }}>{celTxt(resTotal)}</td>}
               </tr>
               <tr style={{ background: theme.input }}>
-                <td style={td}></td><td style={{ ...td, fontWeight: 700 }}>RESULTADO DO EXERCÍCIO (acumulado)</td>
-                {colunas.map(col => <td key={col.key} style={{ ...tdR, fontWeight: 700, color: corRes(-resExercCol(col)) }}>{celTxt(resExercCol(col))}</td>)}
-                {mostraTotal && <td style={{ ...tdR, fontWeight: 700, color: corRes(-resTotal) }}>{celTxt(resTotal)}</td>}
+                <td style={td}></td><td style={td}></td><td style={{ ...td, fontWeight: 700 }}>RESULTADO DO EXERCÍCIO (acumulado)</td>
+                {colunas.map(col => <td key={col.key} style={{ ...td, textAlign: 'right', fontWeight: 700, color: corRes(-resExercCol(col)) }}>{celTxt(resExercCol(col))}</td>)}
+                {mostraTotal && <td style={{ ...td, textAlign: 'right', fontWeight: 700, color: corRes(-resTotal) }}>{celTxt(resTotal)}</td>}
               </tr>
             </tbody>
           </table>
@@ -231,7 +243,6 @@ function Vazio({ icon, txt }) {
   return <div style={cardVazio}><i className={`ti ${icon}`} style={{ fontSize: 22, color: theme.accent }} /><p style={{ fontSize: 14, color: theme.text }}>{txt}</p></div>
 }
 const cardVazio = { background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: '22px 20px', display: 'flex', alignItems: 'center', gap: 14, maxWidth: 640 }
-const th = { padding: '10px 12px', fontSize: 11, fontWeight: 700, color: theme.sub, textTransform: 'uppercase', letterSpacing: .4, whiteSpace: 'nowrap' }
-const thR = { ...th, textAlign: 'right' }
-const td = { padding: '7px 12px', fontSize: 12.5, color: theme.text }
-const tdR = { ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }
+// Mesmos estilos do Comp. Movimento (para a tabela ficar idêntica).
+const th = { textAlign: 'left', padding: '10px 14px', fontSize: 11, color: theme.sub, textTransform: 'uppercase', letterSpacing: .3, whiteSpace: 'nowrap' }
+const td = { padding: '9px 14px', fontSize: 12.5, color: theme.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }
