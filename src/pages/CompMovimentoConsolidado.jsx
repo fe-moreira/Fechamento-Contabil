@@ -58,8 +58,8 @@ export default function CompMovimentoConsolidado() {
             mesesSet.add(c.mes)
             for (const l of res) {
               const key = String(l.classifRaw || l.classif)  // consolida POR CLASSIFICAÇÃO
-              if (!meta[key]) meta[key] = { key, classif: l.classif, classifRaw: key, nome: l.nome, grau: l.grau || String(key).replace(/\D/g, '').length, sintetica: !!l.sintetica }
-              else { if (!meta[key].nome && l.nome) meta[key].nome = l.nome; meta[key].sintetica = meta[key].sintetica && l.sintetica }
+              if (!meta[key]) meta[key] = { key, reduzido: l.reduzido, classif: l.classif, classifRaw: key, nome: l.nome, grau: l.grau || String(key).replace(/\D/g, '').length, sintetica: !!l.sintetica }
+              else { if (!meta[key].nome && l.nome) meta[key].nome = l.nome; if (!meta[key].reduzido && l.reduzido) meta[key].reduzido = l.reduzido; meta[key].sintetica = meta[key].sintetica && l.sintetica }
               ;(matByEmp[cid][key] ||= {})[c.mes] = (matByEmp[cid][key][c.mes] || 0) + num(l.saldo_final)
             }
           }

@@ -77,6 +77,7 @@ export default function Clientes() {
   const [modelosRG, setModelosRG] = useState([])
   const [consolidaIds, setConsolidaIds] = useState([]) // empresas que ESTE cliente (mãe) consolida
   const [buscaCons, setBuscaCons] = useState('')       // filtro da lista de empresas do grupo
+  const [consolidaErro, setConsolidaErro] = useState(null) // erro ao ler/gravar consolidacao_grupo (tabela ausente/RLS)
   const [preview, setPreview] = useState(null)   // resumo da importação p/ confirmação
   const [aplicando, setAplicando] = useState(false)
   const fileRef = useRef(null)
@@ -240,15 +241,15 @@ export default function Clientes() {
     }
   }
 
-  function abrirNovo() { setForm(vazio); setEditId(null); setErro(''); setConsolidaIds([]); setBuscaCons(''); setAberto(true) }
-  function abrirEdit(c) { setForm({ ...vazio, ...c }); setEditId(c.id); setErro(''); setConsolidaIds([]); setBuscaCons(''); setAberto(true); carregarConsolida(c.id) }
-  // Lista de empresas que esta mãe consolida (fase 1). Tolerante: se a tabela ainda não existir, ignora.
+  function abrirNovo() { setForm(vazio); setEditId(null); setErro(''); setConsolidaIds([]); setBuscaCons(''); setConsolidaErro(null); setAberto(true); carregarConsolida(null) }
+  function abrirEdit(c) { setForm({ ...vazio, ...c }); setEditId(c.id); setErro(''); setConsolidaIds([]); setBuscaCons(''); setConsolidaErro(null); setAberto(true); carregarConsolida(c.id) }
+  // Lista de empresas que esta mãe consolida. Além de carregar, TESTA se a tabela existe/grava:
+  // se der erro (tabela ausente ou RLS sem policy), guarda a mensagem para avisar no formulário.
   async function carregarConsolida(id) {
-    if (!id) return
-    try {
-      const { data } = await supabase.from('consolidacao_grupo').select('empresa_id').eq('matriz_id', id)
-      setConsolidaIds((data || []).map(r => r.empresa_id))
-    } catch { /* tabela ainda não criada — segue sem consolidação */ }
+    const sel = supabase.from('consolidacao_grupo').select('empresa_id')
+    const { data, error } = await (id ? sel.eq('matriz_id', id) : sel.limit(1))
+    if (error) { setConsolidaErro(error.message || 'erro'); setConsolidaIds([]) }
+    else { setConsolidaErro(null); if (id) setConsolidaIds((data || []).map(r => r.empresa_id)) }
   }
 
   async function salvar(e) {
@@ -457,7 +458,25 @@ export default function Clientes() {
               <Campo label="Analista" req><input className="input" value={form.analista || ''} onChange={set('analista')} required /></Campo>
               <Campo label="Observações" full><textarea className="input" rows={2} value={form.observacoes || ''} onChange={set('observacoes')} /></Campo>
               <Campo label="Consolida os balancetes destas empresas (grupo)" full>
-                <div style={{ border: `1px solid ${theme.cb}`, borderRadius: 8, padding: 8 }}>
+                {consolidaErro && (
+                  <div style={{ border: `1px solid ${theme.red}`, background: 'rgba(229,72,77,0.10)', borderRadius: 8, padding: '10px 12px', marginBottom: 8 }}>
+                    <p style={{ color: theme.red, fontSize: 12.5, margin: '0 0 6px', fontWeight: 600 }}><i className="ti ti-alert-triangle" /> A consolidação não vai gravar: falta preparar a tabela no Supabase (por isso “some” ao salvar).</p>
+                    <p style={{ color: theme.sub, fontSize: 12, margin: '0 0 6px' }}>Rode este SQL no <b>SQL Editor</b> do Supabase (uma vez) e reabra o cadastro:</p>
+                    <pre style={{ background: theme.input, border: `1px solid ${theme.cb}`, borderRadius: 6, padding: 8, fontSize: 11, overflow: 'auto', margin: 0, whiteSpace: 'pre', color: theme.text }}>{`create table if not exists public.consolidacao_grupo (
+  id uuid primary key default gen_random_uuid(),
+  matriz_id uuid not null references public.clientes(id) on delete cascade,
+  empresa_id uuid not null references public.clientes(id) on delete cascade,
+  usuario text, created_at timestamptz default now(),
+  unique (matriz_id, empresa_id)
+);
+alter table public.consolidacao_grupo enable row level security;
+drop policy if exists "auth_all_consolidacao_grupo" on public.consolidacao_grupo;
+create policy "auth_all_consolidacao_grupo" on public.consolidacao_grupo
+  for all to authenticated using (true) with check (true);`}</pre>
+                    <p style={{ color: theme.sub, fontSize: 11, margin: '6px 0 0' }}>Detalhe técnico: {consolidaErro}</p>
+                  </div>
+                )}
+                <div style={{ border: `1px solid ${theme.cb}`, borderRadius: 8, padding: 8, opacity: consolidaErro ? 0.5 : 1, pointerEvents: consolidaErro ? 'none' : 'auto' }}>
                   {/* SELECIONADAS em destaque no topo — para ficar CLARO o que já está no grupo
                       (a lista é alfabética e a empresa marcada pode ficar fora da área visível). */}
                   {consolidaIds.length > 0 && (
