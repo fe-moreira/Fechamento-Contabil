@@ -243,13 +243,15 @@ export default function Clientes() {
 
   function abrirNovo() { setForm(vazio); setEditId(null); setErro(''); setConsolidaIds([]); setBuscaCons(''); setConsolidaErro(null); setAberto(true); carregarConsolida(null) }
   function abrirEdit(c) { setForm({ ...vazio, ...c }); setEditId(c.id); setErro(''); setConsolidaIds([]); setBuscaCons(''); setConsolidaErro(null); setAberto(true); carregarConsolida(c.id) }
-  // Lista de empresas que esta mãe consolida. Além de carregar, TESTA se a tabela existe/grava:
-  // se der erro (tabela ausente ou RLS sem policy), guarda a mensagem para avisar no formulário.
+  // Lista de empresas que esta mãe consolida — guardada em cargas_cadastro (tabela que JÁ existe,
+  // sem precisar criar nada), tipo 'consolidacao', dados { empresas: [ids] }, por cliente (a mãe).
   async function carregarConsolida(id) {
-    const sel = supabase.from('consolidacao_grupo').select('empresa_id')
-    const { data, error } = await (id ? sel.eq('matriz_id', id) : sel.limit(1))
+    setConsolidaErro(null)
+    if (!id) return
+    const { data, error } = await supabase.from('cargas_cadastro').select('dados')
+      .eq('cliente_id', id).eq('tipo', 'consolidacao').order('created_at', { ascending: false }).limit(1).maybeSingle()
     if (error) { setConsolidaErro(error.message || 'erro'); setConsolidaIds([]) }
-    else { setConsolidaErro(null); if (id) setConsolidaIds((data || []).map(r => r.empresa_id)) }
+    else { const e = data?.dados?.empresas; setConsolidaIds(Array.isArray(e) ? e : []) }
   }
 
   async function salvar(e) {
@@ -276,26 +278,22 @@ export default function Clientes() {
     if (editId) res = await supabase.from('clientes').update(payload).eq('id', editId)
     else { res = await supabase.from('clientes').insert(payload).select('id').single(); novoId = res.data?.id }
     if (res.error) { setSalvando(false); setErro(traduzErro(res.error.message)); return }
-    // Consolidação de grupo: regrava a lista de empresas que esta mãe consolida. O Supabase
-    // NÃO lança exceção em erro (devolve { error }) — então checamos o erro e AVISAMOS (o cliente
-    // já foi salvo; só a consolidação pode falhar se a tabela ainda não existir no banco).
+    // Consolidação de grupo: regrava a lista de empresas que esta mãe consolida em cargas_cadastro
+    // (tipo 'consolidacao') — tabela que já existe, sem SQL. O Supabase NÃO lança exceção em erro
+    // (devolve { error }); então checamos e avisamos (o cliente já foi salvo).
     if (novoId) {
-      const delRes = await supabase.from('consolidacao_grupo').delete().eq('matriz_id', novoId)
       const alvos = consolidaIds.filter(x => x && x !== novoId)
+      const delRes = await supabase.from('cargas_cadastro').delete().eq('cliente_id', novoId).eq('tipo', 'consolidacao')
       let insErr = null
       if (!delRes.error && alvos.length) {
-        const insRes = await supabase.from('consolidacao_grupo').insert(alvos.map(empresa_id => ({ matriz_id: novoId, empresa_id })))
+        const insRes = await supabase.from('cargas_cadastro').insert({ cliente_id: novoId, tipo: 'consolidacao', vigencia: '00/0000', dados: { empresas: alvos } })
         insErr = insRes.error
       }
       const cErr = delRes.error || insErr
       if (cErr) {
         setSalvando(false)
-        const faltaTabela = /does not exist|relation|schema cache|could not find the table/i.test(cErr.message || '')
-        setErro(faltaTabela
-          ? 'O cliente foi salvo, MAS a consolidação não gravou: falta criar a tabela "consolidacao_grupo" no Supabase. Rode o SQL informado e salve de novo.'
-          : 'O cliente foi salvo, mas a consolidação não gravou: ' + cErr.message)
-        carregar()
-        return   // mantém o modal aberto para você ver o aviso (o cliente já está salvo)
+        setErro('O cliente foi salvo, mas a consolidação não gravou: ' + cErr.message)
+        carregar(); return   // mantém o modal aberto para você ver o aviso
       }
     }
     setSalvando(false)
@@ -459,24 +457,11 @@ export default function Clientes() {
               <Campo label="Observações" full><textarea className="input" rows={2} value={form.observacoes || ''} onChange={set('observacoes')} /></Campo>
               <Campo label="Consolida os balancetes destas empresas (grupo)" full>
                 {consolidaErro && (
-                  <div style={{ border: `1px solid ${theme.red}`, background: 'rgba(229,72,77,0.10)', borderRadius: 8, padding: '10px 12px', marginBottom: 8 }}>
-                    <p style={{ color: theme.red, fontSize: 12.5, margin: '0 0 6px', fontWeight: 600 }}><i className="ti ti-alert-triangle" /> A consolidação não vai gravar: falta preparar a tabela no Supabase (por isso “some” ao salvar).</p>
-                    <p style={{ color: theme.sub, fontSize: 12, margin: '0 0 6px' }}>Rode este SQL no <b>SQL Editor</b> do Supabase (uma vez) e reabra o cadastro:</p>
-                    <pre style={{ background: theme.input, border: `1px solid ${theme.cb}`, borderRadius: 6, padding: 8, fontSize: 11, overflow: 'auto', margin: 0, whiteSpace: 'pre', color: theme.text }}>{`create table if not exists public.consolidacao_grupo (
-  id uuid primary key default gen_random_uuid(),
-  matriz_id uuid not null references public.clientes(id) on delete cascade,
-  empresa_id uuid not null references public.clientes(id) on delete cascade,
-  usuario text, created_at timestamptz default now(),
-  unique (matriz_id, empresa_id)
-);
-alter table public.consolidacao_grupo enable row level security;
-drop policy if exists "auth_all_consolidacao_grupo" on public.consolidacao_grupo;
-create policy "auth_all_consolidacao_grupo" on public.consolidacao_grupo
-  for all to authenticated using (true) with check (true);`}</pre>
-                    <p style={{ color: theme.sub, fontSize: 11, margin: '6px 0 0' }}>Detalhe técnico: {consolidaErro}</p>
+                  <div style={{ border: `1px solid ${theme.red}`, background: 'rgba(229,72,77,0.10)', borderRadius: 8, padding: '8px 12px', marginBottom: 8 }}>
+                    <p style={{ color: theme.red, fontSize: 12, margin: 0 }}><i className="ti ti-alert-triangle" /> Não consegui ler a consolidação: {consolidaErro}</p>
                   </div>
                 )}
-                <div style={{ border: `1px solid ${theme.cb}`, borderRadius: 8, padding: 8, opacity: consolidaErro ? 0.5 : 1, pointerEvents: consolidaErro ? 'none' : 'auto' }}>
+                <div style={{ border: `1px solid ${theme.cb}`, borderRadius: 8, padding: 8 }}>
                   {/* SELECIONADAS em destaque no topo — para ficar CLARO o que já está no grupo
                       (a lista é alfabética e a empresa marcada pode ficar fora da área visível). */}
                   {consolidaIds.length > 0 && (

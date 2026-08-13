@@ -32,13 +32,12 @@ export default function CompMovimentoConsolidado() {
     ;(async () => {
       setCarregando(true); setProg('')
       try {
-        // Grupo = a própria mãe + as empresas marcadas no cadastro dela.
+        // Grupo = a própria mãe + as empresas marcadas no cadastro dela (cargas_cadastro).
         let grupoIds = [empresaId], semGrupo = true
-        try {
-          const { data: g } = await supabase.from('consolidacao_grupo').select('empresa_id').eq('matriz_id', empresaId)
-          const extras = (g || []).map(r => r.empresa_id).filter(id => id && id !== empresaId)
-          if (extras.length) { grupoIds = [empresaId, ...extras]; semGrupo = false }
-        } catch { /* tabela ainda não criada — só a própria empresa */ }
+        const { data: cfg } = await supabase.from('cargas_cadastro').select('dados')
+          .eq('cliente_id', empresaId).eq('tipo', 'consolidacao').order('created_at', { ascending: false }).limit(1).maybeSingle()
+        const extras = (Array.isArray(cfg?.dados?.empresas) ? cfg.dados.empresas : []).filter(id => id && id !== empresaId)
+        if (extras.length) { grupoIds = [empresaId, ...extras]; semGrupo = false }
         grupoIds = [...new Set(grupoIds)]
         const { data: emps } = await supabase.from('clientes').select('id, razao_social').in('id', grupoIds)
         const nomeEmp = Object.fromEntries((emps || []).map(e => [e.id, e.razao_social]))
