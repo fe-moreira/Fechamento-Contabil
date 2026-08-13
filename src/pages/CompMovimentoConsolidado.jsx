@@ -139,8 +139,6 @@ export default function CompMovimentoConsolidado() {
       : (compByEmp[cid]?.[mes] ? [{ compId: compByEmp[cid][mes], nomeEmp: nomeById[cid], mes }] : [])))
   const abrir = (c, mes, mesLabel) => setDetalhe({ reduzido: c.reduzido, classif: c.classif, nome: c.nome, mesLabel, contribs: contribuintes(c, mes) })
 
-  const toggleMes = m => setMesesSel(prev => { const n = new Set(prev); n.has(m) ? n.delete(m) : n.add(m); return n })
-
   return (
     <Wrap>
       {semGrupo && <div style={{ ...cardVazio, borderColor: theme.yellow, margin: '4px 0 14px' }}>
@@ -148,52 +146,31 @@ export default function CompMovimentoConsolidado() {
         <p style={{ fontSize: 13, color: theme.text }}>Esta empresa ainda <b>não consolida ninguém</b> (mostrando só ela). Marque o grupo no <b>cadastro da empresa mãe</b>.</p>
       </div>}
 
-      {/* Filtro de EMPRESAS: liga/desliga cada uma; "Só esta" isola; "Todas" volta. */}
-      <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 10, padding: '10px 14px', marginBottom: 14 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8, flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 12, fontWeight: 700, color: theme.sub, textTransform: 'uppercase', letterSpacing: .4 }}><i className="ti ti-building-community" style={{ color: theme.accent }} /> Empresas ({ativas.size}/{empresas.length})</span>
-          <button className="btn btn-ghost" style={{ fontSize: 11.5, padding: '3px 10px' }} onClick={todas}>Todas</button>
+      {/* Filtros — mesmo padrão do Comp. Movimento (ícone + botão/dropdown). Empresas vira LISTA. */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
+        <div style={{ fontSize: 12, color: theme.sub, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <i className="ti ti-building-community" /> Empresas:
+          <EmpresaDropdown empresas={empresas} ativas={ativas} maeId={empresaId} onToggle={toggleEmp} onTodas={todas} onSo={soUma} />
         </div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          {empresas.map(e => {
-            const on = ativas.has(e.id)
-            return (
-              <span key={e.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: `1px solid ${on ? theme.accent : theme.cb}`, background: on ? 'rgba(74,124,255,0.12)' : theme.input, borderRadius: 20, padding: '4px 6px 4px 10px', fontSize: 12.5 }}>
-                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
-                  <input type="checkbox" checked={on} onChange={() => toggleEmp(e.id)} style={{ cursor: 'pointer' }} />
-                  {e.nome}{e.id === empresaId ? <b style={{ color: theme.accent }}> (mãe)</b> : ''}
-                </label>
-                <button title="Ver só esta" onClick={() => soUma(e.id)} style={{ background: 'none', border: 'none', color: theme.sub, cursor: 'pointer', fontSize: 13, padding: 0 }}><i className="ti ti-focus-2" /></button>
-              </span>
-            )
-          })}
-        </div>
-      </div>
-
-      {/* Filtros de layout — iguais ao Comparativo de Movimento */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', marginBottom: 12 }}>
-        <span style={{ fontSize: 12, color: theme.text }}><b>{empresaNome}</b></span>
-        <label style={{ fontSize: 12, color: theme.sub, display: 'inline-flex', alignItems: 'center', gap: 6 }}>Agrupar:
-          <select className="input" value={agrupar} onChange={e => setAgrupar(e.target.value)} style={{ fontSize: 12.5, padding: '5px 10px', width: 'auto' }}>
+        <span style={{ flex: 1, minWidth: 20 }} />
+        <label style={{ fontSize: 12, color: theme.sub, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <i className="ti ti-calendar-stats" /> Agrupar:
+          <select className="input" style={{ width: 'auto', fontSize: 12, padding: '6px 10px' }} value={agrupar} onChange={e => setAgrupar(e.target.value)}>
             {AGRUP.map(a => <option key={a.k} value={a.k}>{a.n}</option>)}
           </select>
         </label>
-        <label style={{ fontSize: 12, color: theme.sub, display: 'inline-flex', alignItems: 'center', gap: 6 }}>Nível:
-          <select className="input" value={nivel} onChange={e => setNivel(e.target.value === 'tudo' ? 'tudo' : Number(e.target.value))} style={{ fontSize: 12.5, padding: '5px 10px', width: 'auto' }}>
-            <option value="tudo">Todas as contas</option>
-            {niveisSint.map(n => <option key={n} value={n}>Sintéticas até nível {n}</option>)}
+        <label style={{ fontSize: 12, color: theme.sub, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <i className="ti ti-stack-2" /> Nível:
+          <select className="input" style={{ width: 'auto', fontSize: 12, padding: '6px 10px' }}
+            value={String(nivel)} onChange={e => setNivel(e.target.value === 'tudo' ? 'tudo' : Number(e.target.value))}>
+            {niveisSint.map(n => <option key={n} value={n}>Até o nível {n}</option>)}
+            <option value="tudo">Tudo (todas as contas)</option>
           </select>
         </label>
-        {agrupar === 'mes' && meses.length > 0 && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 12, color: theme.sub }}>Meses:</span>
-            <button className="btn btn-ghost" style={{ fontSize: 11, padding: '2px 8px', color: mesesSel.size ? theme.sub : theme.accent }} onClick={() => setMesesSel(new Set())}>Todos</button>
-            {meses.map(m => {
-              const on = mesesSel.size === 0 || mesesSel.has(m)
-              return <button key={m} onClick={() => toggleMes(m)} style={{ fontSize: 11.5, padding: '3px 9px', borderRadius: 16, border: `1px solid ${on ? theme.accent : theme.cb}`, background: on ? 'rgba(74,124,255,0.12)' : theme.input, color: theme.text, cursor: 'pointer' }}>{MESES[m - 1]}</button>
-            })}
-          </div>
-        )}
+        <div style={{ fontSize: 12, color: theme.sub, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <i className="ti ti-filter" /> Meses:
+          <MultiMesSelect meses={meses} sel={mesesSel} onChange={setMesesSel} />
+        </div>
       </div>
 
       <p style={{ color: theme.sub, fontSize: 12, margin: '0 0 10px' }}>Consolidando: {empresas.filter(e => ativas.has(e.id)).map(e => e.nome).join(' · ') || '—'}</p>
@@ -349,6 +326,75 @@ function ModalRazaoConsolidado({ detalhe, onClose }) {
           )}
         </div>
       </div>
+    </div>
+  )
+}
+
+// Dropdown de MESES — idêntico ao do Comp. Movimento.
+function MultiMesSelect({ meses, sel, onChange }) {
+  const [aberto, setAberto] = useState(false)
+  const toggle = m => { const n = new Set(sel); n.has(m) ? n.delete(m) : n.add(m); onChange(n) }
+  const marcados = meses.filter(m => sel.has(m)).map(m => MESES[m - 1])
+  const label = sel.size === 0 ? 'Todos os meses' : marcados.length <= 3 ? marcados.join(', ') : `${marcados.length} meses`
+  const linha = { display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', fontSize: 12.5, cursor: 'pointer', borderRadius: 6 }
+  return (
+    <div style={{ position: 'relative', display: 'inline-block' }}>
+      <button className="btn btn-ghost" onClick={() => setAberto(a => !a)}
+        style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12, padding: '6px 12px' }}>
+        {label} <i className="ti ti-chevron-down" style={{ fontSize: 14 }} />
+      </button>
+      {aberto && (
+        <>
+          <div onClick={() => setAberto(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+          <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: 6, background: theme.card, border: `1px solid ${theme.cb}`, borderRadius: 10, padding: 8, zIndex: 41, minWidth: 180, maxHeight: 320, overflow: 'auto', boxShadow: '0 8px 24px rgba(0,0,0,.28)' }}>
+            <label style={{ ...linha, fontWeight: 600 }} onClick={() => onChange(new Set())}>
+              <input type="checkbox" readOnly checked={sel.size === 0} /> Todos os meses
+            </label>
+            <div style={{ height: 1, background: theme.border, margin: '6px 0' }} />
+            {meses.map(m => (
+              <label key={m} style={linha} onClick={() => toggle(m)}>
+                <input type="checkbox" readOnly checked={sel.has(m)} /> {MESES[m - 1]}
+              </label>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+// Dropdown de EMPRESAS (lista com checkboxes) — mesmo padrão dos outros filtros. "Todas" liga
+// todas; a lupa "só esta" isola uma; o (mãe) marca a empresa dona do grupo.
+function EmpresaDropdown({ empresas, ativas, maeId, onToggle, onTodas, onSo }) {
+  const [aberto, setAberto] = useState(false)
+  const linha = { display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', fontSize: 12.5, cursor: 'pointer', borderRadius: 6 }
+  const todasOn = ativas.size === empresas.length
+  return (
+    <div style={{ position: 'relative', display: 'inline-block' }}>
+      <button className="btn btn-ghost" onClick={() => setAberto(a => !a)}
+        style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12, padding: '6px 12px' }}>
+        {ativas.size}/{empresas.length} {todasOn ? '(todas)' : ''} <i className="ti ti-chevron-down" style={{ fontSize: 14 }} />
+      </button>
+      {aberto && (
+        <>
+          <div onClick={() => setAberto(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+          <div style={{ position: 'absolute', top: '100%', left: 0, marginTop: 6, background: theme.card, border: `1px solid ${theme.cb}`, borderRadius: 10, padding: 8, zIndex: 41, minWidth: 280, maxHeight: 340, overflow: 'auto', boxShadow: '0 8px 24px rgba(0,0,0,.28)' }}>
+            <label style={{ ...linha, fontWeight: 600 }} onClick={onTodas}>
+              <input type="checkbox" readOnly checked={todasOn} /> Todas
+            </label>
+            <div style={{ height: 1, background: theme.border, margin: '6px 0' }} />
+            {empresas.map(e => (
+              <div key={e.id} style={{ ...linha, gap: 6, justifyContent: 'space-between' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', flex: 1, minWidth: 0 }} onClick={() => onToggle(e.id)}>
+                  <input type="checkbox" readOnly checked={ativas.has(e.id)} />
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.nome}{e.id === maeId ? <b style={{ color: theme.accent }}> (mãe)</b> : ''}</span>
+                </label>
+                <button title="Ver só esta" onClick={() => onSo(e.id)} style={{ background: 'none', border: 'none', color: theme.sub, cursor: 'pointer', fontSize: 14, padding: 0 }}><i className="ti ti-focus-2" /></button>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   )
 }
