@@ -41,8 +41,9 @@ const RE_DISP = /\bcaixa\b|banc|aplica|dispon|financeir|conta\s*corrente/i
 // Agrega o Cockpit para um intervalo [a..b]. FLUXO (receita/custo/despesa/resultado) SOMA o
 // intervalo; ESTOQUE (balanço/disponibilidades/índices/clientes) = FOTO do mês final b; geração de
 // caixa = fim(b) − início(a). Se a==b==mês da competência, devolve o próprio objeto (idêntico a hoje).
-function agregarPeriodo(d, a, b) {
-  if (!d || (a === d.focusMes && b === d.focusMes)) return d
+function agregarPeriodo(d, a, b, consolidando) {
+  if (!d) return d
+  if (!consolidando && a === d.focusMes && b === d.focusMes) return d
   const meses = (d.meses || []).filter(m => m >= a && m <= b)
   if (!meses.length) return d
   const soma = campo => meses.reduce((s, m) => s + (Number(d.porMes?.[m]?.[campo]) || 0), 0)
@@ -69,6 +70,45 @@ function agregarPeriodo(d, a, b) {
     periodo: { a, b, umMes: a === b },
     // serie/serieCombo/comparativo/variacoesConta ficam do ano inteiro (o gráfico não muda).
   }
+}
+
+// ETAPA 2 — fluxo (resultado) de UMA empresa, por mês, no ano. Leve: só grupos 3/4/5 do balancete
+// vivo (não puxa balanço/índices). É a base da consolidação gerencial do resultado no Cockpit.
+async function flowPorMesEmpresa(cid, ano) {
+  const { data: comps } = await supabase.from('competencias').select('id, mes').eq('cliente_id', cid).eq('ano', ano).order('mes', { ascending: true })
+  const pm = {}
+  for (const c of (comps || [])) {
+    const { linhas } = await montarBalancete(cid, c.id, 0, { comLancamentos: true })
+    const res = (linhas || []).filter(l => !l.sintetica && ['3', '4', '5'].includes(String(l.classifRaw || '')[0]))
+    if (!res.length) continue
+    let g3 = 0, g4 = 0, g5 = 0
+    for (const l of res) { const sf = Number(l.saldo_final) || 0; const grp = String(l.classifRaw || '')[0]; if (grp === '3') g3 += sf; else if (grp === '4') g4 += sf; else g5 += sf }
+    const receita = -g3, custo = g4, despesa = g5
+    const dreN = apurarResultadoSimples(res)
+    pm[c.mes] = { receita, custo, despesa, resultado: receita - custo - despesa, ebitda: dreN.ebitda }
+  }
+  return pm
+}
+
+// Soma o FLUXO por mês de várias empresas (a mãe + as ligadas) e reconstrói serie/serieCombo do
+// grupo. Só resultado (DRE) — balanço/índices consolidados vêm com as eliminações (Etapa 4).
+function consolidarFluxo(dRaw, extrasPorMes) {
+  const all = [dRaw.porMes || {}, ...extrasPorMes]
+  const mesesSet = new Set()
+  all.forEach(pm => Object.keys(pm || {}).forEach(m => mesesSet.add(Number(m))))
+  const meses = [...mesesSet].sort((a, b) => a - b)
+  const porMes = {}
+  for (const m of meses) {
+    let receita = 0, custo = 0, despesa = 0, resultado = 0, ebitda = 0
+    for (const pm of all) { const p = pm?.[m]; if (!p) continue; receita += p.receita; custo += p.custo; despesa += p.despesa; resultado += p.resultado; ebitda += p.ebitda }
+    porMes[m] = { receita, custo, despesa, resultado, ebitda }
+  }
+  const serie = meses.map(m => ({ mes: m, receita: porMes[m].receita, despesa: porMes[m].custo + porMes[m].despesa, resultado: porMes[m].resultado }))
+  const serieCombo = meses.map(m => {
+    const p = porMes[m], receitaLiq = p.receita, ebitda = p.ebitda, lucroLiq = p.resultado
+    return { mes: m, rotulo: MESES[m - 1], receitaLiq, ebitda, lucroLiq, margemEbitda: receitaLiq ? ebitda / receitaLiq * 100 : 0, margemLiquida: receitaLiq ? lucroLiq / receitaLiq * 100 : 0 }
+  })
+  return { ...dRaw, porMes, serie, serieCombo, meses, consolidando: true }
 }
 
 export default function PainelCliente() {
@@ -337,16 +377,63 @@ export default function PainelCliente() {
   // padrão continua exatamente igual. Todos os blocos e o Excel usam `d`, então tudo acompanha.
   const [periodo, setPeriodo] = useState(null) // { ini, fim } | null
   useEffect(() => { setPeriodo(null) }, [empresaId, competencia])
-  const mesesPer = dRaw?.meses || []
-  const focoPer = dRaw?.focusMes ?? mesFoco
+  const rotMes = m => `${MESES[m - 1]}/${String(anoFoco).slice(2)}`
+
+  // ETAPA 2 — CONSOLIDAÇÃO GERENCIAL (só resultado/DRE). Carrega o grupo do cadastro da mãe e deixa
+  // ligar/desligar empresas. Por padrão só a mãe fica ligada, então o Cockpit padrão não muda. Ao
+  // ligar outra, somamos o FLUXO por mês; balanço/índices consolidados (com eliminações) são a Etapa 4.
+  const [grupo, setGrupo] = useState([])              // [{ id, nome }] mãe + ligadas (do cadastro)
+  const [empresasSel, setEmpresasSel] = useState(null) // Set de ids ligados; null = só a mãe
+  const [extrasPorMes, setExtrasPorMes] = useState({}) // { cid: porMes } (cache das outras empresas)
+  const [consolBusy, setConsolBusy] = useState(false)
+  useEffect(() => {
+    setEmpresasSel(null); setExtrasPorMes({}); setGrupo([])
+    if (!empresaId) return
+    let vivo = true
+    ;(async () => {
+      let cfg = (await supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'consolidacao').order('created_at', { ascending: false }).limit(1).maybeSingle()).data
+      if (!cfg) cfg = (await supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'depara').eq('obs', 'consolidacao_grupo').order('created_at', { ascending: false }).limit(1).maybeSingle()).data
+      const extras = (Array.isArray(cfg?.dados?.empresas) ? cfg.dados.empresas : []).filter(id => id && id !== empresaId)
+      if (!vivo || !extras.length) return
+      const ids = [...new Set([empresaId, ...extras])]
+      const { data: emps } = await supabase.from('clientes').select('id, razao_social').in('id', ids)
+      const nome = Object.fromEntries((emps || []).map(e => [e.id, e.razao_social]))
+      if (vivo) setGrupo(ids.map(id => ({ id, nome: nome[id] || id })))
+    })()
+    return () => { vivo = false }
+  }, [empresaId])
+
+  const ativos = empresasSel || new Set([empresaId])
+  const consolidando = grupo.length > 1 && [...ativos].some(id => id !== empresaId)
+  // Carrega o fluxo das empresas ligadas (que não a mãe) que ainda não estão no cache.
+  useEffect(() => {
+    const faltam = [...ativos].filter(id => id !== empresaId && !extrasPorMes[id])
+    if (!faltam.length) return
+    let vivo = true
+    ;(async () => {
+      setConsolBusy(true)
+      const novos = {}
+      for (const cid of faltam) { try { novos[cid] = await flowPorMesEmpresa(cid, anoFoco) } catch { novos[cid] = {} } }
+      if (vivo) setExtrasPorMes(prev => ({ ...prev, ...novos }))
+      if (vivo) setConsolBusy(false)
+    })()
+    return () => { vivo = false }
+  }, [empresasSel, empresaId, anoFoco]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const extrasList = [...ativos].filter(id => id !== empresaId).map(id => extrasPorMes[id]).filter(Boolean)
+  const rawUse = (dRaw && consolidando && extrasList.length) ? consolidarFluxo(dRaw, extrasList) : dRaw
+
+  const mesesPer = rawUse?.meses || []
+  const focoPer = rawUse?.focusMes ?? mesFoco
   const perA = periodo ? Math.min(periodo.ini, periodo.fim) : focoPer
   const perB = periodo ? Math.max(periodo.ini, periodo.fim) : focoPer
-  const d = useMemo(() => (dRaw ? agregarPeriodo(dRaw, perA, perB) : dRaw), [dRaw, perA, perB])
-  const rotMes = m => `${MESES[m - 1]}/${String(anoFoco).slice(2)}`
+  const d = useMemo(() => (rawUse ? agregarPeriodo(rawUse, perA, perB, consolidando) : rawUse), [rawUse, perA, perB, consolidando])
 
   function exportarExcel() {
     if (!d) return
-    const sub = `${empresaNome} · CNPJ ${fmtCnpj(empresaCnpj)} · competência ${competencia}`
+    const sub = consolidando
+      ? `Consolidado do resultado · ${grupo.filter(e => ativos.has(e.id)).map(e => e.nome).join(' · ')} · competência ${competencia}`
+      : `${empresaNome} · CNPJ ${fmtCnpj(empresaCnpj)} · competência ${competencia}`
     const secoes = []
 
     secoes.push({
@@ -364,6 +451,7 @@ export default function PainelCliente() {
       linhas: d.serie.map(x => [`${MESES[x.mes - 1]}/2026`, num(x.resultado)]),
       totais: ['Resultado do exercício (acumulado)', num(d.acumulado)],
     })
+    if (!consolidando) {
     secoes.push({
       titulo: 'Balanço patrimonial (saldo final da conciliação)',
       linhas: [
@@ -402,6 +490,7 @@ export default function PainelCliente() {
         ['Prazo médio de recebimento', d.indices.prazoReceb == null ? '—' : `${d.indices.prazoReceb} dias`],
       ],
     })
+    }
 
     gerarExcelTimbrado({
       titulo: 'Cockpit Financeiro',
@@ -438,9 +527,19 @@ export default function PainelCliente() {
         </div>
       </div>
 
-      {/* Seletor de PERÍODO — vale para todos os blocos: fluxo soma o intervalo; balanço/índices na foto do mês final. */}
-      {dRaw && mesesPer.length > 0 && (
-        <div className="no-print" style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 16 }}>
+      {/* Filtros: Empresas (consolidar resultado do grupo) + Período. */}
+      <div className="no-print" style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', marginBottom: 16 }}>
+        {grupo.length > 1 && (
+          <span style={{ fontSize: 12, color: theme.sub, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <i className="ti ti-building-community" /> Empresas:
+            <EmpresaDropdown grupo={grupo} ativos={ativos} maeId={empresaId}
+              onToggle={id => setEmpresasSel(prev => { const n = new Set(prev || new Set([empresaId])); n.has(id) ? n.delete(id) : n.add(id); n.add(empresaId); return n })}
+              onSoMae={() => setEmpresasSel(new Set([empresaId]))}
+              onTodas={() => setEmpresasSel(new Set(grupo.map(e => e.id)))} />
+            {consolBusy && <span style={{ fontSize: 11, color: theme.accent }}><i className="ti ti-loader-2 girando" /> consolidando…</span>}
+          </span>
+        )}
+        {dRaw && mesesPer.length > 0 && (<>
           <span style={{ fontSize: 12, color: theme.sub, display: 'inline-flex', alignItems: 'center', gap: 6 }}><i className="ti ti-calendar-stats" /> Período:</span>
           <select className="input" style={{ width: 'auto', fontSize: 12, padding: '6px 10px' }} value={perA} onChange={e => setPeriodo({ ini: Number(e.target.value), fim: perB })}>
             {mesesPer.map(m => <option key={m} value={m}>{rotMes(m)}</option>)}
@@ -451,6 +550,15 @@ export default function PainelCliente() {
           </select>
           {(perA !== focoPer || perB !== focoPer) && <button className="btn-ghost" style={{ fontSize: 11.5, padding: '4px 10px', display: 'inline-flex', alignItems: 'center', gap: 5 }} onClick={() => setPeriodo(null)}><i className="ti ti-rotate-2" /> Competência</button>}
           <span style={{ fontSize: 11.5, color: theme.sub }}>{perA === perB ? `Mês de ${rotMes(perA)}` : `Fluxo somando ${rotMes(perA)}–${rotMes(perB)} · balanço/índices na foto de ${rotMes(perB)}`}</span>
+        </>)}
+      </div>
+
+      {consolidando && (
+        <div style={{ background: 'rgba(74,124,255,0.08)', border: `1px solid ${theme.accent}`, borderRadius: 12, padding: '10px 14px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 10 }}>
+          <i className="ti ti-building-community" style={{ color: theme.accent, fontSize: 18 }} />
+          <span style={{ fontSize: 12.5, color: theme.text }}>
+            <b>Consolidado gerencial do resultado</b> — somando {grupo.filter(e => ativos.has(e.id)).map(e => e.nome).join(' · ')}. Cobre <b>DRE/fluxo</b> (receita, custo, despesa, EBITDA, margens). Balanço, índices e financeiro consolidados (com <b>eliminações intercompany</b>) vêm na próxima etapa.
+          </span>
         </div>
       )}
 
@@ -459,11 +567,17 @@ export default function PainelCliente() {
       {!carregando && d && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
           <BlocoResultado d={d} />
-          <BlocoComparativo d={d} />
-          <BlocoBalanco d={d} />
-          <BlocoFinanceiro d={d} />
-          <BlocoImpostos d={d} />
-          <BlocoClientesIndices d={d} />
+          {consolidando ? (
+            <Secao titulo="Balanço, financeiro e índices" flag="individual por empresa">
+              <Aviso icon="ti-lock" texto="Estes blocos ainda não são consolidados. Somar balanços do grupo sem eliminar as operações entre as empresas (mútuos, contas e receitas intercompany) infla ativo/passivo e distorce a liquidez — por isso o consolidado do balanço vem na etapa de eliminações. Para ver o balanço/índices, deixe só a empresa mãe (Empresas → Só a mãe)." />
+            </Secao>
+          ) : (<>
+            <BlocoComparativo d={d} />
+            <BlocoBalanco d={d} />
+            <BlocoFinanceiro d={d} />
+            <BlocoImpostos d={d} />
+            <BlocoClientesIndices d={d} />
+          </>)}
         </div>
       )}
     </Wrapper>
@@ -492,6 +606,39 @@ function BlocoResultado({ d }) {
         </div>
       </div>
     </Secao>
+  )
+}
+
+// Dropdown de EMPRESAS do Cockpit (consolidar resultado). A mãe fica sempre ligada.
+function EmpresaDropdown({ grupo, ativos, maeId, onToggle, onSoMae, onTodas }) {
+  const [aberto, setAberto] = useState(false)
+  const linha = { display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', fontSize: 12.5, cursor: 'pointer', borderRadius: 6 }
+  const todasOn = ativos.size === grupo.length
+  return (
+    <span style={{ position: 'relative', display: 'inline-block' }}>
+      <button className="btn-ghost" onClick={() => setAberto(a => !a)} style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12, padding: '6px 12px' }}>
+        {ativos.size}/{grupo.length} {todasOn ? '(todas)' : ativos.size === 1 ? '(só a mãe)' : ''} <i className="ti ti-chevron-down" style={{ fontSize: 14 }} />
+      </button>
+      {aberto && (<>
+        <div onClick={() => setAberto(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+        <div style={{ position: 'absolute', top: '100%', left: 0, marginTop: 6, background: theme.card, border: `1px solid ${theme.cb}`, borderRadius: 10, padding: 8, zIndex: 41, minWidth: 280, maxHeight: 340, overflow: 'auto', boxShadow: '0 8px 24px rgba(0,0,0,.28)' }}>
+          <div style={{ display: 'flex', gap: 6, marginBottom: 4 }}>
+            <button className="btn-ghost" style={{ fontSize: 11, padding: '3px 8px' }} onClick={onTodas}>Todas</button>
+            <button className="btn-ghost" style={{ fontSize: 11, padding: '3px 8px' }} onClick={onSoMae}>Só a mãe</button>
+          </div>
+          <div style={{ height: 1, background: theme.border, margin: '4px 0 6px' }} />
+          {grupo.map(e => {
+            const mae = e.id === maeId
+            return (
+              <label key={e.id} style={{ ...linha, opacity: mae ? .8 : 1, cursor: mae ? 'default' : 'pointer' }} onClick={() => !mae && onToggle(e.id)}>
+                <input type="checkbox" readOnly checked={ativos.has(e.id)} disabled={mae} />
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.nome}{mae ? <b style={{ color: theme.accent }}> (mãe)</b> : ''}</span>
+              </label>
+            )
+          })}
+        </div>
+      </>)}
+    </span>
   )
 }
 
