@@ -304,12 +304,25 @@ export default function ImportarRazao() {
     }
     const todos = porArquivo.flat().map(r => ({ ...r, competencia_id: cid }))
     // Regrava o razão (sem a coluna nome, que é só do balancete).
-    await supabase.from('razao').delete().eq('competencia_id', cid)
     const paraRazao = todos.map(({ nome, ...r }) => r)
-    for (let i = 0; i < paraRazao.length; i += 500) {
-      const { error } = await supabase.from('razao').insert(paraRazao.slice(i, i + 500))
-      if (error) throw error
+    const inserirRazao = async () => {
+      await supabase.from('razao').delete().eq('competencia_id', cid)
+      for (let i = 0; i < paraRazao.length; i += 500) {
+        const { error } = await supabase.from('razao').insert(paraRazao.slice(i, i + 500))
+        if (error) throw error
+      }
     }
+    await inserirRazao()
+    // BLINDAGEM contra importação SIMULTÂNEA (duas sessões no mesmo login reimportando a mesma
+    // competência): o razão não tem chave única, então duas importações ao mesmo tempo poderiam
+    // DUPLICAR linhas. Se sobrou mais linha que o esperado, reescreve limpo. É seguro mesmo se
+    // disparar à toa, porque sempre regrava exatamente o conjunto correto (paraRazao). O pequeno
+    // atraso aleatório evita que as duas sessões corrijam em lockstep.
+    try {
+      await new Promise(r => setTimeout(r, 150 + Math.floor(Math.random() * 700)))
+      const { count } = await supabase.from('razao').select('*', { count: 'exact', head: true }).eq('competencia_id', cid)
+      if ((count || 0) > paraRazao.length) await inserirRazao()
+    } catch { /* verificação best-effort — não bloqueia a importação */ }
     // Balancete derivado: agrupa por conta (soma matriz + filiais), com o nome lido do razão.
     const porConta = {}
     for (const r of todos) {
@@ -321,10 +334,20 @@ export default function ImportarRazao() {
       competencia_id: cid, conta: c.conta, nome: c.nome || null,
       saldo_inicial: 0, debito: c.debito, credito: c.credito, saldo_final: c.debito - c.credito,
     }))
-    await supabase.from('balancete').delete().eq('competencia_id', cid)
-    for (let i = 0; i < balancete.length; i += 500) {
-      const { error } = await supabase.from('balancete').insert(balancete.slice(i, i + 500))
-      if (error) throw error
+    // O balancete tem unique(competencia_id, conta): sob importação concorrente o insert falha em vez
+    // de duplicar. Nesse caso reescreve limpo uma vez (com atraso aleatório para não colidir de novo).
+    const inserirBalancete = async () => {
+      await supabase.from('balancete').delete().eq('competencia_id', cid)
+      for (let i = 0; i < balancete.length; i += 500) {
+        const { error } = await supabase.from('balancete').insert(balancete.slice(i, i + 500))
+        if (error) throw error
+      }
+    }
+    try {
+      await inserirBalancete()
+    } catch (e) {
+      await new Promise(r => setTimeout(r, 150 + Math.floor(Math.random() * 700)))
+      await inserirBalancete()
     }
     await supabase.from('competencias').update({ razao_importado: todos.length > 0 }).eq('id', cid)
     await salvarMeta(cid, novoArquivos)
