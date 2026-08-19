@@ -370,6 +370,9 @@ export default function Status() {
   // Gates informativos (observações) não bloqueiam o encerramento.
   const totalPendencias = gates.filter(g => !g.informativo).reduce((s, g) => s + pendDe(g), 0)
   const pronto = totalPendencias === 0
+  // LIBERADO para encerrar só quando não há pendências E o balancete do Domínio confere com a
+  // conciliação. Sem isso o fechamento sairia com o balancete divergente.
+  const liberado = pronto && !!balConf?.bate
   const fechado = status === 'fechado'
   // Progresso = fração dos gates bloqueantes já resolvidos (sem pendência). Fechado = 100%.
   // É gravado em competencias.pct (efeito acima) para o card da lista de Fechamentos.
@@ -380,6 +383,7 @@ export default function Status() {
   const selGate = sel ? gates.find(g => g.key === sel) : null
 
   async function encerrar() {
+    if (!pronto || !balConf?.bate) { setMsg('Não é possível encerrar: resolva as pendências e importe o balancete que confere com a conciliação.'); return }
     setSalvando(true)
     const { error } = await supabase.from('competencias').update({ status: 'fechado' }).eq('id', compId)
     setSalvando(false)
@@ -677,7 +681,7 @@ export default function Status() {
           background: (pronto || fechado) ? 'rgba(48,164,108,0.14)' : 'rgba(229,72,77,0.14)',
           border: `0.5px solid ${(pronto || fechado) ? 'rgba(48,164,108,0.4)' : 'rgba(229,72,77,0.4)'}`,
         }}>
-          <i className={`ti ${fechado ? 'ti-lock' : pronto ? 'ti-check' : 'ti-alert-triangle'}`} style={{ fontSize: 32, color: (pronto || fechado) ? theme.green : theme.red }} />
+          <i className={`ti ${fechado ? 'ti-lock' : liberado ? 'ti-check' : 'ti-alert-triangle'}`} style={{ fontSize: 32, color: (liberado || fechado) ? theme.green : theme.red }} />
         </div>
         <div style={{ flex: 1, minWidth: 220 }}>
           {fechado ? (
@@ -685,10 +689,21 @@ export default function Status() {
               <p style={{ fontSize: 21, fontWeight: 700, color: theme.green, margin: 0 }}>Competência encerrada — somente leitura</p>
               <p style={{ fontSize: 13, color: theme.sub, margin: '4px 0 0' }}>{totalPendencias > 0 ? <>Reabra para tratar {totalPendencias} pendência{totalPendencias > 1 ? 's' : ''} (variações/ajustes que surgiram depois do fechamento).</> : 'Nenhuma pendência. Reabra se precisar editar.'}</p>
             </>
-          ) : pronto ? (
+          ) : liberado ? (
             <>
               <p style={{ fontSize: 21, fontWeight: 700, color: theme.green, margin: 0 }}>Tudo OK — fechamento liberado</p>
-              <p style={{ fontSize: 13, color: theme.sub, margin: '4px 0 0' }}>Nenhuma pendência nos gates desta competência.</p>
+              <p style={{ fontSize: 13, color: theme.sub, margin: '4px 0 0' }}>Sem pendências e o balancete confere com a conciliação.</p>
+            </>
+          ) : pronto ? (
+            <>
+              <p style={{ fontSize: 21, fontWeight: 700, color: theme.red, margin: 0 }}>
+                {balConf && !balConf.bate ? 'Balancete não bate com a conciliação' : 'Falta conferir o balancete'}
+              </p>
+              <p style={{ fontSize: 13, color: theme.sub, margin: '4px 0 0' }}>
+                {balConf && !balConf.bate
+                  ? <>Gates resolvidos, mas o balancete do Domínio diverge em <b>{balConf.divergencias.length} conta{balConf.divergencias.length > 1 ? 's' : ''}</b>. Corrija e reimporte — o encerramento fica bloqueado até bater.</>
+                  : <>Gates resolvidos. Importe o <b>balancete do Domínio</b> (abaixo) — ele precisa bater com a conciliação para liberar o encerramento.</>}
+              </p>
             </>
           ) : (
             <>

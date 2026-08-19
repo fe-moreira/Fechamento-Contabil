@@ -39,7 +39,7 @@ export default function Fechamentos() {
 
   async function carregar() {
     setLoading(true)
-    const { data } = await supabase.from('competencias').select('id, ano, mes, status, razao_importado, pct, documentos')
+    const { data } = await supabase.from('competencias').select('id, ano, mes, status, razao_importado, pct, documentos, integracoes')
       .eq('cliente_id', empresaId).order('ano', { ascending: false }).order('mes', { ascending: false })
     const rows = data || []
     setLista(rows); setLoading(false)
@@ -75,6 +75,9 @@ export default function Fechamentos() {
   // Só é "em andamento" depois de importar o razão; sem razão (e não fechado) → "pendente".
   // 100% dos gates (pct) → "pronto" (verde), mesmo antes de encerrar formalmente.
   const efet = c => c.status === 'fechado' ? 'fechado' : (c.razao_importado ? ((c.pct || 0) >= 100 ? 'pronto' : 'andamento') : 'pendente')
+  // Balancete do Domínio confere com a conciliação? (gravado em competencias.integracoes.balanceteConf
+  // pelo Status). Encerrar EXIGE que bata — senão o fechamento sairia com o balancete divergente.
+  const balanceteBate = c => !!c.integracoes?.balanceteConf?.bate
   const cont = { fechado: 0, andamento: 0, pendente: 0 }
   // "pronto" (100%) conta junto com "fechado" no resumo verde.
   filtrada.forEach(c => { const e = efet(c); const b = e === 'pronto' ? 'fechado' : e; cont[b] = (cont[b] || 0) + 1 })
@@ -88,6 +91,13 @@ export default function Fechamentos() {
   // Encerrar DIRETO no card: pergunta se tem certeza e marca a competência como ENCERRADA
   // (somente leitura). Só aparece a 100% (pronto).
   async function encerrarDireto(c) {
+    // TRAVA: não encerra se o balancete do Domínio não confere com a conciliação (ou nem foi
+    // importado). Sem isso o fechamento poderia ser encerrado com o balancete divergente.
+    if (!balanceteBate(c)) {
+      alert('Não é possível encerrar: o balancete do Domínio ainda não confere com a conciliação (ou não foi importado). Abra o fechamento, importe o balancete no Status e corrija as divergências até bater.')
+      abrir(c)
+      return
+    }
     if (!window.confirm(`Encerrar o fechamento de ${MESES[c.mes - 1]}/${c.ano}? Ele fica ENCERRADO (somente leitura) — para editar depois é preciso Reabrir (admin).\n\nTem certeza?`)) return
     setSalvandoAcao(true)
     const { error } = await supabase.from('competencias').update({ status: 'fechado' }).eq('id', c.id)
@@ -227,10 +237,18 @@ export default function Fechamentos() {
                   </button>
                 )}
                 {efet(c) === 'pronto' && (
-                  <button className="btn" disabled={salvandoAcao} onClick={e => { e.stopPropagation(); encerrarDireto(c) }}
-                    style={{ fontSize: 12.5, padding: '5px 12px', background: theme.green, borderColor: theme.green, flexShrink: 0, whiteSpace: 'nowrap' }} title="Encerrar o fechamento (fica somente leitura)">
-                    <i className="ti ti-lock-check" /> Encerrar
-                  </button>
+                  balanceteBate(c) ? (
+                    <button className="btn" disabled={salvandoAcao} onClick={e => { e.stopPropagation(); encerrarDireto(c) }}
+                      style={{ fontSize: 12.5, padding: '5px 12px', background: theme.green, borderColor: theme.green, flexShrink: 0, whiteSpace: 'nowrap' }} title="Encerrar o fechamento (fica somente leitura)">
+                      <i className="ti ti-lock-check" /> Encerrar
+                    </button>
+                  ) : (
+                    <button className="btn btn-ghost" onClick={e => { e.stopPropagation(); abrir(c) }}
+                      style={{ fontSize: 12.5, padding: '5px 12px', color: theme.red, borderColor: theme.red, flexShrink: 0, whiteSpace: 'nowrap' }}
+                      title="O balancete do Domínio ainda não confere com a conciliação — abra o Status para importar/corrigir antes de encerrar">
+                      <i className="ti ti-alert-triangle" /> Conferir balancete
+                    </button>
+                  )
                 )}
                 <i className="ti ti-trash" title="Excluir fechamento" onClick={e => excluir(c, e)}
                   style={{ color: theme.sub, fontSize: 17, flexShrink: 0, cursor: 'pointer' }} />
