@@ -644,8 +644,15 @@ export default function Conciliacao() {
 }
 
 function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia, ajuste = null, getCompetenciaId, onSalvarConf, onMudou, onVoltar }) {
-  const ajDeb = ajuste?.deb || 0, ajCred = ajuste?.cred || 0, ajNet = ajDeb - ajCred // correções pendentes
   const [lanc, setLanc] = useState([])
+  // Débito/crédito/SALDO ATUAL têm que incluir os lançamentos feitos NESTA conta (manuais e
+  // gerados) — seja conta de SALDO ou de COMPOSIÇÃO. Somamos direto dos lançamentos carregados
+  // (os `acerto`), que é a fonte FRESCA do que aparece em "Lançamentos da conta". Antes usávamos
+  // o prop `ajuste` (calculado no pai), que ficava DEFASADO quando um lançamento era gerado aqui
+  // dentro: o saldo não atualizava e a diferença virava exatamente o valor do lançamento.
+  const ajDeb = lanc.reduce((s, l) => l.acerto ? s + (Number(l.debito) || 0) : s, 0)
+  const ajCred = lanc.reduce((s, l) => l.acerto ? s + (Number(l.credito) || 0) : s, 0)
+  const ajNet = ajDeb - ajCred
   const [carregando, setCarregando] = useState(true)
   const [acao, setAcao] = useState(null)   // lançamento clicado (justificar/corrigir)
   const [verCorr, setVerCorr] = useState(null) // lançamento já tratado (ver o que foi feito / desfazer)
