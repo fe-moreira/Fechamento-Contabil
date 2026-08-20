@@ -470,7 +470,7 @@ function cruzarFolha(eventos, idx, justif = {}) {
 }
 
 export default function Integracao() {
-  const { empresas, empresaId, empresaNome, competencia, getCompetenciaId, plano, isAdmin } = useAppData()
+  const { empresas, empresaId, empresaNome, competencia, getCompetenciaId, plano, isAdmin, competenciaFechada } = useAppData()
   const { user } = useAuth()
   const cliente = empresas.find(e => e.id === empresaId)
   const integ = cliente?.integracao_financeira || 'Não usa'
@@ -481,6 +481,7 @@ export default function Integracao() {
   // dados (não da cópia em memória), para um salvamento nunca apagar o que outra aba/
   // sessão gravou. `mut(atual)` deve devolver um NOVO objeto (sem mutar `atual`).
   async function salvarMerge(id, mut) {
+    if (competenciaFechada) return  // período FECHADO = somente leitura: não grava nada na integração
     const { data } = await supabase.from('competencias').select('integracoes').eq('id', id).maybeSingle()
     const atual = (data?.integracoes && typeof data.integracoes === 'object') ? data.integracoes : {}
     const novo = mut(atual)
@@ -646,6 +647,12 @@ export default function Integracao() {
       <p style={{ color: theme.sub, fontSize: 13, marginBottom: 16 }}>
         <b style={{ color: theme.text }}>{empresaNome}</b> · competência <b style={{ color: theme.text }}>{competencia}</b>
       </p>
+      {competenciaFechada && (
+        <div style={{ background: 'rgba(48,164,108,0.10)', border: `1px solid ${theme.green}`, borderRadius: 10, padding: '9px 14px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <i className="ti ti-lock" style={{ color: theme.green, fontSize: 17 }} />
+          <span style={{ fontSize: 12.5, color: theme.text }}>Competência <b>encerrada — somente leitura</b>. Nenhuma alteração é permitida na integração (incluir contas, importar, contabilizar). Reabra no <b>Status</b> para editar. O que já foi feito continua salvo.</span>
+        </div>
+      )}
 
       <div style={{ display: 'flex', gap: 10, marginBottom: 18, flexWrap: 'wrap' }}>
         {TABS.map(([id, label]) => {
@@ -664,14 +671,14 @@ export default function Integracao() {
 
       {tab === 'financeira'
         ? (integ === 'Excel'
-          ? <Financeira competencia={competencia} est={estado.financeira || {}} empresaId={empresaId} cliente={cliente} planoMap={planoMap} user={user} onEstado={salvarFinanceira} isAdmin={isAdmin} usaCC={!!cliente?.usa_centro_custo} />
+          ? <Financeira competencia={competencia} est={estado.financeira || {}} empresaId={empresaId} cliente={cliente} planoMap={planoMap} user={user} onEstado={salvarFinanceira} isAdmin={isAdmin} usaCC={!!cliente?.usa_centro_custo} fechado={competenciaFechada} />
           : <FinanceiraViaSistema integ={integ} sistema={sistema} empresaId={empresaId} competencia={competencia} planoMap={planoMap} est={estado.financeira} onEstado={salvarFinanceira} />)
         : tab === 'fiscal'
           ? <Fiscal competencia={competencia} empresaId={empresaId} cliente={cliente} user={user} est={estado.fiscal || {}} onEstado={salvarFiscal} />
           : tab === 'folha'
             ? <Folha competencia={competencia} empresaId={empresaId} cliente={cliente} user={user} est={estado.folha || {}} onEstado={salvarFolha} onSemMov={() => marcarSemMov('folha')} />
             : tab === 'patrimonio'
-              ? <Patrimonio empresaId={empresaId} competencia={competencia} cliente={cliente} planoMap={planoMap} est={estado.patrimonio} onEstado={salvarPatrimonio} onSemMov={() => marcarSemMov('patrimonio')} />
+              ? <Patrimonio empresaId={empresaId} competencia={competencia} cliente={cliente} planoMap={planoMap} est={estado.patrimonio} onEstado={salvarPatrimonio} onSemMov={() => marcarSemMov('patrimonio')} fechado={competenciaFechada} />
               : <Cruzamento tab={tab} dados={dados[tab]} cliente={cliente} onImport={f => importar(tab, f)} onSemMov={() => marcarSemMov(tab)} onExtrair={() => extrairIntegracao(tab)} est={estado[tab]} />}
     </Wrapper>
   )
@@ -1550,7 +1557,7 @@ function validarCompetencia(linhas, mapa, comp) {
   return ''
 }
 
-function Financeira({ competencia, est, empresaId, cliente, planoMap, user, onEstado, isAdmin, usaCC }) {
+function Financeira({ competencia, est, empresaId, cliente, planoMap, user, onEstado, isAdmin, usaCC, fechado = false }) {
   const [contas, setContas] = useState([])       // [{ conta_contabil, agencia, conta }]
   const [memoria, setMemoria] = useState([])     // [{ termo, conta }]
   const [centros, setCentros] = useState([])     // centros de custo do cliente: [{ cod, nome, resp }]
@@ -1684,6 +1691,7 @@ function Financeira({ competencia, est, empresaId, cliente, planoMap, user, onEs
   // cadastra uma vez). Por isso é lido sempre pelo registro mais recente, sem
   // filtro de mês, e persiste para os próximos meses.
   async function salvarCarga(tipo, arr, obs) {
+    if (fechado) return  // período FECHADO = somente leitura: não grava cadastro (contas/memória)
     await supabase.from('cargas_cadastro').delete().eq('cliente_id', empresaId).eq('tipo', tipo)
     const { error } = await supabase.from('cargas_cadastro').insert({ cliente_id: empresaId, tipo, vigencia: competencia, dados: arr, usuario: user?.email || null, obs })
     if (error) setErro('Não consegui gravar: ' + error.message)
@@ -1714,7 +1722,7 @@ function Financeira({ competencia, est, empresaId, cliente, planoMap, user, onEs
     if (!esp && perfilServe(perfil, arr)) return perfil
     return perfilPadrao(arr)
   }
-  async function salvarContas(arr) { setContas(arr); await salvarCarga('contas_bancarias', arr, obsContas()) }
+  async function salvarContas(arr) { if (fechado) return; setContas(arr); await salvarCarga('contas_bancarias', arr, obsContas()) }
   async function salvarPerfil(perf, banco) {
     const chave = String(banco ?? '').trim()
     const novoMap = chave ? { ...perfis, [chave]: perf || null } : perfis
