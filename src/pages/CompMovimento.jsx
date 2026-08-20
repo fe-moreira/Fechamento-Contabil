@@ -590,16 +590,13 @@ export default function CompMovimento() {
     return { atual, anterior, mesAtual: mes, mesAnterior: mesAntObj ? mesAntObj.mes : null }
   }
 
-  // Justificativa vale para a CONTA inteira (não só para o mês em que foi feita): contas de
-  // resultado ACUMULAM no ano, então uma despesa recorrente estoura os 10% todo mês. Justificou
-  // a conta em QUALQUER mês → ela conta como tratada em todos os meses (pra frente e pra trás),
-  // até desfazer. O texto é herdado do mês em que foi justificada.
-  const contasJust = new Set([...justificadas].map(ch => String(ch).split('|')[0]))
+  // Texto por conta — só para SUGERIR no modal ao justificar outro mês da mesma conta; NÃO deixa
+  // a célula verde (a validação é por mês).
   const textoPorConta = {}
   for (const [ch, txt] of Object.entries(justTextos)) { const c = String(ch).split('|')[0]; if (c && txt && !(c in textoPorConta)) textoPorConta[c] = txt }
-  // Uma célula (conta,mês) está tratada se justificada nela mesma OU se a conta foi justificada
-  // em qualquer mês.
-  const celulaTratada = (reduzido, mes) => justificadas.has(chaveCelula(reduzido, mes)) || contasJust.has(reduzido)
+  // SEM herança entre meses: cada variação tem que ser justificada NO PRÓPRIO mês. Justificar uma
+  // conta num mês NÃO deixa os outros meses verdes (antes valia "pro ano todo" — removido a pedido).
+  const celulaTratada = (reduzido, mes) => justificadas.has(chaveCelula(reduzido, mes))
 
   // Meses ENCERRADOS (fechados) do ano de fechamento — imutáveis mesmo estando num mês aberto.
   // Ex.: trabalhando em julho, junho pra trás está fechado → não se justifica/corrige lá.
@@ -627,15 +624,11 @@ export default function CompMovimento() {
     if (texto) setJustTextos(prev => ({ ...prev, [chaveCelula(conta, mes)]: texto }))
   }
 
-  // Desfaz o ajuste: devolve a conta à contagem de pendências (atualiza na hora). Como a
-  // justificativa vale para a CONTA inteira, desfazer limpa TODOS os meses dela.
-  function marcarNaoJustificada(conta) {
-    setJustificadas(prev => {
-      const next = new Set(prev)
-      for (const ch of prev) if (String(ch).split('|')[0] === String(conta)) next.delete(ch)
-      return next
-    })
-    setJustTextos(prev => { const n = { ...prev }; for (const ch of Object.keys(n)) if (String(ch).split('|')[0] === String(conta)) delete n[ch]; return n })
+  // Desfaz o ajuste de UMA célula (conta+mês) — sem herança, desfazer não mexe nos outros meses.
+  function marcarNaoJustificada(conta, mes) {
+    const ch = chaveCelula(conta, mes)
+    setJustificadas(prev => { const next = new Set(prev); next.delete(ch); return next })
+    setJustTextos(prev => { const n = { ...prev }; delete n[ch]; return n })
   }
 
   // Anos e meses disponíveis (para os filtros).
@@ -933,7 +926,7 @@ export default function CompMovimento() {
           competenciaLabel={competencia}
           justTextoAtual={justTextos[chaveCelula(detalhe.conta, detalhe.mes)] || textoPorConta[detalhe.conta] || ''}
           onJustificada={(texto) => marcarJustificada(detalhe.conta, detalhe.mes, texto)}
-          onDesfeita={() => marcarNaoJustificada(detalhe.conta)}
+          onDesfeita={() => marcarNaoJustificada(detalhe.conta, detalhe.mes)}
           onCorrigido={() => setRefresh(x => x + 1)}
           plano={plano}
           centrosCC={centrosCC}
@@ -1097,15 +1090,14 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
   }
 
   async function desfazer() {
-    // A justificativa vale para a CONTA inteira (todos os meses) — desfazer remove a
-    // justificativa da conta em todos os meses do ano (as correções/reclassificações, que
-    // são específicas do mês, ficam; só sai o tipo 'Justificativa').
+    // Sem herança: desfazer remove a justificativa SÓ DESTE mês (a variação daquele mês volta a
+    // pendente; os outros meses seguem como estavam).
     if (bloqueado) { setMsg('Competência encerrada — reabra no Status para editar.'); return }
-    if (!window.confirm(`Desfazer a justificativa da conta ${conta}? A variação volta a contar como pendência (em todos os meses).`)) return
+    if (!window.confirm(`Desfazer a justificativa de ${conta} em ${MESES[mes - 1]}/${ANO}? A variação deste mês volta a contar como pendência.`)) return
     setSalvando(true)
     try {
       const { error } = await supabase.from('auditoria').delete()
-        .eq('modulo', 'Comparativo').eq('tipo', 'Justificativa').like('item', `${conta} · %/${ANO}`)
+        .eq('competencia_id', compId).eq('modulo', 'Comparativo').eq('tipo', 'Justificativa').eq('item', `${conta} · ${MESES[mes - 1]}/${ANO}`)
       if (error) throw error
       setMsg('Justificativa desfeita — variação voltou a pendente.'); setTratada(false); onDesfeita()
     } catch (e) { setMsg('Erro ao desfazer: ' + (e.message || e)) } finally { setSalvando(false) }
@@ -1131,7 +1123,7 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
     // meses seguintes se atualizam sozinhos. (A JUSTIFICATIVA, essa sim, vale para o ano todo.)
     if (!fechMes || mesL !== fechMes) {
       const alvo = MESES[((mesL || 1) - 1)] ? `${MESES[(mesL || 1) - 1]}/${ANO}` : 'o mês do lançamento'
-      throw new Error(`Este lançamento é de ${alvo}. Correção só pode ser feita no mês do fechamento${competenciaLabel ? ` (${competenciaLabel})` : ''}. Mude o fechamento para ${alvo} e corrija lá — os outros meses se atualizam sozinhos. A justificativa, essa sim, vale para o ano todo.`)
+      throw new Error(`Este lançamento é de ${alvo}. Correção só pode ser feita no mês do fechamento${competenciaLabel ? ` (${competenciaLabel})` : ''}. Mude o fechamento para ${alvo} e corrija lá — os outros meses se atualizam sozinhos. A justificativa é por mês (justifique cada mês).`)
     }
     const { error } = await supabase.from('lancamentos').insert({
       competencia_id: cid, data: l.data || null,
@@ -1280,7 +1272,7 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
           <div style={{ margin: '14px 22px 0', background: 'rgba(240,180,41,0.12)', border: `1px solid ${theme.yellow}`, borderRadius: 10, padding: '10px 14px' }}>
             <p style={{ color: theme.text, fontSize: 12.5, margin: 0 }}>
               <i className="ti ti-alert-triangle" style={{ color: theme.yellow, marginRight: 6 }} />
-              Você está no fechamento de <b>{competenciaLabel}</b>, mas esta coluna é de <b>{MESES[mes - 1]}/{ANO}</b>. Aqui você só pode <b>justificar</b> (vale para o ano todo). Para <b>corrigir/reclassificar</b> um lançamento de {MESES[mes - 1]}, <b>mude o fechamento para {MESES[mes - 1]}/{ANO}</b> e corrija lá — os meses seguintes se atualizam sozinhos.
+              Você está no fechamento de <b>{competenciaLabel}</b>, mas esta coluna é de <b>{MESES[mes - 1]}/{ANO}</b>. Aqui você só pode <b>justificar este mês</b>. Para <b>corrigir/reclassificar</b> um lançamento de {MESES[mes - 1]}, <b>mude o fechamento para {MESES[mes - 1]}/{ANO}</b> e corrija lá — os meses seguintes se atualizam sozinhos.
             </p>
           </div>
         )}
@@ -1732,7 +1724,7 @@ function Wrapper({ children }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
         <h1 style={{ fontSize: 22, fontWeight: 500, margin: 0 }}>Comp. Movimento</h1>
         <InfoTela titulo="Comp. Movimento">
-          Contas de resultado. Valores em <b style={{ color: theme.red }}>vermelho</b> desviam mais de 10% do <b>mês anterior</b> (fev × jan, mar × fev…) — o primeiro mês não é comparado. Mês sem saldo aparece como <b>—</b>; fica vermelho quando o mês anterior tinha movimento. Clique num valor para ver o razão e o provável culpado. Se o cliente <b>usa centro de custo</b>, aparece o filtro para ver o resultado por centro. <b>Justificou uma conta uma vez, vale para o ano todo:</b> a justificativa passa a valer em <b>todos os meses</b> daquela conta (para frente e para trás) — não precisa repetir a cada mês (as recorrentes acumulam e estourariam os 10% sempre). Desfazer tira a justificativa da conta em todos os meses.
+          Contas de resultado. Valores em <b style={{ color: theme.red }}>vermelho</b> desviam mais de 10% do <b>mês anterior</b> (fev × jan, mar × fev…) — o primeiro mês não é comparado. Mês sem saldo aparece como <b>—</b>; fica vermelho quando o mês anterior tinha movimento. Clique num valor para ver o razão e o provável culpado. Se o cliente <b>usa centro de custo</b>, aparece o filtro para ver o resultado por centro. <b>A justificativa é por mês:</b> cada variação em vermelho precisa ser justificada <b>no próprio mês</b> — justificar um mês <b>não</b> deixa os outros verdes, e desfazer tira só a justificativa daquele mês. Assim uma variação nova (inclusive conta que <b>aparece</b> ou <b>some</b>) sempre aparece para você tratar.
         </InfoTela>
       </div>
       <p style={{ color: theme.sub, fontSize: 13, marginBottom: 22 }}>
