@@ -602,8 +602,6 @@ export default function CompMovimento() {
   // não dá pra reabrir à toa), os meses ABERTOS seguintes não ficam vermelhos por ela. MAS variação
   // NOVA — conta que APARECE ou SOME (zero ↔ valor) — sempre re-sinaliza. Justificativa em mês
   // ABERTO vale só naquele mês (sem herança entre abertos).
-  const contasJustFechadas = new Set()
-  for (const ch of justificadas) { const p = String(ch).split('|'); if (mesesFechados.has(Number(p[1]))) contasJustFechadas.add(p[0]) }
   const apareceSumiu = (key, mes) => {
     const idx = comps.findIndex(c => c.mes === mes)
     if (idx <= 0) return false
@@ -612,7 +610,11 @@ export default function CompMovimento() {
     const p = Number(linha[amKey(ANO, comps[idx - 1].mes)] || 0) || 0
     return (a === 0) !== (p === 0)
   }
-  const tratadaCel = (key, reduzido, mes) => justificadas.has(chaveCelula(reduzido, mes)) || (contasJustFechadas.has(reduzido) && !apareceSumiu(key, mes))
+  // BASE FECHADA: se o MÊS ANTERIOR (a base da comparação) está ENCERRADO, a variação contra ele
+  // NÃO fica vermelha — o mês fechado já é base aceita (e você nem reabre à toa). Só continua
+  // vermelho o que for justificado NESTE mês (não some) ou o que APARECE/SOME (evento novo).
+  const baseFechada = mes => { const idx = comps.findIndex(c => c.mes === mes); return idx > 0 && mesesFechados.has(comps[idx - 1].mes) }
+  const tratadaCel = (key, reduzido, mes) => justificadas.has(chaveCelula(reduzido, mes)) || (baseFechada(mes) && !apareceSumiu(key, mes))
 
   // Conta por CONTA (não por célula/mês): uma conta com qualquer mês desviante ainda
   // não justificado conta 1 — mesmo conceito do Status e do badge do menu.
@@ -885,7 +887,7 @@ export default function CompMovimento() {
                               title={mesFechado
                                 ? `${MESES[mes - 1]}/${ANO} encerrado — somente leitura. Reabra no Status para tratar. · clique para ver o razão`
                                 : ok
-                                  ? `Variação justificada${herdada ? ' (justificada num mês encerrado)' : ''}${(justTextos[chaveCelula(reduzido, mes)] || textoPorConta[reduzido]) ? ' — ' + (justTextos[chaveCelula(reduzido, mes)] || textoPorConta[reduzido]) : ''} · clique para ver o razão`
+                                  ? `${herdada ? 'Mês anterior encerrado — base aceita (não conta como pendência)' : 'Variação justificada'}${(justTextos[chaveCelula(reduzido, mes)] || textoPorConta[reduzido]) ? ' — ' + (justTextos[chaveCelula(reduzido, mes)] || textoPorConta[reduzido]) : ''} · clique para ver o razão`
                                   : (vazio ? 'Mês sem movimento nesta conta — variação a justificar' : 'Ver razão da conta neste mês')}
                             >
                               {mesFechado && red && !ok && <i className="ti ti-lock" style={{ color: theme.sub, fontSize: 12 }} />}
@@ -1740,7 +1742,7 @@ function Wrapper({ children }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
         <h1 style={{ fontSize: 22, fontWeight: 500, margin: 0 }}>Comp. Movimento</h1>
         <InfoTela titulo="Comp. Movimento">
-          Contas de resultado. Valores em <b style={{ color: theme.red }}>vermelho</b> desviam mais de 10% do <b>mês anterior</b> (fev × jan, mar × fev…) — o primeiro mês não é comparado. Mês sem saldo aparece como <b>—</b>; fica vermelho quando o mês anterior tinha movimento. Clique num valor para ver o razão e o provável culpado. Se o cliente <b>usa centro de custo</b>, aparece o filtro para ver o resultado por centro. <b>A justificativa é por mês</b> (sem herança entre meses abertos): cada variação em vermelho precisa ser justificada <b>no próprio mês</b>. <b>Exceção:</b> se a conta já foi justificada num <b>mês encerrado</b> (base já aceita), os meses abertos seguintes <b>não</b> ficam vermelhos por ela — mas variação <b>nova</b> (conta que <b>aparece</b> ou <b>some</b>) sempre re-sinaliza para você tratar.
+          Contas de resultado. Valores em <b style={{ color: theme.red }}>vermelho</b> desviam mais de 10% do <b>mês anterior</b> (fev × jan, mar × fev…) — o primeiro mês não é comparado. Mês sem saldo aparece como <b>—</b>; fica vermelho quando o mês anterior tinha movimento. Clique num valor para ver o razão e o provável culpado. Se o cliente <b>usa centro de custo</b>, aparece o filtro para ver o resultado por centro. <b>Base em mês encerrado não fica vermelha:</b> se o <b>mês anterior está encerrado</b> (base já aceita), a variação contra ele <b>não</b> aparece em vermelho — você não rejustifica o que já foi fechado. Fica vermelho o que varia contra um mês <b>ainda aberto</b> (justifique naquele mês) e, sempre, conta que <b>aparece</b> ou <b>some</b> (evento novo).
         </InfoTela>
       </div>
       <p style={{ color: theme.sub, fontSize: 13, marginBottom: 22 }}>
