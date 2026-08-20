@@ -718,6 +718,10 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // Chave estável de uma linha (para "separar" determinístico): razão pelo id, abertura pela
   // chave de abertura, acerto pelo uuid.
   const sepKey = l => l?._abertura ? 'ab:' + chaveAberturaAj(l) : l?.acerto ? 'ac:' + String(l.id).replace(/^ac_/, '') : 'rz:' + (l?.id ?? '')
+  // Chave da SELEÇÃO (checkbox / baixa manual): SEMPRE por linha única (_uid). O sepKey agrupa
+  // aberturas por valor+nome (para desvincular nomes), o que faz o checkbox marcar duas notas de
+  // mesmo valor de uma vez — por isso a seleção usa o _uid, nunca o sepKey.
+  const selKeyU = l => l?._uid ?? sepKey(l)
   async function marcarConfiavel(nome) {
     const k = chaveNome(nome); if (!k) return
     const conf = new Set(nomesConf); conf.add(k); setNomesConf(conf)
@@ -1002,7 +1006,11 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         return { ...base, acerto: true, origem: a.origem || null, razaoRef: a.razao_id || null }
       })
     // Títulos de abertura (saldo anterior) primeiro; depois o movimento do mês; por fim os acertos.
-    setLanc([...(abertura || []).map(a => bump({ ...a, _abertura: true })), ...rzProc, ...acertoLancs])
+    // `_uid` = identificador ÚNICO por linha (índice). A seleção do checkbox (baixa manual) é
+    // por linha, então NUNCA pode agrupar por valor+nome como o sepKey faz — senão marcar uma
+    // nota marca outra de mesmo valor (ex.: duas aberturas de R$ 7.385,96, NF 3232 e 3255).
+    const _todas = [...(abertura || []).map(a => bump({ ...a, _abertura: true })), ...rzProc, ...acertoLancs]
+    setLanc(_todas.map((l, i) => ({ ...l, _uid: `u${i}` })))
     setCarregando(false)
   }
   useEffect(() => { carregarLanc() }, [compId, conta.conta]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -1578,18 +1586,18 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // não casou sozinho (NF diferente, sem NF, ou nomes separados). Vão para Conciliados.
   // Seleção para conectar/baixar: a chave é sepKey(l) (não l.id), porque o SALDO ANTERIOR
   // (abertura) NÃO tem id — e ele precisa ser selecionável para linkar com o pagamento do mês.
-  const toggleSelLin = l => setSelLin(prev => { const s = new Set(prev); const k = sepKey(l); s.has(k) ? s.delete(k) : s.add(k); return s })
+  const toggleSelLin = l => setSelLin(prev => { const s = new Set(prev); const k = selKeyU(l); s.has(k) ? s.delete(k) : s.add(k); return s })
   // Selecionar tudo / desmarcar tudo (as linhas passadas): se todas já estão marcadas, limpa;
   // senão, marca todas (inclui abertura, via sepKey).
   const selecionarTodos = linhas => setSelLin(prev => {
-    const ks = (linhas || []).map(l => sepKey(l))
+    const ks = (linhas || []).map(l => selKeyU(l))
     const todos = ks.length > 0 && ks.every(k => prev.has(k))
     const s = new Set(prev)
     if (todos) ks.forEach(k => s.delete(k)); else ks.forEach(k => s.add(k))
     return s
   })
   async function conectarSelecionados() {
-    const alvo = lanc.filter(l => selLin.has(sepKey(l)))
+    const alvo = lanc.filter(l => selLin.has(selKeyU(l)))
     if (alvo.length < 2) { setMsg('Selecione ao menos 2 lançamentos (a nota e o pagamento) para conectar.'); return }
     const net = alvo.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
     // Conectar SÓ quando ZERA. Se sobra diferença, não conecta (o botão já fica desabilitado).
@@ -2390,8 +2398,8 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
             <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }}>
               <thead>
                 <tr style={{ borderTop: `1px solid ${theme.border}` }}>
-                  <th style={{ ...th, width: 26 }} title={grp.every(l => selLin.has(sepKey(l))) ? 'Desmarcar todos deste' : 'Selecionar tudo deste'}>
-                    {grp.length > 0 && <input type="checkbox" checked={grp.every(l => selLin.has(sepKey(l)))} onChange={() => selecionarTodos(grp)} style={{ cursor: 'pointer', width: 15, height: 15 }} />}
+                  <th style={{ ...th, width: 26 }} title={grp.every(l => selLin.has(selKeyU(l))) ? 'Desmarcar todos deste' : 'Selecionar tudo deste'}>
+                    {grp.length > 0 && <input type="checkbox" checked={grp.every(l => selLin.has(selKeyU(l)))} onChange={() => selecionarTodos(grp)} style={{ cursor: 'pointer', width: 15, height: 15 }} />}
                   </th>
                   <th style={th}>Data</th><th style={th}>NF</th><th style={th}>Histórico</th><th style={th}>Contrapartida</th>
                   <th style={thR}>Débito</th><th style={thR}>Crédito</th><th style={{ ...th, textAlign: 'center' }}>Conf.</th>
@@ -2407,7 +2415,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
                       style={{ borderTop: `1px solid ${theme.border}`, cursor: 'pointer', opacity: (l.acerto || jaTratada(l)) ? 0.7 : 1, background: (l.acerto || jaTratada(l)) ? 'rgba(48,164,108,0.08)' : semNF ? 'rgba(229,72,77,0.08)' : 'transparent' }}
                       title={l.acerto ? `${tagAcertoLanc(l).titulo} — clique para ver ou desfazer` : jaTratada(l) ? 'Já conferido — clique para ver ou desfazer' : semNF ? 'Baixa com NF que não confere com o título — justifique ou corrija' : 'Justificar ou corrigir este lançamento'}>
                       <td style={{ ...td, textAlign: 'center' }} onClick={e => e.stopPropagation()}>
-                        <input type="checkbox" title="Conectar com outro (baixa manual)" checked={selLin.has(sepKey(l))} onChange={() => toggleSelLin(l)} style={{ cursor: 'pointer', width: 15, height: 15 }} />
+                        <input type="checkbox" title="Conectar com outro (baixa manual)" checked={selLin.has(selKeyU(l))} onChange={() => toggleSelLin(l)} style={{ cursor: 'pointer', width: 15, height: 15 }} />
                       </td>
                       <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{fmtDataBR(l.data) || '—'}</td>
                       <td style={{ ...td, color: semNF ? theme.red : theme.sub, fontWeight: 600 }}>NF {l.leitura.nf || '—'}</td>
@@ -2491,7 +2499,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       ) : (
         <>
         <ListaLancamentos lanc={emAbertoTodos} carregando={carregando} contraDe={contraDe} planoMap={planoMap} tratados={tratados} onTratar={abrirLinha}
-          selLin={selLin} selKey={sepKey} onToggleSel={toggleSelLin} onSelTodos={selecionarTodos} onExcluirAbertura={excluirAbertura} podeExcluirAbertura={abertura.inicial} aberturaFechada={abertura.fechada} />
+          selLin={selLin} selKey={selKeyU} onToggleSel={toggleSelLin} onSelTodos={selecionarTodos} onExcluirAbertura={excluirAbertura} podeExcluirAbertura={abertura.inicial} aberturaFechada={abertura.fechada} />
         {conferidosGrupos.length > 0 && (
           <div style={{ marginTop: 6 }}>
             <button onClick={() => setVerConferidos(v => !v)} style={{ background: 'none', border: 'none', color: termoBusca ? theme.accent : theme.sub, cursor: 'pointer', fontSize: 12.5, padding: '6px 2px', display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -2525,7 +2533,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       )}
 
       {(() => {
-        const selLancs = lanc.filter(l => selLin.has(sepKey(l)))
+        const selLancs = lanc.filter(l => selLin.has(selKeyU(l)))
         if (!selLancs.length) return null
         const net = selLancs.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
         const zera = Math.abs(net) < 0.005
