@@ -558,14 +558,34 @@ export default function Integracao() {
       const anteriores = comps.filter(c => (c.ano * 12 + c.mes) < ordAtual)
         .sort((a, b) => (b.ano * 12 + b.mes) - (a.ano * 12 + a.mes))
       const herdarContas = sec => { for (const c of anteriores) { const arr = c.integracoes?.[sec]?.contas; if (Array.isArray(arr) && arr.length) return arr } return null }
+      const herdadas = []
       for (const sec of ['patrimonio', 'financeira']) {
         const cur = (est[sec] && typeof est[sec] === 'object') ? est[sec] : {}
         if (!Array.isArray(cur.contas) || cur.contas.length === 0) {
           const herd = herdarContas(sec)
-          if (herd) est = { ...est, [sec]: { ...cur, contas: [...herd], _herdadoContas: true } }
+          if (herd) { est = { ...est, [sec]: { ...cur, contas: [...herd], _herdadoContas: true } }; herdadas.push(sec) }
         }
       }
       if (ativo) setEstado(est)
+      // PERSISTE o cadastro herdado NESTA competência para o carry-forward "grudar". Sem isso, as
+      // contas herdadas ficavam só em memória e QUALQUER auto-save de outra integração (que mescla a
+      // partir do BD, onde as contas ainda não estavam) apagava a lista — a aba voltava a ficar vazia.
+      // Grava só a LISTA de contas, sem tocar em documento/validação do mês.
+      if (herdadas.length) {
+        try {
+          const id = await getCompetenciaId()
+          if (id && ativo) {
+            await salvarMerge(id, atual => {
+              const novo = { ...atual }
+              for (const sec of herdadas) {
+                const c = (atual[sec] && typeof atual[sec] === 'object') ? atual[sec] : {}
+                if (!Array.isArray(c.contas) || c.contas.length === 0) novo[sec] = { ...c, contas: est[sec].contas, _herdadoContas: true }
+              }
+              return novo
+            })
+          }
+        } catch { /* competência fechada/somente leitura: fica só a herança em memória (sem auto-save que apagaria) */ }
+      }
     })()
     return () => { ativo = false }
   }, [empresaId, competencia])
