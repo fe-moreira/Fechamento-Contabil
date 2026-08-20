@@ -970,6 +970,7 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
 
   async function carregarLinhas() {
     setCarregando(true)
+    try {
     const ids = todos ? compIds : [compId]
     const rows = await lerTudo(() => supabase
       .from('razao').select('id, competencia_id, data, conta, contrapartida, historico, debito, credito, centro_custo')
@@ -1045,7 +1046,10 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
     // Respeita o filtro de centro de custo do comparativo: no drill-down mostra só as linhas
     // dos centros marcados (assim o Total bate com a célula filtrada).
     setLinhas([...analisarCulpados(rows, anteriores), ...lancRows].filter(passaCC))
-    setCarregando(false)
+    } catch (e) {
+      // Sem isso, qualquer erro numa das consultas deixava o modal preso em "Carregando…" pra sempre.
+      setMsg('Erro ao carregar o razão desta conta: ' + (e?.message || String(e)))
+    } finally { setCarregando(false) }
   }
 
   // Marca (ou limpa) a dedutibilidade de um lançamento — grava em auditoria; o indedutível
