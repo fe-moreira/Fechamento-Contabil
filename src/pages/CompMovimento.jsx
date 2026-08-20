@@ -594,13 +594,25 @@ export default function CompMovimento() {
   // a célula verde (a validação é por mês).
   const textoPorConta = {}
   for (const [ch, txt] of Object.entries(justTextos)) { const c = String(ch).split('|')[0]; if (c && txt && !(c in textoPorConta)) textoPorConta[c] = txt }
-  // SEM herança entre meses: cada variação tem que ser justificada NO PRÓPRIO mês. Justificar uma
-  // conta num mês NÃO deixa os outros meses verdes (antes valia "pro ano todo" — removido a pedido).
-  const celulaTratada = (reduzido, mes) => justificadas.has(chaveCelula(reduzido, mes))
-
   // Meses ENCERRADOS (fechados) do ano de fechamento — imutáveis mesmo estando num mês aberto.
   // Ex.: trabalhando em julho, junho pra trás está fechado → não se justifica/corrige lá.
   const mesesFechados = new Set(comps.filter(c => c.status === 'fechado').map(c => c.mes))
+
+  // Herança SÓ do mês FECHADO: se a conta foi justificada num mês ENCERRADO (base já aceita e que
+  // não dá pra reabrir à toa), os meses ABERTOS seguintes não ficam vermelhos por ela. MAS variação
+  // NOVA — conta que APARECE ou SOME (zero ↔ valor) — sempre re-sinaliza. Justificativa em mês
+  // ABERTO vale só naquele mês (sem herança entre abertos).
+  const contasJustFechadas = new Set()
+  for (const ch of justificadas) { const p = String(ch).split('|'); if (mesesFechados.has(Number(p[1]))) contasJustFechadas.add(p[0]) }
+  const apareceSumiu = (key, mes) => {
+    const idx = comps.findIndex(c => c.mes === mes)
+    if (idx <= 0) return false
+    const linha = matrizEff[key] || {}
+    const a = Number(linha[amKey(ANO, mes)] || 0) || 0
+    const p = Number(linha[amKey(ANO, comps[idx - 1].mes)] || 0) || 0
+    return (a === 0) !== (p === 0)
+  }
+  const tratadaCel = (key, reduzido, mes) => justificadas.has(chaveCelula(reduzido, mes)) || (contasJustFechadas.has(reduzido) && !apareceSumiu(key, mes))
 
   // Conta por CONTA (não por célula/mês): uma conta com qualquer mês desviante ainda
   // não justificado conta 1 — mesmo conceito do Status e do badge do menu.
@@ -608,7 +620,7 @@ export default function CompMovimento() {
   let pendentes = 0
   for (const { reduzido, key, sintetica } of contas) {
     if (sintetica) continue
-    if (comps.some(c => desviante(key, c.mes) && !celulaTratada(reduzido, c.mes))) pendentes++
+    if (comps.some(c => desviante(key, c.mes) && !tratadaCel(key, reduzido, c.mes))) pendentes++
   }
 
   // Níveis de sintéticas disponíveis (grau), para o filtro por nível do comparativo.
@@ -850,7 +862,7 @@ export default function CompMovimento() {
                         const mesFechado = mesesFechados.has(mes) // mês encerrado = somente leitura
                         const red = desviante(key, mes)
                         const okProprio = justificadas.has(chaveCelula(reduzido, mes))
-                        const ok = red && celulaTratada(reduzido, mes) // tratada nela mesma OU herdada da conta
+                        const ok = red && tratadaCel(key, reduzido, mes) // tratada neste mês OU herdada de um mês FECHADO
                         const herdada = ok && !okProprio
                         // Sem saldo e sem variação: traço apagado, sem clique.
                         if (vazio && !red) {
@@ -862,7 +874,7 @@ export default function CompMovimento() {
                         return (
                           <td key={col.key} style={{ ...td, textAlign: 'right' }}>
                             <button
-                              onClick={() => setDetalhe({ conta: reduzido, classif, nome, mes, compId: col.compId, mesFechado, varInfo: infoVariacao(key, mes) })}
+                              onClick={() => setDetalhe({ conta: reduzido, classif, nome, mes, key, compId: col.compId, mesFechado, varInfo: infoVariacao(key, mes) })}
                               style={{
                                 display: 'inline-flex', alignItems: 'center', gap: 4, justifyContent: 'flex-end',
                                 background: 'none', border: 'none', padding: 0, cursor: 'pointer',
@@ -873,7 +885,7 @@ export default function CompMovimento() {
                               title={mesFechado
                                 ? `${MESES[mes - 1]}/${ANO} encerrado — somente leitura. Reabra no Status para tratar. · clique para ver o razão`
                                 : ok
-                                  ? `Variação justificada${herdada ? ' (herdada da conta)' : ''}${(justTextos[chaveCelula(reduzido, mes)] || textoPorConta[reduzido]) ? ' — ' + (justTextos[chaveCelula(reduzido, mes)] || textoPorConta[reduzido]) : ''} · clique para ver o razão`
+                                  ? `Variação justificada${herdada ? ' (justificada num mês encerrado)' : ''}${(justTextos[chaveCelula(reduzido, mes)] || textoPorConta[reduzido]) ? ' — ' + (justTextos[chaveCelula(reduzido, mes)] || textoPorConta[reduzido]) : ''} · clique para ver o razão`
                                   : (vazio ? 'Mês sem movimento nesta conta — variação a justificar' : 'Ver razão da conta neste mês')}
                             >
                               {mesFechado && red && !ok && <i className="ti ti-lock" style={{ color: theme.sub, fontSize: 12 }} />}
@@ -920,7 +932,7 @@ export default function CompMovimento() {
           compIdAnterior={comps.find(c => c.mes === detalhe.varInfo?.mesAnterior)?.id || null}
           usuario={user?.email}
           getCompetenciaId={getCompetenciaId}
-          jaJustificada={celulaTratada(detalhe.conta, detalhe.mes)}
+          jaJustificada={tratadaCel(detalhe.key, detalhe.conta, detalhe.mes)}
           fechMes={fechMes}
           bloqueado={competenciaFechada || !!detalhe.mesFechado || mesesFechados.has(detalhe.mes)}
           competenciaLabel={competencia}
@@ -1728,7 +1740,7 @@ function Wrapper({ children }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
         <h1 style={{ fontSize: 22, fontWeight: 500, margin: 0 }}>Comp. Movimento</h1>
         <InfoTela titulo="Comp. Movimento">
-          Contas de resultado. Valores em <b style={{ color: theme.red }}>vermelho</b> desviam mais de 10% do <b>mês anterior</b> (fev × jan, mar × fev…) — o primeiro mês não é comparado. Mês sem saldo aparece como <b>—</b>; fica vermelho quando o mês anterior tinha movimento. Clique num valor para ver o razão e o provável culpado. Se o cliente <b>usa centro de custo</b>, aparece o filtro para ver o resultado por centro. <b>A justificativa é por mês:</b> cada variação em vermelho precisa ser justificada <b>no próprio mês</b> — justificar um mês <b>não</b> deixa os outros verdes, e desfazer tira só a justificativa daquele mês. Assim uma variação nova (inclusive conta que <b>aparece</b> ou <b>some</b>) sempre aparece para você tratar.
+          Contas de resultado. Valores em <b style={{ color: theme.red }}>vermelho</b> desviam mais de 10% do <b>mês anterior</b> (fev × jan, mar × fev…) — o primeiro mês não é comparado. Mês sem saldo aparece como <b>—</b>; fica vermelho quando o mês anterior tinha movimento. Clique num valor para ver o razão e o provável culpado. Se o cliente <b>usa centro de custo</b>, aparece o filtro para ver o resultado por centro. <b>A justificativa é por mês</b> (sem herança entre meses abertos): cada variação em vermelho precisa ser justificada <b>no próprio mês</b>. <b>Exceção:</b> se a conta já foi justificada num <b>mês encerrado</b> (base já aceita), os meses abertos seguintes <b>não</b> ficam vermelhos por ela — mas variação <b>nova</b> (conta que <b>aparece</b> ou <b>some</b>) sempre re-sinaliza para você tratar.
         </InfoTela>
       </div>
       <p style={{ color: theme.sub, fontSize: 13, marginBottom: 22 }}>
