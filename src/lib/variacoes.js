@@ -18,8 +18,10 @@ export async function apurarVariacoes(empresaId, opts = {}) {
   const { data: comps } = await supabase.from('competencias').select('id, mes, status')
     .eq('cliente_id', empresaId).eq('ano', ANO).order('mes', { ascending: true })
   if (!comps || !comps.length) return vazio
-  // Mês ENCERRADO não gera pendência de variação (já foi aceito no fechamento).
-  const mesesFechados = new Set(comps.filter(c => c.status === 'fechado').map(c => c.mes))
+  // Tudo ATÉ o último mês ENCERRADO já foi aceito no fechamento → não gera pendência (nem os meses
+  // de histórico abertos antes dele). Pendência só nos meses DEPOIS do último fechado.
+  const mesesFechados = comps.filter(c => c.status === 'fechado').map(c => c.mes)
+  const ultimoFechado = mesesFechados.length ? Math.max(...mesesFechados) : 0
   const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
 
   // Plano p/ classificar cada conta (reduzido → classificação) e filtrar só resultado.
@@ -104,7 +106,7 @@ export async function apurarVariacoes(empresaId, opts = {}) {
       const a = linha[m] == null ? 0 : Number(linha[m]) || 0
       const p = linha[mAnt] == null ? 0 : Number(linha[mAnt]) || 0
       if (a === 0 && p === 0) continue // sem movimento nos dois meses
-      if (mesesFechados.has(m)) continue // mês encerrado não vira pendência
+      if (m <= ultimoFechado) continue // até o último mês fechado já foi aceito — não vira pendência
       const desvia = p === 0 ? a !== 0 : Math.abs(a - p) / Math.abs(p) > 0.10
       if (desvia && !jaJustificada(conta, m)) itens.push({ conta, nome: nomes[conta] || '', mes: m, valor: linha[m] ?? 0 })
     }

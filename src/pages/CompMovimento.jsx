@@ -602,15 +602,17 @@ export default function CompMovimento() {
   // não dá pra reabrir à toa), os meses ABERTOS seguintes não ficam vermelhos por ela. MAS variação
   // NOVA — conta que APARECE ou SOME (zero ↔ valor) — sempre re-sinaliza. Justificativa em mês
   // ABERTO vale só naquele mês (sem herança entre abertos).
-  // Tratada = justificada NAQUELE mês (sem herança de outros meses). `key` fica só por compat.
-  const tratadaCel = (key, reduzido, mes) => justificadas.has(chaveCelula(reduzido, mes))
+  // ÚLTIMO mês ENCERRADO: tudo ATÉ ele já foi aceito no fechamento (não fica vermelho, mesmo os
+  // meses de histórico abertos antes dele). Vermelho/pendência só nos meses DEPOIS do último fechado.
+  const ultimoFechado = mesesFechados.size ? Math.max(...mesesFechados) : 0
+  // Tratada = justificada NAQUELE mês (sem herança) OU aceita por já estar dentro do período fechado.
+  const tratadaCel = (key, reduzido, mes) => mes <= ultimoFechado || justificadas.has(chaveCelula(reduzido, mes))
 
-  // Pendências = variações não justificadas em meses ABERTOS. Mês ENCERRADO nunca conta (nem fica
-  // vermelho) — pra fechar um mês, as variações dele já têm que estar justificadas. Só analíticas.
+  // Pendências = variações não justificadas em meses DEPOIS do último fechado. Só analíticas.
   let pendentes = 0
   for (const { reduzido, key, sintetica } of contas) {
     if (sintetica) continue
-    if (comps.some(c => !mesesFechados.has(c.mes) && desviante(key, c.mes) && !tratadaCel(key, reduzido, c.mes))) pendentes++
+    if (comps.some(c => c.mes > ultimoFechado && desviante(key, c.mes) && !tratadaCel(key, reduzido, c.mes))) pendentes++
   }
 
   // Níveis de sintéticas disponíveis (grau), para o filtro por nível do comparativo.
@@ -851,7 +853,7 @@ export default function CompMovimento() {
                         const mes = col.mesJust
                         const mesFechado = mesesFechados.has(mes) // mês encerrado = somente leitura
                         const desvia = desviante(key, mes)
-                        const ok = desvia && justificadas.has(chaveCelula(reduzido, mes)) // justificada NAQUELE mês → verde (em qualquer coluna)
+                        const ok = desvia && tratadaCel(key, reduzido, mes) // justificada OU dentro do período já fechado → verde
                         // Sem saldo e sem variação: traço apagado, sem clique.
                         if (vazio && !desvia) {
                           return <td key={col.key} style={{ ...td, textAlign: 'right', color: theme.sub }}>—</td>
@@ -1728,7 +1730,7 @@ function Wrapper({ children }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
         <h1 style={{ fontSize: 22, fontWeight: 500, margin: 0 }}>Comp. Movimento</h1>
         <InfoTela titulo="Comp. Movimento">
-          Contas de resultado. Valores em <b style={{ color: theme.red }}>vermelho</b> desviam mais de 10% do <b>mês anterior</b> (fev × jan, mar × fev…) — o primeiro mês não é comparado. Mês sem saldo aparece como <b>—</b>; fica vermelho quando o mês anterior tinha movimento. Clique num valor para ver o razão e o provável culpado. Se o cliente <b>usa centro de custo</b>, aparece o filtro para ver o resultado por centro. <b>Vermelho = mês ABERTO com variação não justificada.</b> Mês <b>encerrado</b> nunca fica vermelho. Você pode <b>justificar qualquer mês aberto de onde estiver</b> — não precisa trocar a competência (só a correção/reclassificação continua no mês do próprio lançamento). Para <b>encerrar</b> um mês, as variações dele têm que estar <b>justificadas</b>.
+          Contas de resultado. Valores em <b style={{ color: theme.red }}>vermelho</b> desviam mais de 10% do <b>mês anterior</b> (fev × jan, mar × fev…) — o primeiro mês não é comparado. Mês sem saldo aparece como <b>—</b>; fica vermelho quando o mês anterior tinha movimento. Clique num valor para ver o razão e o provável culpado. Se o cliente <b>usa centro de custo</b>, aparece o filtro para ver o resultado por centro. <b>Vermelho = variação a justificar nos meses DEPOIS do último mês encerrado.</b> Tudo <b>até o último mês fechado</b> já foi aceito no fechamento e aparece <b>verde</b> (inclusive meses de histórico importados antes dele) — não fica vermelho. Você pode <b>justificar de onde estiver</b>, sem trocar a competência (só a correção/reclassificação continua no mês do próprio lançamento). Para <b>encerrar</b> um mês, as variações dele têm que estar justificadas.
         </InfoTela>
       </div>
       <p style={{ color: theme.sub, fontSize: 13, marginBottom: 22 }}>
