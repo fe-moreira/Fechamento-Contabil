@@ -15,9 +15,12 @@ export async function apurarVariacoes(empresaId, opts = {}) {
   const vazio = { itens: [], meses: [], contas: [], matriz: {} }
   if (!empresaId) return vazio
 
-  const { data: comps } = await supabase.from('competencias').select('id, mes')
+  const { data: comps } = await supabase.from('competencias').select('id, mes, status')
     .eq('cliente_id', empresaId).eq('ano', ANO).order('mes', { ascending: true })
   if (!comps || !comps.length) return vazio
+  // Mês ENCERRADO não gera pendência de variação (já foi aceito no fechamento).
+  const mesesFechados = new Set(comps.filter(c => c.status === 'fechado').map(c => c.mes))
+  const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
 
   // Plano p/ classificar cada conta (reduzido → classificação) e filtrar só resultado.
   const { data: planoCarga } = await supabase.from('cargas_cadastro').select('dados')
@@ -77,11 +80,19 @@ export async function apurarVariacoes(empresaId, opts = {}) {
   // código puro da variação.
   const { data: aud } = await supabase.from('auditoria').select('item, competencia_id')
     .in('competencia_id', comps.map(c => c.id)).in('modulo', ['Comparativo', 'Status'])
-  const just = new Set()
+  // POR MÊS (igual ao Comparativo): a justificativa do Comparativo tem item "conta · Mai/2026" →
+  // vale só naquele mês. A justificativa feita direto no gate do Status ("conta · NOME") não tem
+  // mês → vale para a conta (compat). Assim, para fechar você justifica CADA mês (fev, mar, abr…).
+  const justCell = new Set(), justConta = new Set()
   for (const a of (aud || [])) {
-    const conta = String(a.item || '').split(' · ')[0].trim()
-    if (conta) just.add(conta)
+    const parts = String(a.item || '').split(' · ')
+    const conta = (parts[0] || '').trim()
+    if (!conta) continue
+    const mm = /^(\w{3})\/\d{4}$/.exec((parts[1] || '').trim())
+    const idx = mm ? MESES.indexOf(mm[1]) : -1
+    if (idx >= 0) justCell.add(conta + '|' + (idx + 1)); else justConta.add(conta)
   }
+  const jaJustificada = (conta, mes) => justConta.has(conta) || justCell.has(conta + '|' + mes)
 
   // Variação mês a mês: cada mês compara com o mês ANTERIOR (fev × jan, mar × fev…).
   // O primeiro mês nunca desvia. Mês sem saldo conta como 0 — sumir de um mês que tinha
@@ -93,8 +104,9 @@ export async function apurarVariacoes(empresaId, opts = {}) {
       const a = linha[m] == null ? 0 : Number(linha[m]) || 0
       const p = linha[mAnt] == null ? 0 : Number(linha[mAnt]) || 0
       if (a === 0 && p === 0) continue // sem movimento nos dois meses
+      if (mesesFechados.has(m)) continue // mês encerrado não vira pendência
       const desvia = p === 0 ? a !== 0 : Math.abs(a - p) / Math.abs(p) > 0.10
-      if (desvia && !just.has(conta)) itens.push({ conta, nome: nomes[conta] || '', mes: m, valor: linha[m] ?? 0 })
+      if (desvia && !jaJustificada(conta, m)) itens.push({ conta, nome: nomes[conta] || '', mes: m, valor: linha[m] ?? 0 })
     }
   }
 
