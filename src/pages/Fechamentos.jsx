@@ -6,6 +6,7 @@ import { useAuth } from '../components/AuthProvider'
 import { fechaSozinho } from '../lib/clientes'
 import { normalizaCompetencia } from '../lib/balancete'
 import { calcularProgresso } from '../lib/progresso'
+import { gerarExcelTimbrado } from '../lib/excel'
 import { theme } from '../lib/theme'
 import InfoTela from '../components/InfoTela'
 
@@ -137,6 +138,47 @@ export default function Fechamentos() {
     setExcluirAlvo({ comp: c, motivo: '', qtdLanc: null, autorizaLanc: false })
     const { count } = await supabase.from('lancamentos').select('id', { count: 'exact', head: true }).eq('competencia_id', c.id)
     setExcluirAlvo(a => (a && a.comp?.id === c.id) ? { ...a, qtdLanc: count || 0 } : a)
+  }
+  // Exporta TODOS os lançamentos manuais do período em Excel (auditoria antes de excluir).
+  // Usa a sessão autenticada do próprio app — baixa o .xlsx direto no navegador.
+  async function exportarLancamentos(comp) {
+    if (!comp) return
+    setExcluirAlvo(a => a ? { ...a, exportando: true } : a)
+    try {
+      const { data: lancs } = await supabase.from('lancamentos')
+        .select('data, conta_debito, conta_credito, valor, historico, origem, documento, usuario, created_at')
+        .eq('competencia_id', comp.id).order('data', { ascending: true }).order('created_at', { ascending: true })
+      if (!lancs?.length) { alert('Não há lançamentos manuais neste período para exportar.'); return }
+      const linhas = lancs.map(l => [
+        l.data || '', l.conta_debito || '', l.conta_credito || '', Number(l.valor) || 0,
+        l.historico || '', l.origem || '', l.documento || '', l.usuario || '',
+        l.created_at ? String(l.created_at).slice(0, 19).replace('T', ' ') : '',
+      ])
+      const total = lancs.reduce((s, l) => s + (Number(l.valor) || 0), 0)
+      await gerarExcelTimbrado({
+        titulo: `Lançamentos do período — ${empresaNome || ''}`,
+        sub: `${MESES[comp.mes - 1]}/${comp.ano} · ${lancs.length} lançamento(s)`,
+        colunas: [
+          { nome: 'Data', largura: 12 },
+          { nome: 'Conta débito', largura: 14 },
+          { nome: 'Conta crédito', largura: 14 },
+          { nome: 'Valor', alinhar: 'right', moeda: true, largura: 15 },
+          { nome: 'Histórico', largura: 48, wrap: true },
+          { nome: 'Origem', largura: 12 },
+          { nome: 'Documento', largura: 16 },
+          { nome: 'Usuário', largura: 24 },
+          { nome: 'Criado em', largura: 20 },
+        ],
+        linhas,
+        totais: ['', '', 'TOTAL', total, '', '', '', '', ''],
+        arquivo: `${empresaNome || 'cliente'} - ${String(comp.mes).padStart(2, '0')}.${comp.ano} - Lancamentos.xlsx`,
+        aba: 'Lançamentos',
+      })
+    } catch (err) {
+      alert('Não consegui exportar: ' + (err.message || err))
+    } finally {
+      setExcluirAlvo(a => a ? { ...a, exportando: false } : a)
+    }
   }
   async function excluirConfirmar() {
     const c = excluirAlvo?.comp
@@ -320,6 +362,11 @@ export default function Fechamentos() {
                 <p style={{ color: theme.sub, fontSize: 12, margin: '0 0 10px', lineHeight: 1.5 }}>
                   Excluir o período vai <b>apagar esses lançamentos</b>. Uma <b>cópia é guardada</b> no log de exclusão (para exportar depois). Só o <b>administrador</b> pode autorizar.
                 </p>
+                <button className="btn btn-ghost" style={{ fontSize: 12.5, padding: '6px 12px', marginBottom: 10 }}
+                  disabled={excluirAlvo.exportando} onClick={() => exportarLancamentos(excluirAlvo.comp)}
+                  title="Baixar em Excel todos os lançamentos deste período para conferir antes de excluir">
+                  <i className="ti ti-file-spreadsheet" /> {excluirAlvo.exportando ? 'Exportando…' : 'Exportar lançamentos (Excel)'}
+                </button>
                 <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', cursor: 'pointer', color: theme.text, fontSize: 13 }}>
                   <input type="checkbox" checked={!!excluirAlvo.autorizaLanc} onChange={e => setExcluirAlvo(a => ({ ...a, autorizaLanc: e.target.checked }))} style={{ marginTop: 2 }} />
                   <span>Autorizo (admin) apagar os {excluirAlvo.qtdLanc} lançamento(s) deste período.</span>
