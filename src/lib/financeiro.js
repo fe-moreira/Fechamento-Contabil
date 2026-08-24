@@ -117,6 +117,12 @@ export function extrairEntidade(s) {
   let e = String(s ?? '')
   // Tira prefixo de operação (PGTO./PAGTO./RECEB.) e o bloco de documento (DOC/CF/NF/Nº/REF).
   e = e.replace(/^\s*(VALOR\s+REFERENTE\s+A\s+)?(PAGAMENTO|PAGTO|PGTO|RECEBIMENTO|RECEBTO|RECEB)\.?\s+/i, '')
+  // "ACUM"/"ACUM."/"ACUMULADOR" no começo é a abreviação de ACUMULADOR do Domínio — etiqueta
+  // interna de agrupamento, NÃO faz parte do nome. O cliente é a palavra seguinte em diante.
+  // Ex.: "ACUM TENDA NEGOCIOS IMOBILIARIOS S A" → "TENDA NEGOCIOS IMOBILIARIOS S A". Cobre também
+  // o formato numerado "ACUM. 27 —". Só do INÍCIO e como token isolado (não afeta nome que só
+  // contenha essas letras no meio).
+  e = e.replace(/^\s*ACUM(?:ULADOR)?\.?(?:\s*\d+)?\s*[-–—:]?\s+/i, '')
   e = e.replace(/\bC[F]?\.?\s*NF.*/i, '').replace(/\bNF.*/i, '').replace(/\bN[ºo°]\.?.*/i, '').replace(/\bREF\.?.*/i, '').replace(/\bDOC.*/i, '')
   // "categoria - entidade": pega a entidade (último trecho). Mas se o último trecho for só
   // sufixo societário (ME/EPP/LTDA/SA) ou muito curto, a entidade é o trecho ANTERIOR
