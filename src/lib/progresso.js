@@ -71,7 +71,7 @@ export async function calcularProgresso(empresaId, competencia) {
     !((razaoCount || 0) > 0),                                     // razão importado
     docsPend,                                                     // documentos
     (cAbertas || []).length > 0,                                  // conciliação
-    (variacoes?.itens || []).length > 0,                          // variações
+    (variacoes?.itens || []).some(i => i.mes <= mes),             // variações ATÉ o mês (o seguinte não conta)
     (br?.lancamentos || []).some(l => !l.tratado),                // banco × resultado
     (dist?.socios || []).some(s => s.excede),                     // distribuição de lucros
     integPend,                                                    // integrações validadas
