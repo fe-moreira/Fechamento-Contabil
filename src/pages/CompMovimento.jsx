@@ -878,7 +878,6 @@ export default function CompMovimento() {
                                   ? `Variação justificada${(justTextos[chaveCelula(reduzido, mes)] || textoPorConta[reduzido]) ? ' — ' + (justTextos[chaveCelula(reduzido, mes)] || textoPorConta[reduzido]) : ''} · clique para ver o razão`
                                   : (acionavel ? (vazio ? 'Mês sem movimento nesta conta — variação a justificar' : 'Variação a justificar neste mês') : 'Ver razão da conta neste mês')}
                             >
-                              {mesFechado && desvia && !ok && <i className="ti ti-lock" style={{ color: theme.sub, fontSize: 12 }} />}
                               {ok && <i className="ti ti-circle-check" style={{ color: theme.green, fontSize: 13 }} />}
                               {vazio ? '—' : moneyDC(v)}
                             </button>
