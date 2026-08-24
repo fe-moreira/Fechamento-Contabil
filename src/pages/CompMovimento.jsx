@@ -204,7 +204,7 @@ function CheckDropdown({ icon, label, resumo, options, marcado, onToggle, onTodo
 }
 
 export default function CompMovimento() {
-  const { empresaId, empresaNome, competencia, getCompetenciaId, plano, competenciaFechada } = useAppData()
+  const { empresaId, empresaNome, competencia, getCompetenciaId, plano, competenciaFechada, isAdmin } = useAppData()
   // Mês do FECHAMENTO em andamento (competência global, "MM/AAAA"). Correções/lançamentos
   // só podem ser feitos NESTE mês; a justificativa é que vale para o ano todo.
   const fechMes = (() => { const m = /^(\d{2})\/(\d{4})$/.exec(String(competencia || '')); return (m && Number(m[2]) === ANO) ? Number(m[1]) : null })()
@@ -929,6 +929,7 @@ export default function CompMovimento() {
           onJustificada={(texto) => marcarJustificada(detalhe.conta, detalhe.mes, texto)}
           onDesfeita={() => marcarNaoJustificada(detalhe.conta, detalhe.mes)}
           onCorrigido={() => setRefresh(x => x + 1)}
+          isAdmin={isAdmin}
           plano={plano}
           centrosCC={centrosCC}
           ccSel={ccSel}
@@ -940,7 +941,7 @@ export default function CompMovimento() {
   )
 }
 
-function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuario, jaJustificada, fechMes, bloqueado = false, competenciaLabel, justTextoAtual, onJustificada, onDesfeita, onCorrigido, plano, centrosCC = [], ccSel = new Set(), filtroCC = false, onClose }) {
+function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuario, jaJustificada, fechMes, bloqueado = false, competenciaLabel, justTextoAtual, onJustificada, onDesfeita, onCorrigido, isAdmin = false, plano, centrosCC = [], ccSel = new Set(), filtroCC = false, onClose }) {
   const { conta, nome, mes, compId, todos, compIds, mesPorComp, classif } = detalhe
   // Conta de resultado (3/4/5) → precisa de centro de custo; sem CC aparece destacado.
   const contaResultado = ['3', '4', '5'].includes(String(classif || '')[0])
@@ -1030,6 +1031,7 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
         conta, contrapartida: ehDeb ? (l.conta_credito || '') : (l.conta_debito || ''),
         historico: l.historico || 'Lançamento de ajuste',
         suspeito: false, ehLancamento: true, origem: l.origem || 'lancamento',
+        lancId: l.id, // id REAL do lançamento (para excluir o ajuste direto daqui)
       }
       // Rateio: uma linha por centro (com o valor do centro), mostrando o CC na coluna C. Custo.
       const rateio = Array.isArray(l.rateio) ? l.rateio.filter(r => r && String(r.cod ?? '').trim()) : []
@@ -1067,6 +1069,29 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
       })
     }
     setDedut(m => { const n = { ...m }; if (valor) n[linha.id] = valor; else delete n[linha.id]; return n })
+  }
+
+  // Exclui um LANÇAMENTO DE AJUSTE direto do drill-down (só admin, período aberto). O ajuste some
+  // do razão vivo, do Comparativo e da conciliação (tudo lê `lancamentos`). Registra na auditoria.
+  async function excluirAjuste(linha) {
+    if (!linha?.lancId || bloqueado) return
+    if (!isAdmin) { alert('Apenas um administrador pode excluir um lançamento de ajuste.'); return }
+    const val = (Number(linha.debito) || 0) - (Number(linha.credito) || 0)
+    if (!window.confirm(`Excluir este lançamento de ajuste?\n\n${linha.data || ''} · ${linha.historico || ''}\n${money(val)}\n\nEle some do razão vivo, do Comparativo e da conciliação. Não dá para desfazer.`)) return
+    setSalvando(true)
+    try {
+      await supabase.from('lancamentos').delete().eq('id', linha.lancId)
+      if (linha.competencia_id) await supabase.from('auditoria').insert({
+        competencia_id: linha.competencia_id, modulo: 'Comparativo', tipo: 'Correção',
+        item: `${conta} · exclusão de ajuste`, detalhe: `Excluído lançamento de ajuste · ${money(val)}${linha.historico ? ' · ' + linha.historico : ''}`,
+        usuario,
+      })
+      setMsg('Ajuste excluído.')
+      await carregarLinhas()
+      onCorrigido?.()
+    } catch (e) {
+      setMsg('Erro ao excluir: ' + (e?.message || e))
+    } finally { setSalvando(false) }
   }
 
   useEffect(() => {
@@ -1349,6 +1374,11 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
                       <td style={{ ...td, whiteSpace: 'nowrap' }}>{l.data || ''}</td>
                       <td style={{ ...td, maxWidth: 360, whiteSpace: 'normal' }}>
                         {ehLanc && <span style={{ fontSize: 9.5, fontWeight: 700, color: theme.accent, background: 'rgba(74,124,255,0.14)', borderRadius: 4, padding: '1px 5px', marginRight: 6 }}>AJUSTE</span>}
+                        {ehLanc && isAdmin && !bloqueado && l.lancId && (
+                          <i className="ti ti-trash" title="Excluir este lançamento de ajuste (admin)"
+                            onClick={e => { e.stopPropagation(); excluirAjuste(l) }}
+                            style={{ color: theme.red, cursor: 'pointer', marginRight: 6 }} />
+                        )}
                         {corr && <i className="ti ti-circle-check" style={{ color: theme.green, marginRight: 6 }} title="Corrigido" />}
                         {l.suspeito && !corr && <i className="ti ti-alert-triangle" style={{ color: theme.yellow, marginRight: 6 }} title="Provável culpado" />}
                         {l.historico || ''}
