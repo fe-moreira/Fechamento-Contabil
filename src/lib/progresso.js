@@ -26,7 +26,7 @@ export async function calcularProgresso(empresaId, competencia) {
     supabase.from('razao').select('id', { count: 'exact', head: true }).eq('competencia_id', comp.id),
     supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'contas_bancarias').order('created_at', { ascending: false }).limit(1).maybeSingle(),
     contasConciliacaoAbertas(empresaId, comp.id),
-    apurarVariacoes(empresaId),
+    apurarVariacoes(empresaId, { comLancamentos: true }),
     apurarBancoResultado(empresaId, comp.id),
     apurarDistribuicao(empresaId, comp.id),
     supabase.from('seguros').select('id, arquivo, vigencia_inicio, vigencia_fim').eq('cliente_id', empresaId),

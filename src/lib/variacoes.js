@@ -8,9 +8,10 @@ const ANO = 2026
 // do Status e no relatório Comparativo. Só CONTAS DE RESULTADO (3/4/5) — mesmo escopo
 // da tela Comp. Movimento (para o badge/Status baterem com o header do comparativo).
 // opts.comLancamentos: sobrepõe os LANÇAMENTOS confirmados (correções, apropriações,
-// contabilizações) sobre a matriz do razão — para o Cockpit ler o resultado VIVO. NÃO
-// ligar na página Comparativo de Movimento nem no gate do Status: lá as correções
-// pendentes aparecem à parte (sobreposição própria); embutir aqui contaria em dobro.
+// contabilizações) sobre a matriz do balancete — resultado VIVO, IGUAL ao que a tela
+// Comp. Movimento mostra (montarBalancete com lançamentos). O gate/badge/progresso usam
+// isto para BATER com o Comparativo: sem os lançamentos, o gate acusava variação numa conta
+// que na tela já estava corrigida/justificada (ou abaixo dos 10%).
 export async function apurarVariacoes(empresaId, opts = {}) {
   const vazio = { itens: [], meses: [], contas: [], matriz: {} }
   if (!empresaId) return vazio

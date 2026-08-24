@@ -119,7 +119,7 @@ export default function Status() {
 
     const dist = await apurarDistribuicao(empresaId, comp?.id)
     const br = await apurarBancoResultado(empresaId, comp?.id)
-    const variacoes = await apurarVariacoes(empresaId)
+    const variacoes = await apurarVariacoes(empresaId, { comLancamentos: true })
 
     setDados({ temRazao, docsPendentes, contasAbertas, cargaInicialPendente, integracaoFin, contasBancarias, dist, br, variacoes, integracoes, observacoes, lancamentos, contratos, contratosJust })
     setCarregando(false)
