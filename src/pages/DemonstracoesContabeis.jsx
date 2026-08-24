@@ -4,6 +4,7 @@ import { lerTudo } from '../lib/lerTudo'
 import { montarBalancete } from '../lib/balancete'
 import { mesesDoPeriodo, montarDadosDemonstracoes, abrirDemonstracoesContabeis } from '../lib/demonstracoes'
 import { apurarDistribuicao } from '../lib/distribuicao'
+import { carregarCargaTribCfg } from '../lib/cargaTributaria'
 import { useAppData } from '../lib/appData'
 import { theme } from '../lib/theme'
 import InfoTela from '../components/InfoTela'
@@ -115,7 +116,9 @@ export default function DemonstracoesContabeis() {
         if (compsComp.length) perMonthComp = compsComp.map(c => ({ ano: c.ano, mes: c.mes, linhas: balCache[c.id] }))
       }
 
-      const dados = montarDadosDemonstracoes(perMonth, razaoReceita, anoPerMonth, perMonthComp)
+      // Carga tributária (Base de Informações): contas que compõem a carga + base (bruto/líquido).
+      const cargaCfg = await carregarCargaTribCfg(empresaId)
+      const dados = montarDadosDemonstracoes(perMonth, razaoReceita, anoPerMonth, perMonthComp, cargaCfg)
       const pri = doPeriodo[0], ult = doPeriodo[doPeriodo.length - 1]
       // Contas de lucro/prejuízo (Base de Informações) — amarram o resultado ao PL no balanço.
       // Tolerante a falha: sem config (ou tabela ausente) o balanço mantém o comportamento antigo.

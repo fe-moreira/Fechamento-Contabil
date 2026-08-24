@@ -416,6 +416,26 @@ drop policy if exists "auth_all_resultado_pl_config" on public.resultado_pl_conf
 create policy "auth_all_resultado_pl_config" on public.resultado_pl_config for all to authenticated using (true) with check (true);
 
 -- ============================================================
+-- CARGA TRIBUTÁRIA CONFIGURÁVEL: quais contas compõem a carga tributária do
+-- cliente (contas de RESULTADO/DEDUÇÃO — movimento do período = apuração do
+-- imposto) e a base do denominador ('bruto' = faturamento; 'liquido' =
+-- faturamento − impostos). Sem config, o Cockpit mostra "configurar" em vez
+-- de um percentual errado.
+-- ============================================================
+create table if not exists public.carga_tributaria_config (
+  id          uuid primary key default gen_random_uuid(),
+  cliente_id  uuid not null references public.clientes(id) on delete cascade,
+  contas      jsonb not null default '[]'::jsonb,   -- [{ cod, nome }]
+  base        text not null default 'bruto' check (base in ('bruto','liquido')),
+  usuario     text,
+  created_at  timestamptz default now()
+);
+create index if not exists carga_tributaria_config_idx on public.carga_tributaria_config(cliente_id);
+alter table public.carga_tributaria_config enable row level security;
+drop policy if exists "auth_all_carga_tributaria_config" on public.carga_tributaria_config;
+create policy "auth_all_carga_tributaria_config" on public.carga_tributaria_config for all to authenticated using (true) with check (true);
+
+-- ============================================================
 -- CONSOLIDAÇÃO DE GRUPO: quais empresas a "empresa mãe" (matriz) consolida.
 -- NÃO usa tabela nova — fica em `cargas_cadastro` (tipo 'consolidacao', dados { empresas: [ids] }),
 -- por cliente (a mãe). Assim não precisa rodar SQL para ativar o recurso.

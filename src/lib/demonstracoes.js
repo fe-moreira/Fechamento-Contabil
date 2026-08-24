@@ -15,6 +15,7 @@ import { lerTudo } from './lerTudo'
 import { montarBalancete, apurarBalanco, prepararBalanco } from './balancete'
 import { montarDRE, apurarResultadoSimples } from './dre'
 import { extrairEntidade } from './financeiro'
+import { codsCarga, somaImpostos, cargaPct } from './cargaTributaria'
 
 const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
 const num = v => Number(v) || 0
@@ -103,7 +104,7 @@ export function agregarBalancete(perMonth) {
 // ---------------------------------------------------------------------------
 // Indicadores do Cockpit para o período (mesma lógica do PainelCliente, adaptada ao período).
 // agg = balancete agregado; perMonth p/ a série; razaoReceita p/ principais clientes.
-function apurarCockpit(agg, perMonth, razaoReceita, primeiro, ultimo, serieMonths) {
+function apurarCockpit(agg, perMonth, razaoReceita, primeiro, ultimo, serieMonths, cargaCfg = null) {
   const analit = agg.filter(l => !l.sintetica)
   const ativo = analit.filter(l => g1(l) === '1')
   const passivo = analit.filter(l => g1(l) === '2')
@@ -112,7 +113,11 @@ function apurarCockpit(agg, perMonth, razaoReceita, primeiro, ultimo, serieMonth
   const somaFiltro = (arr, re) => arr.filter(l => re.test(l.nome || '')).reduce((s, l) => s + Math.abs(num(l.saldo_final)), 0)
   const clientes = somaFiltro(ativo, RE_RECEBER)
   const fornecedores = somaFiltro(passivo, RE_PAGAR)
-  const impostos = somaFiltro(passivo, RE_IMPOSTO)
+  // Carga tributária CONFIGURÁVEL: MOVIMENTO do período das contas escolhidas (não o saldo do
+  // passivo). Sem config, cargaBase = null → o relatório mostra "configurar" em vez de % errado.
+  const codsImp = codsCarga(cargaCfg)
+  const cargaBase = codsImp.size ? (cargaCfg?.base || 'bruto') : null
+  const impostos = cargaBase ? somaImpostos(analit, codsImp) : null
 
   // Resultado do período (grupos 3/4/5 do agregado)
   const resGrupo = d => analit.filter(l => g1(l) === d).reduce((s, l) => s + num(l.saldo_final), 0)
@@ -165,7 +170,7 @@ function apurarCockpit(agg, perMonth, razaoReceita, primeiro, ultimo, serieMonth
   const indices = {
     margem: receita ? (resultado / receita) * 100 : null,
     margemBruta: receita ? ((receita - custo) / receita) * 100 : null,
-    cargaTrib: receita ? (impostos / receita) * 100 : null,
+    cargaTrib: cargaPct(impostos, receita, cargaBase),
     liquidez: Math.abs(pc) > 0.005 ? ac / Math.abs(pc) : null,
     endividamento: Math.abs(totAtivo) > 0.005 ? ((Math.abs(pc) + Math.abs(pnc)) / Math.abs(totAtivo)) * 100 : null,
     prazoReceb: receita ? Math.round((clientes / receita) * 30 * perMonth.length) : null,
@@ -186,7 +191,7 @@ function apurarCockpit(agg, perMonth, razaoReceita, primeiro, ultimo, serieMonth
 
   return { receita, custo, despesa, resultado, acumuladoAno, totAtivo, totPassivo, clientes, fornecedores, impostos,
     disponiveis, totDispIni, totDispFim, geracaoCaixa, indices, serie, topClientes, totReceitaRazao,
-    ac, pc, pnc,
+    ac, pc, pnc, cargaBase,
     dataIni: diaBR(primeiro.mes === 1 ? primeiro.ano - 1 : primeiro.ano, primeiro.mes === 1 ? 12 : primeiro.mes - 1), // fim do mês anterior à 1ª ponta
     dataFim: diaBR(ultimo.ano, ultimo.mes) }
 }
@@ -224,11 +229,11 @@ function apurarDFC(agg, cockpit) {
 // anoPerMonth: meses do ANO (jan→mês do período) só p/ o gráfico do Cockpit + acumulado do ano.
 // perMonthComp: meses que alimentam o COMPARATIVO (colunas). Por padrão = perMonth (o período),
 // mas a tela pode passar uma faixa própria (botão de data do Comparativo).
-export function montarDadosDemonstracoes(perMonth, razaoReceita, anoPerMonth, perMonthComp) {
+export function montarDadosDemonstracoes(perMonth, razaoReceita, anoPerMonth, perMonthComp, cargaCfg = null) {
   const agg = agregarBalancete(perMonth)
   const primeiro = perMonth[0], ultimo = perMonth[perMonth.length - 1]
   const dre = montarDRE(agg)
-  const cockpit = apurarCockpit(agg, perMonth, razaoReceita, primeiro, ultimo, anoPerMonth)
+  const cockpit = apurarCockpit(agg, perMonth, razaoReceita, primeiro, ultimo, anoPerMonth, cargaCfg)
   const dfc = apurarDFC(agg, cockpit)
   // Matriz do comparativo (contas de resultado, mês a mês) — usa a faixa própria se houver.
   const pmComp = (perMonthComp && perMonthComp.length) ? perMonthComp : perMonth
@@ -297,7 +302,7 @@ export function abrirDemonstracoesContabeis({ empresa, cnpj, periodoLabel, perio
         <tr><td>Margem bruta</td><td class="r">${pctBR(ix.margemBruta)}</td><td class="mut">(receita − custo) ÷ receita</td></tr>
         <tr><td>Liquidez corrente</td><td class="r">${fmt2(ix.liquidez)}</td><td class="mut">ativo circ. ÷ passivo circ.</td></tr>
         <tr><td>Endividamento</td><td class="r">${pctBR(ix.endividamento)}</td><td class="mut">passivo exig. ÷ ativo</td></tr>
-        <tr><td>Carga tributária</td><td class="r">${pctBR(ix.cargaTrib)}</td><td class="mut">impostos ÷ receita</td></tr>
+        <tr><td>Carga tributária</td><td class="r">${c.cargaBase ? pctBR(ix.cargaTrib) : 'configurar'}</td><td class="mut">${c.cargaBase === 'liquido' ? 'impostos ÷ receita líquida' : 'impostos ÷ faturamento'}</td></tr>
         <tr><td>Prazo médio de recebimento</td><td class="r">${ix.prazoReceb == null ? '—' : ix.prazoReceb + ' dias'}</td><td class="mut">a receber ÷ receita</td></tr>
       </table>
       ${c.serie.length > 1 ? `<h2 class="sec">Desempenho por mês (gráfico do Cockpit)</h2>
@@ -353,8 +358,8 @@ export function abrirDemonstracoesContabeis({ empresa, cnpj, periodoLabel, perio
       </div>
       <h2 class="sec">Impostos</h2>
       <div class="tiles">
-        <div class="tile"><div class="k">Impostos apurados</div><div class="v">${brlR(c.impostos)}</div><div class="s">${pctBR(ix.cargaTrib)} do faturamento</div></div>
-        <div class="tile"><div class="k">Carga tributária</div><div class="v">${pctBR(ix.cargaTrib)}</div><div class="s">impostos ÷ faturamento</div></div>
+        <div class="tile"><div class="k">Impostos apurados</div><div class="v">${c.cargaBase ? brlR(c.impostos) : '—'}</div><div class="s">${c.cargaBase ? `${pctBR(ix.cargaTrib)} do ${c.cargaBase === 'liquido' ? 'receita líquida' : 'faturamento'}` : 'contas não configuradas'}</div></div>
+        <div class="tile"><div class="k">Carga tributária</div><div class="v">${c.cargaBase ? pctBR(ix.cargaTrib) : 'configurar'}</div><div class="s">${c.cargaBase ? `impostos ÷ ${c.cargaBase === 'liquido' ? 'receita líquida' : 'faturamento'}` : 'defina as contas na Base de Informações'}</div></div>
       </div>
       <h2 class="sec">Principais clientes do período</h2>
       <div class="clibox">${cliRows}</div>
@@ -363,7 +368,7 @@ export function abrirDemonstracoesContabeis({ empresa, cnpj, periodoLabel, perio
         <div class="tile"><div class="k">Liquidez corrente</div><div class="v">${ix.liquidez == null ? '—' : ix.liquidez.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div><div class="s">ativo circ. ÷ passivo circ.</div></div>
         <div class="tile"><div class="k">Margem líquida</div><div class="v">${pctBR(ix.margem)}</div><div class="s">resultado ÷ receita</div></div>
         <div class="tile"><div class="k">Endividamento</div><div class="v">${pctBR(ix.endividamento)}</div><div class="s">passivo exig. ÷ ativo</div></div>
-        <div class="tile"><div class="k">Carga tributária</div><div class="v">${pctBR(ix.cargaTrib)}</div><div class="s">impostos ÷ receita</div></div>
+        <div class="tile"><div class="k">Carga tributária</div><div class="v">${c.cargaBase ? pctBR(ix.cargaTrib) : 'configurar'}</div><div class="s">${c.cargaBase === 'liquido' ? 'impostos ÷ receita líquida' : 'impostos ÷ faturamento'}</div></div>
         <div class="tile"><div class="k">Prazo médio receb.</div><div class="v">${ix.prazoReceb == null ? '—' : ix.prazoReceb + ' dias'}</div><div class="s">a receber ÷ receita</div></div>
       </div>
     </div>

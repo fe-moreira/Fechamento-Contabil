@@ -7,6 +7,7 @@ import { apurarDistribuicao } from '../lib/distribuicao'
 import { montarBalancete } from '../lib/balancete'
 import { apurarResultadoSimples } from '../lib/dre'
 import { extrairEntidade } from '../lib/financeiro'
+import { carregarCargaTribCfg, codsCarga, somaImpostos, cargaPct } from '../lib/cargaTributaria'
 import { gerarExcelTimbrado } from '../lib/excel'
 import { theme, money } from '../lib/theme'
 import InfoTela from '../components/InfoTela'
@@ -51,9 +52,12 @@ function agregarPeriodo(d, a, b, consolidando) {
   const resultado = soma('resultado')
   const acumulado = (d.meses || []).filter(m => m <= b).reduce((s, m) => s + (Number(d.porMes?.[m]?.resultado) || 0), 0)
   const snapB = d.porMesSnap?.[b] || {}, snapA = d.porMesSnap?.[a] || {}
+  // Carga tributária: impostos é MOVIMENTO (apuração), então SOMA o intervalo (≠ das fotos de
+  // balanço, que pegam o mês final). Sem config (d.cargaBase null) → carga null ("configurar").
+  const impostosPer = d.cargaBase ? meses.reduce((s, m) => s + (Number(d.porMesSnap?.[m]?.impostos) || 0), 0) : null
   const indices = {
     margem: faturamento ? ((faturamento - custo - despesa) / faturamento) * 100 : null,
-    cargaTrib: faturamento ? ((snapB.impostos || 0) / faturamento) * 100 : null,
+    cargaTrib: cargaPct(impostosPer, faturamento, d.cargaBase),
     liquidez: snapB.indices?.liquidez ?? null,
     endividamento: snapB.indices?.endividamento ?? null,
     prazoReceb: faturamento ? Math.round(((snapB.clientes || 0) / faturamento) * 30) : null,
@@ -62,7 +66,7 @@ function agregarPeriodo(d, a, b, consolidando) {
     ...d,
     faturamento, custo, despesa, resultado, lucro: resultado, acumulado,
     totAtivo: snapB.totAtivo, totPassivo: snapB.totPassivo, clientes: snapB.clientes, fornecedores: snapB.fornecedores,
-    impostos: snapB.impostos, disponiveis: snapB.disponiveis || [], totDispFim: snapB.totDispFim,
+    impostos: impostosPer, disponiveis: snapB.disponiveis || [], totDispFim: snapB.totDispFim,
     totDispIni: snapA.totDispIni, geracaoCaixa: (snapB.totDispFim || 0) - (snapA.totDispIni || 0),
     dataIni: snapA.dataIni, dataFim: snapB.dataFim,
     indices, dist: snapB.dist, distTotal: snapB.distTotal, ata: snapB.ata || { distribuido: 0, pago: 0, pagoMes: 0, saldo: 0 },
@@ -134,6 +138,13 @@ export default function PainelCliente() {
         const comparativo = await apurarVariacoes(empresaId, { comLancamentos: true }) // só p/ o gate de variações
         const dist = await apurarDistribuicao(empresaId, compId, ano, mes)
 
+        // Carga tributária CONFIGURÁVEL (Base de Informações): contas que compõem a carga +
+        // base (bruto/líquido). Numerador = MOVIMENTO do período dessas contas (não o saldo do
+        // passivo). Sem config, cargaBase = null → o Cockpit mostra "configurar".
+        const cargaCfg = await carregarCargaTribCfg(empresaId)
+        const codsImp = codsCarga(cargaCfg)
+        const cargaBase = codsImp.size ? (cargaCfg?.base || 'bruto') : null
+
         // --- Receita / Custo / Despesa / Resultado — VIVO (com as correções) ---
         // Soma por GRUPO (líquido) a partir do balancete VIVO (razão + lançamentos confirmados),
         // MESMA fonte do balanço acima e da Conciliação: receita = grupo 3 (credor), custo = grupo 4,
@@ -159,7 +170,8 @@ export default function PainelCliente() {
           const somaFiltro = (arr, re) => arr.filter(l => re.test(l.nome || '')).reduce((s, l) => s + Math.abs(num(l.saldo_final)), 0)
           const clientes = somaFiltro(ativoL, RE_RECEBER)
           const fornecedores = somaFiltro(passivoL, RE_PAGAR)
-          const impostos = somaFiltro(passivoL, RE_IMPOSTO)
+          // Carga tributária: movimento do período das contas escolhidas (null se não configurado).
+          const impostos = cargaBase ? somaImpostos(analitM, codsImp) : null
           const sintDisp = (linhasM || []).filter(l => l.sintetica && gg(l) === '1' && /dispon|caixa\s*e\s*equival|disponibilidad/i.test(l.nome || ''))
             .sort((a, b) => String(a.classifRaw || '').length - String(b.classifRaw || '').length)[0]
           let dispPrefix = sintDisp?.classifRaw
@@ -187,7 +199,7 @@ export default function PainelCliente() {
           const fat = flowM.receita, cus = flowM.custo, des = flowM.despesa
           const indices = {
             margem: fat ? ((fat - cus - des) / fat) * 100 : null,
-            cargaTrib: fat ? (impostos / fat) * 100 : null,
+            cargaTrib: cargaPct(impostos, fat, cargaBase),
             liquidez: pc ? ac / Math.abs(pc) : null,
             endividamento: totAtivo ? pct(Math.abs(pc) + Math.abs(pnc), Math.abs(totAtivo)) : null,
             prazoReceb: fat ? Math.round((clientes / fat) * 30) : null,
@@ -285,7 +297,8 @@ export default function PainelCliente() {
           .reduce((s, l) => s + Math.abs(num(l.saldo_final)), 0)
         const clientes = somaFiltro(ativoLinhas, RE_RECEBER)
         const fornecedores = somaFiltro(passivoLinhas, RE_PAGAR)
-        const impostos = somaFiltro(passivoLinhas, RE_IMPOSTO)
+        // Carga tributária: movimento do período das contas escolhidas (null se não configurado).
+        const impostos = cargaBase ? somaImpostos(analit, codsImp) : null
 
         // --- Disponibilidades: TODAS as analíticas da sintética "Disponível" (o totalizador
         // de caixa/bancos/aplicações), como na conciliação — não por nome solto (que pegava
@@ -334,7 +347,7 @@ export default function PainelCliente() {
         const pnc = prePNC ? somaPrefixoRaw(prePNC) : somaClassif('2.2') // passivo não circulante
         const indices = {
           margem: faturamento ? ((faturamento - custo - despesa) / faturamento) * 100 : null,
-          cargaTrib: faturamento ? (impostos / faturamento) * 100 : null,
+          cargaTrib: cargaPct(impostos, faturamento, cargaBase),
           liquidez: pc ? ac / Math.abs(pc) : null,
           endividamento: totAtivo ? pct(Math.abs(pc) + Math.abs(pnc), Math.abs(totAtivo)) : null,
           prazoReceb: faturamento ? Math.round((clientes / faturamento) * 30) : null,
@@ -369,6 +382,7 @@ export default function PainelCliente() {
           totAtivo, totPassivo, clientes, fornecedores,
           impostos, disponiveis, totDispIni, totDispFim, geracaoCaixa, dataIni, dataFim,
           indices, dist, distTotal, ata: dist.ata || { distribuido: 0, pago: 0, pagoMes: 0, saldo: 0 },
+          cargaBase, // base da carga tributária ('bruto'|'liquido') ou null (não configurado)
           comparativo,
           variacoesConta: new Set((comparativo.itens || []).map(i => String(i.conta))).size,
           topClientes, totReceitaRazao,
@@ -478,7 +492,9 @@ export default function PainelCliente() {
     secoes.push({
       titulo: 'Impostos',
       linhas: [
-        [`Impostos apurados (${fmtPct(d.indices.cargaTrib)} do faturamento)`, num(d.impostos)],
+        d.cargaBase
+          ? [`Impostos apurados (${fmtPct(d.indices.cargaTrib)} da ${d.cargaBase === 'liquido' ? 'receita líquida' : 'faturamento'})`, num(d.impostos)]
+          : ['Carga tributária — configurar contas na Base de Informações', ''],
       ],
     })
     if (d.topClientes.length) secoes.push({
@@ -882,11 +898,13 @@ function BlocoFinanceiro({ d }) {
 }
 
 function BlocoImpostos({ d }) {
+  const cfg = !!d.cargaBase
+  const baseTxt = d.cargaBase === 'liquido' ? 'receita líquida' : 'faturamento'
   return (
     <Secao titulo="Impostos">
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(210px,1fr))', gap: 12 }}>
-        <Tile label="Impostos apurados" valor={money(d.impostos)} sub={`${fmtPct(d.indices.cargaTrib)} do faturamento`} />
-        <Tile label="Carga tributária" valor={fmtPct(d.indices.cargaTrib)} sub="impostos ÷ faturamento" />
+        <Tile label="Impostos apurados" valor={cfg ? money(d.impostos) : '—'} sub={cfg ? `${fmtPct(d.indices.cargaTrib)} do ${baseTxt}` : 'contas não configuradas'} />
+        <Tile label="Carga tributária" valor={cfg ? fmtPct(d.indices.cargaTrib) : 'configurar'} sub={cfg ? `impostos ÷ ${baseTxt}` : 'defina as contas na Base de Informações'} />
       </div>
     </Secao>
   )
@@ -943,8 +961,8 @@ function BlocoClientesIndices({ d }) {
               info={<>Quanto <b>sobra de lucro</b> para cada R$ 100 de receita, depois de todos os custos, despesas e impostos. É o <b>resultado do mês ÷ receita do mês</b>. Quanto maior, mais rentável a operação.</>} />
             <Kpi label="Endividamento" v={fmtPct(ix.endividamento)} hint="Passivo exig. ÷ ativo" cor={corFaixa(ix.endividamento, 50, 70, false)}
               info={<>Quanto do que a empresa tem (<b>ativo</b>) está comprometido com <b>dívidas</b> (passivo exigível: fornecedores, empréstimos, impostos). É o (Passivo Circulante + Não Circulante) <b>÷ ativo total</b>. Quanto <b>menor</b>, menos dependente de capital de terceiros.</>} />
-            <Kpi label="Carga tributária" v={fmtPct(ix.cargaTrib)} hint="Impostos ÷ receita" cor={corFaixa(ix.cargaTrib, 15, 25, false)}
-              info={<>Peso dos <b>impostos</b> sobre o faturamento. É o total de <b>impostos apurados ÷ receita do mês</b>. Mostra quanto de cada venda vira tributo.</>} />
+            <Kpi label="Carga tributária" v={d.cargaBase ? fmtPct(ix.cargaTrib) : 'configurar'} hint={d.cargaBase === 'liquido' ? 'Impostos ÷ receita líquida' : 'Impostos ÷ faturamento'} cor={corFaixa(ix.cargaTrib, 15, 25, false)}
+              info={<>Peso dos <b>impostos</b> sobre a base escolhida. É a <b>soma do movimento do período</b> das contas de imposto que você cadastrou na <b>Base de Informações</b>, dividida pelo <b>faturamento</b> (ou pela <b>receita líquida</b>, conforme a config). Sem contas cadastradas aparece <b>configurar</b>.</>} />
             <Kpi label="Prazo médio receb." v={ix.prazoReceb == null ? '—' : `${ix.prazoReceb} dias`} hint="A receber ÷ receita"
               info={<>Em média, quantos <b>dias</b> a empresa leva para <b>receber dos clientes</b> depois de vender. É o (contas a receber ÷ receita) × 30. Quanto <b>menor</b>, mais rápido o dinheiro entra no caixa.</>} />
             <Kpi label="Resultado / receita" v={fmtPct(ix.margem)} hint="Rentabilidade do mês" cor={corResultado(ix.margem)}

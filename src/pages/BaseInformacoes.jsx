@@ -299,6 +299,7 @@ export default function BaseInformacoes() {
   const [cargaFeita, setCargaFeita] = useState(false)     // carga inicial já lançada
   const [dist, setDist] = useState(null)   // linha de dist_lucros_config
   const [resPL, setResPL] = useState(null) // linha de resultado_pl_config (contas de lucro/prejuízo)
+  const [cargaTrib, setCargaTrib] = useState(null) // linha de carga_tributaria_config
   const [regime, setRegime] = useState('') // regime tributário do cliente (habilita o LALUR)
   const [modal, setModal] = useState(null)
   const [aberturaTravada, setAberturaTravada] = useState(false) // competência de abertura fechada
@@ -331,10 +332,17 @@ export default function BaseInformacoes() {
       .eq('cliente_id', empresaId).order('created_at', { ascending: false }).limit(1).maybeSingle()
     setResPL(error ? null : (data || null))
   }
+  // Carga tributária. Tolerante a falha: se a tabela ainda não existir (SQL não rodado),
+  // apenas fica sem config — não quebra a tela.
+  async function carregarCargaTrib() {
+    const { data, error } = await supabase.from('carga_tributaria_config').select('*')
+      .eq('cliente_id', empresaId).order('created_at', { ascending: false }).limit(1).maybeSingle()
+    setCargaTrib(error ? null : (data || null))
+  }
   useEffect(() => {
-    setParticularidades([]); setContatos([]); setCargas({}); setPeriodo(''); setDist(null); setResPL(null); setCargaSaldos(false); setCargaFeita(false)
+    setParticularidades([]); setContatos([]); setCargas({}); setPeriodo(''); setDist(null); setResPL(null); setCargaTrib(null); setCargaSaldos(false); setCargaFeita(false)
     if (!empresaId) return
-    carregarCargas(); carregarDist(); carregarResPL()
+    carregarCargas(); carregarDist(); carregarResPL(); carregarCargaTrib()
     supabase.from('clientes').select('particularidades, contatos, competencia_inicio, carga_saldos, carga_inicial_feita, regime_tributario').eq('id', empresaId).single()
       .then(({ data }) => {
         setParticularidades(data?.particularidades || [])
@@ -464,6 +472,14 @@ export default function BaseInformacoes() {
     if (error) { alert('Não foi possível salvar. Rode o SQL de "resultado_pl_config" no Supabase (supabase/schema.sql) e tente de novo.\n\n' + error.message); return }
     await carregarResPL(); setModal(null)
   }
+  async function salvarCargaTrib(cfg) {
+    const payload = { contas: (cfg.contas || []).filter(c => String(c.cod || '').trim()), base: cfg.base === 'liquido' ? 'liquido' : 'bruto' }
+    let error
+    if (cargaTrib) ({ error } = await supabase.from('carga_tributaria_config').update(payload).eq('id', cargaTrib.id))
+    else ({ error } = await supabase.from('carga_tributaria_config').insert({ cliente_id: empresaId, usuario: user?.email, ...payload }))
+    if (error) { alert('Não foi possível salvar. Rode o SQL de "carga_tributaria_config" no Supabase (supabase/schema.sql) e tente de novo.\n\n' + error.message); return }
+    await carregarCargaTrib(); setModal(null)
+  }
 
   return (
     <Wrapper nome={empresaNome}>
@@ -526,6 +542,9 @@ export default function BaseInformacoes() {
         <SimplesCard icon="ti-scale" title="Contas de lucros e prejuízos" sub="Amarra o resultado ao PL do balanço"
           badge={(resPL?.conta_lucro || resPL?.conta_prejuizo) ? { txt: 'configurado', cor: theme.green, bg: 'rgba(48,164,108,0.15)' } : null}
           onClick={() => setModal({ tipo: 'resultadoPL' })} />
+        <SimplesCard icon="ti-receipt-tax" title="Carga tributária" sub="Contas de imposto + base (bruto/líquido)"
+          badge={(cargaTrib?.contas?.length) ? { txt: `${cargaTrib.contas.length} conta(s)`, cor: theme.green, bg: 'rgba(48,164,108,0.15)' } : { txt: 'configurar', cor: theme.yellow, bg: 'rgba(245,166,35,0.15)' }}
+          onClick={() => setModal({ tipo: 'cargaTrib' })} />
         {(() => {
           const ehLR = /LUCRO REAL/i.test(regime)
           const cfgLalur = cargas.lalur?.at(-1)
@@ -607,6 +626,9 @@ export default function BaseInformacoes() {
       )}
       {modal?.tipo === 'resultadoPL' && (
         <ModalResultadoPL inicial={resPL} plano={plano} onClose={() => setModal(null)} onSalvar={salvarResPL} />
+      )}
+      {modal?.tipo === 'cargaTrib' && (
+        <ModalCargaTributaria inicial={cargaTrib} plano={plano} onClose={() => setModal(null)} onSalvar={salvarCargaTrib} />
       )}
       {modal?.tipo === 'lalur' && (
         <ModalLalurConfig empresaId={empresaId} usuario={user?.email} competencia={competencia} regime={regime}
@@ -1811,6 +1833,46 @@ function ModalResultadoPL({ inicial, plano = [], onClose, onSalvar }) {
         </div>
       </div>
       <Rodape onClose={onClose} onSalvar={() => onSalvar({ conta_lucro: lucro.trim(), conta_prejuizo: prejuizo.trim() })} />
+    </Modal>
+  )
+}
+
+function ModalCargaTributaria({ inicial, plano = [], onClose, onSalvar }) {
+  const [contas, setContas] = useState(inicial?.contas?.length
+    ? inicial.contas.map(c => ({ cod: c.cod || '', nome: c.nome || '' }))
+    : [{ cod: '', nome: '' }])
+  const [base, setBase] = useState(inicial?.base === 'liquido' ? 'liquido' : 'bruto')
+  const setCod = (i, v) => setContas(l => l.map((x, j) => j === i ? { ...x, cod: v } : x))
+  const setPick = (i, p) => setContas(l => l.map((x, j) => j === i ? { cod: p.cod, nome: p.nome || '' } : x))
+  const rem = i => setContas(l => l.filter((_, j) => j !== i))
+  const rBase = { display: 'flex', gap: 7, alignItems: 'center', fontWeight: 400, cursor: 'pointer', color: theme.text, fontSize: 13 }
+  return (
+    <Modal titulo="Carga tributária" sub="Contas que compõem a carga + base do denominador" onClose={onClose} largura={620}>
+      <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 16px', lineHeight: 1.55 }}>
+        Escolha as <b>contas de imposto</b> — as de <b>resultado/dedução</b>, cujo <b>movimento do período</b>
+        é a apuração. A carga = <b>soma do movimento dessas contas ÷ base</b>. Evite contas de <b>saldo do
+        passivo</b> (a recolher/provisão): elas misturam saldo acumulado com o período e distorcem o percentual.
+      </p>
+      <LinhaTitulo titulo="Contas de imposto" onAdd={() => setContas(l => [...l, { cod: '', nome: '' }])} />
+      {contas.map((c, i) => (
+        <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 8, alignItems: 'flex-start' }}>
+          <div style={{ flex: 1 }}>
+            <CampoConta value={c.cod} onChange={v => setCod(i, v)} onPick={p => setPick(i, p)} plano={plano} placeholder="Conta de imposto (F4)" />
+          </div>
+          <i className="ti ti-trash" onClick={() => rem(i)} style={{ color: theme.sub, cursor: 'pointer', marginTop: 10 }} />
+        </div>
+      ))}
+      <div style={{ marginTop: 18 }}>
+        <label>Base do denominador</label>
+        <div style={{ display: 'flex', gap: 20, marginTop: 8, flexWrap: 'wrap' }}>
+          <label style={rBase}><input type="radio" name="baseCarga" checked={base === 'bruto'} onChange={() => setBase('bruto')} /> Faturamento bruto</label>
+          <label style={rBase}><input type="radio" name="baseCarga" checked={base === 'liquido'} onChange={() => setBase('liquido')} /> Receita líquida <span style={{ color: theme.sub }}>(faturamento − impostos)</span></label>
+        </div>
+      </div>
+      <Rodape onClose={onClose} onSalvar={() => onSalvar({
+        contas: contas.filter(c => String(c.cod || '').trim()).map(c => ({ cod: String(c.cod).trim(), nome: c.nome || '' })),
+        base,
+      })} />
     </Modal>
   )
 }
