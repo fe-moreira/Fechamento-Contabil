@@ -308,18 +308,13 @@ function baixadosPorNF(lancs, skipNF = new Set()) {
     const nomes = [...new Set(grp.map(nomeDe).filter(Boolean))]
     const clusters = []
     for (const nm of nomes) { const tk = tokensNome(nm); const c = clusters.find(c => mesmoCliente(c.tk, tk)); if (c) c.nomes.push(nm); else clusters.push({ tk, nomes: [nm] }) }
-    if (clusters.length <= 1) { tryBaix(grp); continue } // um cliente só (ou nenhum identificado) → como antes
-    // Vários NOMES na mesma NF. Mas se a NF é ESPECÍFICA (>=5 dígitos — praticamente única
-    // entre fornecedores) e há UM só nome em cada LADO (um crédito=título e um débito=
-    // pagamento), é o mesmo título com o nome lido de formas diferentes (ex.: "RSM ...
-    // AUDITORIA E CONSULTORIA" no saldo anterior vs "RSM ... AUDITORES INDEPENDENTES" no
-    // pagamento) — confia na NF e baixa o par. Só NF curta repetida entre fornecedores
-    // (ex.: 64) separa por nome, para não casar o título de um com o pagamento de outro.
-    const nomesLado = teste => [...new Set(grp.filter(teste).map(nomeDe).filter(Boolean))]
-    const nomesD = nomesLado(l => Number(l.debito) > 0.005)
-    const nomesC = nomesLado(l => Number(l.credito) > 0.005)
-    if (nf.length >= 5 && nomesD.length <= 1 && nomesC.length <= 1) { tryBaix(grp); continue }
-    // Vários clientes na mesma NF → casa cada cliente isoladamente (o par certo baixa).
+    if (clusters.length <= 1) { tryBaix(grp); continue } // um fornecedor só (ou nenhum identificado)
+    // REGRA (usuário): a baixa automática exige que o FORNECEDOR bata — não basta a NF. Com vários
+    // nomes na mesma NF, casa cada fornecedor ISOLADAMENTE (o par certo, do MESMO fornecedor, com
+    // total débito = total crédito, zera). Fornecedores diferentes com a mesma NF NÃO se cruzam
+    // (ex.: RAMPINELLI × IC ENGENHARIA). Um nome lido em duas variações do MESMO fornecedor já cai
+    // no mesmo cluster (mesmoCliente); se ficou em clusters separados, vira revisão manual (não
+    // baixa no automático confiando só na NF).
     for (const c of clusters) tryBaix(grp.filter(l => { const nm = nomeDe(l); return nm && mesmoCliente(tokensNome(nm), c.tk) }))
   }
   return { baixados, aproximadas }
