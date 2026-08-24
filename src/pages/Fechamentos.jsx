@@ -129,22 +129,39 @@ export default function Fechamentos() {
   }
 
   // Excluir: só administrador, e SEMPRE exige o motivo escrito (modal). Abre o modal.
-  function excluir(c, e) {
+  // Se o período tem LANÇAMENTOS manuais dentro, a exclusão só prossegue com uma
+  // autorização EXPLÍCITA do admin (checkbox) — nunca apaga lançamentos em silêncio.
+  async function excluir(c, e) {
     e.stopPropagation()
     if (!isAdmin) { alert('Apenas um administrador pode excluir um fechamento.'); return }
-    setExcluirAlvo({ comp: c, motivo: '' })
+    setExcluirAlvo({ comp: c, motivo: '', qtdLanc: null, autorizaLanc: false })
+    const { count } = await supabase.from('lancamentos').select('id', { count: 'exact', head: true }).eq('competencia_id', c.id)
+    setExcluirAlvo(a => (a && a.comp?.id === c.id) ? { ...a, qtdLanc: count || 0 } : a)
   }
   async function excluirConfirmar() {
     const c = excluirAlvo?.comp
     const motivo = (excluirAlvo?.motivo || '').trim()
     if (!c) return
+    if (!isAdmin) { alert('Apenas um administrador pode excluir um fechamento.'); return }
     if (motivo.length < 3) { alert('Escreva o motivo da exclusão.'); return }
     setSalvandoAcao(true)
     try {
-      // Registra o motivo (com usuário e data) num log que SOBREVIVE à exclusão da competência.
+      // Lançamentos manuais do período — o admin só apaga com autorização EXPLÍCITA (checkbox).
+      // Guarda uma CÓPIA no log de exclusão (sobrevive à exclusão) para poder exportar depois.
+      const { data: lancs } = await supabase.from('lancamentos')
+        .select('data, conta_debito, conta_credito, valor, historico, origem, documento, usuario, created_at')
+        .eq('competencia_id', c.id).order('data', { ascending: true })
+      if ((lancs?.length || 0) > 0 && !excluirAlvo?.autorizaLanc) {
+        setSalvandoAcao(false)
+        alert(`Este período tem ${lancs.length} lançamento(s) manual(is). Marque a autorização do administrador para apagá-los antes de excluir o período.`)
+        return
+      }
+      // Registra o motivo (com usuário e data) num log que SOBREVIVE à exclusão da competência,
+      // junto com a CÓPIA dos lançamentos apagados (backup para exportação/recuperação).
       await supabase.from('cargas_cadastro').insert({
         cliente_id: empresaId, tipo: 'exclusao_fechamento', vigencia: `${String(c.mes).padStart(2, '0')}/${c.ano}`,
-        dados: { mes: c.mes, ano: c.ano, status: c.status, motivo }, usuario: user?.email || null,
+        dados: { mes: c.mes, ano: c.ano, status: c.status, motivo, lancamentos: lancs || [], qtd_lancamentos: lancs?.length || 0 },
+        usuario: user?.email || null, obs: `Excluído por ${user?.email || '—'} · ${(lancs?.length || 0)} lançamento(s)`,
       })
       // Se estiver fechada, reabre antes (o bloqueio do banco impede apagar dados de fechada).
       if (c.status === 'fechado') await supabase.from('competencias').update({ status: 'andamento' }).eq('id', c.id)
@@ -293,16 +310,39 @@ export default function Fechamentos() {
             <p style={{ color: theme.sub, fontSize: 13.5, margin: '0 0 14px', lineHeight: 1.55 }}>
               Vai apagar <b style={{ color: theme.text }}>{MESES[excluirAlvo.comp.mes - 1]}/{excluirAlvo.comp.ano}</b> e todos os dados dela (razão, balancete, lançamentos, auditoria, conciliação). <b>Escreva o motivo</b> — fica registrado com seu usuário e a data.
             </p>
+            {excluirAlvo.qtdLanc == null ? (
+              <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 12px' }}><i className="ti ti-loader" /> Verificando lançamentos do período…</p>
+            ) : excluirAlvo.qtdLanc > 0 ? (
+              <div style={{ background: 'rgba(229,72,77,0.10)', border: `1px solid rgba(229,72,77,0.35)`, borderRadius: 10, padding: '12px 14px', margin: '0 0 12px' }}>
+                <p style={{ color: theme.red, fontSize: 13, fontWeight: 600, margin: '0 0 6px' }}>
+                  <i className="ti ti-alert-hexagon" /> Este período tem {excluirAlvo.qtdLanc} lançamento(s) manual(is).
+                </p>
+                <p style={{ color: theme.sub, fontSize: 12, margin: '0 0 10px', lineHeight: 1.5 }}>
+                  Excluir o período vai <b>apagar esses lançamentos</b>. Uma <b>cópia é guardada</b> no log de exclusão (para exportar depois). Só o <b>administrador</b> pode autorizar.
+                </p>
+                <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', cursor: 'pointer', color: theme.text, fontSize: 13 }}>
+                  <input type="checkbox" checked={!!excluirAlvo.autorizaLanc} onChange={e => setExcluirAlvo(a => ({ ...a, autorizaLanc: e.target.checked }))} style={{ marginTop: 2 }} />
+                  <span>Autorizo (admin) apagar os {excluirAlvo.qtdLanc} lançamento(s) deste período.</span>
+                </label>
+              </div>
+            ) : (
+              <p style={{ color: theme.green, fontSize: 12.5, margin: '0 0 12px' }}><i className="ti ti-check" /> Sem lançamentos manuais no período.</p>
+            )}
             <textarea className="input" rows={3} autoFocus placeholder="Motivo da exclusão (obrigatório)"
               value={excluirAlvo.motivo} onChange={e => setExcluirAlvo(a => ({ ...a, motivo: e.target.value }))}
               style={{ width: '100%', resize: 'vertical' }} />
+            {(() => {
+              const bloqueado = salvandoAcao || excluirAlvo.motivo.trim().length < 3 || excluirAlvo.qtdLanc == null || (excluirAlvo.qtdLanc > 0 && !excluirAlvo.autorizaLanc)
+              return (
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
               <button className="btn btn-ghost" onClick={() => setExcluirAlvo(null)} disabled={salvandoAcao}>Cancelar</button>
-              <button className="btn" style={{ background: theme.red, opacity: excluirAlvo.motivo.trim().length < 3 ? 0.5 : 1 }}
-                onClick={excluirConfirmar} disabled={salvandoAcao || excluirAlvo.motivo.trim().length < 3}>
+              <button className="btn" style={{ background: theme.red, opacity: bloqueado ? 0.5 : 1 }}
+                onClick={excluirConfirmar} disabled={bloqueado}>
                 <i className="ti ti-trash" /> {salvandoAcao ? 'Excluindo…' : 'Excluir definitivamente'}
               </button>
             </div>
+              )
+            })()}
           </div>
         </div>
       )}
