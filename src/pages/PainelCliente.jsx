@@ -192,9 +192,14 @@ export default function PainelCliente() {
             endividamento: totAtivo ? pct(Math.abs(pc) + Math.abs(pnc), Math.abs(totAtivo)) : null,
             prazoReceb: fat ? Math.round((clientes / fat) * 30) : null,
           }
-          const distM = await apurarDistribuicao(empresaId, compIdM, ano, mesM)
+          // PERFORMANCE: distribuição de lucros e principais clientes são consultas caras (razão +
+          // distribuição) e só aparecem para o mês da competência / fim do período. Antes rodavam
+          // para TODOS os meses (deixava o Cockpit lento). Agora só no mês de foco; os demais meses
+          // trazem só a foto leve (balanço/índices, sem consulta extra).
+          const ehFoco = mesM === mes
+          const distM = ehFoco ? await apurarDistribuicao(empresaId, compIdM, ano, mesM) : null
           const distTotalM = (distM?.socios || []).reduce((s, x) => s + num(x.total), 0)
-          const receitaCods = [...new Set(analitM.filter(l => gg(l) === '3').map(l => String(l.reduzido)))]
+          const receitaCods = ehFoco ? [...new Set(analitM.filter(l => gg(l) === '3').map(l => String(l.reduzido)))] : []
           let topClientes = [], totReceitaRazao = 0
           if (receitaCods.length) {
             const rz = await lerTudo(() => supabase.from('razao').select('conta, historico, debito, credito').eq('competencia_id', compIdM).in('conta', receitaCods))
