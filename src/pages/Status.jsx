@@ -227,6 +227,10 @@ export default function Status() {
     setModal(null); carregar()
   }
 
+  // Mês do fechamento atual: as variações do gate só valem ATÉ este mês. O mês SEGUINTE (ex.:
+  // julho quando você está fechando junho) não pode virar pendência aqui — o mês posterior não
+  // afeta o fechamento do anterior. (Fechar julho é que exige junho pra trás justificado.)
+  const mesAtualStatus = Number(String(competencia || '').split('/')[0]) || 12
   const gates = [
     {
       key: 'cargainicial',
@@ -271,7 +275,7 @@ export default function Status() {
       descricao: 'Contas com variação acima de 10% em relação ao mês anterior, ainda não justificadas (Comp. Movimento).',
       // Uma linha por CONTA (não por lançamento): é a conta que distorce; o culpado
       // exato o usuário confere no Comp. Movimento. Os meses afetados vão no detalhe.
-      itens: Object.values((dados.variacoes?.itens || []).reduce((acc, v) => {
+      itens: Object.values((dados.variacoes?.itens || []).filter(v => v.mes <= mesAtualStatus).reduce((acc, v) => {
         const k = String(v.conta)
         if (!acc[k]) acc[k] = { conta: v.conta, nome: v.nome, meses: [] }
         if (!acc[k].meses.includes(v.mes)) acc[k].meses.push(v.mes)
