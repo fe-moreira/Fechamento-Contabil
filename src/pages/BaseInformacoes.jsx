@@ -436,6 +436,21 @@ export default function BaseInformacoes() {
     await supabase.from('cargas_cadastro').update({ dados: { saldos, composicoes }, obs: 'Carga inicial · ' + (labels.join(' + ') || 'manual') }).eq('id', c.id)
     carregarCargas(); recalcularPendencias?.()
   }
+  // Exporta o SALDO INICIAL implantado para Excel (saldos de abertura + composições), com as
+  // colunas originais dos arquivos — para conferir ou reimplantar no mês certo.
+  async function exportarSaldoInicialExcel() {
+    const cis = (cargas.financeiro || []).filter(c => String(c.obs || '').startsWith('Carga inicial'))
+    const limpa = rows => (rows || []).map(({ __arq, ...r }) => r)
+    const saldos = cis.flatMap(c => limpa(c.dados?.saldos))
+    const composicoes = cis.flatMap(c => limpa(c.dados?.composicoes))
+    if (!saldos.length && !composicoes.length) { alert('Não há saldo inicial implantado para exportar.'); return }
+    const XLSX = await import('xlsx')
+    const wb = XLSX.utils.book_new()
+    if (saldos.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(saldos), 'Saldos de abertura')
+    if (composicoes.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(composicoes), 'Composicoes')
+    const nome = `saldo_inicial_${(empresaNome || 'cliente').toLowerCase().replace(/[^a-z0-9]+/g, '_').slice(0, 30)}_${String(periodo || '').replace('/', '-')}.xlsx`
+    XLSX.writeFile(wb, nome)
+  }
   async function salvarDist(cfg) {
     if (dist) await supabase.from('dist_lucros_config').update(cfg).eq('id', dist.id)
     else await supabase.from('dist_lucros_config').insert({ cliente_id: empresaId, usuario: user?.email, ...cfg })
@@ -543,7 +558,10 @@ export default function BaseInformacoes() {
           <div style={{ marginTop: 24 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', margin: '4px 0 12px' }}>
               <p style={{ color: theme.sub, fontSize: 13, fontWeight: 600, textTransform: 'uppercase', letterSpacing: .8, margin: 0 }}>Carga inicial de saldos</p>
-              <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 11px', color: aberturaTravada ? theme.sub : theme.red, borderColor: aberturaTravada ? theme.border : 'rgba(229,72,77,0.4)' }} disabled={aberturaTravada} onClick={excluirTudoSaldoInicial} title={aberturaTravada ? 'Competência de abertura fechada — reabra para mexer no saldo inicial' : 'Apaga TODO o saldo inicial para você subir os arquivos de novo'}><i className={`ti ${aberturaTravada ? 'ti-lock' : 'ti-trash'}`} /> Excluir saldo inicial (tudo)</button>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 11px' }} onClick={exportarSaldoInicialExcel} title="Baixar o saldo inicial implantado em Excel (saldos + composições) — para conferir ou reimplantar no mês certo"><i className="ti ti-file-spreadsheet" /> Exportar Excel</button>
+                <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 11px', color: aberturaTravada ? theme.sub : theme.red, borderColor: aberturaTravada ? theme.border : 'rgba(229,72,77,0.4)' }} disabled={aberturaTravada} onClick={excluirTudoSaldoInicial} title={aberturaTravada ? 'Competência de abertura fechada — reabra para mexer no saldo inicial' : 'Apaga TODO o saldo inicial para você subir os arquivos de novo'}><i className={`ti ${aberturaTravada ? 'ti-lock' : 'ti-trash'}`} /> Excluir saldo inicial (tudo)</button>
+              </div>
             </div>
             {aberturaTravada && <p style={{ color: theme.yellow, fontSize: 12, margin: '0 0 10px' }}><i className="ti ti-lock" /> A competência de <b>abertura</b> ({periodo}) está <b>fechada</b> — reabra-a para excluir/alterar o saldo inicial.</p>}
             <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'hidden' }}>
