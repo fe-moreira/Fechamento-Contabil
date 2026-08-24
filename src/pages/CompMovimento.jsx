@@ -966,6 +966,7 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
   const [acaoLanc, setAcaoLanc] = useState(null) // { modo:'novo'|'ver', linha, corr }
   const [verCorrigidos, setVerCorrigidos] = useState(false) // mostrar os já corrigidos (ficam ocultos)
   const [sel, setSel] = useState(() => new Set()) // ids marcados p/ corrigir em lote
+  const [selAj, setSelAj] = useState(() => new Set()) // lancIds de AJUSTE marcados p/ excluir em lote
   const [lote, setLote] = useState(null) // [linhas] em edição no painel de correção em lote
 
   const mesDoLanc = l => todos ? (mesPorComp?.[l.competencia_id]) : mes
@@ -1271,6 +1272,36 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
   const selLinhas = linhasVis.filter(l => corrigivel(l) && sel.has(l.id))
   const selTotal = selLinhas.reduce((s, l) => s + (Number(l.debito) || 0) + (Number(l.credito) || 0), 0)
   const corrigiveisVis = linhasVis.filter(corrigivel)
+  // Ajustes selecionáveis (só admin, período aberto): lançamentos manuais com id real.
+  const ajExcluivel = l => l.ehLancamento && !!l.lancId && isAdmin && !bloqueado
+  const toggleAj = id => setSelAj(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s })
+  const ajVisIds = [...new Set(linhasVis.filter(ajExcluivel).map(l => l.lancId))]
+  const selAjIds = ajVisIds.filter(id => selAj.has(id))
+
+  // Exclui em LOTE os ajustes marcados — uma única consulta + um só recarregamento (rápido).
+  async function excluirAjustesLote() {
+    if (!selAjIds.length || bloqueado) return
+    if (!isAdmin) { alert('Apenas um administrador pode excluir lançamentos de ajuste.'); return }
+    if (!window.confirm(`Excluir ${selAjIds.length} lançamento(s) de ajuste selecionado(s)?\n\nEles somem do razão vivo, do Comparativo, do Cockpit e da conciliação. Não dá para desfazer.`)) return
+    setSalvando(true)
+    try {
+      await supabase.from('lancamentos').delete().in('id', selAjIds)
+      const porId = new Map()
+      for (const l of linhasVis) if (l.lancId && !porId.has(l.lancId)) porId.set(l.lancId, l)
+      const audits = selAjIds.map(id => {
+        const l = porId.get(id); const v = l ? (Number(l.debito) || 0) - (Number(l.credito) || 0) : 0
+        return { competencia_id: l?.competencia_id, modulo: 'Comparativo', tipo: 'Correção',
+          item: `${conta} · exclusão de ajuste`, detalhe: `Excluído lançamento de ajuste (em lote) · ${money(v)}${l?.historico ? ' · ' + l.historico : ''}`, usuario }
+      }).filter(a => a.competencia_id)
+      if (audits.length) await supabase.from('auditoria').insert(audits)
+      setMsg(`${selAjIds.length} ajuste(s) excluído(s).`)
+      setSelAj(new Set())
+      await carregarLinhas()
+      onCorrigido?.()
+    } catch (e) {
+      setMsg('Erro ao excluir: ' + (e?.message || e))
+    } finally { setSalvando(false) }
+  }
 
   let saldo = 0
   const totDeb = linhasVis.reduce((s, l) => s + (Number(l.debito) || 0), 0)
@@ -1369,6 +1400,7 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
                     >
                       <td style={{ ...td, textAlign: 'center' }} onClick={e => e.stopPropagation()}>
                         {corrigivel(l) && <input type="checkbox" style={{ width: 15, height: 15, cursor: 'pointer', accentColor: theme.accent }} checked={sel.has(l.id)} onChange={() => toggleSel(l)} />}
+                        {ajExcluivel(l) && <input type="checkbox" title="Selecionar este ajuste para excluir em lote" style={{ width: 15, height: 15, cursor: 'pointer', accentColor: theme.red }} checked={selAj.has(l.lancId)} onChange={() => toggleAj(l.lancId)} />}
                       </td>
                       {todos && <td style={{ ...td, whiteSpace: 'nowrap', color: theme.sub }}>{MESES[(mesDoLanc(l) || 1) - 1]}</td>}
                       <td style={{ ...td, whiteSpace: 'nowrap' }}>{l.data || ''}</td>
@@ -1416,6 +1448,17 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
               <i className="ti ti-arrows-exchange" /> Corrigir selecionados ({selLinhas.length})
             </button>
             <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={() => setSel(new Set())}><i className="ti ti-x" /> Limpar</button>
+          </div>
+        )}
+
+        {selAjIds.length > 0 && (
+          <div style={{ margin: '0 22px 4px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', background: 'rgba(229,72,77,0.08)', border: `1px solid ${theme.red}`, borderRadius: 12, padding: '11px 16px' }}>
+            <span style={{ fontSize: 13 }}><b style={{ color: theme.red }}>{selAjIds.length}</b> ajuste(s) selecionado(s) para excluir</span>
+            <span style={{ flex: 1 }} />
+            <button className="btn" style={{ fontSize: 12.5, background: theme.red }} disabled={salvando} onClick={excluirAjustesLote}>
+              <i className="ti ti-trash" /> Excluir selecionados ({selAjIds.length})
+            </button>
+            <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={() => setSelAj(new Set())}><i className="ti ti-x" /> Limpar</button>
           </div>
         )}
 
