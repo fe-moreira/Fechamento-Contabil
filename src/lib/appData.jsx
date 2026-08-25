@@ -74,8 +74,13 @@ export function AppDataProvider({ children }) {
     p += (Array.isArray(comp.documentos) ? comp.documentos : []).filter(d => (d?.situacao ?? (d?.rec ? 'recebido' : '')) === '').length
     // Conciliação: mesma régua da tela Status (fonte única) — só Ativo/Passivo ainda em aberto.
     p += (await contasConciliacaoAbertas(empresaId, comp.id)).length
-    // Integrações não validadas (mesma régua do gate no Status).
-    p += ['fiscal', 'folha', 'patrimonio', 'financeira'].filter(k => !comp.integracoes?.[k]?.estado).length
+    // Integrações não validadas (mesma régua do gate no Status/progresso): pendente quando o
+    // estado NÃO é 'validado' nem 'sem_movimento'. Antes contava só quando NÃO havia estado, então
+    // uma integração AMARELA (importada mas ainda não bateu → estado 'andamento', ex.: Folha com
+    // diferença) NÃO era contada e o badge dava 0 mesmo com pendência.
+    p += ['fiscal', 'folha', 'patrimonio'].filter(k => { const e = comp.integracoes?.[k]?.estado; return e !== 'validado' && e !== 'sem_movimento' }).length
+    // Financeira: mantém a régua existente (validação própria por banco/combinado) — pendente só se não tem estado.
+    if (!comp.integracoes?.financeira?.estado) p += 1
     const dist = await apurarDistribuicao(empresaId, comp.id)
     p += (dist.socios || []).filter(s => s.excede).length
     const br = await apurarBancoResultado(empresaId, comp.id)
