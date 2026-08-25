@@ -3284,10 +3284,10 @@ function RelatoriosComposicao({ conta, emAberto, zerados, contraDe, auto = new S
   }
 
   const Grupo = ({ rotulo, linhas, icon, cor }) => (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-      <span style={{ fontSize: 12.5, color: theme.text, minWidth: 150 }}><i className={`ti ${icon}`} style={{ color: cor, marginRight: 6 }} />{rotulo} <span style={{ color: theme.sub }}>({linhas.length})</span></span>
-      <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} disabled={!linhas.length} onClick={() => excel(linhas, rotulo)}><i className="ti ti-file-spreadsheet" /> Excel</button>
-      <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px' }} disabled={!linhas.length} onClick={() => pdf(linhas, rotulo)}><i className="ti ti-file-type-pdf" /> PDF</button>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+      <span style={{ fontSize: 12.5, color: theme.text, flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}><i className={`ti ${icon}`} style={{ color: cor, marginRight: 6 }} />{rotulo} <span style={{ color: theme.sub }}>({linhas.length})</span></span>
+      <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', flexShrink: 0 }} disabled={!linhas.length} onClick={() => excel(linhas, rotulo)}><i className="ti ti-file-spreadsheet" /> Excel</button>
+      <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 10px', flexShrink: 0 }} disabled={!linhas.length} onClick={() => pdf(linhas, rotulo)}><i className="ti ti-file-type-pdf" /> PDF</button>
     </div>
   )
 
