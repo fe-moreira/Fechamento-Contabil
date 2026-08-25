@@ -3227,21 +3227,15 @@ function RelatoriosComposicao({ conta, emAberto, zerados, contraDe, exemptos = n
   const somaCred = ls => ls.reduce((s, l) => s + (Number(l.credito) || 0), 0)
   const netDe = ls => somaDeb(ls) - somaCred(ls) // saldo do grupo (0 quando zerou)
 
-  // RÉGUA DO USUÁRIO: conciliado = NOME + NF + (total débito = total crédito). Ou seja, só fica em
-  // "Conciliados" o que casa POR NF (dentro do mesmo cliente): agrupando as linhas por cliente e,
-  // dentro dele, por NF, o conjunto daquela NF tem que SOMAR ZERO. Se a NF não zera (ex.: NF 123661
-  // com 6.871,81 D e 4.187,60 C — mesma nota, valores diferentes), ou a linha não tem NF, ela VOLTA
-  // para "Em aberto" — mesmo que o cliente inteiro tenha somado zero "por nome". As conciliações
-  // MANUAIS/estorno (exemptos — linkadas/confirmadas à mão) são soberanas e NÃO são reavaliadas.
+  // RÉGUA DO USUÁRIO: conciliado = por FORNECEDOR, total débito = total crédito. Junta as variações
+  // do MESMO fornecedor (ex.: "BRW VIAGENS E TURISMO LTDA" e "BRW ... PASSAGENS ESTADIAS" são o
+  // mesmo BRW — agruparPorCliente já une por nome parecido) e o conjunto do fornecedor tem que
+  // SOMAR ZERO. Se o fornecedor NÃO zera (ex.: TROD, saldo 40.096 C), ele volta para "Em aberto".
+  // NÃO exijo casar por NF isolada: um fornecedor pode zerar com várias notas (título de uma NF
+  // quitado por baixas de outras). As conciliações MANUAIS/estorno (exemptos) são soberanas.
   const setVolta = new Set()
   for (const b of agruparPorCliente(zerados || [])) {
-    const porNf = {}
-    for (const l of b.lancs) { const k = nfKey(l.leitura?.nf); (porNf[k] = porNf[k] || []).push(l) }
-    for (const k in porNf) {
-      const grp = porNf[k]
-      const zeraPorNF = k && Math.abs(netDe(grp)) < 0.005 // NF válida (não vazia) e o conjunto dessa NF zera
-      if (!zeraPorNF) for (const l of grp) if (!exemptos.has(l)) setVolta.add(l)
-    }
+    if (Math.abs(netDe(b.lancs)) >= 0.005) for (const l of b.lancs) if (!exemptos.has(l)) setVolta.add(l)
   }
   const emAbertoEff = [...new Set([...(emAberto || []), ...setVolta])]
   const zeradosEff = (zerados || []).filter(l => !setVolta.has(l))
