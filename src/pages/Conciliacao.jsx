@@ -971,7 +971,10 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       // Nome OFICIAL do Fiscal pela NF: é o nome da nota, então SOBREPÕE a leitura do histórico
       // (ex.: "COFINS MIRAGE ..." → nome correto do fiscal). Só não sobrepõe um ajuste manual
       // do saldo inicial; apelidos (renomear em todo lugar) ainda vêm depois.
-      if (leitura.nf && !manualAbert && !leitura.ajustado) {
+      // NÃO casa por NF quando o valor é COMPETÊNCIA (ex.: "062026" = 06/2026) — não é nota.
+      // Sem isto, várias linhas de saldo anterior de clientes DIFERENTES (todas "NF 062026")
+      // pegavam o mesmo nome do índice fiscal e viravam UM bloco só.
+      if (leitura.nf && !manualAbert && !leitura.ajustado && !ehCompetencia(leitura.nf)) {
         const nfn = String(leitura.nf).replace(/\D/g, '').replace(/^0+/, '')
         const fn = nfn && nfFiscal[nfn]
         if (fn) leitura = { ...leitura, entidade: fn, ident: true }
