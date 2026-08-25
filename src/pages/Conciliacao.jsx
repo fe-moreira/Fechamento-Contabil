@@ -231,7 +231,12 @@ function agruparPorCliente(lancs) {
   const canonPorNF = {}
   const porNF = {}
   for (const l of lancs) { const nf = nfKey(l.leitura?.nf); if (nf && nf.length >= 5 && l.leitura?.ident && String(l.leitura.entidade || '').trim()) (porNF[nf] = porNF[nf] || []).push(l.leitura.entidade.trim()) }
-  for (const nf in porNF) { const ns = [...new Set(porNF[nf])]; if (ns.length > 1) canonPorNF[nf] = ns.slice().sort((a, b) => a.length - b.length)[0] } // rótulo: o nome mais curto (mais limpo)
+  // Rótulo por NF (>=5 díg.): o nome mais curto/limpo. Vale sempre que a NF tenha AO MENOS UM
+  // nome identificado — assim linhas da MESMA NF que vieram sem identificar (ex.: a linha de
+  // TÍTULO "VALOR REF. BRW... NF 125110", sem "PAGAMENTO") herdam o cliente em vez de cair em
+  // "(não identificado)". Antes só herdava quando a NF tinha nomes diferentes (ns.length > 1),
+  // então no Excel a linha de título ia parar no grupo "a identificar".
+  for (const nf in porNF) { const ns = [...new Set(porNF[nf])]; canonPorNF[nf] = ns.slice().sort((a, b) => a.length - b.length)[0] }
   const nomeCanon = l => {
     const nf = nfKey(l.leitura?.nf)
     if (nf && canonPorNF[nf]) return canonPorNF[nf]
