@@ -2190,7 +2190,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
 
       {tipoCta !== 'saldo' && (
         <RelatoriosComposicao conta={conta} emAberto={emAbertoTodos} zerados={zerados} contraDe={contraDe}
-          exemptos={baixados} />
+          auto={baixados} />
       )}
 
       {/* Impostos: baixa do mês anterior + memória de cálculo */}
@@ -3219,7 +3219,7 @@ function CardConferencia({ conta, reg, compId, usuario, saldoAjuste = 0, composi
 }
 
 // Relatórios da composição (em aberto / conciliados) em Excel ou PDF.
-function RelatoriosComposicao({ conta, emAberto, zerados, contraDe, exemptos = new Set() }) {
+function RelatoriosComposicao({ conta, emAberto, zerados, contraDe, auto = new Set() }) {
   // Linhas com uma coluna SALDO (D−C) no fim: por lançamento fica em branco (o valor está em
   // Débito/Crédito); o saldo aparece no Subtotal de cada grupo e no Total — R$ 0,00 quando o
   // grupo zerou (título e baixa se compensam) e o saldo em aberto no que sobrou.
@@ -3237,10 +3237,14 @@ function RelatoriosComposicao({ conta, emAberto, zerados, contraDe, exemptos = n
   // "Em aberto". Assim a automática nunca some, e o que não fecha não fica indevidamente conciliado.
   const setVolta = new Set()
   for (const b of agruparPorCliente(zerados || [])) {
-    if (Math.abs(netDe(b.lancs)) >= 0.005) for (const l of b.lancs) if (!exemptos.has(l)) setVolta.add(l)
+    if (Math.abs(netDe(b.lancs)) >= 0.005) for (const l of b.lancs) if (!auto.has(l)) setVolta.add(l)
   }
   const emAbertoEff = [...new Set([...(emAberto || []), ...setVolta])]
   const zeradosEff = (zerados || []).filter(l => !setVolta.has(l))
+  // Separa o que zerou por BAIXA AUTOMÁTICA (por NF) do que zerou MANUALMENTE (link/confirmação/
+  // estorno/por nome) — para o usuário medir quanto foi automático × quanto foi na mão.
+  const zeradosAuto = zeradosEff.filter(l => auto.has(l))
+  const zeradosManual = zeradosEff.filter(l => !auto.has(l))
 
   // Em blocos por cliente/fornecedor, no papel timbrado da Attentive.
   async function excel(linhas, sub) {
@@ -3293,6 +3297,10 @@ function RelatoriosComposicao({ conta, emAberto, zerados, contraDe, exemptos = n
       <div style={{ display: 'grid', gap: 10 }}>
         <Grupo rotulo="Composição atual (em aberto)" linhas={emAbertoEff} icon="ti-folder-open" cor={theme.accent} />
         <Grupo rotulo="Conciliados (o que zerou)" linhas={zeradosEff} icon="ti-circle-check" cor={theme.green} />
+        <div style={{ paddingLeft: 18, display: 'grid', gap: 10 }}>
+          <Grupo rotulo="Conciliados automático (baixa por NF)" linhas={zeradosAuto} icon="ti-bolt" cor={theme.accent} />
+          <Grupo rotulo="Conciliados manual (link / confirmação / estorno)" linhas={zeradosManual} icon="ti-hand-finger" cor={theme.yellow} />
+        </div>
       </div>
     </div>
   )
