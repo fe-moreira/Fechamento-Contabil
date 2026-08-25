@@ -282,8 +282,21 @@ function ehRedutora(nome) {
   return /\(\s*-\s*\)|deprecia|amortiza|exaust|pcld|perdas estimad|provis[aã]o para perda|redutora/.test(n) || /^\s*\(?\s*-/.test(String(nome || ''))
 }
 
+// Valor que é COMPETÊNCIA (MM/AAAA), não NF: ex.: "062026" = 06/2026, "06/2026", "2026-06".
+// A carga de saldo anterior usa a competência como referência do item, e isso vinha sendo lido
+// como "NF 062026" — fazendo contas de clientes DIFERENTES casarem por uma "mesma NF" que não
+// existe. Aqui detectamos MMAAAA e AAAAMM com mês válido e ano 20xx para IGNORAR como NF.
+const ehCompetencia = nf => {
+  const d = String(nf ?? '').replace(/\D/g, '')
+  if (d.length !== 6) return false
+  const mmIni = +d.slice(0, 2), anoFim = +d.slice(2)   // 06 2026
+  const anoIni = +d.slice(0, 4), mmFim = +d.slice(4)    // 2026 06
+  return (mmIni >= 1 && mmIni <= 12 && anoFim >= 2000 && anoFim <= 2099) ||
+         (anoIni >= 2000 && anoIni <= 2099 && mmFim >= 1 && mmFim <= 12)
+}
 // Chave da NF ignorando zeros à esquerda e não-dígitos: "05602823" e "5602823" casam.
-const nfKey = nf => String(nf ?? '').replace(/\D/g, '').replace(/^0+/, '')
+// Um valor que é COMPETÊNCIA (06/2026) NÃO é NF → devolve '' (não agrupa/baixa por ele).
+const nfKey = nf => ehCompetencia(nf) ? '' : String(nf ?? '').replace(/\D/g, '').replace(/^0+/, '')
 
 // Baixa (conciliação) por NÚMERO DA NOTA + cliente: um débito e um crédito só se
 // conciliam (zeram) quando têm a MESMA NF (ignorando zeros à esquerda) e o cliente bate
@@ -313,18 +326,19 @@ function baixadosPorNF(lancs, skipNF = new Set()) {
   const nomeDe = l => (l.leitura?.ident && l.leitura.entidade) ? l.leitura.entidade : null
   for (const nf in porNF) {
     const grp = porNF[nf]
-    // Clusters de cliente DENTRO desta NF — números pequenos (NF 64) se repetem entre
-    // fornecedores diferentes; sem separar, o nome não bate entre todos e nada baixava.
+    // Clusters de cliente DENTRO desta NF — números pequenos (NF 64) e genéricos ("062026",
+    // "00000002") se repetem entre fornecedores diferentes.
     const nomes = [...new Set(grp.map(nomeDe).filter(Boolean))]
+    // REGRA (usuário): a baixa automática exige que o FORNECEDOR BATA — não basta a NF.
+    // Se NINGUÉM está identificado nesta NF, não dá pra confirmar o fornecedor → NÃO baixa
+    // (evita baixar em lote entidades diferentes de um número genérico só porque o batelão
+    // fecha em zero — ex.: várias contas na "NF 062026").
+    if (!nomes.length) continue
     const clusters = []
     for (const nm of nomes) { const tk = tokensNome(nm); const c = clusters.find(c => mesmoCliente(c.tk, tk)); if (c) c.nomes.push(nm); else clusters.push({ tk, nomes: [nm] }) }
-    if (clusters.length <= 1) { tryBaix(grp); continue } // um fornecedor só (ou nenhum identificado)
-    // REGRA (usuário): a baixa automática exige que o FORNECEDOR bata — não basta a NF. Com vários
-    // nomes na mesma NF, casa cada fornecedor ISOLADAMENTE (o par certo, do MESMO fornecedor, com
-    // total débito = total crédito, zera). Fornecedores diferentes com a mesma NF NÃO se cruzam
-    // (ex.: RAMPINELLI × IC ENGENHARIA). Um nome lido em duas variações do MESMO fornecedor já cai
-    // no mesmo cluster (mesmoCliente); se ficou em clusters separados, vira revisão manual (não
-    // baixa no automático confiando só na NF).
+    // Casa cada fornecedor ISOLADAMENTE, e SÓ com as linhas DAQUELE fornecedor (nome bate). Linhas
+    // sem fornecedor identificado NÃO entram no automático (o fornecedor não bateu) — ficam em
+    // aberto para revisão manual. Fornecedores diferentes com a mesma NF nunca se cruzam.
     for (const c of clusters) tryBaix(grp.filter(l => { const nm = nomeDe(l); return nm && mesmoCliente(tokensNome(nm), c.tk) }))
   }
   return { baixados, aproximadas }
