@@ -81,6 +81,10 @@ export function AppDataProvider({ children }) {
     p += ['fiscal', 'folha', 'patrimonio'].filter(k => { const e = comp.integracoes?.[k]?.estado; return e !== 'validado' && e !== 'sem_movimento' }).length
     // Financeira: mantém a régua existente (validação própria por banco/combinado) — pendente só se não tem estado.
     if (!comp.integracoes?.financeira?.estado) p += 1
+    // Balancete do Domínio: importado E batendo com a conciliação é OBRIGATÓRIO para encerrar
+    // (o Status bloqueia o encerramento sem isso). Enquanto não conferir (bate=true), conta como
+    // pendência — senão o badge dava 0 mesmo faltando o balancete, e o fechamento parecia pronto.
+    if (!comp.integracoes?.balanceteConf?.bate) p += 1
     const dist = await apurarDistribuicao(empresaId, comp.id)
     p += (dist.socios || []).filter(s => s.excede).length
     const br = await apurarBancoResultado(empresaId, comp.id)
