@@ -1303,6 +1303,13 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
     } finally { setSalvando(false) }
   }
 
+  // Fechar com aviso: se há ajustes MARCADOS e ainda não excluídos, confirma antes de fechar
+  // (para o pessoal saber que tem seleção pendente e não perder por engano).
+  function pedirFechar() {
+    if (selAjIds.length > 0 && !window.confirm(`Você marcou ${selAjIds.length} ajuste(s) que ainda NÃO foram excluídos. Fechar mesmo assim? A seleção será perdida.`)) return
+    onClose?.()
+  }
+
   let saldo = 0
   const totDeb = linhasVis.reduce((s, l) => s + (Number(l.debito) || 0), 0)
   const totCred = linhasVis.reduce((s, l) => s + (Number(l.credito) || 0), 0)
@@ -1310,7 +1317,7 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
 
   return (
     <div
-      onClick={onClose}
+      onClick={pedirFechar}
       style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, zIndex: 50 }}
     >
       <div
@@ -1324,7 +1331,7 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
               {nome ? `${nome} · ` : ''}{todos ? 'Todos os meses' : `${MESES[mes - 1]}/${ANO}`}
             </p>
           </div>
-          <button className="btn-ghost" onClick={onClose} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <button className="btn-ghost" onClick={pedirFechar} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
             <i className="ti ti-x" /> Fechar
           </button>
         </div>
