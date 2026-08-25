@@ -231,12 +231,17 @@ function agruparPorCliente(lancs) {
   const canonPorNF = {}
   const porNF = {}
   for (const l of lancs) { const nf = nfKey(l.leitura?.nf); if (nf && nf.length >= 5 && l.leitura?.ident && String(l.leitura.entidade || '').trim()) (porNF[nf] = porNF[nf] || []).push(l.leitura.entidade.trim()) }
-  // Rótulo por NF (>=5 díg.): o nome mais curto/limpo. Vale sempre que a NF tenha AO MENOS UM
-  // nome identificado — assim linhas da MESMA NF que vieram sem identificar (ex.: a linha de
-  // TÍTULO "VALOR REF. BRW... NF 125110", sem "PAGAMENTO") herdam o cliente em vez de cair em
-  // "(não identificado)". Antes só herdava quando a NF tinha nomes diferentes (ns.length > 1),
-  // então no Excel a linha de título ia parar no grupo "a identificar".
-  for (const nf in porNF) { const ns = [...new Set(porNF[nf])]; canonPorNF[nf] = ns.slice().sort((a, b) => a.length - b.length)[0] }
+  // Rótulo por NF (>=5 díg.): o nome mais curto/limpo. SÓ vale quando TODOS os nomes identificados
+  // daquela NF são o MESMO cliente (mesmos tokens) — aí uma linha da mesma NF que veio sem
+  // identificar (ex.: a linha de TÍTULO "VALOR REF. BRW... NF 125110", sem "PAGAMENTO") herda o
+  // cliente. Se a NF tem clientes DIFERENTES, é número GENÉRICO/compartilhado (ex.: "062026",
+  // "00000002" — usados por vários) e NÃO pode juntar: senão funde entidades distintas no mesmo
+  // bloco (MARCELA no bloco do MARCELO; dezenas de nomes no "CONDOMÍNIO DUMAS").
+  for (const nf in porNF) {
+    const ns = [...new Set(porNF[nf])]
+    const tks = ns.map(n => tokensNome(n))
+    if (tks.every(t => mesmoCliente(t, tks[0]))) canonPorNF[nf] = ns.slice().sort((a, b) => a.length - b.length)[0]
+  }
   const nomeCanon = l => {
     const nf = nfKey(l.leitura?.nf)
     if (nf && canonPorNF[nf]) return canonPorNF[nf]
