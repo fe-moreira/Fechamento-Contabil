@@ -1331,9 +1331,16 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
               {nome ? `${nome} · ` : ''}{todos ? 'Todos os meses' : `${MESES[mes - 1]}/${ANO}`}
             </p>
           </div>
-          <button className="btn-ghost" onClick={pedirFechar} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-            <i className="ti ti-x" /> Fechar
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            {selAjIds.length > 0 && (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'rgba(229,72,77,0.12)', color: theme.red, border: `1px solid ${theme.red}`, borderRadius: 20, padding: '4px 11px', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }}>
+                <i className="ti ti-trash" /> {selAjIds.length} marcado(s) p/ excluir
+              </span>
+            )}
+            <button className="btn-ghost" onClick={pedirFechar} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <i className="ti ti-x" /> Fechar
+            </button>
+          </div>
         </div>
 
         {!todos && fechMes && mes !== fechMes && (
@@ -1402,7 +1409,7 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
                   return (
                     <tr key={l.id || i}
                       onClick={ehLanc ? undefined : () => { setMsg(''); setAcaoLanc(corr ? { modo: 'ver', linha: l, corr } : { modo: 'novo', linha: l }) }}
-                      style={{ borderTop: `1px solid ${theme.border}`, cursor: ehLanc ? 'default' : 'pointer', background: ehLanc ? 'rgba(74,124,255,0.08)' : corr ? 'rgba(48,164,108,0.08)' : l.suspeito ? 'rgba(245,166,35,0.07)' : undefined }}
+                      style={{ borderTop: `1px solid ${theme.border}`, cursor: ehLanc ? 'default' : 'pointer', background: (ehLanc && selAj.has(l.lancId)) ? 'rgba(229,72,77,0.16)' : ehLanc ? 'rgba(74,124,255,0.08)' : corr ? 'rgba(48,164,108,0.08)' : l.suspeito ? 'rgba(245,166,35,0.07)' : undefined }}
                       title={ehLanc ? 'Lançamento de ajuste (correção/estorno) — reflete no razão vivo' : corr ? 'Corrigido — clique para ver/desfazer' : 'Clique para corrigir (reclassificar)'}
                     >
                       <td style={{ ...td, textAlign: 'center' }} onClick={e => e.stopPropagation()}>
