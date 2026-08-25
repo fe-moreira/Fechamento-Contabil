@@ -3227,16 +3227,16 @@ function RelatoriosComposicao({ conta, emAberto, zerados, contraDe, exemptos = n
   const somaCred = ls => ls.reduce((s, l) => s + (Number(l.credito) || 0), 0)
   const netDe = ls => somaDeb(ls) - somaCred(ls) // saldo do grupo (0 quando zerou)
 
-  // RÉGUA DO USUÁRIO: conciliado = por FORNECEDOR, total débito = total crédito. Junta as variações
-  // do MESMO fornecedor (ex.: "BRW VIAGENS E TURISMO LTDA" e "BRW ... PASSAGENS ESTADIAS" são o
-  // mesmo BRW — agruparPorCliente já une por nome parecido) e o conjunto do fornecedor tem que
-  // SOMAR ZERO. Se o fornecedor NÃO zera (ex.: TROD, saldo 40.096 C), ele volta para "Em aberto".
-  // NÃO exijo casar por NF isolada: um fornecedor pode zerar com várias notas (título de uma NF
-  // quitado por baixas de outras). As conciliações MANUAIS/estorno (exemptos) são soberanas.
+  // RÉGUA DO USUÁRIO (ABSOLUTA): em "Conciliados" só fica o FORNECEDOR cujo total débito = total
+  // crédito (soma ZERO). Junta as variações do mesmo nome (agruparPorCliente une "BRW ... LTDA" e
+  // "BRW ... PASSAGENS ESTADIAS") e um fornecedor pode zerar com várias notas. QUALQUER bloco que
+  // não fecha em zero — inclusive só de "Saldo anterior" (abertura) que não pareou — VOLTA para
+  // "Em aberto", SEM exceção. (exemptos mantido só por compatibilidade; não isenta mais do zero.)
   const setVolta = new Set()
   for (const b of agruparPorCliente(zerados || [])) {
-    if (Math.abs(netDe(b.lancs)) >= 0.005) for (const l of b.lancs) if (!exemptos.has(l)) setVolta.add(l)
+    if (Math.abs(netDe(b.lancs)) >= 0.005) for (const l of b.lancs) setVolta.add(l)
   }
+  void exemptos
   const emAbertoEff = [...new Set([...(emAberto || []), ...setVolta])]
   const zeradosEff = (zerados || []).filter(l => !setVolta.has(l))
 
