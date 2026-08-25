@@ -2190,7 +2190,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
 
       {tipoCta !== 'saldo' && (
         <RelatoriosComposicao conta={conta} emAberto={emAbertoTodos} zerados={zerados} contraDe={contraDe}
-          exemptos={new Set([...conexaoManualLancs, ...confirmadosLancs, ...autoConcLancs])} />
+          exemptos={baixados} />
       )}
 
       {/* Impostos: baixa do mês anterior + memória de cálculo */}
@@ -3230,16 +3230,15 @@ function RelatoriosComposicao({ conta, emAberto, zerados, contraDe, exemptos = n
   const somaCred = ls => ls.reduce((s, l) => s + (Number(l.credito) || 0), 0)
   const netDe = ls => somaDeb(ls) - somaCred(ls) // saldo do grupo (0 quando zerou)
 
-  // RÉGUA DO USUÁRIO (ABSOLUTA): em "Conciliados" só fica o FORNECEDOR cujo total débito = total
-  // crédito (soma ZERO). Junta as variações do mesmo nome (agruparPorCliente une "BRW ... LTDA" e
-  // "BRW ... PASSAGENS ESTADIAS") e um fornecedor pode zerar com várias notas. QUALQUER bloco que
-  // não fecha em zero — inclusive só de "Saldo anterior" (abertura) que não pareou — VOLTA para
-  // "Em aberto", SEM exceção. (exemptos mantido só por compatibilidade; não isenta mais do zero.)
+  // RÉGUA DO USUÁRIO: em "Conciliados" tem que aparecer TUDO que zerou — INCLUSIVE a baixa
+  // AUTOMÁTICA por NF (e os estornos/links manuais). Essas conciliações REAIS (exemptos) ficam
+  // SEMPRE. O que NÃO é conciliação real (ex.: saldo anterior resolvido "por nome") só fica se o
+  // bloco do fornecedor fechar em ZERO; se o fornecedor não zera (ex.: TROD 40.096 C), volta para
+  // "Em aberto". Assim a automática nunca some, e o que não fecha não fica indevidamente conciliado.
   const setVolta = new Set()
   for (const b of agruparPorCliente(zerados || [])) {
-    if (Math.abs(netDe(b.lancs)) >= 0.005) for (const l of b.lancs) setVolta.add(l)
+    if (Math.abs(netDe(b.lancs)) >= 0.005) for (const l of b.lancs) if (!exemptos.has(l)) setVolta.add(l)
   }
-  void exemptos
   const emAbertoEff = [...new Set([...(emAberto || []), ...setVolta])]
   const zeradosEff = (zerados || []).filter(l => !setVolta.has(l))
 
