@@ -3226,6 +3226,17 @@ function RelatoriosComposicao({ conta, emAberto, zerados, contraDe }) {
   const somaCred = ls => ls.reduce((s, l) => s + (Number(l.credito) || 0), 0)
   const netDe = ls => somaDeb(ls) - somaCred(ls) // saldo do grupo (0 quando zerou)
 
+  // RÉGUA DO USUÁRIO: "o que zera vai para Conciliados; o que NÃO zera volta para Em aberto."
+  // Como garantia final (independente da classificação de linha lá em cima), reclassifica POR
+  // BLOCO (cliente): se um bloco dos "conciliados" NÃO soma zero, ele é jogado de volta para o
+  // "em aberto". Não faço o inverso (bloco do em aberto que soma zero NÃO é promovido sozinho a
+  // conciliado — isso continua exigindo NF+fornecedor+valor, para não marcar como baixado um
+  // zero coincidente de notas/valores diferentes).
+  const naoZeramNosConciliados = agruparPorCliente(zerados).filter(b => Math.abs(netDe(b.lancs)) >= 0.005).flatMap(b => b.lancs)
+  const setVolta = new Set(naoZeramNosConciliados)
+  const emAbertoEff = [...new Set([...(emAberto || []), ...naoZeramNosConciliados])]
+  const zeradosEff = (zerados || []).filter(l => !setVolta.has(l))
+
   // Em blocos por cliente/fornecedor, no papel timbrado da Attentive.
   async function excel(linhas, sub) {
     const blocos = agruparPorCliente(linhas)
@@ -3275,8 +3286,8 @@ function RelatoriosComposicao({ conta, emAberto, zerados, contraDe }) {
     <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: 16, marginBottom: 16 }}>
       <p style={{ fontSize: 14, fontWeight: 600, margin: '0 0 12px' }}><i className="ti ti-report" style={{ color: theme.accent, marginRight: 6 }} />Relatórios da composição</p>
       <div style={{ display: 'grid', gap: 10 }}>
-        <Grupo rotulo="Composição atual (em aberto)" linhas={emAberto} icon="ti-folder-open" cor={theme.accent} />
-        <Grupo rotulo="Conciliados (o que zerou)" linhas={zerados} icon="ti-circle-check" cor={theme.green} />
+        <Grupo rotulo="Composição atual (em aberto)" linhas={emAbertoEff} icon="ti-folder-open" cor={theme.accent} />
+        <Grupo rotulo="Conciliados (o que zerou)" linhas={zeradosEff} icon="ti-circle-check" cor={theme.green} />
       </div>
     </div>
   )
