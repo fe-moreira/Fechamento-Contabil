@@ -2186,7 +2186,8 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       <CardConferencia conta={conta} reg={reg} compId={compId} usuario={usuario} saldoAjuste={ajNet} composicao={tipoCta !== 'saldo'} onSalvo={onSalvarConf} />
 
       {tipoCta !== 'saldo' && (
-        <RelatoriosComposicao conta={conta} emAberto={emAbertoTodos} zerados={zerados} contraDe={contraDe} />
+        <RelatoriosComposicao conta={conta} emAberto={emAbertoTodos} zerados={zerados} contraDe={contraDe}
+          exemptos={new Set([...conexaoManualLancs, ...confirmadosLancs, ...autoConcLancs])} />
       )}
 
       {/* Impostos: baixa do mês anterior + memória de cálculo */}
@@ -3215,7 +3216,7 @@ function CardConferencia({ conta, reg, compId, usuario, saldoAjuste = 0, composi
 }
 
 // Relatórios da composição (em aberto / conciliados) em Excel ou PDF.
-function RelatoriosComposicao({ conta, emAberto, zerados, contraDe }) {
+function RelatoriosComposicao({ conta, emAberto, zerados, contraDe, exemptos = new Set() }) {
   // Linhas com uma coluna SALDO (D−C) no fim: por lançamento fica em branco (o valor está em
   // Débito/Crédito); o saldo aparece no Subtotal de cada grupo e no Total — R$ 0,00 quando o
   // grupo zerou (título e baixa se compensam) e o saldo em aberto no que sobrou.
@@ -3226,15 +3227,23 @@ function RelatoriosComposicao({ conta, emAberto, zerados, contraDe }) {
   const somaCred = ls => ls.reduce((s, l) => s + (Number(l.credito) || 0), 0)
   const netDe = ls => somaDeb(ls) - somaCred(ls) // saldo do grupo (0 quando zerou)
 
-  // RÉGUA DO USUÁRIO: "o que zera vai para Conciliados; o que NÃO zera volta para Em aberto."
-  // Como garantia final (independente da classificação de linha lá em cima), reclassifica POR
-  // BLOCO (cliente): se um bloco dos "conciliados" NÃO soma zero, ele é jogado de volta para o
-  // "em aberto". Não faço o inverso (bloco do em aberto que soma zero NÃO é promovido sozinho a
-  // conciliado — isso continua exigindo NF+fornecedor+valor, para não marcar como baixado um
-  // zero coincidente de notas/valores diferentes).
-  const naoZeramNosConciliados = agruparPorCliente(zerados).filter(b => Math.abs(netDe(b.lancs)) >= 0.005).flatMap(b => b.lancs)
-  const setVolta = new Set(naoZeramNosConciliados)
-  const emAbertoEff = [...new Set([...(emAberto || []), ...naoZeramNosConciliados])]
+  // RÉGUA DO USUÁRIO: conciliado = NOME + NF + (total débito = total crédito). Ou seja, só fica em
+  // "Conciliados" o que casa POR NF (dentro do mesmo cliente): agrupando as linhas por cliente e,
+  // dentro dele, por NF, o conjunto daquela NF tem que SOMAR ZERO. Se a NF não zera (ex.: NF 123661
+  // com 6.871,81 D e 4.187,60 C — mesma nota, valores diferentes), ou a linha não tem NF, ela VOLTA
+  // para "Em aberto" — mesmo que o cliente inteiro tenha somado zero "por nome". As conciliações
+  // MANUAIS/estorno (exemptos — linkadas/confirmadas à mão) são soberanas e NÃO são reavaliadas.
+  const setVolta = new Set()
+  for (const b of agruparPorCliente(zerados || [])) {
+    const porNf = {}
+    for (const l of b.lancs) { const k = nfKey(l.leitura?.nf); (porNf[k] = porNf[k] || []).push(l) }
+    for (const k in porNf) {
+      const grp = porNf[k]
+      const zeraPorNF = k && Math.abs(netDe(grp)) < 0.005 // NF válida (não vazia) e o conjunto dessa NF zera
+      if (!zeraPorNF) for (const l of grp) if (!exemptos.has(l)) setVolta.add(l)
+    }
+  }
+  const emAbertoEff = [...new Set([...(emAberto || []), ...setVolta])]
   const zeradosEff = (zerados || []).filter(l => !setVolta.has(l))
 
   // Em blocos por cliente/fornecedor, no papel timbrado da Attentive.
