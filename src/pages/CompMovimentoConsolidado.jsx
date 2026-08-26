@@ -173,8 +173,6 @@ export default function CompMovimentoConsolidado() {
         </div>
       </div>
 
-      <p style={{ color: theme.sub, fontSize: 12, margin: '0 0 10px' }}>Consolidando: {empresas.filter(e => ativas.has(e.id)).map(e => e.nome).join(' · ') || '—'}</p>
-
       {!meses.length ? (
         <Vazio icon="ti-database-off" txt={`Nenhuma das empresas do grupo tem razão importado em ${ANO}.`} />
       ) : (
