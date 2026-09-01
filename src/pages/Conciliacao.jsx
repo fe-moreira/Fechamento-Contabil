@@ -2212,7 +2212,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
 
       {tipoCta !== 'saldo' && (
         <RelatoriosComposicao conta={conta} emAberto={emAbertoTodos} zerados={zerados} contraDe={contraDe}
-          auto={baixados} />
+          auto={baixados} exemptos={new Set([...conexaoManualLancs, ...autoConcLancs, ...confirmadosLancs])} />
       )}
 
       {/* Impostos: baixa do mês anterior + memória de cálculo */}
@@ -3241,7 +3241,7 @@ function CardConferencia({ conta, reg, compId, usuario, saldoAjuste = 0, composi
 }
 
 // Relatórios da composição (em aberto / conciliados) em Excel ou PDF.
-function RelatoriosComposicao({ conta, emAberto, zerados, contraDe, auto = new Set() }) {
+function RelatoriosComposicao({ conta, emAberto, zerados, contraDe, auto = new Set(), exemptos = new Set() }) {
   // Linhas com uma coluna SALDO (D−C) no fim: por lançamento fica em branco (o valor está em
   // Débito/Crédito); o saldo aparece no Subtotal de cada grupo e no Total — R$ 0,00 quando o
   // grupo zerou (título e baixa se compensam) e o saldo em aberto no que sobrou.
@@ -3253,13 +3253,14 @@ function RelatoriosComposicao({ conta, emAberto, zerados, contraDe, auto = new S
   const netDe = ls => somaDeb(ls) - somaCred(ls) // saldo do grupo (0 quando zerou)
 
   // RÉGUA DO USUÁRIO: em "Conciliados" tem que aparecer TUDO que zerou — INCLUSIVE a baixa
-  // AUTOMÁTICA por NF (e os estornos/links manuais). Essas conciliações REAIS (exemptos) ficam
-  // SEMPRE. O que NÃO é conciliação real (ex.: saldo anterior resolvido "por nome") só fica se o
-  // bloco do fornecedor fechar em ZERO; se o fornecedor não zera (ex.: TROD 40.096 C), volta para
-  // "Em aberto". Assim a automática nunca some, e o que não fecha não fica indevidamente conciliado.
+  // AUTOMÁTICA por NF e os LINKS/CONEXÕES manuais (o usuário baixou explicitamente). Essas
+  // conciliações REAIS (auto + exemptos) ficam SEMPRE, mesmo que o bloco do fornecedor não feche
+  // em zero (ex.: a outra perna caiu em outro grupo porque o nome do pagamento veio diferente do
+  // saldo anterior). O que NÃO é conciliação real (ex.: saldo anterior resolvido só "por nome") é
+  // que volta para "Em aberto" quando o fornecedor não zera.
   const setVolta = new Set()
   for (const b of agruparPorCliente(zerados || [])) {
-    if (Math.abs(netDe(b.lancs)) >= 0.005) for (const l of b.lancs) if (!auto.has(l)) setVolta.add(l)
+    if (Math.abs(netDe(b.lancs)) >= 0.005) for (const l of b.lancs) if (!auto.has(l) && !exemptos.has(l)) setVolta.add(l)
   }
   const emAbertoEff = [...new Set([...(emAberto || []), ...setVolta])]
   const zeradosEff = (zerados || []).filter(l => !setVolta.has(l))
