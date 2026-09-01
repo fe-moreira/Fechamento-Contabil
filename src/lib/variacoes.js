@@ -16,13 +16,18 @@ export async function apurarVariacoes(empresaId, opts = {}) {
   const vazio = { itens: [], meses: [], contas: [], matriz: {} }
   if (!empresaId) return vazio
 
-  const { data: comps } = await supabase.from('competencias').select('id, mes, status')
+  const { data: comps } = await supabase.from('competencias').select('id, mes, status, integracoes')
     .eq('cliente_id', empresaId).eq('ano', ANO).order('mes', { ascending: true })
   if (!comps || !comps.length) return vazio
   // Tudo ATÉ o último mês ENCERRADO já foi aceito no fechamento → não gera pendência (nem os meses
   // de histórico abertos antes dele). Pendência só nos meses DEPOIS do último fechado.
   const mesesFechados = comps.filter(c => c.status === 'fechado').map(c => c.mes)
   const ultimoFechado = mesesFechados.length ? Math.max(...mesesFechados) : 0
+  // SNAPSHOT do encerramento: células (conta|mês) que foram ACEITAS quando o fechamento foi
+  // encerrado. Ao reabrir para um ajuste, elas continuam aceitas — não voltam a ser pendência
+  // (evita "perder" as justificativas já feitas). É preenchido pelo botão Encerrar/Re-encerrar.
+  const snapshotVar = new Set()
+  for (const c of comps) { const cells = c.integracoes?.aceitacao?.varCells; if (Array.isArray(cells)) for (const k of cells) snapshotVar.add(k) }
   const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
 
   // Plano p/ classificar cada conta (reduzido → classificação) e filtrar só resultado.
@@ -101,18 +106,23 @@ export async function apurarVariacoes(empresaId, opts = {}) {
   // O primeiro mês nunca desvia. Mês sem saldo conta como 0 — sumir de um mês que tinha
   // movimento é variação a justificar.
   const itens = []
+  const celulas = [] // TODAS as células (conta|mês) que desviam — usado para montar o snapshot ao encerrar.
   for (const [conta, linha] of Object.entries(matriz)) {
     for (let i = 1; i < mesesComDados.length; i++) {
       const m = mesesComDados[i], mAnt = mesesComDados[i - 1]
       const a = linha[m] == null ? 0 : Number(linha[m]) || 0
       const p = linha[mAnt] == null ? 0 : Number(linha[mAnt]) || 0
       if (a === 0 && p === 0) continue // sem movimento nos dois meses
-      if (m <= ultimoFechado) continue // até o último mês fechado já foi aceito — não vira pendência
       const desvia = p === 0 ? a !== 0 : Math.abs(a - p) / Math.abs(p) > 0.10
-      if (desvia && !jaJustificada(conta, m)) itens.push({ conta, nome: nomes[conta] || '', mes: m, valor: linha[m] ?? 0 })
+      if (!desvia) continue
+      celulas.push(conta + '|' + m)
+      if (m <= ultimoFechado) continue // até o último mês fechado já foi aceito — não vira pendência
+      if (jaJustificada(conta, m)) continue // justificada no Comparativo/Status
+      if (snapshotVar.has(conta + '|' + m)) continue // aceita no encerramento — reabrir não reverte
+      itens.push({ conta, nome: nomes[conta] || '', mes: m, valor: linha[m] ?? 0 })
     }
   }
 
   const contas = Object.keys(matriz).sort((a, b) => a.localeCompare(b, 'pt-BR', { numeric: true })).map(conta => ({ conta, nome: nomes[conta] || '' }))
-  return { itens, meses: mesesComDados, contas, matriz }
+  return { itens, meses: mesesComDados, contas, matriz, celulas }
 }

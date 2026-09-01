@@ -7,6 +7,8 @@ import { fechaSozinho } from '../lib/clientes'
 import { inativacaoDoCliente, inativoNaCompetencia } from '../lib/inativacao'
 import { normalizaCompetencia } from '../lib/balancete'
 import { calcularProgresso } from '../lib/progresso'
+import { apurarVariacoes } from '../lib/variacoes'
+import { apurarBancoResultado } from '../lib/bancoResultado'
 import { gerarExcelTimbrado } from '../lib/excel'
 import { theme } from '../lib/theme'
 import InfoTela from '../components/InfoTela'
@@ -96,6 +98,20 @@ export default function Fechamentos() {
     abrirFechamento(c.mes, c.ano) // marca o fechamento como ativo (libera as funções)
     nav('/status')
   }
+  // SNAPSHOT das aceitações no encerramento: guarda as chaves de banco×resultado e as células
+  // (conta|mês) de variação que estão aceitas AGORA. Ao reabrir, os gates respeitam este carimbo —
+  // nada que já estava aceito volta a ser pendência (só o que você realmente mudar é reavaliado).
+  async function montarAceitacao(compId, mes) {
+    try {
+      const [br, v] = await Promise.all([
+        apurarBancoResultado(empresaId, compId),
+        apurarVariacoes(empresaId, { comLancamentos: true }),
+      ])
+      const banco = [...new Set((br?.lancamentos || []).map(l => l.chave).filter(Boolean))]
+      const varCells = [...new Set((v?.celulas || []).filter(k => Number(String(k).split('|')[1]) <= mes))]
+      return { banco, varCells, em: new Date().toISOString(), por: user?.email || null }
+    } catch (e) { console.error('montarAceitacao:', e); return null }
+  }
   // Encerrar DIRETO no card: pergunta se tem certeza e marca a competência como ENCERRADA
   // (somente leitura). Só aparece a 100% (pronto).
   async function encerrarDireto(c) {
@@ -111,7 +127,9 @@ export default function Fechamentos() {
     // Carimba QUEM encerrou e QUANDO na própria competência (integracoes.encerramento) — histórico
     // imutável de quem fechou, independente de quem seja o responsável depois. Sem tabela nova.
     const { data: cur } = await supabase.from('competencias').select('integracoes').eq('id', c.id).maybeSingle()
-    const integ = { ...(cur?.integracoes && typeof cur.integracoes === 'object' ? cur.integracoes : {}), encerramento: { por: user?.email || null, em: new Date().toISOString() } }
+    const aceit = await montarAceitacao(c.id, c.mes)
+    const base = (cur?.integracoes && typeof cur.integracoes === 'object') ? cur.integracoes : {}
+    const integ = { ...base, encerramento: { por: user?.email || null, em: new Date().toISOString() }, ...(aceit ? { aceitacao: aceit } : {}) }
     const { error } = await supabase.from('competencias').update({ status: 'fechado', integracoes: integ }).eq('id', c.id)
     setSalvandoAcao(false)
     if (error) { alert('Não consegui encerrar: ' + error.message); return }
@@ -145,8 +163,9 @@ export default function Fechamentos() {
     if (!window.confirm(`Re-encerrar ${MESES[c.mes - 1]}/${c.ano}?\n\nIsto REACEITA o estado que já estava encerrado e volta a competência para SOMENTE LEITURA. As justificativas/variações que reapareceram ao reabrir voltam a ser aceitas como antes — nada é refeito nem apagado.\n\nUse só se você NÃO alterou valores desde a reabertura.\n\nTem certeza?`)) return
     setSalvandoAcao(true)
     const { data: cur } = await supabase.from('competencias').select('integracoes').eq('id', c.id).maybeSingle()
+    const aceit = await montarAceitacao(c.id, c.mes)
     const base = (cur?.integracoes && typeof cur.integracoes === 'object') ? cur.integracoes : {}
-    const integ = { ...base, encerramento: { por: user?.email || null, em: new Date().toISOString(), reencerrado: true } }
+    const integ = { ...base, encerramento: { por: user?.email || null, em: new Date().toISOString(), reencerrado: true }, ...(aceit ? { aceitacao: aceit } : {}) }
     const { error } = await supabase.from('competencias').update({ status: 'fechado', integracoes: integ }).eq('id', c.id)
     setSalvandoAcao(false)
     if (error) { alert('Não consegui re-encerrar: ' + error.message); return }

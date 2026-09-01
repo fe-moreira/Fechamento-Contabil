@@ -70,10 +70,15 @@ export async function apurarBancoResultado(empresaId, compId) {
   const { data: aud } = await supabase.from('auditoria').select('item, tipo, detalhe, dedutibilidade').eq('competencia_id', compId).eq('modulo', 'Status')
   const tratados = new Map(), pend = new Set()
   for (const a of (aud || [])) { if (a.tipo === 'Pendência') pend.add(a.item); else tratados.set(a.item, a) }
+  // SNAPSHOT do encerramento: chaves aceitas quando o fechamento foi encerrado. Ao reabrir para um
+  // ajuste, elas seguem aceitas mesmo que o casamento por valor tenha oscilado — não voltam a pendência.
+  const { data: compRow } = await supabase.from('competencias').select('integracoes').eq('id', compId).maybeSingle()
+  const snapBanco = new Set(Array.isArray(compRow?.integracoes?.aceitacao?.banco) ? compRow.integracoes.aceitacao.banco : [])
   for (const f of flagged) {
     const chave = `${f.banco} → ${f.resultado} · ${money(f.valor)}`
+    f.chave = chave
     const t = tratados.get(chave)
-    f.tratado = !!t
+    f.tratado = !!t || snapBanco.has(chave)
     f.pendenciaCliente = pend.has(chave)
     f.justDetalhe = t?.detalhe || ''
     f.justDedut = t?.dedutibilidade || ''
