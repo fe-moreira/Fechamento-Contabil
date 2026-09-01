@@ -13,8 +13,9 @@ import InfoTela from '../components/InfoTela'
 const MESES = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
 const MESES_CURTO = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
 
+const fmtDataHora = iso => { if (!iso) return ''; const d = new Date(iso); if (isNaN(d)) return ''; const p = n => String(n).padStart(2, '0'); return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}` }
 const ST = {
-  fechado: { txt: 'Encerrado', cor: theme.green, bg: 'rgba(48,164,108,0.15)', icon: 'ti-lock-check', sub: () => 'Encerrado (somente leitura)' },
+  fechado: { txt: 'Encerrado', cor: theme.green, bg: 'rgba(48,164,108,0.15)', icon: 'ti-lock-check', sub: c => { const e = c?.integracoes?.encerramento; return e?.por ? `Encerrado por ${e.por}${e.em ? ' · ' + fmtDataHora(e.em) : ''}` : 'Encerrado (somente leitura)' } },
   // 100% dos gates OK, ainda não encerrado formalmente. Verde (conta como Fechado no resumo).
   pronto: { txt: 'Concluído', cor: theme.green, bg: 'rgba(48,164,108,0.15)', icon: 'ti-circle-check', sub: () => 'Pronto para encerrar · 100%' },
   andamento: { txt: 'Em andamento', cor: theme.yellow, bg: 'rgba(245,166,35,0.15)', icon: 'ti-progress', sub: c => `Progresso ${c.pct || 0}%` },
@@ -101,7 +102,11 @@ export default function Fechamentos() {
     }
     if (!window.confirm(`Encerrar o fechamento de ${MESES[c.mes - 1]}/${c.ano}? Ele fica ENCERRADO (somente leitura) — para editar depois é preciso Reabrir (admin).\n\nTem certeza?`)) return
     setSalvandoAcao(true)
-    const { error } = await supabase.from('competencias').update({ status: 'fechado' }).eq('id', c.id)
+    // Carimba QUEM encerrou e QUANDO na própria competência (integracoes.encerramento) — histórico
+    // imutável de quem fechou, independente de quem seja o responsável depois. Sem tabela nova.
+    const { data: cur } = await supabase.from('competencias').select('integracoes').eq('id', c.id).maybeSingle()
+    const integ = { ...(cur?.integracoes && typeof cur.integracoes === 'object' ? cur.integracoes : {}), encerramento: { por: user?.email || null, em: new Date().toISOString() } }
+    const { error } = await supabase.from('competencias').update({ status: 'fechado', integracoes: integ }).eq('id', c.id)
     setSalvandoAcao(false)
     if (error) { alert('Não consegui encerrar: ' + error.message); return }
     refreshStatusCompetencia?.()
@@ -112,7 +117,10 @@ export default function Fechamentos() {
     if (!isAdmin) { alert('Apenas um administrador pode reabrir um fechamento.'); return }
     if (!window.confirm(`Reabrir o fechamento de ${MESES[c.mes - 1]}/${c.ano}? Ele volta a ficar ABERTO para edição.\n\nTem certeza?`)) return
     setSalvandoAcao(true)
-    const { error } = await supabase.from('competencias').update({ status: 'andamento' }).eq('id', c.id)
+    // Carimba QUEM reabriu e QUANDO (mantém o encerramento anterior no histórico).
+    const { data: cur } = await supabase.from('competencias').select('integracoes').eq('id', c.id).maybeSingle()
+    const integ = { ...(cur?.integracoes && typeof cur.integracoes === 'object' ? cur.integracoes : {}), reabertura: { por: user?.email || null, em: new Date().toISOString() } }
+    const { error } = await supabase.from('competencias').update({ status: 'andamento', integracoes: integ }).eq('id', c.id)
     setSalvandoAcao(false)
     if (error) { alert('Não consegui reabrir: ' + error.message); return }
     refreshStatusCompetencia?.()
