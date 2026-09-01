@@ -808,11 +808,14 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       // lote usa isso — as demais tratativas (ajuste/correção) seguem pelo razao_id, para
       // não mexer nos filtros/leitura incerta.
       const det = String(a.detalhe || '')
-      if (det.startsWith('Confirmado em lote')) { conf.add(chave); if (a.item && !abItem) conf.add(a.item) }
+      // Baixa de ABERTURA: registra também a forma SEM NOME (conta·data·NF·valor), para reconhecer
+      // a baixa mesmo que o nome tenha mudado (unificação/prefixo) desde que foi gravada.
+      const abNI = abItem ? chaveAberturaSemNome(abItem) : null
+      if (det.startsWith('Confirmado em lote')) { conf.add(chave); if (a.item && !abItem) conf.add(a.item); if (abNI) conf.add(abNI) }
       // CONEXÃO/VÍNCULO manual: o usuário selecionou N linhas que ZERAM entre si e mandou baixar.
       // Esse par explícito SAI SEMPRE do em aberto (vai para Conciliados), mesmo que OUTRAS linhas
       // do mesmo nome sigam abertas — o grupo do nome não precisa zerar inteiro. Ver caso ATTENTIVE.
-      if (/conex[aã]o manual|v[ií]nculo manual/.test(det)) { conx.add(chave); if (a.item && !abItem) conx.add(a.item) }
+      if (/conex[aã]o manual|v[ií]nculo manual/.test(det)) { conx.add(chave); if (a.item && !abItem) conx.add(a.item); if (abNI) conx.add(abNI) }
     }
     setTratados(rz); setTratadosAb(ab); setConfirmados(conf); setConexoesManuais(conx)
   }
@@ -827,6 +830,13 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // Formato ANTIGO (sem data) — só para reconhecer conferências gravadas ANTES desta mudança,
   // e apenas quando a linha é ÚNICA por esse formato (senão marcaria o gêmeo de novo).
   const chaveAberturaLegacy = l => `AB·${conta.conta}·${nfKey(l.leitura?.nf)}·${baixaTxt(l.leitura?.entidade || '')}·${Math.round(((Number(l.debito) || 0) - (Number(l.credito) || 0)) * 100)}`
+  // Chave da BAIXA de abertura SEM o nome (conta·data·NF·valor). O nome é instável — muda com a
+  // unificação do vínculo e com prefixos (ex.: CNPJ "63.977.829" colado no nome do pagamento) —,
+  // então uma baixa gravada com o nome canônico não era reconhecida na releitura (a linha voltava
+  // pro em aberto). A baixa por chave sem nome não depende disso. `chaveAberturaSemNome` converte
+  // um item AB· já gravado (com nome) para essa forma, esvaziando o segmento do nome.
+  const chaveAbBaixa = l => chaveAbertura(l, '')
+  const chaveAberturaSemNome = item => { const p = String(item || '').split('·'); return (p[0] === 'AB' && p.length === 6) ? (p[4] = '', p.join('·')) : null }
   // Chave estável de uma linha de razão pelo `item` (conta·data·NF) — igual à gravada na
   // auditoria por registrar()/baixarConexao(). Casa mesmo após reimportar o razão.
   const itemConc = l => `${conta.conta} · ${l.data || ''} · NF ${l.leitura?.nf || '—'}`
@@ -844,11 +854,11 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const trataAbLegacy = l => legacyAbUnico(l) && tratadosAb.has(chaveAberturaLegacy(l))
   const chaveTrat = l => l.acerto ? String(l.id).replace(/^ac_/, '') : (l._abertura ? chaveAbertura(l) : l.id)
   const jaTratada = l => l._abertura ? (tratadosAb.has(chaveAbertura(l)) || trataAbLegacy(l)) : tratados.has(l.id)
-  const foiConfirmado = l => confirmados.has(chaveTrat(l)) || (l._abertura && legacyAbUnico(l) && confirmados.has(chaveAberturaLegacy(l))) || (!l._abertura && !l.acerto && itemUnico(l) && confirmados.has(itemConc(l))) // saiu do em aberto (conciliado)
+  const foiConfirmado = l => confirmados.has(chaveTrat(l)) || (l._abertura && confirmados.has(chaveAbBaixa(l))) || (l._abertura && legacyAbUnico(l) && confirmados.has(chaveAberturaLegacy(l))) || (!l._abertura && !l.acerto && itemUnico(l) && confirmados.has(itemConc(l))) // saiu do em aberto (conciliado)
   // VÍNCULO/CONEXÃO manual: o par explícito que o usuário linkou e mandou baixar (zera entre si).
   // SAI SEMPRE do em aberto — não depende do grupo do nome zerar inteiro (o resto do nome pode
   // seguir aberto). É a régua do usuário: "cliquei e conciliei → tem que baixar". Ver ATTENTIVE.
-  const ehConexaoManual = l => conexoesManuais.has(chaveTrat(l)) || (!l._abertura && !l.acerto && itemUnico(l) && conexoesManuais.has(itemConc(l)))
+  const ehConexaoManual = l => conexoesManuais.has(chaveTrat(l)) || (l._abertura && conexoesManuais.has(chaveAbBaixa(l))) || (!l._abertura && !l.acerto && itemUnico(l) && conexoesManuais.has(itemConc(l)))
   // REABERTO pelo usuário: um grupo que ZEROU POR NOME (automático) e o usuário mandou reabrir
   // porque não era um par de verdade (NF/valor diferentes). Chave ÚNICA POR LINHA — razão pelo
   // uuid (NUNCA por conta·data·NF: linhas SEM NF colidem e reabriam o que já estava certo);
