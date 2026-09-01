@@ -162,27 +162,19 @@ export async function conferirBalanceteEncerramento(empresaId, compId, importado
     const { data: compsAno } = await supabase.from('competencias').select('id')
       .eq('cliente_id', empresaId).eq('ano', alvoCmp.ano).lte('mes', alvoCmp.mes)
     const ids = (compsAno || []).map(c => c.id)
-    const { data: lancsAno } = ids.length
-      ? await supabase.from('lancamentos').select('competencia_id, conta_debito, conta_credito, valor').in('competencia_id', ids)
-      : { data: [] }
-    const ajComp = {} // competencia_id -> { conta: ajuste }
-    for (const l of (lancsAno || [])) {
-      const v = Number(l.valor) || 0
-      const a = ajComp[l.competencia_id] || (ajComp[l.competencia_id] = {})
-      if (l.conta_debito) a[String(l.conta_debito)] = (a[String(l.conta_debito)] || 0) + v
-      if (l.conta_credito) a[String(l.conta_credito)] = (a[String(l.conta_credito)] || 0) - v
-    }
+    // FONTE ÚNICA do resultado = a MESMA do Comparativo de Movimento: montarBalancete com
+    // `comLancamentos: true` (razão vivo — balancete + lançamentos/correções). Somar o saldo_final
+    // dessas competências dá exatamente a coluna TOTAL do Comparativo. Nada de somar lançamentos
+    // à mão aqui (dava diferença para o Comparativo).
     for (const cId of ids) {
-      const ls = cId === compId ? linhas : (await montarBalancete(empresaId, cId)).linhas
-      const a = ajComp[cId] || {}
+      const ls = (await montarBalancete(empresaId, cId, 0, { comLancamentos: true })).linhas
       for (const l of ls) {
         if (l.sintetica) continue
         const d = dig(l.classifRaw || l.classif)[0]
         if (d !== '3' && d !== '4' && d !== '5') continue
         const k = String(l.reduzido)
-        const efe = (Number(l.saldo_final) || 0) + (a[k] || 0)
         const cur = resAcum.get(k) || { classifRaw: l.classifRaw, classif: l.classif, nome: l.nome, efetivo: 0 }
-        cur.efetivo += efe
+        cur.efetivo += Number(l.saldo_final) || 0
         if (!cur.nome && l.nome) cur.nome = l.nome
         resAcum.set(k, cur)
       }
