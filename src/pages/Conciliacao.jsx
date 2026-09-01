@@ -1037,11 +1037,23 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         if (nomeAc) base.leitura = { ...base.leitura, entidade: nomeAc, ident: true, conf: 'alta' }
         return { ...base, acerto: true, origem: a.origem || null, razaoRef: a.razao_id || null }
       })
+    // DEDUP de abertura idêntica: duas linhas "Saldo anterior" com a MESMA NF + mesmo cliente +
+    // mesmo valor são a MESMA nota duplicada na carga inicial — mantém UMA só (senão o saldo conta
+    // a nota duas vezes). Só quando há NF: SEM NF cada linha é individual (títulos distintos de
+    // mesmo valor). NF diferente (ex.: 3232 × 3255) NUNCA junta — respeita a regra abaixo.
+    const abVistos = new Set()
+    const aberturaDedup = (abertura || []).filter(a => {
+      const nf = nfKey(a.leitura?.nf)
+      if (!nf) return true
+      const k = `${nf}·${Math.round(((Number(a.debito) || 0) - (Number(a.credito) || 0)) * 100)}·${chaveNome(a.leitura?.entidade || '')}`
+      if (abVistos.has(k)) return false
+      abVistos.add(k); return true
+    })
     // Títulos de abertura (saldo anterior) primeiro; depois o movimento do mês; por fim os acertos.
     // `_uid` = identificador ÚNICO por linha (índice). A seleção do checkbox (baixa manual) é
     // por linha, então NUNCA pode agrupar por valor+nome como o sepKey faz — senão marcar uma
     // nota marca outra de mesmo valor (ex.: duas aberturas de R$ 7.385,96, NF 3232 e 3255).
-    const _todas = [...(abertura || []).map(a => bump({ ...a, _abertura: true })), ...rzProc, ...acertoLancs]
+    const _todas = [...aberturaDedup.map(a => bump({ ...a, _abertura: true })), ...rzProc, ...acertoLancs]
     setLanc(_todas.map((l, i) => ({ ...l, _uid: `u${i}` })))
     setCarregando(false)
   }
