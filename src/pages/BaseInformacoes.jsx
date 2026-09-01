@@ -10,6 +10,7 @@ import { theme, money } from '../lib/theme'
 import InfoTela from '../components/InfoTela'
 import { parsePlano, applyMask, normalizaCompetencia } from '../lib/balancete'
 import { gerarExcelTimbrado } from '../lib/excel'
+import { carregarResponsavelHist, salvarResponsavel, excluirResponsavel, normVigencia, responsavelNaCompetencia, vigNum } from '../lib/responsavel'
 import { abrePdfTimbrado } from '../lib/pdf'
 import { aberturaComp, excluirSaldoInicialTudo } from '../lib/cargaInicial'
 
@@ -300,6 +301,7 @@ export default function BaseInformacoes() {
   const [dist, setDist] = useState(null)   // linha de dist_lucros_config
   const [resPL, setResPL] = useState(null) // linha de resultado_pl_config (contas de lucro/prejuízo)
   const [cargaTrib, setCargaTrib] = useState(null) // linha de carga_tributaria_config
+  const [respHist, setRespHist] = useState([]) // responsável pelo fechamento por vigência (mais recente primeiro)
   const [regime, setRegime] = useState('') // regime tributário do cliente (habilita o LALUR)
   const [modal, setModal] = useState(null)
   const [aberturaTravada, setAberturaTravada] = useState(false) // competência de abertura fechada
@@ -341,10 +343,11 @@ export default function BaseInformacoes() {
       .order('created_at', { ascending: false }).limit(1).maybeSingle()
     setCargaTrib(error || !data ? null : { id: data.id, contas: Array.isArray(data.dados?.contas) ? data.dados.contas : [], base: data.dados?.base || 'bruto' })
   }
+  async function carregarRespHist() { setRespHist(await carregarResponsavelHist(empresaId)) }
   useEffect(() => {
-    setParticularidades([]); setContatos([]); setCargas({}); setPeriodo(''); setDist(null); setResPL(null); setCargaTrib(null); setCargaSaldos(false); setCargaFeita(false)
+    setParticularidades([]); setContatos([]); setCargas({}); setPeriodo(''); setDist(null); setResPL(null); setCargaTrib(null); setRespHist([]); setCargaSaldos(false); setCargaFeita(false)
     if (!empresaId) return
-    carregarCargas(); carregarDist(); carregarResPL(); carregarCargaTrib()
+    carregarCargas(); carregarDist(); carregarResPL(); carregarCargaTrib(); carregarRespHist()
     supabase.from('clientes').select('particularidades, contatos, competencia_inicio, carga_saldos, carga_inicial_feita, regime_tributario').eq('id', empresaId).single()
       .then(({ data }) => {
         setParticularidades(data?.particularidades || [])
@@ -548,6 +551,9 @@ export default function BaseInformacoes() {
         <SimplesCard icon="ti-receipt-tax" title="Carga tributária" sub="Contas de imposto + base (bruto/líquido)"
           badge={(cargaTrib?.contas?.length) ? { txt: `${cargaTrib.contas.length} conta(s)`, cor: theme.green, bg: 'rgba(48,164,108,0.15)' } : { txt: 'configurar', cor: theme.yellow, bg: 'rgba(245,166,35,0.15)' }}
           onClick={() => setModal({ tipo: 'cargaTrib' })} />
+        <SimplesCard icon="ti-user-check" title="Responsável pelo fechamento" sub={respHist.length ? `atual desde ${respHist[0].vigencia} · ${respHist.length} vigência(s)` : 'quem fecha este cliente (por vigência)'}
+          badge={respHist.length ? { txt: respHist[0].responsavel, cor: theme.green, bg: 'rgba(48,164,108,0.15)' } : { txt: 'definir', cor: theme.yellow, bg: 'rgba(245,166,35,0.15)' }}
+          onClick={() => setModal({ tipo: 'responsavel' })} />
         {(() => {
           const ehLR = /LUCRO REAL/i.test(regime)
           const cfgLalur = cargas.lalur?.at(-1)
@@ -632,6 +638,10 @@ export default function BaseInformacoes() {
       )}
       {modal?.tipo === 'cargaTrib' && (
         <ModalCargaTributaria inicial={cargaTrib} plano={plano} onClose={() => setModal(null)} onSalvar={salvarCargaTrib} />
+      )}
+      {modal?.tipo === 'responsavel' && (
+        <ModalResponsavel empresaId={empresaId} empresaNome={empresaNome} competencia={competencia} usuario={user?.email}
+          hist={respHist} onChanged={carregarRespHist} onClose={() => setModal(null)} />
       )}
       {modal?.tipo === 'lalur' && (
         <ModalLalurConfig empresaId={empresaId} usuario={user?.email} competencia={competencia} regime={regime}
@@ -2014,6 +2024,54 @@ function ModalCargaTributaria({ inicial, plano = [], onClose, onSalvar }) {
         contas: contas.filter(c => String(c.cod || '').trim()).map(c => ({ cod: String(c.cod).trim(), nome: c.nome || '' })),
         base,
       })} />
+    </Modal>
+  )
+}
+
+function ModalResponsavel({ empresaId, empresaNome, competencia, usuario, hist = [], onChanged, onClose }) {
+  const [vig, setVig] = useState(competencia || '')
+  const [nome, setNome] = useState('')
+  const [salvando, setSalvando] = useState(false)
+  const [erro, setErro] = useState('')
+  const atualComp = responsavelNaCompetencia(hist, competencia)
+  const alvo = vigNum(competencia)
+  const atualId = (hist.filter(h => vigNum(h.vigencia) <= alvo)[0] || {}).id // hist já vem desc
+  const fmt = iso => { if (!iso) return ''; const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleDateString('pt-BR') }
+  async function add() {
+    setErro(''); const v = normVigencia(vig)
+    if (!v) { setErro('Vigência inválida — use MM/AAAA.'); return }
+    if (!nome.trim()) { setErro('Informe o nome do responsável.'); return }
+    setSalvando(true)
+    const { error } = await salvarResponsavel(empresaId, v, nome.trim(), usuario)
+    setSalvando(false)
+    if (error) { setErro('Não consegui salvar: ' + error.message); return }
+    setNome(''); await onChanged()
+  }
+  async function remover(id) { if (!window.confirm('Remover esta vigência do responsável?')) return; await excluirResponsavel(id); await onChanged() }
+  return (
+    <Modal titulo="Responsável pelo fechamento" sub={empresaNome} onClose={onClose} largura={580}>
+      <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 14px', lineHeight: 1.55 }}>
+        Quem responde pelo fechamento deste cliente, <b>por vigência</b>. Trocou? <b>Adicione uma vigência nova</b> — o anterior fica no histórico, não some. {competencia && atualComp && <>Na competência <b>{competencia}</b>, o responsável é <b style={{ color: theme.text }}>{atualComp}</b>.</>}
+      </p>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', marginBottom: 12, flexWrap: 'wrap' }}>
+        <div><label>A partir de</label><input className="input" style={{ width: 110 }} placeholder="MM/AAAA" value={vig} onChange={e => setVig(e.target.value)} /></div>
+        <div style={{ flex: 1, minWidth: 160 }}><label>Responsável</label><input className="input" value={nome} onChange={e => setNome(e.target.value)} placeholder="Nome do responsável" onKeyDown={e => e.key === 'Enter' && add()} /></div>
+        <button className="btn" disabled={salvando} onClick={add}><i className="ti ti-plus" /> Adicionar</button>
+      </div>
+      {erro && <p style={{ color: theme.red, fontSize: 12.5, margin: '0 0 10px' }}>{erro}</p>}
+      <p style={{ color: theme.sub, fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: .6, margin: '8px 0 6px' }}>Histórico de vigências</p>
+      {!hist.length ? <p style={{ color: theme.sub, fontSize: 12.5 }}>Nenhum responsável cadastrado ainda.</p> : (
+        <div style={{ border: `0.5px solid ${theme.cb}`, borderRadius: 10, overflow: 'hidden' }}>
+          {hist.map((h, i) => (
+            <div key={h.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderTop: i ? `1px solid ${theme.border}` : 'none' }}>
+              <span style={{ fontSize: 12.5, color: theme.sub, whiteSpace: 'nowrap', minWidth: 92 }}>desde {h.vigencia}</span>
+              <span style={{ fontSize: 13.5, color: theme.text, fontWeight: 600, flex: 1 }}>{h.responsavel || '—'}{h.id === atualId && <span style={{ marginLeft: 8, fontSize: 10.5, fontWeight: 700, color: theme.green, background: 'rgba(48,164,108,0.15)', borderRadius: 20, padding: '2px 8px' }}>vigente</span>}</span>
+              <span style={{ fontSize: 11, color: theme.sub, whiteSpace: 'nowrap' }}>{h.usuario || '—'}{h.created_at ? ' · ' + fmt(h.created_at) : ''}</span>
+              <i className="ti ti-trash" onClick={() => remover(h.id)} style={{ color: theme.red, cursor: 'pointer' }} title="Remover vigência" />
+            </div>
+          ))}
+        </div>
+      )}
     </Modal>
   )
 }
