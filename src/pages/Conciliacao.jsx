@@ -2054,6 +2054,12 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         const chaves = [chaveAbertura(l)]
         if (legacyAbUnico(l)) chaves.push(chaveAberturaLegacy(l)) // limpa também o registro no formato antigo
         await supabase.from('auditoria').delete().eq('competencia_id', compId).eq('modulo', 'Conciliação').in('item', chaves)
+        // A baixa pode ter sido gravada com OUTRO nome embutido (unificação do vínculo, CNPJ colado
+        // no nome do pagamento). Apaga TODA baixa desta abertura pela chave SEM NOME (conta·data·NF·
+        // valor), senão o registro sobrevive e a linha não reabre.
+        const cents = Math.round(((Number(l.debito) || 0) - (Number(l.credito) || 0)) * 100)
+        const like = `AB·${conta.conta}·${dataAb(l)}·${nfKey(l.leitura?.nf)}·%·${cents}`
+        await supabase.from('auditoria').delete().eq('competencia_id', compId).eq('modulo', 'Conciliação').like('item', like)
       } else {
         let q = supabase.from('auditoria').delete().eq('competencia_id', compId).eq('modulo', 'Conciliação')
         q = l.acerto ? q.eq('razao_id', String(l.id).replace(/^ac_/, '')) : q.eq('razao_id', l.id)
