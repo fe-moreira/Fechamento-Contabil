@@ -738,7 +738,7 @@ function SelecionarContasPlano({ plano = [], jaCods = new Set(), tipos = null, f
     const cod = String(p.cod).trim()
     if (jaCods.has(cod)) return false
     if (!todas && grupos && !grupos.includes(g1(p))) return false
-    if (q && !norm(cod).includes(q) && !norm(p.nome).includes(q)) return false
+    if (q && !norm(cod).includes(q) && !norm(p.nome).includes(q) && !norm(p.classif).includes(q)) return false
     return true
   })
   const toggle = cod => setMarc(s => { const n = new Set(s); n.has(cod) ? n.delete(cod) : n.add(cod); return n })
@@ -757,7 +757,7 @@ function SelecionarContasPlano({ plano = [], jaCods = new Set(), tipos = null, f
         </div>
       )}
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
-        <input className="input" autoFocus placeholder="Buscar por código ou nome…" value={busca} onChange={e => setBusca(e.target.value)} style={{ flex: 1, minWidth: 180 }} />
+        <input className="input" autoFocus placeholder="Buscar por código, classificação (ex.: 1.1.1) ou nome…" value={busca} onChange={e => setBusca(e.target.value)} style={{ flex: 1, minWidth: 180 }} />
         {grupos && <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12, color: theme.sub, whiteSpace: 'nowrap', cursor: 'pointer' }}><input type="checkbox" checked={todas} onChange={e => setTodas(e.target.checked)} /> todas as contas</label>}
       </div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, color: theme.sub, margin: '0 2px 6px' }}>
@@ -770,7 +770,8 @@ function SelecionarContasPlano({ plano = [], jaCods = new Set(), tipos = null, f
           : lista.map(p => { const cod = String(p.cod).trim(); const on = marc.has(cod); return (
             <label key={cod} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '8px 12px', borderTop: `1px solid ${theme.border}`, cursor: 'pointer', background: on ? 'rgba(91,87,224,0.06)' : 'transparent' }}>
               <input type="checkbox" checked={on} onChange={() => toggle(cod)} />
-              <span style={{ fontSize: 12.5, fontWeight: 600, minWidth: 74, fontVariantNumeric: 'tabular-nums' }}>{p.cod}</span>
+              <span style={{ fontSize: 12.5, fontWeight: 600, minWidth: 56, fontVariantNumeric: 'tabular-nums' }}>{p.cod}</span>
+              <span style={{ fontSize: 11, color: theme.sub, minWidth: 96, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>{p.classif}</span>
               <span style={{ fontSize: 12.5, color: theme.text, flex: 1 }}>{p.nome}</span>
             </label>
           ) })}
