@@ -967,6 +967,7 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
   const [verCorrigidos, setVerCorrigidos] = useState(false) // mostrar os já corrigidos (ficam ocultos)
   const [sel, setSel] = useState(() => new Set()) // ids marcados p/ corrigir em lote
   const [selAj, setSelAj] = useState(() => new Set()) // lancIds de AJUSTE marcados p/ excluir em lote
+  const [verAjuste, setVerAjuste] = useState(null) // linha de AJUSTE aberta para VER o que foi feito
   const [lote, setLote] = useState(null) // [linhas] em edição no painel de correção em lote
 
   const mesDoLanc = l => todos ? (mesPorComp?.[l.competencia_id]) : mes
@@ -1408,9 +1409,9 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
                   const ehLanc = l.ehLancamento
                   return (
                     <tr key={l.id || i}
-                      onClick={ehLanc ? undefined : () => { setMsg(''); setAcaoLanc(corr ? { modo: 'ver', linha: l, corr } : { modo: 'novo', linha: l }) }}
-                      style={{ borderTop: `1px solid ${theme.border}`, cursor: ehLanc ? 'default' : 'pointer', background: (ehLanc && selAj.has(l.lancId)) ? 'rgba(229,72,77,0.16)' : ehLanc ? 'rgba(74,124,255,0.08)' : corr ? 'rgba(48,164,108,0.08)' : l.suspeito ? 'rgba(245,166,35,0.07)' : undefined }}
-                      title={ehLanc ? 'Lançamento de ajuste (correção/estorno) — reflete no razão vivo' : corr ? 'Corrigido — clique para ver/desfazer' : 'Clique para corrigir (reclassificar)'}
+                      onClick={ehLanc ? () => { setMsg(''); setVerAjuste(l) } : () => { setMsg(''); setAcaoLanc(corr ? { modo: 'ver', linha: l, corr } : { modo: 'novo', linha: l }) }}
+                      style={{ borderTop: `1px solid ${theme.border}`, cursor: 'pointer', background: (ehLanc && selAj.has(l.lancId)) ? 'rgba(229,72,77,0.16)' : ehLanc ? 'rgba(74,124,255,0.08)' : corr ? 'rgba(48,164,108,0.08)' : l.suspeito ? 'rgba(245,166,35,0.07)' : undefined }}
+                      title={ehLanc ? 'Ajuste (reclassificação/estorno) — clique para ver o que foi feito' : corr ? 'Corrigido — clique para ver/desfazer' : 'Clique para corrigir (reclassificar)'}
                     >
                       <td style={{ ...td, textAlign: 'center' }} onClick={e => e.stopPropagation()}>
                         {corrigivel(l) && <input type="checkbox" style={{ width: 15, height: 15, cursor: 'pointer', accentColor: theme.accent }} checked={sel.has(l.id)} onChange={() => toggleSel(l)} />}
@@ -1501,6 +1502,11 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
         </div>
       </div>
 
+      {verAjuste && (
+        <VerAjusteModal linha={verAjuste} compId={compId} isAdmin={isAdmin} bloqueado={bloqueado}
+          onClose={() => setVerAjuste(null)}
+          onExcluir={async () => { const l = verAjuste; setVerAjuste(null); await excluirAjuste(l) }} />
+      )}
       {registro && (
         <ModalRegistro
           tipo={registro} salvando={salvando} conta={conta} mes={mes}
@@ -1534,6 +1540,72 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
 
 // Correção em LOTE: uma linha por lançamento selecionado, com a SUA conta certa (podem
 // ser diferentes) e valor. Grava todos de uma vez (só os que têm conta escolhida).
+// Ver o que um AJUSTE (reclassificação/estorno) fez — de/para, valor, histórico, justificativa e
+// quem/quando — antes de excluir ou alterar. Busca o lançamento real e a auditoria relacionada.
+function VerAjusteModal({ linha, compId, isAdmin, bloqueado, onClose, onExcluir }) {
+  const [info, setInfo] = useState(null)
+  const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    let vivo = true
+    ;(async () => {
+      let lanc = null, just = null
+      if (linha?.lancId) {
+        const { data } = await supabase.from('lancamentos')
+          .select('conta_debito, conta_credito, valor, historico, origem, usuario, created_at, documento, razao_id')
+          .eq('id', linha.lancId).maybeSingle()
+        lanc = data || null
+        if (lanc?.razao_id) {
+          const { data: a } = await supabase.from('auditoria').select('detalhe, tipo, usuario, created_at')
+            .eq('competencia_id', compId).eq('modulo', 'Comparativo').eq('razao_id', lanc.razao_id)
+            .order('created_at', { ascending: false }).limit(1).maybeSingle()
+          just = a || null
+        }
+      }
+      if (vivo) setInfo({ lanc, just })
+    })()
+    return () => { vivo = false }
+  }, [linha, compId])
+  const l = info?.lanc, j = info?.just
+  const dt = iso => { if (!iso) return ''; const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) }
+  const tipoTxt = l?.origem === 'correcao' ? 'Reclassificação / correção' : l?.origem === 'apropriacao' ? 'Apropriação' : l?.origem === 'estorno' ? 'Estorno' : 'Lançamento de ajuste'
+  const Linha = ({ rot, children }) => (
+    <div style={{ display: 'grid', gridTemplateColumns: '124px 1fr', gap: 10, alignItems: 'start' }}>
+      <span style={{ color: theme.sub, fontSize: 12 }}>{rot}</span>
+      <span style={{ color: theme.text, fontSize: 13.5 }}>{children}</span>
+    </div>
+  )
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 60 }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 'min(520px,96vw)', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 22 }}>
+        <h2 style={{ fontSize: 17, marginBottom: 4 }}>Ver ajuste</h2>
+        <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 14px' }}>O que este lançamento de ajuste fez — confira antes de excluir ou alterar.</p>
+        {!info ? <p style={{ color: theme.sub, fontSize: 13 }}>Carregando…</p> : (
+          <div style={{ display: 'grid', gap: 10 }}>
+            <Linha rot="Tipo">{tipoTxt}</Linha>
+            <Linha rot="Data">{linha.data || '—'}</Linha>
+            <Linha rot="Lançamento">{l ? <><b>D</b> {l.conta_debito || '—'} &nbsp;/&nbsp; <b>C</b> {l.conta_credito || '—'} &nbsp;·&nbsp; {money(Number(l.valor) || 0)}</> : '—'}</Linha>
+            <Linha rot="Histórico">{l?.historico || linha.historico || '—'}</Linha>
+            {l?.documento && <Linha rot="Documento">{l.documento}</Linha>}
+            {j?.detalhe && <Linha rot="Justificativa">{j.detalhe}</Linha>}
+            <Linha rot="Feito por">{(l?.usuario || j?.usuario) ? `${l?.usuario || j?.usuario}${(l?.created_at || j?.created_at) ? ' · ' + dt(l?.created_at || j?.created_at) : ''}` : '—'}</Linha>
+          </div>
+        )}
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginTop: 18, flexWrap: 'wrap' }}>
+          <div>
+            {isAdmin && !bloqueado && (
+              <button className="btn btn-ghost" style={{ color: theme.red, borderColor: theme.red }} disabled={busy}
+                onClick={async () => { if (!window.confirm('Excluir este ajuste? Ele sai do razão vivo e do arquivo do Domínio, e o saldo se reverte.')) return; setBusy(true); await onExcluir() }}>
+                <i className="ti ti-trash" /> {busy ? 'Excluindo…' : 'Excluir ajuste'}
+              </button>
+            )}
+          </div>
+          <button className="btn" onClick={onClose}>Fechar</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function ModalCorrecaoLote({ itens, conta, plano, salvando, onClose, onGravar }) {
   const ehDesp = cod => String((plano || []).find(p => String(p.cod) === String(cod))?.classif || '').replace(/\D/g, '')[0] === '4'
   const [rows, setRows] = useState(() => itens.map(it => {
