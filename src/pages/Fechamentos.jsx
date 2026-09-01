@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { fechaSozinho } from '../lib/clientes'
+import { inativacaoDoCliente, inativoNaCompetencia } from '../lib/inativacao'
 import { normalizaCompetencia } from '../lib/balancete'
 import { calcularProgresso } from '../lib/progresso'
 import { gerarExcelTimbrado } from '../lib/excel'
@@ -36,6 +37,8 @@ export default function Fechamentos() {
   const [excluirAlvo, setExcluirAlvo] = useState(null) // { comp, motivo } (modal excluir c/ motivo)
   const [salvandoAcao, setSalvandoAcao] = useState(false)
   const [novo, setNovo] = useState(null)
+  const [inat, setInat] = useState(null) // inativação do cliente (ou null): { desde }
+  useEffect(() => { if (empresaId) inativacaoDoCliente(empresaId).then(setInat).catch(() => setInat(null)); else setInat(null) }, [empresaId])
 
   const [selMes, selAno] = competencia.split('/').map(Number)
 
@@ -129,6 +132,14 @@ export default function Fechamentos() {
   async function criar() {
     if (!podeFechar) { setNovo(null); return }
     const { ano, mes } = novo
+    // TRAVA: cliente desativado a partir de uma competência não abre fechamento novo dessa data
+    // em diante — fica só consulta. Confere no banco (evita estado velho).
+    const inatAgora = await inativacaoDoCliente(empresaId)
+    if (inativoNaCompetencia(inatAgora, ano, mes)) {
+      setNovo(null)
+      alert(`Cliente desativado a partir de ${inatAgora.desde}. Não é possível abrir o fechamento de ${MESES[mes - 1]}/${ano} — dessa competência em diante é somente consulta. Para voltar a fechar, reative o cliente no cadastro.`)
+      return
+    }
     const existe = lista.find(c => c.ano === +ano && c.mes === +mes)
     if (existe) { setNovo(null); abrir(existe); return }
     const { data, error } = await supabase.from('competencias')
@@ -236,6 +247,15 @@ export default function Fechamentos() {
           </button>
         )}
       </div>
+
+      {inat?.desde && (
+        <div style={{ background: 'rgba(229,72,77,0.10)', border: `1px solid ${theme.red}`, borderRadius: 12, padding: '14px 18px', display: 'flex', alignItems: 'center', gap: 14, marginBottom: 16 }}>
+          <i className="ti ti-ban" style={{ fontSize: 22, color: theme.red, flexShrink: 0 }} />
+          <p style={{ fontSize: 13.5, color: theme.text, margin: 0, lineHeight: 1.5 }}>
+            Cliente <b>desativado a partir de {inat.desde}</b>: dessa competência em diante <b>não é possível abrir fechamento novo</b> — fica só como consulta. O histórico anterior continua acessível. Para voltar a fechar, <b>reative o cliente</b> no cadastro.
+          </p>
+        </div>
+      )}
 
       {!podeFechar && (
         <div style={{ background: 'rgba(74,124,255,0.12)', border: `1px solid ${theme.accent}`, borderRadius: 12, padding: '16px 18px', display: 'flex', alignItems: 'center', gap: 14, marginBottom: 16 }}>

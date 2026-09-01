@@ -7,6 +7,7 @@ import InfoTela from '../components/InfoTela'
 import { normalizaCompetencia } from '../lib/balancete'
 import { fechaSozinho } from '../lib/clientes'
 import { responsavelNaCompetencia } from '../lib/responsavel'
+import { carregarInativacoes, inativoNaCompetencia } from '../lib/inativacao'
 
 // O responsável é um NOME ("KAUE BROCOS") e quem encerrou vem do LOGIN (e-mail). Para cruzar os
 // dois usamos um casamento por token: se algum pedaço (>=3 letras) do nome aparece no início do
@@ -96,6 +97,9 @@ export default function Dashboard() {
         // Responsável pelo fechamento por vigência (mesmo depósito da consolidação/carga tributária).
         supabase.from('cargas_cadastro').select('cliente_id, vigencia, dados').eq('tipo', 'depara').eq('obs', 'responsavel_fechamento'),
       ])
+      // Inativações (cliente_id -> { desde }): quem está inativo numa competência não conta como pendência.
+      const inativMap = await carregarInativacoes().catch(() => ({}))
+      const inativo = (cid, ano, mes) => inativoNaCompetencia(inativMap[cid], ano, mes)
       // Carteira inteira (matriz + filiais) — usada no painel de regime.
       const todos = cli || []
       // Só quem fecha sozinho entra nos demais painéis: matriz e filial individualizada.
@@ -119,7 +123,8 @@ export default function Dashboard() {
       }
 
       // 1 · Placar — só a competência-alvo (o fechamento atual). Atrasos ficam nos outros painéis.
-      const placar = contaStatus(clientes)
+      // Clientes DESATIVADOS na competência-alvo saem do placar (não são pendência — é só consulta).
+      const placar = contaStatus(clientes.filter(c => !inativo(c.id, targAno, targMes)))
       const recentes = cps.filter(c => c.ano === targAno && c.mes === targMes)
         .slice().sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))).slice(0, 6)
         .map(c => ({ nome: nomeCli[c.cliente_id] || '—', mes: c.mes, ano: c.ano, status: statusEfetivo(c) }))
@@ -131,7 +136,8 @@ export default function Dashboard() {
       for (const c of clientes) {
         const mm = mesesEsperados(c.competencia_inicio, targAno, targMes)
         let n = 0, oldest = null
-        for (const { ano, mes } of mm) if (!fechadoSet.has(`${c.id}|${ano}|${mes}`)) { n++; if (!oldest) oldest = { ano, mes } }
+        // Meses em que o cliente já estava DESATIVADO não são atraso (é só consulta).
+        for (const { ano, mes } of mm) if (!inativo(c.id, ano, mes) && !fechadoSet.has(`${c.id}|${ano}|${mes}`)) { n++; if (!oldest) oldest = { ano, mes } }
         if (n > 0) { atrasoTotal += n; atrasoLista.push({ nome: c.razao_social, regime: c.regime_tributario, analista: c.analista, meses: n, oldest }) }
       }
       atrasoLista.sort((a, b) => b.meses - a.meses)
@@ -162,10 +168,8 @@ export default function Dashboard() {
         const cp = compAlvo[c.id]
         const enc = cp?.integracoes?.encerramento || {}
         const encPor = enc.por || ''
-        // Dono: responsável da vigência; na falta dele, cai para o analista do cadastro.
-        const donoVig = responsavelNaCompetencia(histResp[c.id] || [], compVig)
-        const dono = donoVig || (c.analista || '').trim()
-        const donoFonte = donoVig ? 'responsavel' : (c.analista ? 'analista' : '')
+        // Dono = responsável da VIGÊNCIA (a mais recente ≤ competência-alvo). Não usa o Analista.
+        const dono = responsavelNaCompetencia(histResp[c.id] || [], compVig)
         const encerrado = !!encPor
         if (encerrado) respEncTotal++
         const match = encerrado ? mesmaPessoa(dono, encPor) : null // true | false | null
@@ -176,7 +180,7 @@ export default function Dashboard() {
           else if (match === false) { flag = 'outro'; respDiverg++ }
           else { flag = 'indef' }
         }
-        respLinhas.push({ nome: c.razao_social, dono, donoFonte, encPor, encEm: enc.em || '', encerrado, flag })
+        respLinhas.push({ nome: c.razao_social, dono, encPor, encEm: enc.em || '', encerrado, flag })
       }
       const ordFlag = { outro: 0, indef: 1, semresp: 2, proprio: 3, neutro: 4 }
       respLinhas.sort((a, b) => (ordFlag[a.flag] - ordFlag[b.flag]) || String(a.nome).localeCompare(String(b.nome), 'pt-BR'))
@@ -698,7 +702,7 @@ function PainelResponsavel({ d, onDrill }) {
                   return (
                     <tr key={i} style={{ background: l.flag === 'outro' ? 'rgba(229,72,77,0.08)' : 'transparent' }}>
                       <td style={{ ...rtd, fontWeight: 600 }}>{l.nome}</td>
-                      <td style={rtd}>{l.dono || <span style={{ color: theme.sub }}>—</span>}{l.donoFonte === 'analista' && l.dono ? <span style={{ color: theme.sub, fontSize: 11 }}> · analista</span> : null}</td>
+                      <td style={rtd}>{l.dono || <span style={{ color: theme.sub }}>—</span>}</td>
                       <td style={rtd}>{String(l.encPor).split('@')[0]}</td>
                       <td style={{ ...rtd, textAlign: 'center' }}><span style={{ color: f.cor, fontSize: 13, whiteSpace: 'nowrap' }}><i className={`ti ${f.ic}`} /> {f.txt}</span></td>
                     </tr>
@@ -709,7 +713,7 @@ function PainelResponsavel({ d, onDrill }) {
           )}
       </div>
       <p style={{ color: theme.sub, fontSize: 11.5, margin: '8px 2px 0' }}>
-        <i className="ti ti-info-circle" /> O “dono” vem do <b>responsável por vigência</b> (Clientes) e, na falta dele, do <b>Analista</b>. “Encerrado por” é o login de quem fechou. Quando não dá para cruzar nome × login automaticamente, marcamos <b>Conferir</b>.
+        <i className="ti ti-info-circle" /> O “dono” vem do <b>responsável por vigência</b> (a vigência mais recente até {r.compVig}) — não do Analista. “Encerrado por” é o login de quem fechou. Quando não dá para cruzar nome × login automaticamente, marcamos <b>Conferir</b>.
       </p>
     </>
   )

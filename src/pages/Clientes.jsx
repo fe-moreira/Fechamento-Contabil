@@ -5,6 +5,7 @@ import InfoTela from '../components/InfoTela'
 import { normalizaCompetencia } from '../lib/balancete'
 import { useAuth } from '../components/AuthProvider'
 import { carregarResponsavelHist, salvarResponsavel, excluirResponsavel, normVigencia } from '../lib/responsavel'
+import { carregarInativacoes, inativacaoDoCliente, desativarCliente, reativarCliente } from '../lib/inativacao'
 
 // Regimes tributários — nomenclatura padrão da carteira.
 const REGIMES = ['SIMPLES NACIONAL', 'LUCRO PRESUMIDO', 'LUCRO REAL ANUAL', 'LUCRO REAL TRIMESTRAL', 'ISENTA FEDERAL']
@@ -90,6 +91,12 @@ export default function Clientes() {
   const [respNome, setRespNome] = useState('')
   const [respBusy, setRespBusy] = useState(false)
   const [respMsg, setRespMsg] = useState('')
+  // Inativação por competência (cliente fica só como consulta a partir do mês de corte).
+  const [inativMap, setInativMap] = useState({})   // cliente_id -> { desde } (para o selo na lista)
+  const [inatv, setInatv] = useState(null)          // inativação do cliente aberto no modal
+  const [inativVig, setInativVig] = useState('')
+  const [inativBusy, setInativBusy] = useState(false)
+  const [inativMsg, setInativMsg] = useState('')
 
   async function carregar() {
     setLoading(true); setErro('')
@@ -97,6 +104,7 @@ export default function Clientes() {
       .from('clientes').select('*').order('razao_social', { ascending: true })
     if (error) setErro(error.message)
     else setLista(data || [])
+    carregarInativacoes().then(setInativMap).catch(() => {})
     setLoading(false)
   }
   useEffect(() => { carregar() }, [])
@@ -250,8 +258,31 @@ export default function Clientes() {
     }
   }
 
-  function abrirNovo() { setForm(vazio); setEditId(null); setErro(''); setConsolidaIds([]); setBuscaCons(''); setConsolidaErro(null); setAberto(true); carregarConsolida(null); resetResp(); setRespHist([]) }
-  function abrirEdit(c) { setForm({ ...vazio, ...c }); setEditId(c.id); setErro(''); setConsolidaIds([]); setBuscaCons(''); setConsolidaErro(null); setAberto(true); carregarConsolida(c.id); resetResp(); carregarRespHist(c.id) }
+  function abrirNovo() { setForm(vazio); setEditId(null); setErro(''); setConsolidaIds([]); setBuscaCons(''); setConsolidaErro(null); setAberto(true); carregarConsolida(null); resetResp(); setRespHist([]); setInatv(null); setInativVig(''); setInativMsg('') }
+  function abrirEdit(c) { setForm({ ...vazio, ...c }); setEditId(c.id); setErro(''); setConsolidaIds([]); setBuscaCons(''); setConsolidaErro(null); setAberto(true); carregarConsolida(c.id); resetResp(); carregarRespHist(c.id); setInativVig(''); setInativMsg(''); inativacaoDoCliente(c.id).then(setInatv).catch(() => setInatv(null)) }
+
+  // Desativa/reativa o cliente a partir de uma competência de corte.
+  async function desativar() {
+    setInativMsg('')
+    const vig = normVigencia(inativVig)
+    if (!vig) { setInativMsg('Competência inválida — use MM/AAAA (ex.: 09/2026).'); return }
+    if (!confirm(`Desativar "${form.razao_social || 'este cliente'}" a partir de ${vig}?\n\nDessa competência em diante ninguém abre fechamento novo — o cliente fica só como consulta. O passado continua acessível.`)) return
+    setInativBusy(true)
+    const { error } = await desativarCliente(editId, vig, user?.email)
+    setInativBusy(false)
+    if (error) { setInativMsg('Não gravou: ' + (error.message || error)); return }
+    setInativVig(''); setForm(f => ({ ...f, ativo: false }))
+    inativacaoDoCliente(editId).then(setInatv); carregar()
+  }
+  async function reativar() {
+    setInativMsg('')
+    if (!confirm('Reativar este cliente? Ele volta a permitir novos fechamentos.')) return
+    setInativBusy(true)
+    const { error } = await reativarCliente(editId)
+    setInativBusy(false)
+    if (error) { setInativMsg('Não reativou: ' + (error.message || error)); return }
+    setInatv(null); setForm(f => ({ ...f, ativo: true })); carregar()
+  }
 
   // Responsável pelo fechamento (por vigência): lê/grava/remove no cliente aberto.
   function resetResp() { setRespVig(''); setRespNome(''); setRespMsg(''); setRespBusy(false) }
@@ -419,7 +450,7 @@ export default function Clientes() {
             ) : listaFiltrada.map(c => (
               <tr key={c.id} style={{ borderTop: `1px solid ${theme.border}` }}>
                 <td style={{ padding: '11px 14px', fontSize: 13, color: theme.sub }}>{c.codigo_dominio}{c.tipo === 'Filial' ? ' (filial)' : ''}</td>
-                <td style={{ padding: '11px 14px', fontSize: 13 }}>{c.razao_social}</td>
+                <td style={{ padding: '11px 14px', fontSize: 13 }}>{c.razao_social}{(c.ativo === false || inativMap[c.id]) && <span title={inativMap[c.id]?.desde ? `Desativado a partir de ${inativMap[c.id].desde}` : 'Desativado'} style={{ marginLeft: 8, fontSize: 10.5, color: theme.red, background: 'rgba(229,72,77,0.12)', border: `1px solid ${theme.red}`, borderRadius: 12, padding: '2px 8px', whiteSpace: 'nowrap' }}>desativado{inativMap[c.id]?.desde ? ` · ${inativMap[c.id].desde}` : ''}</span>}</td>
                 <td style={{ padding: '11px 14px', fontSize: 13, color: theme.sub }}>{c.regime_tributario}</td>
                 <td style={{ padding: '11px 14px', fontSize: 13, color: theme.sub }}>{c.integracao_financeira}</td>
                 <td style={{ padding: '11px 14px', fontSize: 13, color: theme.sub }}>{c.analista}</td>
@@ -531,6 +562,35 @@ export default function Clientes() {
               ) : (
                 <Campo label="Responsável pelo fechamento (por vigência)" full>
                   <p style={{ color: theme.sub, fontSize: 12, margin: 0 }}>Salve o cliente primeiro; depois reabra o cadastro para definir o responsável e a vigência.</p>
+                </Campo>
+              )}
+              {editId && (
+                <Campo label="Situação do cliente" full>
+                  <div style={{ border: `1px solid ${inatv ? theme.red : theme.cb}`, borderRadius: 8, padding: 10, background: inatv ? 'rgba(229,72,77,0.06)' : 'transparent' }}>
+                    {inatv ? (
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+                        <div style={{ fontSize: 12.5 }}>
+                          <b style={{ color: theme.red }}><i className="ti ti-ban" /> Desativado a partir de {inatv.desde}</b>
+                          <div style={{ color: theme.sub, fontSize: 11.5, marginTop: 2 }}>Não abre fechamento novo dessa competência em diante — só consulta.{inatv.usuario ? ` Por ${String(inatv.usuario).split('@')[0]}.` : ''}</div>
+                        </div>
+                        <button type="button" className="btn btn-ghost" disabled={inativBusy} onClick={reativar} style={{ fontSize: 12.5, whiteSpace: 'nowrap' }}><i className="ti ti-lock-open" /> Reativar</button>
+                      </div>
+                    ) : (
+                      <>
+                        <p style={{ color: theme.sub, fontSize: 11.5, margin: '0 0 8px' }}>
+                          Desativar a partir de uma competência: dessa data em diante <b>ninguém abre fechamento novo</b> e o cliente fica só como <b>consulta</b>. O histórico anterior continua acessível.
+                        </p>
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                          <div style={{ flex: '0 0 150px' }}>
+                            <label style={{ fontSize: 11, color: theme.sub, display: 'block', marginBottom: 3 }}>Desativar a partir de (MM/AAAA)</label>
+                            <input className="input" value={inativVig} onChange={e => setInativVig(e.target.value)} placeholder="09/2026" style={{ fontSize: 12.5 }} />
+                          </div>
+                          <button type="button" className="btn btn-ghost" disabled={inativBusy} onClick={desativar} style={{ fontSize: 12.5, whiteSpace: 'nowrap', color: theme.red, borderColor: theme.red }}>{inativBusy ? 'Salvando…' : 'Desativar cliente'}</button>
+                        </div>
+                      </>
+                    )}
+                    {inativMsg && <p style={{ color: theme.red, fontSize: 11.5, margin: '8px 0 0' }}>{inativMsg}</p>}
+                  </div>
                 </Campo>
               )}
               <Campo label="Consolida os balancetes destas empresas (grupo)" full>
