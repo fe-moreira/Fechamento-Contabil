@@ -1690,13 +1690,13 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // lançamento de acerto da diferença (desconto/juros), que também deve sair do em aberto.
   async function baixarConexao(alvo, extraRazaoId) {
     const id = await getCompetenciaId()
-    // Nome FINAL do vínculo (o mais longo, salvo digitado): a abertura passa a se chamar assim na
-    // releitura, então o "Confirmado" dela tem que ser chaveado por esse nome — senão não bate e
-    // ela volta pro em aberto. (Mesma régua do vincularLote.)
-    const canonicalPre = aplicarLink(alvo, [], aliasesForcados).canonical || ''
+    // A baixa da ABERTURA é gravada pela chave SEM NOME (conta·data·NF·valor) — o nome é instável
+    // (unificação do vínculo, CNPJ colado no pagamento), e chavear pelo nome fazia a perna do
+    // "Saldo anterior" NÃO ser reconhecida como baixada e voltar pro em aberto (só o pagamento
+    // baixava). Sem nome, as DUAS pernas baixam sempre.
     const rows = alvo.map(l => ({
       competencia_id: id, modulo: 'Conciliação',
-      item: l._abertura ? chaveAbertura(l, canonicalPre || undefined) : `${conta.conta} · ${l.data || ''} · NF ${l.leitura?.nf || '—'}`,
+      item: l._abertura ? chaveAbBaixa(l) : `${conta.conta} · ${l.data || ''} · NF ${l.leitura?.nf || '—'}`,
       tipo: 'Justificativa',
       detalhe: `Confirmado em lote — conexão manual (nota + pagamento).`,
       // Acerto (estorno/lançamento) é identificado pelo uuid do próprio lançamento (sem "ac_").
