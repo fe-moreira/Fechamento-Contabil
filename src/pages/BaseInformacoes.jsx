@@ -1701,9 +1701,22 @@ function ModalCargaInicial({ vigencia, empresaId, cliente, onClose, onConcluir }
 function ModalDist({ inicial, empresaId, competencia, empresaNome, planoMap = {}, plano = [], onClose, onSalvar }) {
   const [limite, setLimite] = useState(inicial?.limite ?? 50000)
   const [aliquota, setAliquota] = useState(inicial?.aliquota ?? 10)
-  const [contas, setContas] = useState(inicial?.contas?.length ? inicial.contas : [{ cod: '', nome: '' }])
-  const [socios, setSocios] = useState(inicial?.socios?.length ? inicial.socios : [{ nome: '', ident: '' }])
-  const [pickerContas, setPickerContas] = useState(false)
+  const normNm = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+  // Nome do sócio a partir do nome da conta ("… - NOME" → "NOME"; ex.: "ADTO. DIST. LUCRO - VILMA").
+  const nomeSocioDaConta = nome => { const p = String(nome || '').split(/\s[-–—]\s/); return (p.length > 1 ? p[p.length - 1] : p[0]).trim() }
+  // SÓCIOS unificados: cada sócio carrega a CONTA (amarrada) + CPF + identificação. Migra cadastros
+  // antigos: se o sócio não tinha conta, casa pelo nome com as "contas observadas" antigas.
+  const [socios, setSocios] = useState(() => {
+    const ss = (inicial?.socios?.length ? inicial.socios : [{}]).map(s => ({ nome: s.nome || '', cpf: s.cpf || '', ident: s.ident || '', conta: s.conta || '' }))
+    const cs = inicial?.contas || []
+    if (cs.length) for (const s of ss) if (!s.conta && s.nome) {
+      const alvo = normNm(s.nome), toks = alvo.split(' ').filter(t => t.length >= 3)
+      const m = cs.find(c => { const n = normNm(c.nome); return (alvo && n.includes(alvo)) || toks.some(t => n.includes(t)) })
+      if (m) s.conta = m.cod
+    }
+    return ss
+  })
+  const [pickerSocios, setPickerSocios] = useState(false)
   // Lucros a distribuir registrados em ATA (passivo "a distribuir") — só cadastro/informação.
   const [ata, setAta] = useState(inicial?.ata && !Array.isArray(inicial.ata) ? inicial.ata : { houve: false, arquivo: '', documento: '', socios: [] })
   const [salvando, setSalvando] = useState(false)
@@ -1754,57 +1767,55 @@ function ModalDist({ inicial, empresaId, competencia, empresaNome, planoMap = {}
     const ataLimpa = ata.houve
       ? { houve: true, arquivo: ata.arquivo || '', documento: ata.documento || '', socios: (ata.socios || []).filter(s => s.nome || s.valor).map(s => ({ nome: s.nome, cpf: String(s.cpf || '').trim(), valor: Number(s.valor) || 0, conta: String(s.conta || '').trim(), pagamentos: (s.pagamentos || []).filter(p => p.data || p.valor).map(p => ({ data: p.data || '', valor: Number(p.valor) || 0 })) })) }
       : { houve: false, arquivo: '', documento: '', socios: [] }
+    // Sócios unificados: cada um carrega a conta. As "contas observadas" (usadas pelo cálculo do
+    // IRRF) são DERIVADAS das contas dos sócios (únicas), com o nome do plano.
+    const socLimpos = socios.filter(s => s.nome || s.ident || s.conta).map(s => ({ nome: (s.nome || '').trim(), cpf: String(s.cpf || '').trim(), ident: (s.ident || '').trim(), conta: String(s.conta || '').trim() }))
+    const contasDeriv = []; const vistos = new Set()
+    for (const s of socLimpos) { if (s.conta && !vistos.has(s.conta)) { vistos.add(s.conta); contasDeriv.push({ cod: s.conta, nome: planoMap[s.conta]?.nome || '' }) } }
     await onSalvar({
       limite: Number(limite) || 0, aliquota: Number(aliquota) || 0,
-      contas: contas.filter(c => c.cod || c.nome), socios: socios.filter(s => s.nome || s.ident),
+      contas: contasDeriv, socios: socLimpos,
       ata: ataLimpa,
     })
     setSalvando(false)
   }
 
   return (
-    <Modal titulo="Distribuição de lucros · IRRF 2026" sub="Lei 15.270/2025 — limite, alíquota, contas observadas e sócios." onClose={onClose} largura={640}>
+    <Modal titulo="Distribuição de lucros · IRRF 2026" sub="Lei 15.270/2025 — limite, alíquota e sócios (cada um com a sua conta e CPF)." onClose={onClose} largura={640}>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
         <div><label>Limite mensal por sócio (R$)</label><input className="input" type="number" value={limite} onChange={e => setLimite(e.target.value)} /></div>
         <div><label>Alíquota de IRRF (%)</label><input className="input" type="number" value={aliquota} onChange={e => setAliquota(e.target.value)} /></div>
       </div>
 
-      <LinhaTitulo titulo="Contas de distribuição observadas" onAdd={() => setContas(l => [...l, { cod: '', nome: '' }])} />
-      {contas.map((c, i) => (
-        <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-          <div style={{ width: 175 }}>
-            <CampoConta value={c.cod} onChange={v => setContas(l => l.map((x, j) => j === i ? { ...x, cod: v, nome: planoMap[String(v).trim()]?.nome ?? x.nome } : x))}
-              onPick={p => setContas(l => l.map((x, j) => j === i ? { cod: p.cod, nome: p.nome || '' } : x))} plano={plano} placeholder="Código (F4)" />
+      <LinhaTitulo titulo="Sócios (com a conta de distribuição)" onAdd={() => setSocios(l => [...l, { nome: '', cpf: '', ident: '', conta: '' }])} />
+      <p style={{ color: theme.sub, fontSize: 11.5, margin: '0 0 8px' }}>Cada sócio já com a <b>conta</b> dele (o nome do plano aparece do lado, pra conferir), o <b>CPF</b> e, se for conta compartilhada, a <b>identificação no razão</b>.</p>
+      {socios.map((s, i) => (
+        <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+          <input className="input" style={{ flex: '1 1 150px', minWidth: 130 }} placeholder="Nome do sócio" value={s.nome} onChange={upd(setSocios, i, 'nome')} />
+          <input className="input" style={{ width: 140 }} placeholder="CPF" value={s.cpf || ''} onChange={upd(setSocios, i, 'cpf')} />
+          <div style={{ width: 180 }}>
+            <CampoConta value={s.conta || ''} onChange={cod => setSocios(l => l.map((x, j) => j === i ? { ...x, conta: cod } : x))}
+              onPick={p => setSocios(l => l.map((x, j) => j === i ? { ...x, conta: p.cod } : x))} plano={plano} placeholder="Conta (F4)" />
           </div>
-          <input className="input" style={{ flex: 1 }} placeholder="Nome da conta" value={c.nome} onChange={upd(setContas, i, 'nome')} />
-          <i className="ti ti-trash" onClick={() => rem(setContas, i)} style={{ color: theme.sub, cursor: 'pointer', alignSelf: 'center' }} />
+          <input className="input" style={{ flex: '1 1 150px', minWidth: 130 }} placeholder="Identificação no razão (opcional)" value={s.ident} onChange={upd(setSocios, i, 'ident')} />
+          <i className="ti ti-trash" onClick={() => rem(setSocios, i)} style={{ color: theme.sub, cursor: 'pointer', marginTop: 10 }} />
         </div>
       ))}
-      <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 11px', borderColor: theme.accent, color: theme.accent, marginBottom: 4 }} onClick={() => setPickerContas(true)}><i className="ti ti-checklist" /> Do plano (várias)</button>
-      {pickerContas && (
-        <SelecionarContasPlano plano={plano} jaCods={new Set(contas.map(c => String(c.cod || '').trim()).filter(Boolean))}
-          onCancelar={() => setPickerContas(false)}
+      <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 11px', borderColor: theme.accent, color: theme.accent, marginBottom: 4 }} onClick={() => setPickerSocios(true)}><i className="ti ti-checklist" /> Do plano (várias) — cria um sócio por conta</button>
+      {pickerSocios && (
+        <SelecionarContasPlano plano={plano} jaCods={new Set(socios.map(s => String(s.conta || '').trim()).filter(Boolean))}
+          onCancelar={() => setPickerSocios(false)}
           onAdicionar={novas => {
-            setContas(l => {
-              const ja = new Set(l.map(c => String(c.cod || '').trim()).filter(Boolean))
-              const add = novas.filter(n => !ja.has(String(n.cod).trim())).map(n => ({ cod: n.cod, nome: n.nome }))
+            setSocios(l => {
+              const ja = new Set(l.map(s => String(s.conta || '').trim()).filter(Boolean))
+              const add = novas.filter(n => !ja.has(String(n.cod).trim())).map(n => ({ nome: nomeSocioDaConta(n.nome), cpf: '', ident: '', conta: n.cod }))
               if (!add.length) return l
-              const base = (l.length === 1 && !l[0].cod && !l[0].nome) ? [] : l
+              const base = (l.length === 1 && !l[0].nome && !l[0].conta && !l[0].cpf && !l[0].ident) ? [] : l
               return [...base, ...add]
             })
-            setPickerContas(false)
+            setPickerSocios(false)
           }} />
       )}
-
-      <LinhaTitulo titulo="Sócios" onAdd={() => setSocios(l => [...l, { nome: '', ident: '', cpf: '' }])} />
-      {socios.map((s, i) => (
-        <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-          <input className="input" style={{ flex: 1 }} placeholder="Nome do sócio" value={s.nome} onChange={upd(setSocios, i, 'nome')} />
-          <input className="input" style={{ width: 150 }} placeholder="CPF" value={s.cpf || ''} onChange={upd(setSocios, i, 'cpf')} />
-          <input className="input" style={{ flex: 1 }} placeholder="Identificação no razão (CC/histórico)" value={s.ident} onChange={upd(setSocios, i, 'ident')} />
-          <i className="ti ti-trash" onClick={() => rem(setSocios, i)} style={{ color: theme.sub, cursor: 'pointer', alignSelf: 'center' }} />
-        </div>
-      ))}
 
       <p style={{ color: theme.sub, fontSize: 11.5, margin: '12px 0 0' }}>Estimativa para revisão humana — o razão não distingue sozinho lucro de 2025 (isento) de lucro novo.</p>
 

@@ -23,10 +23,15 @@ export async function apurarDistribuicao(empresaId, compId, ano = null, mes = nu
   }
 
   const socios = (cfg.socios || []).map(s => {
+    const contaS = String(s.conta || '').trim()
     const ident = baixa(s.ident || s.nome)
     let total = 0
-    if (ident) for (const l of lanc) {
-      if (baixa(l.historico).includes(ident)) total += (Number(l.debito) || 0) + (Number(l.credito) || 0)
+    if (contaS) {
+      // Conta amarrada ao sócio (1 conta por sócio): soma o movimento da conta dele.
+      for (const l of lanc) if (String(l.conta).trim() === contaS) total += (Number(l.debito) || 0) + (Number(l.credito) || 0)
+    } else if (ident) {
+      // Conta compartilhada: separa pela identificação/nome no histórico.
+      for (const l of lanc) if (baixa(l.historico).includes(ident)) total += (Number(l.debito) || 0) + (Number(l.credito) || 0)
     }
     const excede = total > limite
     return { nome: s.nome || '(sócio)', ident: s.ident || '', total, excede, irrf: excede ? total * (aliquota / 100) : 0 }
