@@ -6,11 +6,22 @@ import { theme, applyThemeMode, getThemeMode } from '../lib/theme'
 import InfoTela from '../components/InfoTela'
 import { normalizaCompetencia } from '../lib/balancete'
 import { fechaSozinho } from '../lib/clientes'
+import { responsavelNaCompetencia } from '../lib/responsavel'
+
+// O responsável é um NOME ("KAUE BROCOS") e quem encerrou vem do LOGIN (e-mail). Para cruzar os
+// dois usamos um casamento por token: se algum pedaço (>=3 letras) do nome aparece no início do
+// e-mail (ou vice-versa), é a mesma pessoa. Retorna true/false, ou null quando não dá pra cruzar.
+const mesmaPessoa = (nome, email) => {
+  const toks = String(nome || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').split(/[^a-z0-9]+/).filter(t => t.length >= 3)
+  const local = String(email || '').toLowerCase().split('@')[0].replace(/[^a-z0-9]/g, '')
+  if (!toks.length || !local) return null
+  return toks.some(t => local.includes(t) || t.includes(local))
+}
 
 const MES = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
 const MES_C = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
 const TEMPO = 10000 // 10s por tela
-const N = 9
+const N = 10
 
 const fmtH = s => { const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return `${h}h${String(m).padStart(2, '0')}` }
 
@@ -76,12 +87,14 @@ export default function Dashboard() {
     (async () => {
      try {
       const inicioMes = new Date(hoje.getFullYear(), hoje.getMonth(), 1).toISOString()
-      const [{ data: cli }, { data: comps }, { data: ts }, { data: rasc }] = await Promise.all([
+      const [{ data: cli }, { data: comps }, { data: ts }, { data: rasc }, { data: respRows }] = await Promise.all([
         supabase.from('clientes').select('*'),
-        supabase.from('competencias').select('cliente_id, ano, mes, status, razao_importado, pct, created_at'),
+        supabase.from('competencias').select('cliente_id, ano, mes, status, razao_importado, pct, created_at, integracoes'),
         supabase.from('timesheet').select('cliente_id, cliente_nome, segundos, created_at').gte('created_at', inicioMes),
         // Trabalhos financeiros salvos para continuar depois (rascunhos), de qualquer usuário.
         supabase.from('competencias').select('cliente_id, ano, mes, integracoes, updated_at').not('integracoes->financeira', 'is', null),
+        // Responsável pelo fechamento por vigência (mesmo depósito da consolidação/carga tributária).
+        supabase.from('cargas_cadastro').select('cliente_id, vigencia, dados').eq('tipo', 'depara').eq('obs', 'responsavel_fechamento'),
       ])
       // Carteira inteira (matriz + filiais) — usada no painel de regime.
       const todos = cli || []
@@ -135,6 +148,39 @@ export default function Dashboard() {
       for (const c of clientes) { const a = (c.analista || '').trim() || 'Sem analista'; (porAnalista[a] = porAnalista[a] || []).push(c) }
       const analistas = Object.entries(porAnalista).map(([nome, lista]) => ({ nome, ...contaStatus(lista) }))
         .sort((a, b) => b.total - a.total)
+
+      // 4b · Responsável (dono por vigência) × quem realmente ENCERROU a competência-alvo.
+      // Objetivo: enxergar quando a empresa é do fulano mas outra pessoa fechou o mês.
+      const histResp = {}
+      for (const r of (respRows || [])) {
+        (histResp[r.cliente_id] = histResp[r.cliente_id] || []).push({ vigencia: r.vigencia, responsavel: r.dados?.responsavel || '' })
+      }
+      const compVig = `${String(targMes).padStart(2, '0')}/${targAno}`
+      const respLinhas = []
+      let respDiverg = 0, respProprio = 0, respEncTotal = 0, respSemResp = 0
+      for (const c of clientes) {
+        const cp = compAlvo[c.id]
+        const enc = cp?.integracoes?.encerramento || {}
+        const encPor = enc.por || ''
+        // Dono: responsável da vigência; na falta dele, cai para o analista do cadastro.
+        const donoVig = responsavelNaCompetencia(histResp[c.id] || [], compVig)
+        const dono = donoVig || (c.analista || '').trim()
+        const donoFonte = donoVig ? 'responsavel' : (c.analista ? 'analista' : '')
+        const encerrado = !!encPor
+        if (encerrado) respEncTotal++
+        const match = encerrado ? mesmaPessoa(dono, encPor) : null // true | false | null
+        let flag = 'neutro' // neutro (não encerrado) · proprio · outro · indef (não dá pra cruzar)
+        if (encerrado) {
+          if (!dono) { flag = 'semresp'; respSemResp++ }
+          else if (match === true) { flag = 'proprio'; respProprio++ }
+          else if (match === false) { flag = 'outro'; respDiverg++ }
+          else { flag = 'indef' }
+        }
+        respLinhas.push({ nome: c.razao_social, dono, donoFonte, encPor, encEm: enc.em || '', encerrado, flag })
+      }
+      const ordFlag = { outro: 0, indef: 1, semresp: 2, proprio: 3, neutro: 4 }
+      respLinhas.sort((a, b) => (ordFlag[a.flag] - ordFlag[b.flag]) || String(a.nome).localeCompare(String(b.nome), 'pt-BR'))
+      const responsavel = { linhas: respLinhas, diverg: respDiverg, proprio: respProprio, encTotal: respEncTotal, semResp: respSemResp, compVig }
 
       // 5 · Timesheet do mês corrente por cliente
       const tsMap = {}
@@ -199,7 +245,7 @@ export default function Dashboard() {
       }
       rascunhos.sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)))
 
-      setD({ placar, recentes, atrasoLista, atrasoTotal, regime, matrizes, filiais, analistas, tsLista, tsTotal, prazos, dias, semPrazo: semPrazo.length, nomesAnal, matriz, matrizTot, totalClientes: clientes.length, sistemas, rascunhos })
+      setD({ placar, recentes, atrasoLista, atrasoTotal, regime, matrizes, filiais, analistas, tsLista, tsTotal, prazos, dias, semPrazo: semPrazo.length, nomesAnal, matriz, matrizTot, totalClientes: clientes.length, sistemas, rascunhos, responsavel })
      } catch (e) { console.error('Dashboard:', e); setErroPainel(String(e?.message || e)) }
     })()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -268,6 +314,7 @@ export default function Dashboard() {
         {idx === 6 && <PainelMatriz d={d} />}
         {idx === 7 && <PainelSistemas d={d} />}
         {idx === 8 && <PainelRascunhos d={d} onContinuar={continuarRascunho} />}
+        {idx === 9 && <PainelResponsavel d={d} onDrill={setDrill} />}
       </div>
 
       {/* navegação */}
@@ -611,6 +658,63 @@ function PainelRascunhos({ d, onContinuar }) {
   )
 }
 
+function PainelResponsavel({ d, onDrill }) {
+  const r = d.responsavel || { linhas: [], diverg: 0, proprio: 0, encTotal: 0, semResp: 0, compVig: '' }
+  const linhas = r.linhas || []
+  const encerradas = linhas.filter(l => l.encerrado)
+  const FLAG = {
+    outro: { txt: 'Outra pessoa', cor: theme.red, ic: 'ti-alert-triangle' },
+    indef: { txt: 'Conferir', cor: theme.yellow, ic: 'ti-help' },
+    semresp: { txt: 'Sem dono', cor: theme.yellow, ic: 'ti-user-question' },
+    proprio: { txt: 'O próprio', cor: theme.green, ic: 'ti-circle-check' },
+    neutro: { txt: 'Não encerrado', cor: theme.sub, ic: 'ti-minus' },
+  }
+  const drillOutro = () => onDrill && onDrill({ titulo: `Encerrados por outra pessoa · ${r.compVig}`, itens: linhas.filter(l => l.flag === 'outro').map(l => `${l.nome} · dono ${l.dono || '—'} → encerrou ${String(l.encPor).split('@')[0]}`) })
+  return (
+    <>
+      <Titulo h2="Responsável × quem encerrou" sub={`Competência ${r.compVig} · dono da empresa (por vigência) comparado a quem fechou o mês`} />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 14, marginBottom: 16 }}>
+        <Metric label="Encerrados" v={r.encTotal} icon="ti-lock-check" onClick={() => onDrill({ titulo: `Encerrados · ${r.compVig}`, itens: encerradas.map(l => l.nome) })} />
+        <Metric label="Pelo próprio dono" v={r.proprio} icon="ti-circle-check" cor={theme.green} onClick={() => onDrill({ titulo: `Encerrados pelo próprio dono · ${r.compVig}`, itens: linhas.filter(l => l.flag === 'proprio').map(l => l.nome) })} />
+        <Metric label="Por outra pessoa" v={r.diverg} icon="ti-alert-triangle" cor={r.diverg ? theme.red : theme.text} onClick={drillOutro} />
+        <Metric label="Sem dono definido" v={r.semResp} icon="ti-user-question" cor={r.semResp ? theme.yellow : theme.text} onClick={() => onDrill({ titulo: `Encerrados sem dono definido · ${r.compVig}`, itens: linhas.filter(l => l.flag === 'semresp').map(l => l.nome) })} />
+      </div>
+      <div style={{ ...card, flex: 1, overflow: 'auto' }}>
+        {encerradas.length === 0
+          ? <p style={{ color: theme.sub, fontSize: 14 }}>Nenhum fechamento de {r.compVig} encerrado ainda — nada para cruzar.</p>
+          : (
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr>
+                  <th style={{ ...rth, textAlign: 'left' }}>Empresa</th>
+                  <th style={{ ...rth, textAlign: 'left' }}>Responsável (dono)</th>
+                  <th style={{ ...rth, textAlign: 'left' }}>Encerrado por</th>
+                  <th style={rth}>Situação</th>
+                </tr>
+              </thead>
+              <tbody>
+                {encerradas.map((l, i) => {
+                  const f = FLAG[l.flag] || FLAG.neutro
+                  return (
+                    <tr key={i} style={{ background: l.flag === 'outro' ? 'rgba(229,72,77,0.08)' : 'transparent' }}>
+                      <td style={{ ...rtd, fontWeight: 600 }}>{l.nome}</td>
+                      <td style={rtd}>{l.dono || <span style={{ color: theme.sub }}>—</span>}{l.donoFonte === 'analista' && l.dono ? <span style={{ color: theme.sub, fontSize: 11 }}> · analista</span> : null}</td>
+                      <td style={rtd}>{String(l.encPor).split('@')[0]}</td>
+                      <td style={{ ...rtd, textAlign: 'center' }}><span style={{ color: f.cor, fontSize: 13, whiteSpace: 'nowrap' }}><i className={`ti ${f.ic}`} /> {f.txt}</span></td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          )}
+      </div>
+      <p style={{ color: theme.sub, fontSize: 11.5, margin: '8px 2px 0' }}>
+        <i className="ti ti-info-circle" /> O “dono” vem do <b>responsável por vigência</b> (Clientes) e, na falta dele, do <b>Analista</b>. “Encerrado por” é o login de quem fechou. Quando não dá para cruzar nome × login automaticamente, marcamos <b>Conferir</b>.
+      </p>
+    </>
+  )
+}
+
 /* ---------- peças ---------- */
 function Metric({ label, v, icon, cor, onClick }) {
   return (
@@ -636,3 +740,5 @@ const iconBtn = { background: theme.card, border: `1px solid ${theme.cb}`, color
 const arrow = { background: theme.card, border: `1px solid ${theme.cb}`, color: theme.text, width: 38, height: 38, borderRadius: '50%', cursor: 'pointer', fontSize: 18, display: 'flex', alignItems: 'center', justifyContent: 'center' }
 const mth = { fontSize: 13, color: theme.sub, textTransform: 'uppercase', letterSpacing: .5, fontWeight: 600, padding: '6px 8px', textAlign: 'center' }
 const mtd = { textAlign: 'center', borderRadius: 12, padding: 16, fontSize: 22, fontWeight: 800, color: theme.text }
+const rth = { fontSize: 12, color: theme.sub, textTransform: 'uppercase', letterSpacing: .5, fontWeight: 600, padding: '8px 10px', textAlign: 'center', borderBottom: `1px solid ${theme.border}` }
+const rtd = { fontSize: 13.5, padding: '9px 10px', borderBottom: `1px solid ${theme.border}`, textAlign: 'left' }

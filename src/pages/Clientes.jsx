@@ -3,6 +3,8 @@ import { supabase } from '../lib/supabase'
 import { theme } from '../lib/theme'
 import InfoTela from '../components/InfoTela'
 import { normalizaCompetencia } from '../lib/balancete'
+import { useAuth } from '../components/AuthProvider'
+import { carregarResponsavelHist, salvarResponsavel, excluirResponsavel, normVigencia } from '../lib/responsavel'
 
 // Regimes tributários — nomenclatura padrão da carteira.
 const REGIMES = ['SIMPLES NACIONAL', 'LUCRO PRESUMIDO', 'LUCRO REAL ANUAL', 'LUCRO REAL TRIMESTRAL', 'ISENTA FEDERAL']
@@ -81,6 +83,13 @@ export default function Clientes() {
   const [preview, setPreview] = useState(null)   // resumo da importação p/ confirmação
   const [aplicando, setAplicando] = useState(false)
   const fileRef = useRef(null)
+  const { user } = useAuth()
+  // Responsável pelo fechamento, por vigência (histórico nunca sobrescrito) — guardado por cliente.
+  const [respHist, setRespHist] = useState([])
+  const [respVig, setRespVig] = useState('')
+  const [respNome, setRespNome] = useState('')
+  const [respBusy, setRespBusy] = useState(false)
+  const [respMsg, setRespMsg] = useState('')
 
   async function carregar() {
     setLoading(true); setErro('')
@@ -241,8 +250,29 @@ export default function Clientes() {
     }
   }
 
-  function abrirNovo() { setForm(vazio); setEditId(null); setErro(''); setConsolidaIds([]); setBuscaCons(''); setConsolidaErro(null); setAberto(true); carregarConsolida(null) }
-  function abrirEdit(c) { setForm({ ...vazio, ...c }); setEditId(c.id); setErro(''); setConsolidaIds([]); setBuscaCons(''); setConsolidaErro(null); setAberto(true); carregarConsolida(c.id) }
+  function abrirNovo() { setForm(vazio); setEditId(null); setErro(''); setConsolidaIds([]); setBuscaCons(''); setConsolidaErro(null); setAberto(true); carregarConsolida(null); resetResp(); setRespHist([]) }
+  function abrirEdit(c) { setForm({ ...vazio, ...c }); setEditId(c.id); setErro(''); setConsolidaIds([]); setBuscaCons(''); setConsolidaErro(null); setAberto(true); carregarConsolida(c.id); resetResp(); carregarRespHist(c.id) }
+
+  // Responsável pelo fechamento (por vigência): lê/grava/remove no cliente aberto.
+  function resetResp() { setRespVig(''); setRespNome(''); setRespMsg(''); setRespBusy(false) }
+  async function carregarRespHist(id) { setRespHist(id ? await carregarResponsavelHist(id) : []) }
+  async function addResp() {
+    setRespMsg('')
+    const vig = normVigencia(respVig)
+    if (!vig) { setRespMsg('Vigência inválida — use MM/AAAA (ex.: 08/2026).'); return }
+    if (!respNome.trim()) { setRespMsg('Informe o nome do responsável.'); return }
+    setRespBusy(true)
+    const { error } = await salvarResponsavel(editId, vig, respNome, user?.email)
+    setRespBusy(false)
+    if (error) { setRespMsg('Não gravou: ' + (error.message || error)); return }
+    setRespVig(''); setRespNome('')
+    carregarRespHist(editId)
+  }
+  async function delResp(id) {
+    if (!confirm('Remover esta vigência de responsável? (o histórico das outras vigências é mantido)')) return
+    await excluirResponsavel(id)
+    carregarRespHist(editId)
+  }
   // Lista de empresas que esta mãe consolida — guardada em cargas_cadastro (tabela que JÁ existe,
   // sem SQL). Formato principal: tipo 'consolidacao'. Se o banco recusar esse tipo (CHECK antigo),
   // cai para tipo 'depara' + obs 'consolidacao_grupo' (tipo garantidamente aceito). Lê os dois.
@@ -464,6 +494,45 @@ export default function Clientes() {
               </Campo>
               <Campo label="Analista" req><input className="input" value={form.analista || ''} onChange={set('analista')} required /></Campo>
               <Campo label="Observações" full><textarea className="input" rows={2} value={form.observacoes || ''} onChange={set('observacoes')} /></Campo>
+              {editId ? (
+                <Campo label="Responsável pelo fechamento (por vigência)" full>
+                  <div style={{ border: `1px solid ${theme.cb}`, borderRadius: 8, padding: 10 }}>
+                    <p style={{ color: theme.sub, fontSize: 11.5, margin: '0 0 8px' }}>
+                      Quem responde por esta empresa a partir de cada vigência. Trocar o responsável cria uma <b>vigência nova</b> — o histórico nunca é sobrescrito.
+                    </p>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                      <div style={{ flex: '0 0 118px' }}>
+                        <label style={{ fontSize: 11, color: theme.sub, display: 'block', marginBottom: 3 }}>Vigência (MM/AAAA)</label>
+                        <input className="input" value={respVig} onChange={e => setRespVig(e.target.value)} placeholder="08/2026" style={{ fontSize: 12.5 }} />
+                      </div>
+                      <div style={{ flex: 1, minWidth: 160 }}>
+                        <label style={{ fontSize: 11, color: theme.sub, display: 'block', marginBottom: 3 }}>Responsável</label>
+                        <input className="input" value={respNome} onChange={e => setRespNome(e.target.value)} placeholder="Nome do responsável" style={{ fontSize: 12.5 }} />
+                      </div>
+                      <button type="button" className="btn" disabled={respBusy} onClick={addResp} style={{ fontSize: 12.5, whiteSpace: 'nowrap' }}>
+                        {respBusy ? 'Salvando…' : 'Adicionar / trocar'}
+                      </button>
+                    </div>
+                    {respMsg && <p style={{ color: theme.red, fontSize: 11.5, margin: '8px 0 0' }}>{respMsg}</p>}
+                    <div style={{ marginTop: 10 }}>
+                      {respHist.length === 0
+                        ? <p style={{ color: theme.sub, fontSize: 12, margin: 0 }}>Sem responsável definido — na falta dele o Dashboard usa o <b>Analista</b> do cadastro.</p>
+                        : respHist.map((h, i) => (
+                          <div key={h.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 2px', borderTop: i ? `1px solid ${theme.border}` : 'none', fontSize: 12.5 }}>
+                            <span style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 600, minWidth: 62 }}>{h.vigencia}</span>
+                            <span style={{ flex: 1 }}>{h.responsavel || '—'}</span>
+                            {i === 0 && <span style={{ fontSize: 10.5, color: theme.green, background: 'rgba(48,164,108,0.15)', borderRadius: 12, padding: '2px 8px' }}>vigente</span>}
+                            <button type="button" title="Remover vigência" onClick={() => delResp(h.id)} style={{ background: 'none', border: 'none', color: theme.sub, cursor: 'pointer', fontSize: 14, padding: 0, display: 'inline-flex' }}><i className="ti ti-trash" /></button>
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+                </Campo>
+              ) : (
+                <Campo label="Responsável pelo fechamento (por vigência)" full>
+                  <p style={{ color: theme.sub, fontSize: 12, margin: 0 }}>Salve o cliente primeiro; depois reabra o cadastro para definir o responsável e a vigência.</p>
+                </Campo>
+              )}
               <Campo label="Consolida os balancetes destas empresas (grupo)" full>
                 {consolidaErro && (
                   <div style={{ border: `1px solid ${theme.red}`, background: 'rgba(229,72,77,0.10)', borderRadius: 8, padding: '8px 12px', marginBottom: 8 }}>
