@@ -1839,10 +1839,9 @@ function ModalDist({ inicial, empresaId, competencia, empresaNome, planoMap = {}
                 <input className="input" style={{ flex: 1, minWidth: 150 }} placeholder="Nome do sócio" value={s.nome} onChange={updAtaSocio(i, 'nome')} />
                 <input className="input" style={{ width: 150 }} placeholder="CPF" value={s.cpf || ''} onChange={updAtaSocio(i, 'cpf')} />
                 <input className="input" style={{ width: 140 }} type="number" step="0.01" placeholder="Distribuído (R$)" value={s.valor} onChange={updAtaSocio(i, 'valor')} />
-                <div style={{ width: 150 }}><CampoConta value={s.conta || ''} onChange={cod => setAtaContaSocio(i, cod)} onPick={p => setAtaContaSocio(i, p.cod)} placeholder="Conta (F4)" /></div>
+                <div style={{ width: 150 }}><CampoConta value={s.conta || ''} onChange={cod => setAtaContaSocio(i, cod)} onPick={p => setAtaContaSocio(i, p.cod)} plano={plano} placeholder="Conta (F4)" /></div>
                 <i className="ti ti-trash" onClick={() => setAta(a => ({ ...a, socios: a.socios.filter((_, j) => j !== i) }))} style={{ color: theme.sub, cursor: 'pointer' }} />
               </div>
-              {s.conta && planoMap[s.conta] && <p style={{ fontSize: 11, color: theme.accent, margin: '4px 0 0' }}><i className="ti ti-corner-down-right" /> {planoMap[s.conta].nome}</p>}
               <div style={{ marginTop: 8 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <span style={{ fontSize: 11, color: theme.sub, textTransform: 'uppercase', letterSpacing: .3 }}>Pagamentos já feitos</span>
