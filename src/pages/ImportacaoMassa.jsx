@@ -417,6 +417,28 @@ function MassaResponsavel() {
     } catch (err) { setMsg('Erro ao ler: ' + (err.message || err)) }
   }
 
+  // Semeia a vigência 06/2026 a partir do Analista de cada cliente — a base do histórico.
+  // Idempotente: pula quem JÁ tem qualquer responsável por vigência (não sobrescreve).
+  async function semearJunho() {
+    setMsg('')
+    try {
+      const [{ data: clientes }, { data: jaResp }] = await Promise.all([
+        supabase.from('clientes').select('id, codigo_dominio, razao_social, analista'),
+        supabase.from('cargas_cadastro').select('cliente_id').eq('tipo', 'depara').eq('obs', 'responsavel_fechamento'),
+      ])
+      const comResp = new Set((jaResp || []).map(r => r.cliente_id))
+      const linhas = []
+      for (const c of (clientes || [])) {
+        const resp = String(c.analista || '').trim()
+        const situacao = comResp.has(c.id) ? 'ja_tem' : !resp ? 'sem_analista' : 'ok'
+        linhas.push({ cod: c.codigo_dominio, empresa: c.razao_social || '—', cliente_id: c.id, vigencia: '06/2026', responsavel: resp, situacao })
+      }
+      linhas.sort((a, b) => ((a.situacao === 'ok' ? 0 : 1) - (b.situacao === 'ok' ? 0 : 1)) || String(a.empresa).localeCompare(String(b.empresa), 'pt-BR'))
+      if (!linhas.length) { setMsg('Nenhum cliente para semear.'); return }
+      setPrev({ linhas, semente: true })
+    } catch (err) { setMsg('Erro ao preparar: ' + (err.message || err)) }
+  }
+
   async function aplicar() {
     setAplicando(true)
     let ok = 0
@@ -428,7 +450,7 @@ function MassaResponsavel() {
   }
 
   const ok = prev ? prev.linhas.filter(l => l.situacao === 'ok').length : 0
-  const SIT = { ok: { t: 'ok', c: theme.green, i: 'ti-check' }, nao_encontrada: { t: 'empresa não encontrada', c: theme.red, i: 'ti-alert-triangle' }, vig_invalida: { t: 'vigência inválida', c: theme.yellow, i: 'ti-alert-triangle' }, sem_resp: { t: 'sem responsável', c: theme.yellow, i: 'ti-alert-triangle' } }
+  const SIT = { ok: { t: 'ok', c: theme.green, i: 'ti-check' }, nao_encontrada: { t: 'empresa não encontrada', c: theme.red, i: 'ti-alert-triangle' }, vig_invalida: { t: 'vigência inválida', c: theme.yellow, i: 'ti-alert-triangle' }, sem_resp: { t: 'sem responsável', c: theme.yellow, i: 'ti-alert-triangle' }, ja_tem: { t: 'já tem responsável (pulado)', c: theme.sub, i: 'ti-minus' }, sem_analista: { t: 'sem analista (pulado)', c: theme.yellow, i: 'ti-alert-triangle' } }
 
   return (
     <Bloco icon="ti-user-check" titulo="Responsável pelo fechamento" desc="Planilha com codigo_dominio, vigência (MM/AAAA) e o nome do responsável. Aplica em várias empresas de uma vez, guardando por vigência — não sobrescreve o anterior (preserva o histórico).">
@@ -438,13 +460,14 @@ function MassaResponsavel() {
           <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={analisar} />
         </label>
         <button className="btn btn-ghost" style={{ fontSize: 13 }} onClick={baixarModelo}><i className="ti ti-file-spreadsheet" /> Baixar modelo</button>
+        <button className="btn btn-ghost" style={{ fontSize: 13 }} onClick={semearJunho} title="Cria a vigência 06/2026 a partir do Analista de cada cliente (pula quem já tem responsável)"><i className="ti ti-seeding" /> Semear junho (do Analista)</button>
       </div>
       {msg && <p style={{ color: msg.startsWith('Erro') ? theme.red : theme.green, fontSize: 12.5, margin: '8px 0 0' }}>{msg}</p>}
       {prev && (
         <div onClick={() => !aplicando && setPrev(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 50 }}>
           <div onClick={e => e.stopPropagation()} style={{ width: 'min(680px,96vw)', maxHeight: '88vh', overflow: 'auto', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
-            <h2 style={{ fontSize: 17, marginBottom: 4 }}>Responsável — conferir antes de aplicar</h2>
-            <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 12px' }}><b style={{ color: theme.text }}>{ok}</b> de {prev.linhas.length} linha(s) prontas. Empresas não encontradas ou linhas inválidas <b>não</b> são aplicadas. Cada vigência é <b>acrescentada</b> (a mesma empresa+vigência é substituída).</p>
+            <h2 style={{ fontSize: 17, marginBottom: 4 }}>{prev.semente ? 'Semear junho (06/2026) a partir do Analista' : 'Responsável — conferir antes de aplicar'}</h2>
+            <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 12px' }}><b style={{ color: theme.text }}>{ok}</b> de {prev.linhas.length} linha(s) prontas.{prev.semente ? ' Cria a vigência 06/2026 com o Analista atual. Quem já tem responsável ou está sem analista é pulado.' : ' Empresas não encontradas ou linhas inválidas não são aplicadas.'} Cada vigência é <b>acrescentada</b> (a mesma empresa+vigência é substituída).</p>
             <div style={{ maxHeight: '50vh', overflow: 'auto', border: `0.5px solid ${theme.cb}`, borderRadius: 10 }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
                 <thead><tr style={{ background: theme.input }}>
