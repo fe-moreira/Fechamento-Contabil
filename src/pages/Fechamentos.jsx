@@ -80,6 +80,9 @@ export default function Fechamentos() {
   // Só é "em andamento" depois de importar o razão; sem razão (e não fechado) → "pendente".
   // 100% dos gates (pct) → "pronto" (verde), mesmo antes de encerrar formalmente.
   const efet = c => c.status === 'fechado' ? 'fechado' : (c.razao_importado ? ((c.pct || 0) >= 100 ? 'pronto' : 'andamento') : 'pendente')
+  // Já foi encerrado alguma vez? (tem o carimbo de encerramento). Se está reaberto e abaixo de 100%,
+  // permite RE-ENCERRAR reaceitando o estado anterior — sem refazer justificativas que não mudaram.
+  const foiEncerrado = c => !!c?.integracoes?.encerramento?.por
   // Balancete do Domínio confere com a conciliação? (gravado em competencias.integracoes.balanceteConf
   // pelo Status). Encerrar EXIGE que bata — senão o fechamento sairia com o balancete divergente.
   const balanceteBate = c => !!c.integracoes?.balanceteConf?.bate
@@ -126,6 +129,27 @@ export default function Fechamentos() {
     const { error } = await supabase.from('competencias').update({ status: 'andamento', integracoes: integ }).eq('id', c.id)
     setSalvandoAcao(false)
     if (error) { alert('Não consegui reabrir: ' + error.message); return }
+    refreshStatusCompetencia?.()
+    await carregar()
+  }
+  // RE-ENCERRAR (só admin): volta ao estado ENCERRADO uma competência que já tinha sido encerrada
+  // e foi reaberta. Reaceita o que já estava aceito (a regra "mês fechado aceita tudo até ele" volta
+  // a valer) — NÃO refaz nem apaga justificativas. Use quando reabriu, os gates reapareceram e você
+  // NÃO alterou valores. Mantém a trava do balancete (que sobrevive à reabertura).
+  async function reencerrarDireto(c) {
+    if (!isAdmin) { alert('Apenas um administrador pode re-encerrar.'); return }
+    if (!balanceteBate(c)) {
+      alert('Não é possível re-encerrar: o balancete do Domínio não confere (ou foi alterado). Abra o Status, confira o balancete e tente de novo.')
+      abrir(c); return
+    }
+    if (!window.confirm(`Re-encerrar ${MESES[c.mes - 1]}/${c.ano}?\n\nIsto REACEITA o estado que já estava encerrado e volta a competência para SOMENTE LEITURA. As justificativas/variações que reapareceram ao reabrir voltam a ser aceitas como antes — nada é refeito nem apagado.\n\nUse só se você NÃO alterou valores desde a reabertura.\n\nTem certeza?`)) return
+    setSalvandoAcao(true)
+    const { data: cur } = await supabase.from('competencias').select('integracoes').eq('id', c.id).maybeSingle()
+    const base = (cur?.integracoes && typeof cur.integracoes === 'object') ? cur.integracoes : {}
+    const integ = { ...base, encerramento: { por: user?.email || null, em: new Date().toISOString(), reencerrado: true } }
+    const { error } = await supabase.from('competencias').update({ status: 'fechado', integracoes: integ }).eq('id', c.id)
+    setSalvandoAcao(false)
+    if (error) { alert('Não consegui re-encerrar: ' + error.message); return }
     refreshStatusCompetencia?.()
     await carregar()
   }
@@ -336,6 +360,15 @@ export default function Fechamentos() {
                       <i className="ti ti-alert-triangle" /> Conferir balancete
                     </button>
                   )
+                )}
+                {/* Reaberto e abaixo de 100%, mas JÁ tinha sido encerrado: re-encerrar reaceita o estado
+                    anterior sem refazer as justificativas (só admin). */}
+                {isAdmin && (efet(c) === 'andamento' || efet(c) === 'pendente') && foiEncerrado(c) && (
+                  <button className="btn btn-ghost" disabled={salvandoAcao} onClick={e => { e.stopPropagation(); reencerrarDireto(c) }}
+                    style={{ fontSize: 12.5, padding: '5px 12px', color: theme.green, borderColor: theme.green, flexShrink: 0, whiteSpace: 'nowrap' }}
+                    title="Este fechamento já tinha sido encerrado e foi reaberto. Re-encerrar reaceita o estado anterior (sem refazer justificativas) — só administrador.">
+                    <i className="ti ti-lock-check" /> Re-encerrar
+                  </button>
                 )}
                 <i className="ti ti-trash" title="Excluir fechamento" onClick={e => excluir(c, e)}
                   style={{ color: theme.sub, fontSize: 17, flexShrink: 0, cursor: 'pointer' }} />
