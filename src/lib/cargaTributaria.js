@@ -38,13 +38,26 @@ export function codsCarga(cfg) {
   return new Set((cfg?.contas || []).map(c => String(c?.cod ?? '').trim()).filter(Boolean))
 }
 
-// Numerador: soma o MOVIMENTO do período (|saldo_final|) das contas escolhidas, casando
-// pelo código reduzido. As linhas analíticas do balancete VIVO trazem `reduzido` e `saldo_final`.
+// Apura o imposto do período nas contas escolhidas (casando pelo código reduzido). Devolve:
+//  - bruto:   total de DÉBITO (imposto apurado)
+//  - credito: total de CRÉDITO (creditamento de crédito — recupera/estorna imposto)
+//  - liquido: bruto − credito (o que REALMENTE onera; é o numerador da carga)
+// O creditamento ABATE: por isso é débito − crédito, e NÃO a soma em módulo (que somava o crédito).
+export function apurarImpostos(analit, cods) {
+  const out = { bruto: 0, credito: 0, liquido: 0 }
+  if (!cods || !cods.size) return out
+  const r2 = v => Math.round(v * 100) / 100
+  for (const l of (analit || [])) {
+    if (!cods.has(String(l.reduzido ?? l.conta ?? '').trim())) continue
+    out.bruto += num(l.debito)
+    out.credito += num(l.credito)
+  }
+  out.bruto = r2(out.bruto); out.credito = r2(out.credito); out.liquido = r2(out.bruto - out.credito)
+  return out
+}
+// Numerador da carga = imposto LÍQUIDO (débito − crédito).
 export function somaImpostos(analit, cods) {
-  if (!cods || !cods.size) return 0
-  return (analit || [])
-    .filter(l => cods.has(String(l.reduzido ?? l.conta ?? '').trim()))
-    .reduce((s, l) => s + Math.abs(num(l.saldo_final ?? l.saldo)), 0)
+  return apurarImpostos(analit, cods).liquido
 }
 
 // Percentual da carga. `base` = 'bruto' | 'liquido' | null/'' (não configurado → null).

@@ -15,7 +15,7 @@ import { lerTudo } from './lerTudo'
 import { montarBalancete, apurarBalanco, prepararBalanco } from './balancete'
 import { montarDRE, apurarResultadoSimples } from './dre'
 import { extrairEntidade } from './financeiro'
-import { codsCarga, somaImpostos, cargaPct } from './cargaTributaria'
+import { codsCarga, apurarImpostos, cargaPct } from './cargaTributaria'
 
 const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
 const num = v => Number(v) || 0
@@ -117,7 +117,10 @@ function apurarCockpit(agg, perMonth, razaoReceita, primeiro, ultimo, serieMonth
   // passivo). Sem config, cargaBase = null → o relatório mostra "configurar" em vez de % errado.
   const codsImp = codsCarga(cargaCfg)
   const cargaBase = codsImp.size ? (cargaCfg?.base || 'bruto') : null
-  const impostos = cargaBase ? somaImpostos(analit, codsImp) : null
+  const impTrib = cargaBase ? apurarImpostos(analit, codsImp) : null
+  const impostos = impTrib ? impTrib.liquido : null // LÍQUIDO (débito − crédito)
+  const impostosBruto = impTrib ? impTrib.bruto : null
+  const impostosCredito = impTrib ? impTrib.credito : null
 
   // Resultado do período (grupos 3/4/5 do agregado)
   const resGrupo = d => analit.filter(l => g1(l) === d).reduce((s, l) => s + num(l.saldo_final), 0)
@@ -190,6 +193,7 @@ function apurarCockpit(agg, perMonth, razaoReceita, primeiro, ultimo, serieMonth
   const topClientes = Object.entries(mapaCli).map(([nome, valor]) => ({ nome, valor })).sort((a, b) => b.valor - a.valor).slice(0, 6)
 
   return { receita, custo, despesa, resultado, acumuladoAno, totAtivo, totPassivo, clientes, fornecedores, impostos,
+    impostosBruto, impostosCredito,
     disponiveis, totDispIni, totDispFim, geracaoCaixa, indices, serie, topClientes, totReceitaRazao,
     ac, pc, pnc, cargaBase,
     dataIni: diaBR(primeiro.mes === 1 ? primeiro.ano - 1 : primeiro.ano, primeiro.mes === 1 ? 12 : primeiro.mes - 1), // fim do mês anterior à 1ª ponta
@@ -358,8 +362,8 @@ export function abrirDemonstracoesContabeis({ empresa, cnpj, periodoLabel, perio
       </div>
       <h2 class="sec">Impostos</h2>
       <div class="tiles">
-        <div class="tile"><div class="k">Impostos apurados</div><div class="v">${c.cargaBase ? brlR(c.impostos) : '—'}</div><div class="s">${c.cargaBase ? `${pctBR(ix.cargaTrib)} do ${c.cargaBase === 'liquido' ? 'receita líquida' : 'faturamento'}` : 'contas não configuradas'}</div></div>
-        <div class="tile"><div class="k">Carga tributária</div><div class="v">${c.cargaBase ? pctBR(ix.cargaTrib) : 'configurar'}</div><div class="s">${c.cargaBase ? `impostos ÷ ${c.cargaBase === 'liquido' ? 'receita líquida' : 'faturamento'}` : 'defina as contas na Base de Informações'}</div></div>
+        <div class="tile"><div class="k">Imposto líquido</div><div class="v">${c.cargaBase ? brlR(c.impostos) : '—'}</div><div class="s">${c.cargaBase ? `apurado ${brlR(c.impostosBruto)}${Math.abs(c.impostosCredito || 0) >= 0.005 ? ` · (−) créditos ${brlR(c.impostosCredito)}` : ''}` : 'contas não configuradas'}</div></div>
+        <div class="tile"><div class="k">Carga tributária</div><div class="v">${c.cargaBase ? pctBR(ix.cargaTrib) : 'configurar'}</div><div class="s">${c.cargaBase ? `imposto líquido ÷ ${c.cargaBase === 'liquido' ? 'receita líquida' : 'faturamento'}` : 'defina as contas na Base de Informações'}</div></div>
       </div>
       <h2 class="sec">Principais clientes do período</h2>
       <div class="clibox">${cliRows}</div>
