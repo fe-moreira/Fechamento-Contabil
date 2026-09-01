@@ -93,6 +93,20 @@ export async function balanceteEfetivo(empresaId, compId) {
   return out.sort((a, b) => String(a.classif).localeCompare(String(b.classif), 'pt-BR', { numeric: true }))
 }
 
+// Garante que a DATA de um lançamento caia DENTRO do mês da competência ('MM/AAAA'). Se a data de
+// origem for de outro mês (ex.: título de abril reclassificado numa conciliação de julho), devolve
+// o ÚLTIMO dia do mês da competência — mantém o valor na competência certa e evita que o Domínio
+// recuse um lançamento datado fora do período. Datas já dentro do mês são mantidas.
+export function dataNaCompetencia(data, competencia) {
+  const m = String(competencia || '').match(/^(\d{1,2})\/(\d{4})$/)
+  if (!m) return data || null
+  const mes = +m[1], ano = +m[2]
+  const dd = String(data || '').match(/^(\d{4})-(\d{2})-(\d{2})/)
+  if (dd && +dd[1] === ano && +dd[2] === mes) return data // já está no mês certo
+  const ultimo = new Date(ano, mes, 0).getDate()
+  return `${ano}-${String(mes).padStart(2, '0')}-${String(ultimo).padStart(2, '0')}`
+}
+
 export async function conferirBalanceteEncerramento(empresaId, compId, importado) {
   const { linhas } = await montarBalancete(empresaId, compId)
   const { data: lancs } = await supabase.from('lancamentos').select('conta_debito, conta_credito, valor').eq('competencia_id', compId)
@@ -119,7 +133,10 @@ export async function conferirBalanceteEncerramento(empresaId, compId, importado
   for (const l of linhas) {
     if (l.sintetica) continue
     const d = dig(l.classifRaw || l.classif)[0]
-    if (d !== '1' && d !== '2') continue // só Ativo/Passivo (escopo da conciliação)
+    // Ativo/Passivo (1/2) batem com a CONCILIAÇÃO; Resultado (3/4/5) bate com o COMPARATIVO — em
+    // ambos o saldo esperado é o RAZÃO VIVO (balancete + lançamentos/correções). Fora disso, ignora.
+    if (!d || !'12345'.includes(d)) continue
+    const lado = (d === '1' || d === '2') ? 'Conciliação' : 'Comparativo'
     const efetivo = Math.round(((Number(l.saldo_final) || 0) + (aj[String(l.reduzido)] || 0)) * 100) / 100
     if (Math.abs(efetivo) < 0.005) continue // conta zerada não precisa constar
     verificados++
@@ -127,9 +144,9 @@ export async function conferirBalanceteEncerramento(empresaId, compId, importado
     if (imp == null) imp = porClassif[dig(l.classifRaw || l.classif)]
     // Fallback por NOME — só quando o nome é ÚNICO no arquivo importado (evita casar errado).
     if (imp == null) { const kn = normNm(l.nome); if (kn && nomeCount[kn] === 1) imp = porNome[kn] }
-    if (imp == null) { divergencias.push({ conta: l.reduzido, nome: l.nome, esperado: efetivo, importado: null, dif: efetivo }); continue }
+    if (imp == null) { divergencias.push({ conta: l.reduzido, nome: l.nome, esperado: efetivo, importado: null, dif: efetivo, lado }); continue }
     const dif = Math.round((Math.abs(efetivo) - Math.abs(imp)) * 100) / 100
-    if (Math.abs(dif) >= 0.05) divergencias.push({ conta: l.reduzido, nome: l.nome, esperado: efetivo, importado: imp, dif })
+    if (Math.abs(dif) >= 0.05) divergencias.push({ conta: l.reduzido, nome: l.nome, esperado: efetivo, importado: imp, dif, lado })
   }
   return { verificados, bate: verificados > 0 && divergencias.length === 0, divergencias }
 }

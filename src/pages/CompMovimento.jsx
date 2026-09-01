@@ -4,7 +4,7 @@ import { lerTudo } from '../lib/lerTudo'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { theme, money, moneyDC } from '../lib/theme'
-import { montarBalancete, normalizaCompetencia, applyMask, erroContaSintetica } from '../lib/balancete'
+import { montarBalancete, normalizaCompetencia, applyMask, erroContaSintetica, dataNaCompetencia } from '../lib/balancete'
 import { aprenderDaCorrecao } from '../lib/sugestoesRazao'
 import CampoConta from '../components/CampoConta'
 import InfoTela from '../components/InfoTela'
@@ -1157,7 +1157,7 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
       throw new Error(`Este lançamento é de ${alvo}. Correção só pode ser feita no mês do fechamento${competenciaLabel ? ` (${competenciaLabel})` : ''}. Mude o fechamento para ${alvo} e corrija lá — os outros meses se atualizam sozinhos. A justificativa é por mês (justifique cada mês).`)
     }
     const { error } = await supabase.from('lancamentos').insert({
-      competencia_id: cid, data: l.data || null,
+      competencia_id: cid, data: dataNaCompetencia(l.data, `${String(mesL).padStart(2, '0')}/${ANO}`) || null,
       conta_debito, conta_credito, valor: v,
       historico: historico || `Reclassificação ref. ${l.historico || ''}`.trim(),
       origem: 'correcao', razao_id: l.id, usuario,

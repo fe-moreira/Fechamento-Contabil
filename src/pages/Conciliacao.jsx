@@ -6,7 +6,7 @@ import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { theme, money, moneyDC } from '../lib/theme'
 import InfoTela from '../components/InfoTela'
-import { montarBalancete, parsePlano, composicaoAbertura, difConciliacao, applyMask, erroContaSintetica, ehCompetenciaInicial, excluirLinhaAbertura, limparNomeEntidade } from '../lib/balancete'
+import { montarBalancete, parsePlano, composicaoAbertura, difConciliacao, applyMask, erroContaSintetica, ehCompetenciaInicial, excluirLinhaAbertura, limparNomeEntidade, dataNaCompetencia } from '../lib/balancete'
 import { abrePdfTimbrado } from '../lib/pdf'
 import { gerarExcelTimbrado } from '../lib/excel'
 import { listarComentariosConta, adicionarComentario, excluirComentario } from '../lib/comentarios'
@@ -1440,7 +1440,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       const eSint = erroContaSintetica(plano, L.conta_debito, L.conta_credito)
       if (eSint) { setMsg(eSint); return }
       const { data: lanIns } = await supabase.from('lancamentos').insert({
-        competencia_id: id, data: L.data || null,
+        competencia_id: id, data: dataNaCompetencia(L.data, competencia) || null,
         conta_debito: L.conta_debito || null, conta_credito: L.conta_credito || null,
         valor: Number(L.valor) || 0, historico: L.historico || null,
         documento: acao?.leitura.nf ? `NF ${acao.leitura.nf}` : null,
@@ -1719,7 +1719,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     const id = await getCompetenciaId()
     // net>0 (débito residual na conta) → credita a conta p/ zerar; net<0 → debita a conta.
     const { data: lan, error: e1 } = await supabase.from('lancamentos').insert({
-      competencia_id: id, data: null,
+      competencia_id: id, data: dataNaCompetencia(null, competencia),
       conta_debito: net > 0 ? contaDif : conta.conta,
       conta_credito: net > 0 ? conta.conta : contaDif,
       valor: dif, historico: `${kind === 'juros' ? 'Juros/multa' : 'Desconto financeiro'} — conexão manual · ${conta.nome}`,

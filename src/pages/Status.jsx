@@ -5,7 +5,7 @@ import { useAuth } from '../components/AuthProvider'
 import { apurarDistribuicao } from '../lib/distribuicao'
 import { apurarBancoResultado } from '../lib/bancoResultado'
 import { apurarVariacoes } from '../lib/variacoes'
-import { contasConciliacaoAbertas, conferirBalanceteEncerramento, erroContaSintetica } from '../lib/balancete'
+import { contasConciliacaoAbertas, conferirBalanceteEncerramento, erroContaSintetica, dataNaCompetencia } from '../lib/balancete'
 import { theme, money } from '../lib/theme'
 import InfoTela from '../components/InfoTela'
 import { abrePdfTimbrado } from '../lib/pdf'
@@ -491,7 +491,7 @@ export default function Status() {
       try { await supabase.storage.from('extratos').upload(path, file, { upsert: true, contentType: file.type || undefined }) } catch { /* segue mesmo sem guardar o arquivo */ }
       const conf = { ...res, nome: file.name, path, quando: new Date().toISOString() }
       setBalConf(conf); await persistBalConf(conf)
-      setMsg(res.bate ? 'Balancete confere com a conciliação — pode encerrar.' : `Balancete não bate: ${res.divergencias.length} conta(s) divergente(s).`)
+      setMsg(res.bate ? 'Balancete confere (Ativo/Passivo × conciliação e resultado × comparativo) — pode encerrar.' : `Balancete não bate: ${res.divergencias.length} conta(s) divergente(s) (Ativo/Passivo × conciliação e resultado × comparativo).`)
     } catch (e) { setMsg('Não consegui ler o balancete: ' + e.message) }
     setBalBusy(false)
   }
@@ -626,7 +626,7 @@ export default function Status() {
     if (eSint) { setMsg(eSint); return }
     const id = await getCompetenciaId()
     await supabase.from('lancamentos').insert({
-      competencia_id: id, data: L.data || null,
+      competencia_id: id, data: dataNaCompetencia(L.data, competencia) || null,
       conta_debito: L.conta_debito || null, conta_credito: L.conta_credito || null,
       valor: Number(L.valor) || 0, historico: L.historico || null,
       origem: 'correcao', usuario: user?.email,
@@ -701,12 +701,12 @@ export default function Status() {
           ) : pronto ? (
             <>
               <p style={{ fontSize: 21, fontWeight: 700, color: theme.red, margin: 0 }}>
-                {balConf && !balConf.bate ? 'Balancete não bate com a conciliação' : 'Falta conferir o balancete'}
+                {balConf && !balConf.bate ? 'Balancete não bate' : 'Falta conferir o balancete'}
               </p>
               <p style={{ fontSize: 13, color: theme.sub, margin: '4px 0 0' }}>
                 {balConf && !balConf.bate
-                  ? <>Gates resolvidos, mas o balancete do Domínio diverge em <b>{balConf.divergencias.length} conta{balConf.divergencias.length > 1 ? 's' : ''}</b>. Corrija e reimporte — o encerramento fica bloqueado até bater.</>
-                  : <>Gates resolvidos. Importe o <b>balancete do Domínio</b> (abaixo) — ele precisa bater com a conciliação para liberar o encerramento.</>}
+                  ? <>Gates resolvidos, mas o balancete do Domínio diverge em <b>{balConf.divergencias.length} conta{balConf.divergencias.length > 1 ? 's' : ''}</b> (Ativo/Passivo × conciliação e resultado × comparativo). Corrija e reimporte — o encerramento fica bloqueado até bater.</>
+                  : <>Gates resolvidos. Importe o <b>balancete do Domínio</b> (abaixo) — Ativo/Passivo tem que bater com a <b>conciliação</b> e o resultado com o <b>comparativo</b> para liberar o encerramento.</>}
               </p>
             </>
           ) : (
@@ -777,8 +777,8 @@ export default function Status() {
           <p style={{ fontSize: 13.5, fontWeight: 600, margin: 0, display: 'flex', alignItems: 'center', gap: 8, color: balConf.bate ? theme.green : theme.red }}>
             <i className={`ti ${balConf.bate ? 'ti-circle-check' : 'ti-alert-triangle'}`} />
             {balConf.bate
-              ? `Balancete confere com a conciliação (${balConf.verificados} conta(s)). Pode encerrar.`
-              : `Balancete NÃO bate com a conciliação — ${balConf.divergencias.length} conta(s) divergente(s). Corrija e reimporte.`}
+              ? `Balancete confere — Ativo/Passivo com a conciliação e resultado com o comparativo (${balConf.verificados} conta(s)). Pode encerrar.`
+              : `Balancete NÃO bate — ${balConf.divergencias.length} conta(s) divergente(s) (Ativo/Passivo × conciliação e resultado × comparativo). Corrija e reimporte.`}
             <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 10, fontSize: 11.5, color: theme.sub, fontWeight: 400 }}>
               {balConf.nome}
               {balConf.path && <button className="btn btn-ghost" style={{ fontSize: 11.5, padding: '3px 9px' }} title="Baixar o arquivo do balancete que foi importado" onClick={extrairBalancete}><i className="ti ti-download" /> Extrair</button>}
@@ -789,13 +789,14 @@ export default function Status() {
             <div style={{ overflowX: 'auto', marginTop: 10 }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 520 }}>
                 <thead><tr style={{ background: theme.input }}>
-                  <th style={th}>Conta</th><th style={th}>Nome</th><th style={{ ...th, textAlign: 'right' }}>Conciliação</th><th style={{ ...th, textAlign: 'right' }}>Balancete</th><th style={{ ...th, textAlign: 'right' }}>Diferença</th>
+                  <th style={th}>Conta</th><th style={th}>Nome</th><th style={th}>Origem</th><th style={{ ...th, textAlign: 'right' }}>Sistema</th><th style={{ ...th, textAlign: 'right' }}>Balancete</th><th style={{ ...th, textAlign: 'right' }}>Diferença</th>
                 </tr></thead>
                 <tbody>
                   {balConf.divergencias.slice(0, 30).map((d, i) => (
                     <tr key={i} style={{ borderTop: `1px solid ${theme.border}` }}>
                       <td style={td}>{d.conta}</td>
                       <td style={td}>{d.nome || '—'}</td>
+                      <td style={{ ...td, color: theme.sub }}>{d.lado || '—'}</td>
                       <td style={{ ...td, textAlign: 'right' }}>{money(d.esperado)}</td>
                       <td style={{ ...td, textAlign: 'right' }}>{d.importado == null ? <span style={{ color: theme.red }}>não veio</span> : money(d.importado)}</td>
                       <td style={{ ...td, textAlign: 'right', color: theme.red, fontWeight: 600 }}>{money(d.dif)}</td>
