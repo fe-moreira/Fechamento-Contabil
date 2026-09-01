@@ -130,24 +130,74 @@ export async function conferirBalanceteEncerramento(empresaId, compId, importado
   }
   const divergencias = []
   let verificados = 0
+  // Casa uma conta (código → classificação → nome único) contra o balancete importado.
+  const acharImp = (cod, classifRaw, classif, nome) => {
+    let imp = porCod[String(cod)]
+    if (imp == null) imp = porClassif[dig(classifRaw || classif)]
+    if (imp == null) { const kn = normNm(nome); if (kn && nomeCount[kn] === 1) imp = porNome[kn] }
+    return imp
+  }
+
+  // ATIVO/PASSIVO (1/2): batem com a CONCILIAÇÃO — saldo do MÊS-ALVO (patrimonial já é acumulado
+  // por natureza, carrega saldo de abertura). Razão vivo = balancete + lançamentos/correções do mês.
   for (const l of linhas) {
     if (l.sintetica) continue
     const d = dig(l.classifRaw || l.classif)[0]
-    // Ativo/Passivo (1/2) batem com a CONCILIAÇÃO; Resultado (3/4/5) bate com o COMPARATIVO — em
-    // ambos o saldo esperado é o RAZÃO VIVO (balancete + lançamentos/correções). Fora disso, ignora.
-    if (!d || !'12345'.includes(d)) continue
-    const lado = (d === '1' || d === '2') ? 'Conciliação' : 'Comparativo'
+    if (d !== '1' && d !== '2') continue
     const efetivo = Math.round(((Number(l.saldo_final) || 0) + (aj[String(l.reduzido)] || 0)) * 100) / 100
-    if (Math.abs(efetivo) < 0.005) continue // conta zerada não precisa constar
+    if (Math.abs(efetivo) < 0.005) continue
     verificados++
-    let imp = porCod[String(l.reduzido)]
-    if (imp == null) imp = porClassif[dig(l.classifRaw || l.classif)]
-    // Fallback por NOME — só quando o nome é ÚNICO no arquivo importado (evita casar errado).
-    if (imp == null) { const kn = normNm(l.nome); if (kn && nomeCount[kn] === 1) imp = porNome[kn] }
-    if (imp == null) { divergencias.push({ conta: l.reduzido, nome: l.nome, esperado: efetivo, importado: null, dif: efetivo, lado }); continue }
+    const imp = acharImp(l.reduzido, l.classifRaw, l.classif, l.nome)
+    if (imp == null) { divergencias.push({ conta: l.reduzido, nome: l.nome, esperado: efetivo, importado: null, dif: efetivo, lado: 'Conciliação' }); continue }
     const dif = Math.round((Math.abs(efetivo) - Math.abs(imp)) * 100) / 100
-    if (Math.abs(dif) >= 0.05) divergencias.push({ conta: l.reduzido, nome: l.nome, esperado: efetivo, importado: imp, dif, lado })
+    if (Math.abs(dif) >= 0.05) divergencias.push({ conta: l.reduzido, nome: l.nome, esperado: efetivo, importado: imp, dif, lado: 'Conciliação' })
   }
+
+  // RESULTADO (3/4/5): bate com o COMPARATIVO. No balancete a última coluna é o saldo ACUMULADO do
+  // ano — então o esperado é o razão vivo SOMADO de TODAS as competências do ano até o mês-alvo, não
+  // só o movimento do mês.
+  const { data: alvoCmp } = await supabase.from('competencias').select('ano, mes').eq('id', compId).maybeSingle()
+  const resAcum = new Map() // reduzido -> { classifRaw, classif, nome, efetivo }
+  if (alvoCmp) {
+    const { data: compsAno } = await supabase.from('competencias').select('id')
+      .eq('cliente_id', empresaId).eq('ano', alvoCmp.ano).lte('mes', alvoCmp.mes)
+    const ids = (compsAno || []).map(c => c.id)
+    const { data: lancsAno } = ids.length
+      ? await supabase.from('lancamentos').select('competencia_id, conta_debito, conta_credito, valor').in('competencia_id', ids)
+      : { data: [] }
+    const ajComp = {} // competencia_id -> { conta: ajuste }
+    for (const l of (lancsAno || [])) {
+      const v = Number(l.valor) || 0
+      const a = ajComp[l.competencia_id] || (ajComp[l.competencia_id] = {})
+      if (l.conta_debito) a[String(l.conta_debito)] = (a[String(l.conta_debito)] || 0) + v
+      if (l.conta_credito) a[String(l.conta_credito)] = (a[String(l.conta_credito)] || 0) - v
+    }
+    for (const cId of ids) {
+      const ls = cId === compId ? linhas : (await montarBalancete(empresaId, cId)).linhas
+      const a = ajComp[cId] || {}
+      for (const l of ls) {
+        if (l.sintetica) continue
+        const d = dig(l.classifRaw || l.classif)[0]
+        if (d !== '3' && d !== '4' && d !== '5') continue
+        const k = String(l.reduzido)
+        const efe = (Number(l.saldo_final) || 0) + (a[k] || 0)
+        const cur = resAcum.get(k) || { classifRaw: l.classifRaw, classif: l.classif, nome: l.nome, efetivo: 0 }
+        cur.efetivo += efe
+        if (!cur.nome && l.nome) cur.nome = l.nome
+        resAcum.set(k, cur)
+      }
+    }
+  }
+  for (const [k, r] of resAcum) {
+    const efetivo = Math.round(r.efetivo * 100) / 100
+    if (Math.abs(efetivo) < 0.005) continue
+    verificados++
+    const imp = acharImp(k, r.classifRaw, r.classif, r.nome)
+    if (imp == null) { divergencias.push({ conta: k, nome: r.nome, esperado: efetivo, importado: null, dif: efetivo, lado: 'Comparativo' }); continue }
+    const dif = Math.round((Math.abs(efetivo) - Math.abs(imp)) * 100) / 100
+    if (Math.abs(dif) >= 0.05) divergencias.push({ conta: k, nome: r.nome, esperado: efetivo, importado: imp, dif, lado: 'Comparativo' })
+  }
+
   return { verificados, bate: verificados > 0 && divergencias.length === 0, divergencias }
 }
 
