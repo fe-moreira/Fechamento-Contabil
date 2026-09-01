@@ -1665,9 +1665,25 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     if (correcoesLimpas.length) {
       try { await supabase.from('ajuste_leitura').delete().eq('competencia_id', await getCompetenciaId()).in('razao_id', correcoesLimpas) } catch { /* segue mesmo se falhar a limpeza */ }
     }
-    if (!mudou && !correcoesLimpas.length) return null
-    setAliasesForcados(aliasForcado)
-    await salvarNomes(nomesConf, nomesIsolados, undefined, undefined, undefined, undefined, undefined, undefined, undefined, aliasForcado)
+    // Renomeia as ABERTURAS do vínculo para o nome CANÔNICO. A abertura (saldo anterior) não tem
+    // id nem ajuste_leitura, e o alias forçado nem sempre "cola" nela (correção soberana, limpeza
+    // de nome) — então grava o nome direto no ajuste da abertura. Sem isso, o "Saldo anterior"
+    // fica num BLOCO SEPARADO do pagamento no relatório mesmo depois de você linkar.
+    let aberAj = aberturaAj, mudouAb = false
+    if (canonical) {
+      for (const l of (alvo || [])) {
+        if (!l._abertura) continue
+        const key = chaveAberturaAj(l)
+        if (chaveNome(aberAj[key]?.entidade || '') !== chaveNome(canonical)) {
+          aberAj = { ...aberAj, [key]: { ...(aberAj[key] || {}), entidade: canonical } }
+          mudouAb = true
+        }
+      }
+      if (mudouAb) setAberturaAj(aberAj)
+    }
+    if (!mudou && !correcoesLimpas.length && !mudouAb) return null
+    if (mudou) setAliasesForcados(aliasForcado)
+    await salvarNomes(nomesConf, nomesIsolados, undefined, aberAj, undefined, undefined, undefined, undefined, undefined, mudou ? aliasForcado : aliasesForcados)
     return canonical || null
   }
   // Marca as linhas da conexão como confirmadas (saem para Conciliados). `extraRazaoId` é o
