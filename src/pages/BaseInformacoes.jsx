@@ -1773,7 +1773,7 @@ function ModalDist({ inicial, empresaId, competencia, empresaNome, planoMap = {}
       {contas.map((c, i) => (
         <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
           <div style={{ width: 175 }}>
-            <CampoConta value={c.cod} onChange={v => setContas(l => l.map((x, j) => j === i ? { ...x, cod: v } : x))}
+            <CampoConta value={c.cod} onChange={v => setContas(l => l.map((x, j) => j === i ? { ...x, cod: v, nome: planoMap[String(v).trim()]?.nome ?? x.nome } : x))}
               onPick={p => setContas(l => l.map((x, j) => j === i ? { cod: p.cod, nome: p.nome || '' } : x))} plano={plano} placeholder="Código (F4)" />
           </div>
           <input className="input" style={{ flex: 1 }} placeholder="Nome da conta" value={c.nome} onChange={upd(setContas, i, 'nome')} />
