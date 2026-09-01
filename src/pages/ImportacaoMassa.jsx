@@ -385,7 +385,15 @@ function MassaResponsavel() {
   async function baixarModelo() {
     const XLSX = await import('xlsx')
     const linhas = [['codigo_dominio', 'vigencia', 'responsavel'], ['1072', '07/2026', 'Fulano de Tal'], ['1091', '07/2026', 'Ciclana de Tal']]
-    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(linhas), 'Responsavel')
+    const ws = XLSX.utils.aoa_to_sheet(linhas)
+    // Vigência (coluna B) como TEXTO — senão o Excel converte "07/2026" em data e a leitura quebra.
+    for (let r = 1; r <= linhas.length; r++) {
+      const cell = ws[XLSX.utils.encode_cell({ r, c: 1 })]
+      if (cell) { cell.t = 's'; cell.z = '@' }
+    }
+    if (!ws['!cols']) ws['!cols'] = []
+    ws['!cols'][1] = { wch: 12 }
+    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Responsavel')
     XLSX.writeFile(wb, 'modelo-responsavel-massa.xlsx')
   }
 
@@ -395,7 +403,8 @@ function MassaResponsavel() {
     setMsg('')
     try {
       const XLSX = await import('xlsx')
-      const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' })
+      // cellDates: se o Excel guardou a vigência como data, vem como Date (normVigencia entende).
+      const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true })
       const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' })
       const hdr = (rows[0] || []).map(h => String(h).toLowerCase().trim())
       const iCod = hdr.findIndex(h => /codigo|codi|dominio|empresa/.test(h))
