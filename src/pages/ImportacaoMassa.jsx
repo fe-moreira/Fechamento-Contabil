@@ -4,6 +4,7 @@ import { lerTudo } from '../lib/lerTudo'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { fechaSozinho } from '../lib/clientes'
+import { normVigencia, salvarResponsavel } from '../lib/responsavel'
 import { folhaPorEmpresa, novoRotuloArq, marcarEventos, arquivosDoSlot } from '../lib/folha'
 import { periodoDistribuicao, blocoNormal, blocoAta, pdfDistribuicaoEmpresa, renderEmpresaDistribuicao, criarDocDistribuicao, docBlob, nomeArquivoDistribuicao } from '../lib/distribuicaoRelatorio'
 
@@ -189,6 +190,9 @@ export default function ImportacaoMassa() {
 
         {/* Folha em massa (um arquivo do Domínio com várias empresas → quebra por empresa) */}
         <MassaFolha competencias={competencias} competencia={competencia} recalcularPendencias={recalcularPendencias} />
+
+        {/* Responsável pelo fechamento (por vigência) em massa */}
+        <MassaResponsavel />
         {/* O card de Distribuição de Lucros foi para a tela "Relatórios em massa" (é um relatório). */}
       </div>
 
@@ -369,6 +373,104 @@ function Bloco({ icon, titulo, desc, children, emBreve }) {
       <p style={{ color: theme.sub, fontSize: 12.5, margin: 0, lineHeight: 1.5, flex: 1 }}>{desc}</p>
       {children && <div style={{ marginTop: 2 }}>{children}</div>}
     </div>
+  )
+}
+
+function MassaResponsavel() {
+  const { user } = useAuth()
+  const [prev, setPrev] = useState(null)
+  const [aplicando, setAplicando] = useState(false)
+  const [msg, setMsg] = useState('')
+
+  async function baixarModelo() {
+    const XLSX = await import('xlsx')
+    const linhas = [['codigo_dominio', 'vigencia', 'responsavel'], ['1072', '07/2026', 'Fulano de Tal'], ['1091', '07/2026', 'Ciclana de Tal']]
+    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(linhas), 'Responsavel')
+    XLSX.writeFile(wb, 'modelo-responsavel-massa.xlsx')
+  }
+
+  async function analisar(e) {
+    const file = e.target.files?.[0]; if (e.target) e.target.value = ''
+    if (!file) return
+    setMsg('')
+    try {
+      const XLSX = await import('xlsx')
+      const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' })
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' })
+      const hdr = (rows[0] || []).map(h => String(h).toLowerCase().trim())
+      const iCod = hdr.findIndex(h => /codigo|codi|dominio|empresa/.test(h))
+      const iVig = hdr.findIndex(h => /vig/.test(h))
+      const iResp = hdr.findIndex(h => /respons/.test(h))
+      if (iCod < 0 || iVig < 0 || iResp < 0) { setMsg('Erro: a planilha precisa das colunas codigo_dominio, vigencia e responsavel.'); return }
+      const { data: clientes } = await supabase.from('clientes').select('id, codigo_dominio, razao_social')
+      const porCod = new Map((clientes || []).map(c => [String(c.codigo_dominio || '').trim(), c]))
+      const linhas = []
+      for (const r of rows.slice(1)) {
+        const cod = String(r[iCod] ?? '').trim(); const vig = normVigencia(r[iVig]); const resp = String(r[iResp] ?? '').trim()
+        if (!cod && !resp) continue
+        const cli = porCod.get(cod)
+        const situacao = !cli ? 'nao_encontrada' : !vig ? 'vig_invalida' : !resp ? 'sem_resp' : 'ok'
+        linhas.push({ cod, empresa: cli?.razao_social || '—', cliente_id: cli?.id || null, vigencia: vig || String(r[iVig] ?? '').trim(), responsavel: resp, situacao })
+      }
+      if (!linhas.length) { setMsg('Nenhuma linha lida — confira a planilha.'); return }
+      setPrev({ linhas })
+    } catch (err) { setMsg('Erro ao ler: ' + (err.message || err)) }
+  }
+
+  async function aplicar() {
+    setAplicando(true)
+    let ok = 0
+    for (const l of prev.linhas.filter(x => x.situacao === 'ok')) {
+      const { error } = await salvarResponsavel(l.cliente_id, l.vigencia, l.responsavel, user?.email)
+      if (!error) ok++
+    }
+    setAplicando(false); setPrev(null); setMsg(`${ok} empresa(s) com responsável atualizado.`)
+  }
+
+  const ok = prev ? prev.linhas.filter(l => l.situacao === 'ok').length : 0
+  const SIT = { ok: { t: 'ok', c: theme.green, i: 'ti-check' }, nao_encontrada: { t: 'empresa não encontrada', c: theme.red, i: 'ti-alert-triangle' }, vig_invalida: { t: 'vigência inválida', c: theme.yellow, i: 'ti-alert-triangle' }, sem_resp: { t: 'sem responsável', c: theme.yellow, i: 'ti-alert-triangle' } }
+
+  return (
+    <Bloco icon="ti-user-check" titulo="Responsável pelo fechamento" desc="Planilha com codigo_dominio, vigência (MM/AAAA) e o nome do responsável. Aplica em várias empresas de uma vez, guardando por vigência — não sobrescreve o anterior (preserva o histórico).">
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <label className="btn" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 13 }}>
+          <i className="ti ti-file-import" /> Importar em massa
+          <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={analisar} />
+        </label>
+        <button className="btn btn-ghost" style={{ fontSize: 13 }} onClick={baixarModelo}><i className="ti ti-file-spreadsheet" /> Baixar modelo</button>
+      </div>
+      {msg && <p style={{ color: msg.startsWith('Erro') ? theme.red : theme.green, fontSize: 12.5, margin: '8px 0 0' }}>{msg}</p>}
+      {prev && (
+        <div onClick={() => !aplicando && setPrev(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 50 }}>
+          <div onClick={e => e.stopPropagation()} style={{ width: 'min(680px,96vw)', maxHeight: '88vh', overflow: 'auto', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
+            <h2 style={{ fontSize: 17, marginBottom: 4 }}>Responsável — conferir antes de aplicar</h2>
+            <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 12px' }}><b style={{ color: theme.text }}>{ok}</b> de {prev.linhas.length} linha(s) prontas. Empresas não encontradas ou linhas inválidas <b>não</b> são aplicadas. Cada vigência é <b>acrescentada</b> (a mesma empresa+vigência é substituída).</p>
+            <div style={{ maxHeight: '50vh', overflow: 'auto', border: `0.5px solid ${theme.cb}`, borderRadius: 10 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+                <thead><tr style={{ background: theme.input }}>
+                  {['Código', 'Empresa', 'Vigência', 'Responsável', 'Situação'].map(h => <th key={h} style={{ textAlign: 'left', padding: '8px 10px', color: theme.sub, fontSize: 11, textTransform: 'uppercase', letterSpacing: .3, whiteSpace: 'nowrap' }}>{h}</th>)}
+                </tr></thead>
+                <tbody>
+                  {prev.linhas.map((l, i) => { const s = SIT[l.situacao] || SIT.ok; return (
+                    <tr key={i} style={{ borderTop: `1px solid ${theme.border}`, opacity: l.situacao === 'ok' ? 1 : 0.7 }}>
+                      <td style={{ padding: '7px 10px', whiteSpace: 'nowrap' }}>{l.cod}</td>
+                      <td style={{ padding: '7px 10px' }}>{l.empresa}</td>
+                      <td style={{ padding: '7px 10px', whiteSpace: 'nowrap' }}>{l.vigencia}</td>
+                      <td style={{ padding: '7px 10px' }}>{l.responsavel}</td>
+                      <td style={{ padding: '7px 10px', color: s.c, whiteSpace: 'nowrap' }}><i className={`ti ${s.i}`} /> {s.t}</td>
+                    </tr>
+                  ) })}
+                </tbody>
+              </table>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
+              <button className="btn btn-ghost" onClick={() => setPrev(null)} disabled={aplicando}>Cancelar</button>
+              <button className="btn" onClick={aplicar} disabled={aplicando || !ok}>{aplicando ? 'Aplicando…' : `Aplicar (${ok})`}</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </Bloco>
   )
 }
 
