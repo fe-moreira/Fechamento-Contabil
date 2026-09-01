@@ -607,7 +607,7 @@ export default function BaseInformacoes() {
 
       {/* Modais */}
       {modal?.tipo === 'carga' && (
-        <ModalCarga carga={modal.carga} historico={cargas[modal.carga.tipo] || []} empresaId={empresaId} cliente={cliente} usuario={user?.email}
+        <ModalCarga carga={modal.carga} historico={cargas[modal.carga.tipo] || []} empresaId={empresaId} cliente={cliente} usuario={user?.email} plano={plano}
           onClose={() => setModal(null)} onImportado={() => { carregarCargas(); recarregarPlano() }} />
       )}
       {modal?.tipo === 'partic' && (
@@ -625,7 +625,7 @@ export default function BaseInformacoes() {
         <ModalCargaInicial vigencia={modal.vigencia} empresaId={empresaId} cliente={cliente} onClose={() => setModal(null)} onConcluir={concluirCargaInicial} />
       )}
       {modal?.tipo === 'dist' && (
-        <ModalDist inicial={dist} empresaId={empresaId} competencia={competencia} empresaNome={empresaNome} planoMap={planoMap} onClose={() => setModal(null)} onSalvar={salvarDist} />
+        <ModalDist inicial={dist} empresaId={empresaId} competencia={competencia} empresaNome={empresaNome} planoMap={planoMap} plano={plano} onClose={() => setModal(null)} onSalvar={salvarDist} />
       )}
       {modal?.tipo === 'resultadoPL' && (
         <ModalResultadoPL inicial={resPL} plano={plano} onClose={() => setModal(null)} onSalvar={salvarResPL} />
@@ -719,12 +719,77 @@ function Acoes({ onEdit, onDel }) {
 }
 
 /* ---------- Modais ---------- */
-function ModalCarga({ carga, historico, empresaId, cliente, usuario, onClose, onImportado }) {
+// Seletor de VÁRIAS contas do plano de uma vez (em vez de linha por linha). `tipos` (opcional):
+// [{ label, grupos:['1'] }] — mostra o tipo e pré-filtra o plano pelo 1º dígito da classificação
+// (ex.: Banco → grupo 1; Resultado → 3/4/5), com um "todas as contas" para tirar o filtro.
+// Reutilizável (banco × resultado, carga tributária, distribuição…).
+function SelecionarContasPlano({ plano = [], jaCods = new Set(), tipos = null, filtroGrupos = null, onCancelar, onAdicionar }) {
+  const [tipoSel, setTipoSel] = useState(tipos ? tipos[0].label : null)
+  const [busca, setBusca] = useState('')
+  const [todas, setTodas] = useState(false)
+  const [marc, setMarc] = useState(() => new Set())
+  const norm = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+  const tipoAtual = tipos ? tipos.find(t => t.label === tipoSel) : null
+  const grupos = tipoAtual?.grupos || filtroGrupos // pré-filtro pelo 1º dígito da classificação
+  const g1 = p => (String(p.classif || p.classifRaw || '').replace(/\D/g, '')[0] || String(p.cod || '')[0] || '')
+  const analiticas = (plano || []).filter(p => !p.sintetica && String(p.cod ?? '').trim())
+  const q = norm(busca)
+  const lista = analiticas.filter(p => {
+    const cod = String(p.cod).trim()
+    if (jaCods.has(cod)) return false
+    if (!todas && grupos && !grupos.includes(g1(p))) return false
+    if (q && !norm(cod).includes(q) && !norm(p.nome).includes(q)) return false
+    return true
+  })
+  const toggle = cod => setMarc(s => { const n = new Set(s); n.has(cod) ? n.delete(cod) : n.add(cod); return n })
+  const codsLista = lista.map(p => String(p.cod).trim())
+  const todasMarcadas = codsLista.length > 0 && codsLista.every(c => marc.has(c))
+  const toggleTodas = () => setMarc(s => { const n = new Set(s); const all = codsLista.every(c => n.has(c)); codsLista.forEach(c => all ? n.delete(c) : n.add(c)); return n })
+  const adicionar = () => onAdicionar([...marc].map(cod => ({ cod, nome: analiticas.find(x => String(x.cod).trim() === cod)?.nome || '' })), tipoSel)
+  const chip = ativo => ({ fontSize: 12.5, padding: '6px 13px', borderColor: ativo ? theme.accent : theme.border, color: ativo ? theme.accent : theme.text, background: ativo ? 'rgba(91,87,224,0.08)' : 'transparent', fontWeight: ativo ? 600 : 400 })
+  return (
+    <Modal titulo="Selecionar contas do plano" sub="Marque várias de uma vez — entram como linhas" onClose={onCancelar} largura={620}>
+      {tipos && (
+        <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+          {tipos.map(t => (
+            <button key={t.label} className="btn btn-ghost" style={chip(tipoSel === t.label)} onClick={() => { setTipoSel(t.label); setMarc(new Set()) }}>{t.label}</button>
+          ))}
+        </div>
+      )}
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
+        <input className="input" autoFocus placeholder="Buscar por código ou nome…" value={busca} onChange={e => setBusca(e.target.value)} style={{ flex: 1, minWidth: 180 }} />
+        {grupos && <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12, color: theme.sub, whiteSpace: 'nowrap', cursor: 'pointer' }}><input type="checkbox" checked={todas} onChange={e => setTodas(e.target.checked)} /> todas as contas</label>}
+      </div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, color: theme.sub, margin: '0 2px 6px' }}>
+        <span>{lista.length} conta(s){tipoAtual && !todas ? ` · ${tipoSel}` : ''}{marc.size ? ` · ${marc.size} marcada(s)` : ''}</span>
+        {lista.length > 0 && <button className="btn btn-ghost" style={{ fontSize: 11.5, padding: '3px 10px' }} onClick={toggleTodas}>{todasMarcadas ? 'desmarcar todas' : 'marcar todas'}</button>}
+      </div>
+      <div style={{ maxHeight: '46vh', overflow: 'auto', border: `0.5px solid ${theme.cb}`, borderRadius: 10 }}>
+        {!lista.length
+          ? <p style={{ color: theme.sub, fontSize: 12.5, padding: 16, textAlign: 'center' }}>Nenhuma conta{busca ? ' para essa busca' : ''}.</p>
+          : lista.map(p => { const cod = String(p.cod).trim(); const on = marc.has(cod); return (
+            <label key={cod} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '8px 12px', borderTop: `1px solid ${theme.border}`, cursor: 'pointer', background: on ? 'rgba(91,87,224,0.06)' : 'transparent' }}>
+              <input type="checkbox" checked={on} onChange={() => toggle(cod)} />
+              <span style={{ fontSize: 12.5, fontWeight: 600, minWidth: 74, fontVariantNumeric: 'tabular-nums' }}>{p.cod}</span>
+              <span style={{ fontSize: 12.5, color: theme.text, flex: 1 }}>{p.nome}</span>
+            </label>
+          ) })}
+      </div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
+        <button className="btn btn-ghost" onClick={onCancelar}>Cancelar</button>
+        <button className="btn" disabled={!marc.size} style={{ opacity: marc.size ? 1 : 0.5 }} onClick={adicionar}><i className="ti ti-plus" /> Adicionar ({marc.size})</button>
+      </div>
+    </Modal>
+  )
+}
+
+function ModalCarga({ carga, historico, empresaId, cliente, usuario, plano = [], onClose, onImportado }) {
   const modelo = MODELOS[carga.tipo] || { cols: ['Código', 'Nome'], ex: [], dica: '' }
   const linhaVazia = () => Object.fromEntries(modelo.cols.map(c => [c, '']))
   const [vigencia, setVigencia] = useState('')
   const [modo, setModo] = useState('arquivo') // 'arquivo' | 'manual'
   const [linhas, setLinhas] = useState([linhaVazia()])
+  const [pickerPlano, setPickerPlano] = useState(false) // seletor "várias do plano"
   const [erro, setErro] = useState('')
   const [salvando, setSalvando] = useState(false)
   const [planoIdx, setPlanoIdx] = useState(null) // { porRed, porNum, mascara } p/ puxar nome pelo código
@@ -1114,11 +1179,36 @@ function ModalCarga({ carga, historico, empresaId, cliente, usuario, onClose, on
               </tbody>
             </table>
           </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 10 }}>
-            <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={() => setLinhas(ls => [...ls, linhaVazia()])}><i className="ti ti-plus" /> Adicionar linha</button>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 10, gap: 8, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={() => setLinhas(ls => [...ls, linhaVazia()])}><i className="ti ti-plus" /> Adicionar linha</button>
+              {!semPlano && colCod && colNome && (
+                <button className="btn btn-ghost" style={{ fontSize: 12.5, borderColor: theme.accent, color: theme.accent }} onClick={() => setPickerPlano(true)}
+                  title="Selecionar várias contas do plano de uma vez"><i className="ti ti-checklist" /> Do plano (várias)</button>
+              )}
+            </div>
             <button className="btn" disabled={salvando} onClick={salvarManual}>{salvando ? 'Salvando…' : 'Salvar cadastro'}</button>
           </div>
         </>
+      )}
+      {pickerPlano && (
+        <SelecionarContasPlano plano={plano}
+          jaCods={new Set(linhas.map(l => String(l[colCod] || '').trim()).filter(Boolean))}
+          tipos={carga.tipo === 'bancoresult' ? [{ label: 'Banco', grupos: ['1'] }, { label: 'Resultado liberado', grupos: ['3', '4', '5'] }] : null}
+          onCancelar={() => setPickerPlano(false)}
+          onAdicionar={(contas, tipoLabel) => {
+            setLinhas(ls => {
+              const ja = new Set(ls.map(l => String(l[colCod] || '').trim()).filter(Boolean))
+              const novas = contas.filter(c => !ja.has(String(c.cod).trim())).map(c => ({
+                ...linhaVazia(), [colCod]: c.cod, [colNome]: c.nome,
+                ...(carga.tipo === 'bancoresult' && tipoLabel ? { Tipo: tipoLabel } : {}),
+              }))
+              if (!novas.length) return ls
+              const base = (ls.length === 1 && !ls[0][colCod] && !ls[0][colNome]) ? [] : ls
+              return [...base, ...novas]
+            })
+            setPickerPlano(false)
+          }} />
       )}
       {erro && <p style={{ color: theme.red, fontSize: 13, margin: '10px 0 0' }}>{erro}</p>}
       {msgOk && <p style={{ color: theme.green, fontSize: 13, margin: '10px 0 0' }}><i className="ti ti-circle-check" /> {msgOk}</p>}
@@ -1607,11 +1697,12 @@ function ModalCargaInicial({ vigencia, empresaId, cliente, onClose, onConcluir }
   )
 }
 
-function ModalDist({ inicial, empresaId, competencia, empresaNome, planoMap = {}, onClose, onSalvar }) {
+function ModalDist({ inicial, empresaId, competencia, empresaNome, planoMap = {}, plano = [], onClose, onSalvar }) {
   const [limite, setLimite] = useState(inicial?.limite ?? 50000)
   const [aliquota, setAliquota] = useState(inicial?.aliquota ?? 10)
   const [contas, setContas] = useState(inicial?.contas?.length ? inicial.contas : [{ cod: '', nome: '' }])
   const [socios, setSocios] = useState(inicial?.socios?.length ? inicial.socios : [{ nome: '', ident: '' }])
+  const [pickerContas, setPickerContas] = useState(false)
   // Lucros a distribuir registrados em ATA (passivo "a distribuir") — só cadastro/informação.
   const [ata, setAta] = useState(inicial?.ata && !Array.isArray(inicial.ata) ? inicial.ata : { houve: false, arquivo: '', documento: '', socios: [] })
   const [salvando, setSalvando] = useState(false)
@@ -1680,16 +1771,35 @@ function ModalDist({ inicial, empresaId, competencia, empresaNome, planoMap = {}
       <LinhaTitulo titulo="Contas de distribuição observadas" onAdd={() => setContas(l => [...l, { cod: '', nome: '' }])} />
       {contas.map((c, i) => (
         <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-          <input className="input" style={{ width: 130 }} placeholder="Código" value={c.cod} onChange={upd(setContas, i, 'cod')} />
+          <div style={{ width: 175 }}>
+            <CampoConta value={c.cod} onChange={v => setContas(l => l.map((x, j) => j === i ? { ...x, cod: v } : x))}
+              onPick={p => setContas(l => l.map((x, j) => j === i ? { cod: p.cod, nome: p.nome || '' } : x))} plano={plano} placeholder="Código (F4)" />
+          </div>
           <input className="input" style={{ flex: 1 }} placeholder="Nome da conta" value={c.nome} onChange={upd(setContas, i, 'nome')} />
           <i className="ti ti-trash" onClick={() => rem(setContas, i)} style={{ color: theme.sub, cursor: 'pointer', alignSelf: 'center' }} />
         </div>
       ))}
+      <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 11px', borderColor: theme.accent, color: theme.accent, marginBottom: 4 }} onClick={() => setPickerContas(true)}><i className="ti ti-checklist" /> Do plano (várias)</button>
+      {pickerContas && (
+        <SelecionarContasPlano plano={plano} jaCods={new Set(contas.map(c => String(c.cod || '').trim()).filter(Boolean))}
+          onCancelar={() => setPickerContas(false)}
+          onAdicionar={novas => {
+            setContas(l => {
+              const ja = new Set(l.map(c => String(c.cod || '').trim()).filter(Boolean))
+              const add = novas.filter(n => !ja.has(String(n.cod).trim())).map(n => ({ cod: n.cod, nome: n.nome }))
+              if (!add.length) return l
+              const base = (l.length === 1 && !l[0].cod && !l[0].nome) ? [] : l
+              return [...base, ...add]
+            })
+            setPickerContas(false)
+          }} />
+      )}
 
-      <LinhaTitulo titulo="Sócios" onAdd={() => setSocios(l => [...l, { nome: '', ident: '' }])} />
+      <LinhaTitulo titulo="Sócios" onAdd={() => setSocios(l => [...l, { nome: '', ident: '', cpf: '' }])} />
       {socios.map((s, i) => (
         <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
           <input className="input" style={{ flex: 1 }} placeholder="Nome do sócio" value={s.nome} onChange={upd(setSocios, i, 'nome')} />
+          <input className="input" style={{ width: 150 }} placeholder="CPF" value={s.cpf || ''} onChange={upd(setSocios, i, 'cpf')} />
           <input className="input" style={{ flex: 1 }} placeholder="Identificação no razão (CC/histórico)" value={s.ident} onChange={upd(setSocios, i, 'ident')} />
           <i className="ti ti-trash" onClick={() => rem(setSocios, i)} style={{ color: theme.sub, cursor: 'pointer', alignSelf: 'center' }} />
         </div>
@@ -1848,6 +1958,7 @@ function ModalCargaTributaria({ inicial, plano = [], onClose, onSalvar }) {
   const setCod = (i, v) => setContas(l => l.map((x, j) => j === i ? { ...x, cod: v } : x))
   const setPick = (i, p) => setContas(l => l.map((x, j) => j === i ? { cod: p.cod, nome: p.nome || '' } : x))
   const rem = i => setContas(l => l.filter((_, j) => j !== i))
+  const [picker, setPicker] = useState(false)
   const rBase = { display: 'flex', gap: 7, alignItems: 'center', fontWeight: 400, cursor: 'pointer', color: theme.text, fontSize: 13 }
   return (
     <Modal titulo="Carga tributária" sub="Contas que compõem a carga + base do denominador" onClose={onClose} largura={620}>
@@ -1865,6 +1976,22 @@ function ModalCargaTributaria({ inicial, plano = [], onClose, onSalvar }) {
           <i className="ti ti-trash" onClick={() => rem(i)} style={{ color: theme.sub, cursor: 'pointer', marginTop: 10 }} />
         </div>
       ))}
+      <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 11px', borderColor: theme.accent, color: theme.accent, marginTop: 2 }} onClick={() => setPicker(true)}><i className="ti ti-checklist" /> Do plano (várias)</button>
+      {picker && (
+        <SelecionarContasPlano plano={plano} filtroGrupos={['3', '4', '5']}
+          jaCods={new Set(contas.map(c => String(c.cod || '').trim()).filter(Boolean))}
+          onCancelar={() => setPicker(false)}
+          onAdicionar={novas => {
+            setContas(l => {
+              const ja = new Set(l.map(c => String(c.cod || '').trim()).filter(Boolean))
+              const add = novas.filter(n => !ja.has(String(n.cod).trim())).map(n => ({ cod: n.cod, nome: n.nome }))
+              if (!add.length) return l
+              const base0 = (l.length === 1 && !l[0].cod && !l[0].nome) ? [] : l
+              return [...base0, ...add]
+            })
+            setPicker(false)
+          }} />
+      )}
       <div style={{ marginTop: 18 }}>
         <label>Base do denominador</label>
         <div style={{ display: 'flex', gap: 20, marginTop: 8, flexWrap: 'wrap' }}>
