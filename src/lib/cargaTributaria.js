@@ -20,15 +20,17 @@ import { supabase } from './supabase'
 const num = v => Number(v) || 0
 
 // Config do cliente ({ contas: [{ cod, nome }], base }) ou null se não configurado.
-// Tolerante: se a tabela ainda não existir (SQL não rodado), devolve null (não quebra a tela).
+// Guardada em `cargas_cadastro` (tipo 'depara' + obs 'carga_tributaria') — MESMO padrão da
+// consolidação de grupo, para NÃO exigir criar tabela nova (a `carga_tributaria_config` não
+// precisa existir). Tolerante a falha: qualquer erro → devolve null (não quebra a tela).
 export async function carregarCargaTribCfg(empresaId) {
   if (!empresaId) return null
-  const { data, error } = await supabase.from('carga_tributaria_config')
-    .select('contas, base').eq('cliente_id', empresaId)
+  const { data, error } = await supabase.from('cargas_cadastro')
+    .select('dados').eq('cliente_id', empresaId).eq('tipo', 'depara').eq('obs', 'carga_tributaria')
     .order('created_at', { ascending: false }).limit(1).maybeSingle()
-  if (error) return null
-  if (!data) return null
-  return { contas: Array.isArray(data.contas) ? data.contas : [], base: data.base || 'bruto' }
+  if (error || !data) return null
+  const d = data.dados || {}
+  return { contas: Array.isArray(d.contas) ? d.contas : [], base: d.base || 'bruto' }
 }
 
 // Conjunto de códigos reduzidos das contas escolhidas (para casar com as linhas do balancete).

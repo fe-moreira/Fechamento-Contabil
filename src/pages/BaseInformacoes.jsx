@@ -335,9 +335,11 @@ export default function BaseInformacoes() {
   // Carga tributária. Tolerante a falha: se a tabela ainda não existir (SQL não rodado),
   // apenas fica sem config — não quebra a tela.
   async function carregarCargaTrib() {
-    const { data, error } = await supabase.from('carga_tributaria_config').select('*')
-      .eq('cliente_id', empresaId).order('created_at', { ascending: false }).limit(1).maybeSingle()
-    setCargaTrib(error ? null : (data || null))
+    // Guardada em cargas_cadastro (tipo 'depara' + obs 'carga_tributaria') — não exige tabela nova.
+    const { data, error } = await supabase.from('cargas_cadastro').select('id, dados')
+      .eq('cliente_id', empresaId).eq('tipo', 'depara').eq('obs', 'carga_tributaria')
+      .order('created_at', { ascending: false }).limit(1).maybeSingle()
+    setCargaTrib(error || !data ? null : { id: data.id, contas: Array.isArray(data.dados?.contas) ? data.dados.contas : [], base: data.dados?.base || 'bruto' })
   }
   useEffect(() => {
     setParticularidades([]); setContatos([]); setCargas({}); setPeriodo(''); setDist(null); setResPL(null); setCargaTrib(null); setCargaSaldos(false); setCargaFeita(false)
@@ -473,11 +475,12 @@ export default function BaseInformacoes() {
     await carregarResPL(); setModal(null)
   }
   async function salvarCargaTrib(cfg) {
-    const payload = { contas: (cfg.contas || []).filter(c => String(c.cod || '').trim()), base: cfg.base === 'liquido' ? 'liquido' : 'bruto' }
-    let error
-    if (cargaTrib) ({ error } = await supabase.from('carga_tributaria_config').update(payload).eq('id', cargaTrib.id))
-    else ({ error } = await supabase.from('carga_tributaria_config').insert({ cliente_id: empresaId, usuario: user?.email, ...payload }))
-    if (error) { alert('Não foi possível salvar. Rode o SQL de "carga_tributaria_config" no Supabase (supabase/schema.sql) e tente de novo.\n\n' + error.message); return }
+    const dados = { contas: (cfg.contas || []).filter(c => String(c.cod || '').trim()), base: cfg.base === 'liquido' ? 'liquido' : 'bruto' }
+    // Guarda em cargas_cadastro (tipo 'depara' + obs 'carga_tributaria') — um por cliente. Apaga o
+    // anterior e grava o novo (não precisa de tabela nova nem rodar SQL).
+    await supabase.from('cargas_cadastro').delete().eq('cliente_id', empresaId).eq('tipo', 'depara').eq('obs', 'carga_tributaria')
+    const { error } = await supabase.from('cargas_cadastro').insert({ cliente_id: empresaId, tipo: 'depara', obs: 'carga_tributaria', vigencia: competencia || '00/0000', dados, usuario: user?.email })
+    if (error) { alert('Não foi possível salvar: ' + error.message); return }
     await carregarCargaTrib(); setModal(null)
   }
 
