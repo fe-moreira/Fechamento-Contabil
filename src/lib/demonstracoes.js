@@ -306,7 +306,7 @@ export function abrirDemonstracoesContabeis({ empresa, cnpj, periodoLabel, perio
         <tr><td>Margem bruta</td><td class="r">${pctBR(ix.margemBruta)}</td><td class="mut">(receita − custo) ÷ receita</td></tr>
         <tr><td>Liquidez corrente</td><td class="r">${fmt2(ix.liquidez)}</td><td class="mut">ativo circ. ÷ passivo circ.</td></tr>
         <tr><td>Endividamento</td><td class="r">${pctBR(ix.endividamento)}</td><td class="mut">passivo exig. ÷ ativo</td></tr>
-        <tr><td>Carga tributária</td><td class="r">${c.cargaBase ? pctBR(ix.cargaTrib) : 'configurar'}</td><td class="mut">${c.cargaBase === 'liquido' ? 'impostos ÷ receita líquida' : 'impostos ÷ faturamento'}</td></tr>
+        <tr><td>Carga tributária</td><td class="r">${c.cargaBase ? pctBR(ix.cargaTrib) : 'configurar'}</td><td class="mut">${c.cargaBase === 'liquido' ? 'imposto líquido ÷ receita líquida' : 'imposto líquido ÷ faturamento'}</td></tr>
         <tr><td>Prazo médio de recebimento</td><td class="r">${ix.prazoReceb == null ? '—' : ix.prazoReceb + ' dias'}</td><td class="mut">a receber ÷ receita</td></tr>
       </table>
       ${c.serie.length > 1 ? `<h2 class="sec">Desempenho por mês (gráfico do Cockpit)</h2>
@@ -363,7 +363,7 @@ export function abrirDemonstracoesContabeis({ empresa, cnpj, periodoLabel, perio
       <h2 class="sec">Impostos</h2>
       <div class="tiles">
         <div class="tile"><div class="k">Imposto líquido</div><div class="v">${c.cargaBase ? brlR(c.impostos) : '—'}</div><div class="s">${c.cargaBase ? `apurado ${brlR(c.impostosBruto)}${Math.abs(c.impostosCredito || 0) >= 0.005 ? ` · (−) créditos ${brlR(c.impostosCredito)}` : ''}` : 'contas não configuradas'}</div></div>
-        <div class="tile"><div class="k">Carga tributária</div><div class="v">${c.cargaBase ? pctBR(ix.cargaTrib) : 'configurar'}</div><div class="s">${c.cargaBase ? `imposto líquido ÷ ${c.cargaBase === 'liquido' ? 'receita líquida' : 'faturamento'}` : 'defina as contas na Base de Informações'}</div></div>
+        <div class="tile"><div class="k">Carga tributária</div><div class="v">${c.cargaBase ? pctBR(ix.cargaTrib) + ' <span style="font-size:11px;color:#666;font-weight:600">líquida</span>' : 'configurar'}</div><div class="s">${c.cargaBase ? `imposto líquido ÷ ${c.cargaBase === 'liquido' ? 'receita líquida' : 'faturamento'}${Math.abs(c.impostosCredito || 0) >= 0.005 ? ` · bruta ${pctBR(cargaPct(c.impostosBruto, c.receita, c.cargaBase))}` : ''}` : 'defina as contas na Base de Informações'}</div></div>
       </div>
       <h2 class="sec">Principais clientes do período</h2>
       <div class="clibox">${cliRows}</div>
@@ -372,7 +372,7 @@ export function abrirDemonstracoesContabeis({ empresa, cnpj, periodoLabel, perio
         <div class="tile"><div class="k">Liquidez corrente</div><div class="v">${ix.liquidez == null ? '—' : ix.liquidez.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div><div class="s">ativo circ. ÷ passivo circ.</div></div>
         <div class="tile"><div class="k">Margem líquida</div><div class="v">${pctBR(ix.margem)}</div><div class="s">resultado ÷ receita</div></div>
         <div class="tile"><div class="k">Endividamento</div><div class="v">${pctBR(ix.endividamento)}</div><div class="s">passivo exig. ÷ ativo</div></div>
-        <div class="tile"><div class="k">Carga tributária</div><div class="v">${c.cargaBase ? pctBR(ix.cargaTrib) : 'configurar'}</div><div class="s">${c.cargaBase === 'liquido' ? 'impostos ÷ receita líquida' : 'impostos ÷ faturamento'}</div></div>
+        <div class="tile"><div class="k">Carga tributária</div><div class="v">${c.cargaBase ? pctBR(ix.cargaTrib) : 'configurar'}</div><div class="s">${c.cargaBase === 'liquido' ? 'imposto líquido ÷ receita líquida' : 'imposto líquido ÷ faturamento'}</div></div>
         <div class="tile"><div class="k">Prazo médio receb.</div><div class="v">${ix.prazoReceb == null ? '—' : ix.prazoReceb + ' dias'}</div><div class="s">a receber ÷ receita</div></div>
       </div>
     </div>

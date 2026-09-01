@@ -934,8 +934,22 @@ function BlocoImpostos({ d }) {
         ) : (
           <Tile label="Impostos apurados" valor="—" sub="contas não configuradas" />
         )}
-        <Tile label="Carga tributária" valor={cfg ? fmtPct(d.indices.cargaTrib) : 'configurar'}
-          sub={cfg ? `imposto líquido ÷ ${baseTxt}${temCredito ? ` · bruto ${fmtPct(cargaBruto)}` : ''}` : 'defina as contas na Base de Informações'} />
+        {cfg ? (
+          <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, padding: 16 }}>
+            <p style={{ color: theme.sub, fontSize: 11, textTransform: 'uppercase', letterSpacing: .5, margin: '0 0 6px' }}>Carga tributária</p>
+            <p style={{ fontSize: 26, fontWeight: 700, margin: 0, color: theme.green, fontVariantNumeric: 'tabular-nums' }}>
+              {fmtPct(d.indices.cargaTrib)} <span style={{ fontSize: 13, fontWeight: 600, color: theme.sub }}>líquida</span>
+            </p>
+            <p style={{ color: theme.sub, fontSize: 12, margin: '2px 0 0' }}>imposto líquido ÷ {baseTxt}</p>
+            {temCredito && (
+              <p style={{ fontSize: 12.5, margin: '8px 0 0', paddingTop: 8, borderTop: `1px dashed ${theme.border}`, color: theme.sub }}>
+                <b style={{ color: theme.text, fontVariantNumeric: 'tabular-nums' }}>{fmtPct(cargaBruto)} bruta</b> · imposto bruto ÷ {baseTxt} <span style={{ color: theme.sub }}>(antes do crédito)</span>
+              </p>
+            )}
+          </div>
+        ) : (
+          <Tile label="Carga tributária" valor="configurar" sub="defina as contas na Base de Informações" />
+        )}
       </div>
     </Secao>
   )
