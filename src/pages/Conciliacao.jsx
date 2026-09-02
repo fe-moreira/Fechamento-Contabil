@@ -1134,14 +1134,14 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     return [...new Set(contras.map(r => String(r.conta)))]
   }
 
-  const somaComp = lanc.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
-  // Nas contas de COMPOSIÇÃO a abertura entra como títulos (já no somaComp); nas de SALDO
-  // (ex.: banco) não há título de abertura — então o saldo inicial não está no somaComp.
+  // Nas contas de COMPOSIÇÃO a abertura entra como títulos (já na composição); nas de SALDO
+  // (ex.: banco) não há título de abertura — então o saldo inicial não está na composição.
   // Completa o que falta da abertura para a amarração fechar nos dois casos.
   const aberturaSoma = lanc.reduce((s, l) => l._abertura ? s + (Number(l.debito) || 0) - (Number(l.credito) || 0) : s, 0)
   const aberturaFaltante = (Number(conta.saldo_inicial) || 0) - aberturaSoma
-  // Saldo efetivo (balancete + acertos) para amarrar com a composição, que já inclui os acertos.
-  const dif = (Number(conta.saldo_final) || 0) + ajNet - somaComp - aberturaFaltante
+  // `somaComp` e `dif` (amarração) são definidos MAIS ABAIXO, sobre a composição EM ABERTO de fato
+  // exibida/exportada (emAbertoEff) — não sobre TODOS os lançamentos (que somam o saldo trivialmente
+  // e faziam a amarração dizer "bate" mesmo quando a composição não batia com o saldo).
 
   // Resíduo da NF do lançamento (D - C de todos os lançamentos da mesma NF) — usado para
   // tratar a diferença como desconto/juros quando NF e cliente batem mas o valor não.
@@ -1299,6 +1299,21 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const autoConcLancs = lanc.filter(l => autoConc.has(l) && Math.abs(ov(l)) >= 0.005)
   const conferidosLancs = [...new Set([...confirmadosLancs, ...conexaoManualLancs, ...resolvidasEnt.flatMap(g => g.lancs).filter(l => Math.abs(ov(l)) >= 0.005), ...autoConcLancs])]
   const zerados = [...new Set([...baixados, ...conferidosLancs])] // sem repetir (uma linha pode ser baixada E confirmada)
+
+  // AMARRAÇÃO sobre a composição EM ABERTO que é REALMENTE exibida/exportada (emAbertoEff = base +
+  // setVolta, a MESMA lógica do relatório): se o que fica em aberto não soma o saldo, algo foi
+  // conciliado sem zerar. `dif` = líquido dos conciliados que NÃO fecham (a "sobra" escondida).
+  const exemptosAmarr = new Set([...conexaoManualLancs, ...autoConcLancs, ...confirmadosLancs])
+  const baixadosAmarr = new Set(baixados)
+  const setVoltaAmarr = new Set()
+  for (const b of agruparPorCliente(zerados)) {
+    const net = b.lancs.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
+    if (Math.abs(net) >= 0.005) for (const l of b.lancs) if (!baixadosAmarr.has(l) && !exemptosAmarr.has(l)) setVoltaAmarr.add(l)
+  }
+  const emAbertoEff = [...new Set([...emAbertoTodos, ...setVoltaAmarr])]
+  const somaComp = emAbertoEff.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
+  const dif = (Number(conta.saldo_final) || 0) + ajNet - somaComp - aberturaFaltante
+
   // Termos de busca (nome / NF / valor) — definidos AQUI (antes das seções de reabrir) para que
   // a busca alcance também os CONCILIADOS e os BAIXADOS por NF, e não só o em aberto.
   const termoBusca = baixaTxt(buscaNome).trim()
@@ -2197,7 +2212,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         <Tile label="Débito" v={money((Number(conta.debito) || 0) + ajDeb)} cor={theme.green} />
         <Tile label="Crédito" v={money((Number(conta.credito) || 0) + ajCred)} cor={theme.red} />
         <Tile label="Saldo atual" v={moneyDC((Number(conta.saldo_final) || 0) + ajNet)} hint="Ver a composição do saldo final (o que segue em aberto — arrasta para o próximo mês)"
-          onClick={() => setVerComposic({ titulo: `Composição do saldo final · ${conta.conta} ${conta.nome}`, itens: emAbertoTodos })} />
+          onClick={() => setVerComposic({ titulo: `Composição do saldo final · ${conta.conta} ${conta.nome}`, itens: emAbertoEff })} />
         <Tile label="Diferença (amarração)" v={money(dif)} cor={Math.abs(dif) < 0.01 ? theme.green : theme.yellow}
           hint={`O que fica EM ABERTO tem que somar exatamente o Saldo atual (o do Painel). Verde = bate. Diferente de zero = tem baixa errada (quase sempre uma baixa automática que não era par).`} />
       </div>
