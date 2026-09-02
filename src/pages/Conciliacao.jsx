@@ -1041,11 +1041,14 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     // mesmo valor são a MESMA nota duplicada na carga inicial — mantém UMA só (senão o saldo conta
     // a nota duas vezes). Só quando há NF: SEM NF cada linha é individual (títulos distintos de
     // mesmo valor). NF diferente (ex.: 3232 × 3255) NUNCA junta — respeita a regra abaixo.
+    // Dedup só de DUPLICATA EXATA (a mesma nota importada 2x): mesma NF **exata** (com a letra da
+    // parcela, ex.: 186008A ≠ 186008B) + mesmo fornecedor + mesmo valor + mesma data. NÃO usa nfKey
+    // (que tira zeros/letra) — senão colapsava PARCELAS distintas da mesma NF e perdia saldo inicial.
     const abVistos = new Set()
     const aberturaDedup = (abertura || []).filter(a => {
-      const nf = nfKey(a.leitura?.nf)
-      if (!nf) return true
-      const k = `${nf}·${Math.round(((Number(a.debito) || 0) - (Number(a.credito) || 0)) * 100)}·${chaveNome(a.leitura?.entidade || '')}`
+      const nfRaw = String(a.leitura?.nf ?? '').trim().toUpperCase()
+      if (!nfRaw) return true
+      const k = `${nfRaw}·${Math.round(((Number(a.debito) || 0) - (Number(a.credito) || 0)) * 100)}·${chaveNome(a.leitura?.entidade || '')}·${String(a.data || '')}`
       if (abVistos.has(k)) return false
       abVistos.add(k); return true
     })
