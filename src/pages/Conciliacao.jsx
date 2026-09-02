@@ -1314,6 +1314,11 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const aberturaSoma = lanc.reduce((s, l) => l._abertura ? s + (Number(l.debito) || 0) - (Number(l.credito) || 0) : s, 0)
   const aberturaFaltante = ehEntidade ? 0 : ((Number(conta.saldo_inicial) || 0) - aberturaSoma)
   const dif = (Number(conta.saldo_final) || 0) + ajNet - somaComp - aberturaFaltante
+  // Quebra da diferença (só em conta de ENTIDADE): quanto é SALDO INICIAL que NÃO virou título de
+  // "Saldo anterior" (carga de abertura incompleta) × quanto é baixa desbalanceada. Só a segunda
+  // é "reabra o par certo"; a primeira é completar a abertura em Base de Informações.
+  const difAbertura = ehEntidade ? ((Number(conta.saldo_inicial) || 0) - aberturaSoma) : 0
+  const difBaixa = dif - difAbertura
 
   // Termos de busca (nome / NF / valor) — definidos AQUI (antes das seções de reabrir) para que
   // a busca alcance também os CONCILIADOS e os BAIXADOS por NF, e não só o em aberto.
@@ -2228,7 +2233,9 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         </p>
       ) : (
         <p style={{ color: theme.yellow, fontSize: 12, margin: '0 0 16px', display: 'flex', alignItems: 'flex-start', gap: 6 }}>
-          <i className="ti ti-alert-triangle" style={{ marginTop: 2 }} /> <span>Em aberto <b>NÃO bate</b> com o Painel: a composição soma <b>{moneyDC((Number(conta.saldo_final) || 0) + ajNet - dif)}</b>, mas o saldo é <b>{moneyDC((Number(conta.saldo_final) || 0) + ajNet)}</b> — <b>diferença de {money(dif)}</b>. Isso costuma ser uma <b>baixa automática errada</b> (par que não era par): abra <b>“Conferidos neste mês”</b> e <b>Reabra</b> o item, depois baixe à mão o par certo.</span>
+          <i className="ti ti-alert-triangle" style={{ marginTop: 2 }} /> <span>Em aberto <b>NÃO bate</b> com o Painel: a composição soma <b>{moneyDC((Number(conta.saldo_final) || 0) + ajNet - dif)}</b>, mas o saldo é <b>{moneyDC((Number(conta.saldo_final) || 0) + ajNet)}</b> — <b>diferença de {money(dif)}</b>.
+          {Math.abs(difAbertura) >= 0.01 && <> <b>{money(difAbertura)}</b> é <b>saldo inicial não detalhado</b> em títulos de “Saldo anterior” (a <b>carga de abertura</b> desta conta está incompleta nesse valor) — complete a abertura em <b>Base de Informações → saldo inicial</b> (lance o título do fornecedor certo).</>}
+          {Math.abs(difBaixa) >= 0.01 && <> <b>{money(difBaixa)}</b> é <b>baixa desbalanceada</b> (par que não fecha): abra <b>“Conferidos neste mês”</b> e <b>Reabra</b> o item, depois baixe à mão o par certo.</>}</span>
         </p>
       ))}
 
