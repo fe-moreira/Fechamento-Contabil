@@ -92,7 +92,7 @@ async function flowPorMesEmpresa(cid, ano) {
     for (const l of res) { const sf = Number(l.saldo_final) || 0; const grp = String(l.classifRaw || '')[0]; if (grp === '3') g3 += sf; else if (grp === '4') g4 += sf; else g5 += sf }
     const receita = -g3, custo = g4, despesa = g5
     const dreN = apurarResultadoSimples(res)
-    pm[c.mes] = { receita, custo, despesa, resultado: receita - custo - despesa, ebitda: dreN.ebitda }
+    pm[c.mes] = { receita, custo, despesa, resultado: receita - custo - despesa, ebitda: dreN.ebitda, deprec: dreN.deprec }
   }
   return pm
 }
@@ -106,14 +106,15 @@ function consolidarFluxo(dRaw, extrasPorMes) {
   const meses = [...mesesSet].sort((a, b) => a - b)
   const porMes = {}
   for (const m of meses) {
-    let receita = 0, custo = 0, despesa = 0, resultado = 0, ebitda = 0
-    for (const pm of all) { const p = pm?.[m]; if (!p) continue; receita += p.receita; custo += p.custo; despesa += p.despesa; resultado += p.resultado; ebitda += p.ebitda }
-    porMes[m] = { receita, custo, despesa, resultado, ebitda }
+    let receita = 0, custo = 0, despesa = 0, resultado = 0, ebitda = 0, deprec = 0
+    for (const pm of all) { const p = pm?.[m]; if (!p) continue; receita += p.receita; custo += p.custo; despesa += p.despesa; resultado += p.resultado; ebitda += p.ebitda; deprec += (p.deprec || 0) }
+    porMes[m] = { receita, custo, despesa, resultado, ebitda, deprec }
   }
   const serie = meses.map(m => ({ mes: m, receita: porMes[m].receita, despesa: porMes[m].custo + porMes[m].despesa, resultado: porMes[m].resultado }))
   const serieCombo = meses.map(m => {
     const p = porMes[m], receitaLiq = p.receita, ebitda = p.ebitda, lucroLiq = p.resultado
-    return { mes: m, rotulo: MESES[m - 1], receitaLiq, ebitda, lucroLiq, margemEbitda: receitaLiq ? ebitda / receitaLiq * 100 : 0, margemLiquida: receitaLiq ? lucroLiq / receitaLiq * 100 : 0 }
+    const ebit = ebitda + (p.deprec || 0) // EBIT = EBITDA − depreciação/amortização
+    return { mes: m, rotulo: MESES[m - 1], receitaLiq, ebitda, ebit, lucroLiq, margemEbitda: receitaLiq ? ebitda / receitaLiq * 100 : 0, margemEbit: receitaLiq ? ebit / receitaLiq * 100 : 0, margemLiquida: receitaLiq ? lucroLiq / receitaLiq * 100 : 0 }
   })
   return { ...dRaw, porMes, serie, serieCombo, meses, consolidando: true }
 }
@@ -258,7 +259,7 @@ export default function PainelCliente() {
           // vinha = receita − custo (ignorando as despesas do grupo 5) e a margem dava ~100%.
           const dreN = apurarResultadoSimples(res)
           meses.push(c.mes)
-          porMes[c.mes] = { receita, custo, despesa, resultado: receita - custo - despesa, ebitda: dreN.ebitda }
+          porMes[c.mes] = { receita, custo, despesa, resultado: receita - custo - despesa, ebitda: dreN.ebitda, deprec: dreN.deprec }
           porMesSnap[c.mes] = await snapMes(linhasC, c.id, c.mes, porMes[c.mes])
         }
         meses.sort((a, b) => a - b)
@@ -278,11 +279,13 @@ export default function PainelCliente() {
         //   EBITDA = resultado operacional (receita − custo − despesas operacionais)
         //   Lucro Líquido = receita − custo − despesa (grupo 3 − 4 − 5, tudo)
         const serieCombo = meses.map(m => {
-          const p = porMes[m] || { receita: 0, custo: 0, despesa: 0, resultado: 0, ebitda: 0 }
+          const p = porMes[m] || { receita: 0, custo: 0, despesa: 0, resultado: 0, ebitda: 0, deprec: 0 }
           const receitaLiq = p.receita, ebitda = p.ebitda ?? (p.receita - p.custo), lucroLiq = p.resultado
+          const ebit = ebitda + (p.deprec || 0) // EBIT = EBITDA − depreciação/amortização
           return {
-            mes: m, rotulo: MESES[m - 1], receitaLiq, ebitda, lucroLiq,
+            mes: m, rotulo: MESES[m - 1], receitaLiq, ebitda, ebit, lucroLiq,
             margemEbitda: receitaLiq ? (ebitda / receitaLiq) * 100 : 0,
+            margemEbit: receitaLiq ? (ebit / receitaLiq) * 100 : 0,
             margemLiquida: receitaLiq ? (lucroLiq / receitaLiq) * 100 : 0,
           }
         })
@@ -727,9 +730,12 @@ function BlocoComparativo({ d }) {
 
 // Gráfico combinado: barras de Receita Líquida, EBITDA e Lucro Líquido por mês +
 // linhas de Margem EBITDA e Margem Líquida no eixo % — na paleta do app.
+const EBIT_COR = '#7C5CFF'
 function GraficoDesempenho({ s }) {
   const [hov, setHov] = useState(null) // índice do mês em hover
+  const [verEbit, setVerEbit] = useState(false) // EBIT = EBITDA − depreciação (opcional, off por padrão)
   if (!s || s.length === 0) return <p style={{ color: theme.sub, fontSize: 13, marginTop: 10 }}>Sem meses no comparativo ainda.</p>
+  const temEbit = verEbit && s.some(p => p.ebit != null)
   const W = 1000, H = 360, mL = 78, mR = 54, mT = 16, mB = 38
   const x0 = mL, x1 = W - mR, y1 = H - mB
   const plotH = y1 - mT, plotW = x1 - x0
@@ -737,28 +743,36 @@ function GraficoDesempenho({ s }) {
   // Escala com LINHA DO ZERO: aceita valores negativos (prejuízo/margem negativa). O eixo R$ (esq)
   // e o % (dir) compartilham o mesmo zero, então a barra de prejuízo desce e a linha de margem
   // negativa não sai do gráfico (antes tudo era grudado em 0 e só o mês positivo aparecia).
-  const allR = s.flatMap(p => [p.receitaLiq, p.ebitda, p.lucroLiq])
+  const allR = s.flatMap(p => temEbit ? [p.receitaLiq, p.ebitda, p.ebit, p.lucroLiq] : [p.receitaLiq, p.ebitda, p.lucroLiq])
   let rMin = Math.min(0, ...allR), rMax = Math.max(0, ...allR)
   const rPad = (rMax - rMin || 1) * 0.08; rMin -= rPad; rMax += rPad
   const zeroFrac = (0 - rMin) / (rMax - rMin), zeroY = y1 - zeroFrac * plotH
   const yR = v => y1 - ((v - rMin) / (rMax - rMin)) * plotH
-  const allP = s.flatMap(p => [p.margemEbitda, p.margemLiquida])
+  const allP = s.flatMap(p => temEbit ? [p.margemEbitda, p.margemEbit, p.margemLiquida] : [p.margemEbitda, p.margemLiquida])
   const pPos = (Math.max(0, ...allP) * 1.15) || 1, pNeg = (Math.max(0, -Math.min(0, ...allP)) * 1.15) || 1
   const yP = v => v >= 0 ? zeroY - (v / pPos) * (plotH * (1 - zeroFrac)) : zeroY + (-v / pNeg) * (plotH * zeroFrac)
   const cx = i => x0 + gw * i + gw / 2
   const bars = [
     { key: 'receitaLiq', label: 'Receita Líquida', cor: theme.accent },
     { key: 'ebitda', label: 'EBITDA', cor: theme.red },
+    ...(temEbit ? [{ key: 'ebit', label: 'EBIT', cor: EBIT_COR }] : []),
     { key: 'lucroLiq', label: 'Lucro Líquido', cor: theme.green },
   ]
   const linhas = [
     { key: 'margemEbitda', label: 'Margem EBITDA', cor: theme.red, dash: '7 4' },
+    ...(temEbit ? [{ key: 'margemEbit', label: 'Margem EBIT', cor: EBIT_COR, dash: '4 3' }] : []),
     { key: 'margemLiquida', label: 'Margem Líquida', cor: theme.green, dash: '2 4' },
   ]
-  const bw = (gw * 0.62) / 3
+  const bw = (gw * 0.62) / bars.length
   const money0 = v => `R$ ${Math.round(v).toLocaleString('pt-BR')}`
   return (
     <>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 4 }}>
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: theme.sub, cursor: 'pointer' }}
+          title="EBIT = EBITDA − depreciação/amortização (resultado operacional já com a depreciação, antes do financeiro e do IR)">
+          <input type="checkbox" checked={verEbit} onChange={e => setVerEbit(e.target.checked)} style={{ cursor: 'pointer', accentColor: EBIT_COR }} /> Mostrar EBIT
+        </label>
+      </div>
       <div style={{ overflowX: 'auto', marginTop: 8 }}>
         <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ minWidth: 460, display: 'block' }}>
           {/* grades + eixo R$ (esq) */}
@@ -777,7 +791,7 @@ function GraficoDesempenho({ s }) {
           ))}
           {/* barras — a partir da linha do zero (lucro pra cima, prejuízo pra baixo) */}
           {s.map((p, i) => bars.map((b, bi) => {
-            const v = p[b.key], y = yR(v), bx = cx(i) - (bw * 3) / 2 + bi * bw
+            const v = p[b.key], y = yR(v), bx = cx(i) - (bw * bars.length) / 2 + bi * bw
             const top = Math.min(y, zeroY), h = Math.max(1, Math.abs(zeroY - y))
             return <rect key={i + b.key} x={bx} y={top} width={Math.max(1, bw - 1)} height={h} fill={b.cor} rx="1" opacity={v < 0 ? 0.82 : 1}>
               <title>{`${p.rotulo} · ${b.label}: ${money(v)}`}</title>
@@ -803,15 +817,18 @@ function GraficoDesempenho({ s }) {
           ))}
           {/* tooltip com os valores reais do mês */}
           {hov != null && s[hov] && (() => {
-            const p = s[hov], bw2 = 186, bh = 98
-            const tx = Math.min(x1 - bw2, Math.max(x0, cx(hov) - bw2 / 2)), ty = mT + 4
+            const p = s[hov], bw2 = 186
             const linhasT = [
               ['Receita Líquida', money(p.receitaLiq), theme.accent],
               ['EBITDA', money(p.ebitda), theme.red],
+              ...(temEbit ? [['EBIT', money(p.ebit), EBIT_COR]] : []),
               ['Lucro Líquido', money(p.lucroLiq), theme.green],
               ['Margem EBITDA', `${p.margemEbitda.toFixed(2)}%`, theme.red],
+              ...(temEbit ? [['Margem EBIT', `${p.margemEbit.toFixed(2)}%`, EBIT_COR]] : []),
               ['Margem Líquida', `${p.margemLiquida.toFixed(2)}%`, theme.green],
             ]
+            const bh = 26 + linhasT.length * 14
+            const tx = Math.min(x1 - bw2, Math.max(x0, cx(hov) - bw2 / 2)), ty = mT + 4
             return (
               <g pointerEvents="none">
                 <rect x={tx} y={ty} width={bw2} height={bh} rx="7" fill={theme.card} stroke={theme.cb} />
