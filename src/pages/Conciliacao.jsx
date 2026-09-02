@@ -1134,14 +1134,9 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     return [...new Set(contras.map(r => String(r.conta)))]
   }
 
-  // Nas contas de COMPOSIÇÃO a abertura entra como títulos (já na composição); nas de SALDO
-  // (ex.: banco) não há título de abertura — então o saldo inicial não está na composição.
-  // Completa o que falta da abertura para a amarração fechar nos dois casos.
-  const aberturaSoma = lanc.reduce((s, l) => l._abertura ? s + (Number(l.debito) || 0) - (Number(l.credito) || 0) : s, 0)
-  const aberturaFaltante = (Number(conta.saldo_inicial) || 0) - aberturaSoma
-  // `somaComp` e `dif` (amarração) são definidos MAIS ABAIXO, sobre a composição EM ABERTO de fato
-  // exibida/exportada (emAbertoEff) — não sobre TODOS os lançamentos (que somam o saldo trivialmente
-  // e faziam a amarração dizer "bate" mesmo quando a composição não batia com o saldo).
+  // `somaComp`, `dif` e a amarração da abertura são definidos MAIS ABAIXO (depois de saber se a conta
+  // é de ENTIDADE), sobre a composição EM ABERTO de fato exibida/exportada (emAbertoEff) — não sobre
+  // TODOS os lançamentos (que somam o saldo trivialmente e diziam "bate" mesmo sem bater).
 
   // Resíduo da NF do lançamento (D - C de todos os lançamentos da mesma NF) — usado para
   // tratar a diferença como desconto/juros quando NF e cliente batem mas o valor não.
@@ -1312,6 +1307,12 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   }
   const emAbertoEff = [...new Set([...emAbertoTodos, ...setVoltaAmarr])]
   const somaComp = emAbertoEff.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
+  // Abertura: numa conta de ENTIDADE (cliente/fornecedor) o saldo inicial JÁ são os títulos "Saldo
+  // anterior" na composição — a amarração NÃO completa nada (senão mascara baixas desbalanceadas, ex.:
+  // título de abertura baixado sem o pagamento sair junto). Numa conta de SALDO (banco/seguro/despesa)
+  // não há título de abertura, então completa o saldo inicial que falta.
+  const aberturaSoma = lanc.reduce((s, l) => l._abertura ? s + (Number(l.debito) || 0) - (Number(l.credito) || 0) : s, 0)
+  const aberturaFaltante = ehEntidade ? 0 : ((Number(conta.saldo_inicial) || 0) - aberturaSoma)
   const dif = (Number(conta.saldo_final) || 0) + ajNet - somaComp - aberturaFaltante
 
   // Termos de busca (nome / NF / valor) — definidos AQUI (antes das seções de reabrir) para que
