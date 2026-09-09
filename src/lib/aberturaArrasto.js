@@ -192,7 +192,9 @@ export async function itensAbertosConta(compId, contaCod, contaNome, classifRaw,
     id: `arr-${compId}-${i}`,
     data: l.data || 'abertura',
     contrapartida: '',
-    historico: `Saldo anterior · ${l.leitura?.entidade || ''}${l.leitura?.nf ? ' · NF ' + l.leitura.nf : ''}`.replace(/·\s*$/, '').trim(),
+    // Histórico = só o FORNECEDOR (a data e a coluna NF já dizem que é do mês anterior; o texto
+    // "Saldo anterior" era redundante). Fallback para quando não há nome identificado.
+    historico: (String(l.leitura?.entidade || '').replace(/[\s·\-]+$/, '').trim()) || 'Saldo anterior',
     debito: Number(l.debito) || 0,
     credito: Number(l.credito) || 0,
     abertura: true,
