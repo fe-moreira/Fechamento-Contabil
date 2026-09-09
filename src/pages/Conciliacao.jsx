@@ -1351,6 +1351,16 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   }
   const conferidosGrupos = Object.entries(conferidosPorNome).map(([nome, lancs]) => ({ nome: confExib[nome] || nome, lancs }))
   const conferidosVis = termoBusca ? conferidosGrupos.filter(casaBusca) : conferidosGrupos
+  // Blocos de conciliados que NÃO fecham em zero (perna quebrada / baixa sem par de verdade) —
+  // base do botão "Reabrir os que não zeraram". Cada bloco que zera de verdade (nome+NF+valor)
+  // fica; o resto volta para o em aberto. Opera só na competência ATUAL (não mexe em mês fechado).
+  const qtdNaoZeram = conferidosGrupos.reduce((s, g) => s + (Math.abs(g.lancs.reduce((a, l) => a + ov(l), 0)) >= 0.005 ? g.lancs.length : 0), 0)
+  const btnReabrirNaoZeram = qtdNaoZeram > 0 ? (
+    <button className="btn btn-ghost" style={{ fontSize: 12, padding: '4px 10px', color: theme.yellow, borderColor: theme.yellow, marginLeft: 10 }}
+      onClick={reabrirNaoZerados} title="Reabre os blocos de conciliados que NÃO fecham em zero (perna quebrada / par que não bate nome+NF+valor). Voltam para o em aberto. Opera só neste mês.">
+      <i className="ti ti-rotate-2" /> Reabrir os que não zeraram ({qtdNaoZeram})
+    </button>
+  ) : null
   // Baixados AUTOMATICAMENTE por NF (par título + pagamento com a mesma NF). Também podem ser
   // REABERTOS: o usuário puxa a NF de volta para o em aberto para vincular do jeito certo à mão.
   const baixadosPorNome = {}
@@ -2095,6 +2105,17 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
 
   // Reabre lançamentos CONFIRMADOS em lote: apaga só o registro de confirmação (mantém
   // qualquer justificativa individual) e devolve as linhas para "em aberto".
+  // Reabre EM LOTE só os blocos de conciliados que NÃO fecham em zero (perna quebrada). Usa o
+  // mesmo agrupamento da tela (nome+NF+valor), então reabre exatamente o que não bate — sem tocar
+  // no que zerou de verdade. Opera na competência atual (não mexe em mês fechado, que nem é editado
+  // aqui). É o "reabrir o que não zerou" pedido: cada par válido fica, o resto volta pro em aberto.
+  async function reabrirNaoZerados() {
+    const lancs = conferidosGrupos
+      .filter(g => Math.abs(g.lancs.reduce((a, l) => a + ov(l), 0)) >= 0.005)
+      .flatMap(g => g.lancs)
+    if (!lancs.length) { setMsg('Nada a reabrir — todos os blocos conciliados já fecham em zero.'); return }
+    await reabrirConferidos(lancs)
+  }
   async function reabrirConferidos(lancs) {
     if (!lancs?.length) return
     if (!window.confirm(`Reabrir ${lancs.length} lançamento(s)? Eles voltam para "em aberto" para você revisar/corrigir de novo.`)) return
@@ -2581,6 +2602,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
           <button onClick={() => setVerConferidos(v => !v)} style={{ background: 'none', border: 'none', color: termoBusca ? theme.accent : theme.sub, cursor: 'pointer', fontSize: 12.5, padding: '6px 2px', display: 'flex', alignItems: 'center', gap: 6 }}>
             <i className={`ti ${(verConferidos || termoBusca) ? 'ti-chevron-down' : 'ti-chevron-right'}`} /> <i className="ti ti-circle-check" style={{ color: theme.green }} /> Conciliados / conferidos neste mês ({conferidosLancs.length}){termoBusca ? ` — ${conferidosVis.length} com “${buscaNome}” (reabra aqui)` : verConferidos ? ' — clique para ocultar' : ' — clique para ver e reabrir'}
           </button>
+          {btnReabrirNaoZeram}
           {(verConferidos || termoBusca) && conferidosVis.map((g, gi) => (
             <div key={gi} style={{ background: theme.card, border: `1px solid ${theme.cb}`, borderRadius: 12, overflow: 'hidden', marginBottom: 10, opacity: 0.9 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', background: theme.input, gap: 8 }}>
@@ -2619,6 +2641,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
             <button onClick={() => setVerConferidos(v => !v)} style={{ background: 'none', border: 'none', color: termoBusca ? theme.accent : theme.sub, cursor: 'pointer', fontSize: 12.5, padding: '6px 2px', display: 'flex', alignItems: 'center', gap: 6 }}>
               <i className={`ti ${(verConferidos || termoBusca) ? 'ti-chevron-down' : 'ti-chevron-right'}`} /> <i className="ti ti-circle-check" style={{ color: theme.green }} /> Conciliados / conferidos neste mês ({conferidosLancs.length}){termoBusca ? ` — ${conferidosVis.length} com “${buscaNome}” (reabra aqui)` : verConferidos ? ' — clique para ocultar' : ' — clique para ver e reabrir'}
             </button>
+            {btnReabrirNaoZeram}
             {(verConferidos || termoBusca) && conferidosVis.map((g, gi) => (
               <div key={gi} style={{ background: theme.card, border: `1px solid ${theme.cb}`, borderRadius: 12, overflow: 'hidden', marginBottom: 10, opacity: 0.9 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', background: theme.input, gap: 8 }}>
