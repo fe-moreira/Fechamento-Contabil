@@ -683,6 +683,18 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const ajCred = lanc.reduce((s, l) => l.acerto ? s + (Number(l.credito) || 0) : s, 0)
   const ajNet = ajDeb - ajCred
   const [carregando, setCarregando] = useState(true)
+  // Preserva a POSIÇÃO DE SCROLL nas recargas IN-PLACE (reabrir/confirmar/conectar/corrigir): sem
+  // isso a tela some no "Carregando…" e o navegador volta pro topo. Só restaura quando é a MESMA
+  // conta (troca de conta abre no topo normalmente).
+  const scrollRef = useRef(null)
+  const contaKeyRef = useRef('')
+  useEffect(() => {
+    if (!carregando && scrollRef.current != null) {
+      const y = scrollRef.current; scrollRef.current = null
+      requestAnimationFrame(() => requestAnimationFrame(() => { try { window.scrollTo(0, y) } catch { /* noop */ } }))
+    }
+  }, [carregando])
+  const [selReabrir, setSelReabrir] = useState(new Set()) // linhas de CONCILIADOS marcadas p/ reabrir em lote (por _uid)
   const [acao, setAcao] = useState(null)   // lançamento clicado (justificar/corrigir)
   const [verCorr, setVerCorr] = useState(null) // lançamento já tratado (ver o que foi feito / desfazer)
   const [plano, setPlano] = useState([])   // [{ cod, nome }] para os seletores de conta
@@ -912,6 +924,10 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   }
 
   async function carregarLanc() {
+    // guarda o scroll para restaurar depois (só na MESMA conta — troca de conta abre no topo)
+    const _ck = `${compId}·${conta.conta}`
+    scrollRef.current = (_ck === contaKeyRef.current && typeof window !== 'undefined') ? window.scrollY : null
+    contaKeyRef.current = _ck
     setCarregando(true)
     const contasRz = await contasDoRazao()
     const [rz, { data: aj }, { data: acs }, abertura, { data: cn }, { data: compInteg }] = await Promise.all([
@@ -1370,6 +1386,14 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     <button className="btn btn-ghost" style={{ fontSize: 12, padding: '4px 10px', color: theme.yellow, borderColor: theme.yellow, marginLeft: 10 }}
       onClick={reabrirNaoZerados} title="Reabre os blocos de conciliados que NÃO fecham em zero (perna quebrada / par que não bate nome+NF+valor). Voltam para o em aberto. Opera só neste mês.">
       <i className="ti ti-rotate-2" /> Reabrir os que não zeraram ({qtdNaoZeram})
+    </button>
+  ) : null
+  // Botão de reabrir as linhas MARCADAS (seleção manual, pode misturar blocos).
+  const selReabrirCount = conferidosLancs.filter(l => selReabrir.has(l._uid)).length
+  const btnReabrirSel = selReabrirCount > 0 ? (
+    <button className="btn btn-ghost" style={{ fontSize: 12, padding: '4px 10px', color: theme.yellow, borderColor: theme.yellow, marginLeft: 10 }}
+      onClick={reabrirSelecionados} title="Reabre só as linhas que você marcou (de qualquer bloco). Voltam para o em aberto.">
+      <i className="ti ti-rotate-2" /> Reabrir selecionados ({selReabrirCount})
     </button>
   ) : null
   // Baixados AUTOMATICAMENTE por NF (par título + pagamento com a mesma NF). Também podem ser
@@ -2146,6 +2170,15 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     if (!lancs.length) { setMsg('Nada a reabrir — todos os blocos conciliados já fecham em zero.'); return }
     await reabrirConferidos(lancs)
   }
+  // Marca/desmarca uma linha de Conciliados para reabrir em lote (seleção manual).
+  const toggleSelReabrir = l => setSelReabrir(prev => { const s = new Set(prev); s.has(l._uid) ? s.delete(l._uid) : s.add(l._uid); return s })
+  // Reabre SÓ as linhas de Conciliados que o usuário marcou (pode ser de blocos diferentes).
+  async function reabrirSelecionados() {
+    const alvo = conferidosLancs.filter(l => selReabrir.has(l._uid))
+    if (!alvo.length) return
+    await reabrirConferidos(alvo)
+    setSelReabrir(new Set())
+  }
   async function reabrirConferidos(lancs) {
     if (!lancs?.length) return
     if (!window.confirm(`Reabrir ${lancs.length} lançamento(s)? Eles voltam para "em aberto" para você revisar/corrigir de novo.`)) return
@@ -2632,7 +2665,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
           <button onClick={() => setVerConferidos(v => !v)} style={{ background: 'none', border: 'none', color: termoBusca ? theme.accent : theme.sub, cursor: 'pointer', fontSize: 12.5, padding: '6px 2px', display: 'flex', alignItems: 'center', gap: 6 }}>
             <i className={`ti ${(verConferidos || termoBusca) ? 'ti-chevron-down' : 'ti-chevron-right'}`} /> <i className="ti ti-circle-check" style={{ color: theme.green }} /> Conciliados / conferidos neste mês ({conferidosLancs.length}){termoBusca ? ` — ${conferidosVis.length} com “${buscaNome}” (reabra aqui)` : verConferidos ? ' — clique para ocultar' : ' — clique para ver e reabrir'}
           </button>
-          {btnReabrirNaoZeram}
+          {btnReabrirNaoZeram}{btnReabrirSel}
           {(verConferidos || termoBusca) && conferidosVis.map((g, gi) => {
             const netG = g.lancs.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
             const zerouG = Math.abs(netG) < 0.005
@@ -2650,6 +2683,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
                   <tbody>
                     {g.lancs.map((l, i) => (
                       <tr key={i} style={{ borderTop: `1px solid ${theme.border}`, fontSize: 12 }}>
+                        <td style={{ ...td, textAlign: 'center' }} onClick={e => e.stopPropagation()}><input type="checkbox" title="Marcar para reabrir" checked={selReabrir.has(l._uid)} onChange={() => toggleSelReabrir(l)} style={{ cursor: 'pointer' }} /></td>
                         <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{fmtDataBR(l.data) || '—'}</td>
                         <td style={{ ...td, color: theme.sub }}>NF {l.leitura?.nf || '—'}</td>
                         <td style={{ ...td, color: theme.sub, fontFamily: 'monospace', fontSize: 11, maxWidth: 320 }}>{l.historico}</td>
@@ -2681,7 +2715,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
             <button onClick={() => setVerConferidos(v => !v)} style={{ background: 'none', border: 'none', color: termoBusca ? theme.accent : theme.sub, cursor: 'pointer', fontSize: 12.5, padding: '6px 2px', display: 'flex', alignItems: 'center', gap: 6 }}>
               <i className={`ti ${(verConferidos || termoBusca) ? 'ti-chevron-down' : 'ti-chevron-right'}`} /> <i className="ti ti-circle-check" style={{ color: theme.green }} /> Conciliados / conferidos neste mês ({conferidosLancs.length}){termoBusca ? ` — ${conferidosVis.length} com “${buscaNome}” (reabra aqui)` : verConferidos ? ' — clique para ocultar' : ' — clique para ver e reabrir'}
             </button>
-            {btnReabrirNaoZeram}
+            {btnReabrirNaoZeram}{btnReabrirSel}
             {(verConferidos || termoBusca) && conferidosVis.map((g, gi) => {
               const netG = g.lancs.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
               const zerouG = Math.abs(netG) < 0.005
@@ -2699,6 +2733,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
                     <tbody>
                       {g.lancs.map((l, i) => (
                         <tr key={i} style={{ borderTop: `1px solid ${theme.border}`, fontSize: 12 }}>
+                          <td style={{ ...td, textAlign: 'center' }} onClick={e => e.stopPropagation()}><input type="checkbox" title="Marcar para reabrir" checked={selReabrir.has(l._uid)} onChange={() => toggleSelReabrir(l)} style={{ cursor: 'pointer' }} /></td>
                           <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{fmtDataBR(l.data) || '—'}</td>
                           <td style={{ ...td, color: theme.sub, fontFamily: 'monospace', fontSize: 11, maxWidth: 320 }}>{l.historico}</td>
                           <td style={{ ...tdR, color: theme.green }}>{Number(l.debito) ? money(l.debito) : '—'}</td>
