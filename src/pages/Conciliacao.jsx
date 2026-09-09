@@ -106,6 +106,17 @@ const GENERICAS = new Set(['COMPANHIA', 'CIA', 'DISTRIBUIDORA', 'DISTRIBUIDOR', 
   'LTDA', 'EIRELI', 'EPP', 'MEI', 'CF', 'RPS',
   'DO', 'DA', 'DE', 'DOS', 'DAS', 'E', 'EM'])
 const normNome = s => String(s || '').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim()
+// NÚCLEO do nome (p/ AUTO-UNIR idênticos): tira CNPJ/CPF/código no INÍCIO e o sufixo jurídico
+// (LTDA/EIRELI/EPP/ME/MEI/SA) no FIM. Assim "DVP CONSULTORIA EMPRESARIAL" ≡ "…LTDA" e
+// "61.111.913 TIAGO SANTOS COSTA" ≡ "TIAGO SANTOS COSTA" caem no MESMO bloco sozinhos.
+const SUFIXO_JUR = /\b(?:LTDA|EIRELI|EPP|MEI|ME|S\s?A)\b/g
+const nucleoNome = nome => normNome(nome).replace(/^(?:\d[\d ]*)/, '').replace(SUFIXO_JUR, ' ').replace(/\s+/g, ' ').trim()
+// Mesmo fornecedor? por token distintivo (mesmoCliente) OU pelo NÚCLEO idêntico (>=3 chars).
+const mesmoFornecedor = (nomeA, tkA, nomeB, tkB) => {
+  if (mesmoCliente(tkA, tkB)) return true
+  const na = nucleoNome(nomeA)
+  return !!na && na.length >= 3 && na === nucleoNome(nomeB)
+}
 // Tokens distintivos de um nome (>=3 letras, sem genéricas). Se não sobrar nenhum "forte",
 // usa os tokens NÃO genéricos mesmo CURTOS (iniciais como "C K", "A S", "RC") — que
 // distinguem melhor do que cair em TODOS (com as palavras genéricas juntas, que encadeiam
@@ -256,7 +267,7 @@ function agruparPorCliente(lancs) {
   const tk = Object.fromEntries(idents.map(k => [k, tokensNome(k)]))
   const clusters = []
   for (const k of idents) {
-    const alvo = clusters.find(cl => cl.some(m => mesmoCliente(tk[k], tk[m])))
+    const alvo = clusters.find(cl => cl.some(m => mesmoFornecedor(k, tk[k], m, tk[m])))
     if (alvo) alvo.push(k); else clusters.push([k])
   }
   if (grupos['(não identificado)']) clusters.push(['(não identificado)'])
@@ -1230,7 +1241,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   for (const k of idents) {
     // Nome ISOLADO (desvinculou) ou linha SEPARADA: nunca une — fica no seu próprio grupo.
     const isoladoK = ehSep(k) || nomesIsolados.has(chaveNome(nomeExib[k]))
-    const alvo = isoladoK ? null : clusters.find(cl => !cl.isolado && cl.membros.some(m => mesmoCliente(tk[k], tk[m])))
+    const alvo = isoladoK ? null : clusters.find(cl => !cl.isolado && cl.membros.some(m => mesmoFornecedor(nomeExib[k], tk[k], nomeExib[m], tk[m])))
     if (alvo) alvo.membros.push(k); else clusters.push({ membros: [k], isolado: isoladoK })
   }
   const listaTodas = clusters.map(cl => {
