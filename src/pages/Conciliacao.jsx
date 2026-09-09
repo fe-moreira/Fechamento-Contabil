@@ -1304,35 +1304,9 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const resolvidasEnt = listaTodas.filter(ehResolvida)
   const lista = listaTodas.filter(g => !ehResolvida(g))
 
-  // Sugestões de nome: depois que você corrige um nome (✎), procura OUTROS grupos com o
-  // mesmo padrão — mesmo cliente (tokens) ou mesmo recorte de prefixo/sufixo — e sugere a
-  // mesma correção (atual → sugerido), para você aprovar um a um ou todos.
-  const sugestoesNome = (() => {
-    if (!ultimaCorrecao?.neu) return []
-    const { old, neu } = ultimaCorrecao
-    const neuKey = chaveNome(neu)
-    const rec = recorteDe(old, neu)
-    const tkNeu = tokensNome(neu)
-    const out = [], vistos = new Set()
-    for (const g of lista) {
-      if (g.unk) continue
-      const gk = chaveNome(g.nome)
-      if (gk === neuKey || vistos.has(gk) || sugDismiss.has(gk)) continue
-      let sugerido = null, tipo = null
-      // Padrão de texto: o mesmo prefixo/sufixo recortado aparece neste nome → sugere o mesmo corte.
-      if (rec) {
-        let base = g.nome, hit = false
-        if (rec.prefixo.length >= 4 && baixaTxt(base).startsWith(baixaTxt(rec.prefixo))) { base = base.slice(rec.prefixo.length); hit = true }
-        if (rec.sufixo.length >= 4 && baixaTxt(base).endsWith(baixaTxt(rec.sufixo))) { base = base.slice(0, base.length - rec.sufixo.length); hit = true }
-        base = base.replace(/^[\s\-–·|]+|[\s\-–·|]+$/g, '').trim()
-        if (hit && base && chaveNome(base) !== gk) { sugerido = base; tipo = 'padrão' }
-      }
-      // Mesmo cliente que o corrigido (variações de escrita que não foram unidas sozinhas).
-      if (!sugerido && mesmoCliente(tokensNome(g.nome), tkNeu)) { sugerido = neu; tipo = 'cliente' }
-      if (sugerido) { vistos.add(gk); out.push({ atual: g.nome, sugerido, tipo, lancs: g.lancs }) }
-    }
-    return out
-  })()
+  // Sugestões de nome (propagação) DESLIGADAS a pedido do time: corrigir um nome NÃO "arruma
+  // tudo" nem sai mexendo em outros grupos — cada correção é INDIVIDUAL, só no que foi tocado.
+  const sugestoesNome = []
 
   // Para os relatórios: o que está em aberto (compõe o saldo) e o que zerou (baixa/confirmação/resolvida).
   const ehEntidade = ehEntidadeConta
@@ -1773,42 +1747,42 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     }
     await baixarConexao(alvo, undefined, nomeAlvo)
   }
-  // Ao CONECTAR lançamentos com nomes lidos diferentes (ex.: o título lido como "ELETROLAR"
-  // e o pagamento como "LIKE DISTRIBUICAO E LOGISTICA"), UNIFICA o fornecedor: adota o nome
-  // mais COMPLETO como o "fornecedor final" e APRENDE que os outros são o mesmo (apelido) —
-  // vale para os próximos meses e agrupa sozinho. Assim a plataforma vai aprendendo.
+  // Ao CONECTAR, dá o mesmo nome às linhas do vínculo — mas SÓ NAS LINHAS SELECIONADAS. NÃO cria
+  // apelido GLOBAL (que arrastava todo o resto do fornecedor para o bloco, ex.: SILVIA/GMMG/IGOR
+  // caindo dentro de "BARBARA"). Aplica por linha: razão via ajuste_leitura (razao_id), abertura
+  // via aberAj (por título), acerto via acertoNomes (uuid). Aprendizado global fica só no botão
+  // "Confirmar nome" (ação explícita), nunca no simples conectar.
   async function unificarNomesConectados(alvo, nomeAlvo = '') {
-    // VÍNCULO FORÇADO (o usuário conectou explicitamente e o par ZERA): junta os nomes num
-    // canônico SEM a trava do "mesmo cliente" — o par cai num grupo só que zera, mesmo entre
-    // clientes diferentes. Além disso, o link é a ação MAIS RECENTE: LIMPA a correção anterior
-    // (ajuste_leitura) das linhas linkadas que não são o canônico, para o vínculo poder recolhê-
-    // las (correção-depois-link volta a funcionar). Lógica provada em conciliacaoCore.aplicarLink.
-    const ids = (alvo || []).map(l => l.id).filter(x => x != null)
-    const { aliasForcado, correcoesLimpas, canonical } = aplicarLink(alvo, ids, aliasesForcados, nomeAlvo)
-    const mudou = JSON.stringify(aliasForcado) !== JSON.stringify(aliasesForcados)
-    if (correcoesLimpas.length) {
-      try { await supabase.from('ajuste_leitura').delete().eq('competencia_id', await getCompetenciaId()).in('razao_id', correcoesLimpas) } catch { /* segue mesmo se falhar a limpeza */ }
+    const sel = alvo || []
+    // Canônico: o nome confirmado, ou o nome REAL (não genérico) mais longo entre os selecionados.
+    let canonical = String(nomeAlvo || '').trim()
+    if (!canonical) {
+      const nomes = sel.map(l => String(l.leitura?.entidade || '').trim()).filter(Boolean)
+      const reais = nomes.filter(n => !ehNomeGenerico(n))
+      canonical = (reais.length ? reais : nomes).sort((a, b) => b.length - a.length)[0] || ''
     }
-    // Renomeia as ABERTURAS do vínculo para o nome CANÔNICO. A abertura (saldo anterior) não tem
-    // id nem ajuste_leitura, e o alias forçado nem sempre "cola" nela (correção soberana, limpeza
-    // de nome) — então grava o nome direto no ajuste da abertura. Sem isso, o "Saldo anterior"
-    // fica num BLOCO SEPARADO do pagamento no relatório mesmo depois de você linkar.
+    if (!canonical) return null
+    const id = await getCompetenciaId()
     let aberAj = aberturaAj, mudouAb = false
-    if (canonical) {
-      for (const l of (alvo || [])) {
-        if (!l._abertura) continue
+    const acMap = { ...acertoNomes }
+    const razaoIds = []
+    for (const l of sel) {
+      if (l._abertura) {
         const key = chaveAberturaAj(l)
-        if (chaveNome(aberAj[key]?.entidade || '') !== chaveNome(canonical)) {
-          aberAj = { ...aberAj, [key]: { ...(aberAj[key] || {}), entidade: canonical } }
-          mudouAb = true
-        }
+        if (chaveNome(aberAj[key]?.entidade || '') !== chaveNome(canonical)) { aberAj = { ...aberAj, [key]: { ...(aberAj[key] || {}), entidade: canonical } }; mudouAb = true }
+      } else if (l.acerto) {
+        const rid = String(l.id).replace(/^ac_/, ''); if (rid) acMap[rid] = canonical
+      } else if (l.id != null) {
+        razaoIds.push(l.id)
       }
-      if (mudouAb) setAberturaAj(aberAj)
     }
-    if (!mudou && !correcoesLimpas.length && !mudouAb) return null
-    if (mudou) setAliasesForcados(aliasForcado)
-    await salvarNomes(nomesConf, nomesIsolados, undefined, aberAj, undefined, undefined, undefined, undefined, undefined, mudou ? aliasForcado : aliasesForcados)
-    return canonical || null
+    if (razaoIds.length) {
+      try { await supabase.from('ajuste_leitura').upsert(razaoIds.map(rid => ({ competencia_id: id, razao_id: rid, entidade: canonical, usuario })), { onConflict: 'razao_id' }) } catch { /* segue */ }
+    }
+    if (mudouAb) setAberturaAj(aberAj)
+    setAcertoNomes(acMap)
+    await salvarNomes(nomesConf, nomesIsolados, nomesAlias, aberAj, acMap)
+    return canonical
   }
   // Marca as linhas da conexão como confirmadas (saem para Conciliados). `extraRazaoId` é o
   // lançamento de acerto da diferença (desconto/juros), que também deve sair do em aberto.
