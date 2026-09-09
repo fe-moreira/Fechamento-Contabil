@@ -711,6 +711,14 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const [buscaNome, setBuscaNome] = useState('') // busca por nome na composição de clientes/fornecedores
   const [selLin, setSelLin] = useState(() => new Set()) // linhas marcadas p/ conectar (baixa manual)
   const [abertura, setAbertura] = useState({ inicial: false, fechada: false }) // esta competência é a de abertura? está fechada?
+  const [periodoFechado, setPeriodoFechado] = useState(false) // ESTA competência (o mês que você está conciliando) está FECHADA → tudo travado
+  // TRAVA de período fechado: um mês FECHADO é somente leitura. Nada pode ser conciliado,
+  // reaberto, corrigido, vinculado ou lançado aqui — só depois de reabrir o fechamento (em
+  // Fechamentos). Chame no início de TODA ação que grava algo.
+  const bloqueadoFechado = () => {
+    if (periodoFechado) { setMsg('Período FECHADO — este mês é somente leitura. Reabra o fechamento (em Fechamentos) para editar. Nada pode ser conciliado, reaberto ou corrigido aqui.'); return true }
+    return false
+  }
   const [loteForn, setLoteForn] = useState(null) // { lines } — corrigir fornecedor em lote
   const [conectarDif, setConectarDif] = useState(null) // { alvo, net } — apontar desconto/juros da diferença
   const [novoLanc, setNovoLanc] = useState(false)       // abre o modal de novo lançamento manual nesta conta
@@ -784,6 +792,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // apelidos (variações → oficial, vale p/ os próximos meses) e marca a unificação como confirmada
   // — aí os chips "Unificado de" somem (não precisa mais ficar aparecendo).
   async function confirmarUnificacao(g) {
+    if (bloqueadoFechado()) return
     const oficial = window.prompt('Confirmar unificação — qual é o NOME OFICIAL deste fornecedor? (vale para os próximos meses)', g.nome)
     if (oficial == null) return
     const nome = String(oficial).trim(); if (!nome) { setMsg('Nome vazio — cancelado.'); return }
@@ -802,6 +811,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // DESFAZ a união: dá à linha o seu nome PRÓPRIO (o digitado, senão o do histórico), remove o
   // apelido que remapeava esse nome e marca o nome próprio como isolado.
   async function desvincularLinha(alvo, nomeDigitado) {
+    if (bloqueadoFechado()) return
     if (!alvo) return
     // O nome EXIBIDO da linha pode ser o nome MESCLADO (apelido do outro fornecedor). Para
     // separar de verdade, o "nome próprio" tem que ser o do HISTÓRICO (pré-apelido). Só usamos
@@ -1145,12 +1155,18 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       if (inicial) { const ab = await aberturaComp(empresaId, competencia); fechada = !!ab.fechada }
       if (ativo) setAbertura({ inicial, fechada })
     })()
+    // Status DESTA competência (o mês conciliado): FECHADO → tela somente leitura.
+    ;(async () => {
+      const { data } = await supabase.from('competencias').select('status').eq('id', compId).maybeSingle()
+      if (ativo) setPeriodoFechado(String(data?.status || '').toLowerCase() === 'fechado')
+    })()
     return () => { ativo = false }
   }, [empresaId, compId, competencia])
 
   // Exclui a linha do saldo inicial (Saldo anterior) da carga inicial — para tirar um
   // duplicado sem ir à Base de Informações. Trava se a abertura estiver fechada.
   async function excluirAbertura(l) {
+    if (bloqueadoFechado()) return
     if (abertura.fechada) { setMsg('A competência de abertura está FECHADA — reabra-a para excluir o saldo inicial.'); return }
     const valor = (Number(l.debito) || 0) - (Number(l.credito) || 0)
     const cliente = String(l._origEntidade ?? l.leitura?.entidade ?? '').trim()
@@ -1589,6 +1605,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     : listaBase
 
   async function registrar(tipo, payload) {
+    if (bloqueadoFechado()) return
     const id = await getCompetenciaId()
     // Linha de ABERTURA (saldo inicial) não tem razao_id: é identificada pela chave estável
     // "AB·…" no campo item; a razão vai pelo razao_id (uuid).
@@ -1748,6 +1765,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     setTratadosAb(prev => { const s = new Set(prev); linhas.filter(l => l._abertura).forEach(l => s.add(chaveAbertura(l))); return s })
   }
   async function confirmarEntidade(grupo, nome) {
+    if (bloqueadoFechado()) return
     const alvo = (grupo || []).filter(l => l.id && !l.acerto && !jaTratada(l))
     if (!alvo.length) return
     if (!window.confirm(`Confirmar ${alvo.length} lançamento(s) de "${nome}" como conferidos? A composição já está zerada (título e baixa se compensam) — isso marca as linhas como revisadas com justificativa, sem abrir uma a uma.`)) return
@@ -1763,6 +1781,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // zerar): tira o "revisar", marca conferido (com usuário e data). NÃO tira do em aberto
   // (o saldo pode seguir aberto) — é uma justificativa individual, não baixa em lote.
   async function confirmarNome(l) {
+    if (bloqueadoFechado()) return
     if (!l?.id || l.acerto || jaTratada(l)) return
     const id = await getCompetenciaId()
     const nome = l.leitura?.entidade || ''
@@ -1863,6 +1882,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // Marca as linhas da conexão como confirmadas (saem para Conciliados). `extraRazaoId` é o
   // lançamento de acerto da diferença (desconto/juros), que também deve sair do em aberto.
   async function baixarConexao(alvo, extraRazaoId, nomeAlvo = '') {
+    if (bloqueadoFechado()) return false
     const id = await getCompetenciaId()
     // A baixa da ABERTURA é gravada pela chave SEM NOME (conta·data·NF·valor) — o nome é instável
     // (unificação do vínculo, CNPJ colado no pagamento), e chavear pelo nome fazia a perna do
@@ -1891,6 +1911,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // conexão manual — vão para Conciliados. Unifica o nome DENTRO de cada par (nunca entre pares
   // diferentes, para não fundir clientes distintos).
   async function aprovarVinculos(pares) {
+    if (bloqueadoFechado()) return
     if (!pares || !pares.length) return
     if (!window.confirm(`Vincular ${pares.length} par(es) sugerido(s)? Cliente e valor batem — os lançamentos vão para Conciliados.`)) return
     const id = await getCompetenciaId()
@@ -1947,6 +1968,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // individual). `mapa` = { [razao_id]: contaDestino }. Aceita uma conta por linha (o usuário
   // preenche cada uma) OU a mesma conta para todos (o modal preenche o mapa inteiro).
   async function reclassificarLote(mapa) {
+    if (bloqueadoFechado()) return
     const id = await getCompetenciaId()
     if (!id) { setMsg('Selecione uma empresa/competência.'); return }
     // Só lançamentos do razão (têm razao_id = id da linha); abertura e acertos ficam de fora.
@@ -2005,6 +2027,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // Uma das pernas já vem preenchida com a conta atual. Entra em Lançamentos (Status → Domínio),
   // aparece na composição como acerto e atualiza o saldo. Fica na tela para lançar outro.
   async function criarLancamento(form) {
+    if (bloqueadoFechado()) return
     const deb = String(form.conta_debito || '').trim(), cred = String(form.conta_credito || '').trim()
     if (!deb || !cred) { setMsg('Informe a conta de débito e a de crédito.'); return }
     if (deb === cred) { setMsg('Débito e crédito precisam ser contas diferentes.'); return }
@@ -2012,6 +2035,9 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     if (!(val > 0)) { setMsg('Informe um valor maior que zero.'); return }
     const eSint = erroContaSintetica(plano, deb, cred)
     if (eSint) { setMsg(eSint); return }
+    // CONFIRMA O PERÍODO: o lançamento entra na competência ABERTA em que você está. Confirmar o
+    // mês evita lançar sem querer no período errado (ex.: fazendo agosto e caindo em outro mês).
+    if (!window.confirm(`Lançar em ${competencia}?\n\nEste lançamento manual entra no fechamento de ${competencia} (que está ABERTO). Confirme que é o período certo.`)) return
     const id = await getCompetenciaId()
     if (!id) { setMsg('Abra um fechamento para esta competência.'); return }
     const { error } = await supabase.from('lancamentos').insert({
@@ -2027,6 +2053,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // Desvincula EM LOTE os nomes dos lançamentos selecionados (não unir com parecidos) —
   // vale para todos os meses. Útil quando o sistema juntou vários nomes distintos por engano.
   async function desvincularLote(lines) {
+    if (bloqueadoFechado()) return
     const alvos = (lines || []).filter(l => !l.acerto && (l.leitura?.entidade || '').trim())
     if (!alvos.length) { setMsg('Marque linhas com nome identificado para desvincular.'); return }
     const iso = new Set(nomesIsolados)
@@ -2057,6 +2084,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // escolhido, senão o mais completo) por linha/item e grava um APELIDO FORÇADO — aplicado sem
   // a trava do "mesmo cliente" — para continuar unido nos próximos meses.
   async function vincularLote(lines, nomeAlvo) {
+    if (bloqueadoFechado()) return
     const comNome = (lines || []).filter(l => (l.leitura?.entidade || '').trim() || l.acerto)
     if (comNome.length < 2) { setLoteForn(null); setMsg('Marque ao menos 2 linhas para vincular.'); return }
     // Nome alvo: o digitado; senão o MAIS COMPLETO (mais longo) entre os selecionados.
@@ -2131,6 +2159,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // Corrige o FORNECEDOR/CLIENTE de vários lançamentos de uma vez (ajuste de leitura em
   // lote): útil quando o sistema leu o nome errado em várias linhas do mesmo fornecedor.
   async function aplicarFornecedorLote(lines, nome, aprender) {
+    if (bloqueadoFechado()) return
     const nm = String(nome || '').trim()
     // Nome que estava antes (p/ detectar o padrão da correção): do card (pincel) ou, no lote da
     // barra, o nome mais frequente entre as linhas selecionadas.
@@ -2263,6 +2292,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     setSelReabrir(new Set())
   }
   async function reabrirConferidos(lancs) {
+    if (bloqueadoFechado()) return
     if (!lancs?.length) return
     if (!window.confirm(`Reabrir ${lancs.length} lançamento(s)? Eles voltam para "em aberto" para você revisar/corrigir de novo.`)) return
     for (const l of lancs) {
@@ -2315,6 +2345,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // Reabre uma baixa AUTOMÁTICA por NF: registra a NF como "manter em aberto" (persistido) para
   // NÃO baixar de novo no automático — os lançamentos voltam para o em aberto para vincular à mão.
   async function reabrirBaixaNF(lancs) {
+    if (bloqueadoFechado()) return
     if (!lancs?.length) return
     if (!window.confirm(`Reabrir ${lancs.length} lançamento(s) que o sistema baixou por NF? Voltam para "em aberto" para você vincular manualmente (não baixam mais sozinhos).`)) return
     const s = new Set(baixasReabertas)
@@ -2337,6 +2368,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // Desfazer uma correção/estorno: remove o lançamento de acerto e o registro de
   // auditoria daquela linha; a linha volta a ficar pendente e o saldo se reverte.
   async function desfazerCorrecao(alvo) {
+    if (bloqueadoFechado()) return
     const linha = (alvo && typeof alvo === 'object') ? alvo : null
     // Linha de ABERTURA: a conferência está na auditoria pela chave "AB·…" (sem razao_id).
     if (linha && linha._abertura) {
@@ -2390,6 +2422,9 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
           <span onClick={onVoltar} style={{ color: '#8FB0FF', fontSize: 13, cursor: 'pointer' }}><i className="ti ti-chevron-left" /> Conciliação</span>
           <span style={{ color: theme.sub }}>/</span>
           <span style={{ fontSize: 13, fontWeight: 600 }}>{conta.conta} · {conta.nome}</span>
+          <span style={{ fontSize: 11.5, fontWeight: 700, padding: '2px 9px', borderRadius: 10, whiteSpace: 'nowrap', color: periodoFechado ? theme.red : theme.green, background: periodoFechado ? 'rgba(229,72,77,0.14)' : 'rgba(48,164,108,0.12)' }} title={periodoFechado ? 'Este mês está FECHADO — somente leitura. Reabra o fechamento para editar.' : 'Este mês está aberto para edição.'}>
+            <i className={`ti ${periodoFechado ? 'ti-lock' : 'ti-lock-open'}`} /> {competencia} · {periodoFechado ? 'FECHADO (só leitura)' : 'aberto'}
+          </span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
           <span style={{ color: theme.sub, fontSize: 12 }}><i className="ti ti-click" /> Clique num lançamento para justificar ou corrigir.</span>
