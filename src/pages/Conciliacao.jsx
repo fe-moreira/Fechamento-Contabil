@@ -1689,21 +1689,40 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     const net = alvo.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
     // Conectar SÓ quando ZERA. Se sobra diferença, não conecta (o botão já fica desabilitado).
     if (Math.abs(net) >= 0.005) { setMsg(`Só dá para conectar quando o líquido ZERA. Ainda sobra ${money(Math.abs(net))} ${net < 0 ? 'C' : 'D'} — ajuste a seleção.`); return }
-    if (!window.confirm(`Conectar ${alvo.length} lançamento(s)? Eles zeram entre si e vão para Conciliados.`)) return
-    await baixarConexao(alvo)
+    // Se a seleção mistura fornecedores com NOMES DIFERENTES (não são o mesmo cliente), PEDE o nome
+    // correto do fornecedor antes de unir. Isso (a) evita fundir por engano fornecedores distintos
+    // — o que poluía os apelidos — e (b) deixa o bloco com o NOME certo. O nome confirmado vira o
+    // canônico do vínculo (e é aprendido p/ os próximos meses).
+    const nomesSel = [...new Set(alvo.map(l => String(l.leitura?.entidade || '').trim()).filter(Boolean))]
+    const tksSel = nomesSel.map(tokensNome)
+    const fornecedoresDiferentes = nomesSel.length > 1 && !tksSel.every(t => mesmoCliente(t, tksSel[0]))
+    let nomeAlvo = ''
+    if (fornecedoresDiferentes) {
+      const sugestao = nomesSel.slice().sort((a, b) => b.length - a.length)[0] || ''
+      const r = window.prompt(
+        `Estes lançamentos têm nomes de FORNECEDOR diferentes:\n\n· ${nomesSel.join('\n· ')}\n\n` +
+        `São o MESMO fornecedor? Confirme (ou corrija) o nome certo deste bloco — vale para os próximos meses.\n` +
+        `Se forem fornecedores DIFERENTES de verdade, clique Cancelar e não conecte.`, sugestao)
+      if (r == null) return // cancelou → não conecta
+      nomeAlvo = String(r).trim()
+      if (!nomeAlvo) { setMsg('Nome do fornecedor vazio — conexão cancelada.'); return }
+    } else if (!window.confirm(`Conectar ${alvo.length} lançamento(s)? Eles zeram entre si e vão para Conciliados.`)) {
+      return
+    }
+    await baixarConexao(alvo, undefined, nomeAlvo)
   }
   // Ao CONECTAR lançamentos com nomes lidos diferentes (ex.: o título lido como "ELETROLAR"
   // e o pagamento como "LIKE DISTRIBUICAO E LOGISTICA"), UNIFICA o fornecedor: adota o nome
   // mais COMPLETO como o "fornecedor final" e APRENDE que os outros são o mesmo (apelido) —
   // vale para os próximos meses e agrupa sozinho. Assim a plataforma vai aprendendo.
-  async function unificarNomesConectados(alvo) {
+  async function unificarNomesConectados(alvo, nomeAlvo = '') {
     // VÍNCULO FORÇADO (o usuário conectou explicitamente e o par ZERA): junta os nomes num
     // canônico SEM a trava do "mesmo cliente" — o par cai num grupo só que zera, mesmo entre
     // clientes diferentes. Além disso, o link é a ação MAIS RECENTE: LIMPA a correção anterior
     // (ajuste_leitura) das linhas linkadas que não são o canônico, para o vínculo poder recolhê-
     // las (correção-depois-link volta a funcionar). Lógica provada em conciliacaoCore.aplicarLink.
     const ids = (alvo || []).map(l => l.id).filter(x => x != null)
-    const { aliasForcado, correcoesLimpas, canonical } = aplicarLink(alvo, ids, aliasesForcados)
+    const { aliasForcado, correcoesLimpas, canonical } = aplicarLink(alvo, ids, aliasesForcados, nomeAlvo)
     const mudou = JSON.stringify(aliasForcado) !== JSON.stringify(aliasesForcados)
     if (correcoesLimpas.length) {
       try { await supabase.from('ajuste_leitura').delete().eq('competencia_id', await getCompetenciaId()).in('razao_id', correcoesLimpas) } catch { /* segue mesmo se falhar a limpeza */ }
@@ -1731,7 +1750,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   }
   // Marca as linhas da conexão como confirmadas (saem para Conciliados). `extraRazaoId` é o
   // lançamento de acerto da diferença (desconto/juros), que também deve sair do em aberto.
-  async function baixarConexao(alvo, extraRazaoId) {
+  async function baixarConexao(alvo, extraRazaoId, nomeAlvo = '') {
     const id = await getCompetenciaId()
     // A baixa da ABERTURA é gravada pela chave SEM NOME (conta·data·NF·valor) — o nome é instável
     // (unificação do vínculo, CNPJ colado no pagamento), e chavear pelo nome fazia a perna do
@@ -1750,7 +1769,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     if (error) { setMsg('Não consegui conectar: ' + error.message); return false }
     marcarTratadas(alvo)
     // Unifica e APRENDE o fornecedor final (nomes lidos diferentes → um só, nos próximos meses).
-    const canonical = await unificarNomesConectados(alvo)
+    const canonical = await unificarNomesConectados(alvo, nomeAlvo)
     setSelLin(new Set()); setConectarDif(null)
     carregarTratados(); carregarLanc(); onMudou && onMudou()
     if (!extraRazaoId) setMsg(`${alvo.length} lançamento(s) conectado(s) — foram para Conciliados.${canonical ? ` Fornecedor unificado como "${canonical}" e aprendido para os próximos meses.` : ''}`)
