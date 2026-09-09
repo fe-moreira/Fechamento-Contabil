@@ -1360,16 +1360,35 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const casaBusca = g => baixaTxt(g.nome).includes(termoBusca) || g.lancs.some(l => baixaTxt(l.historico).includes(termoBusca))
     || (termoDig && g.lancs.some(l => String(l.leitura?.nf || '').replace(/\D/g, '').includes(termoDig)))
     || (termoDig.length >= 3 && g.lancs.some(l => valDig(l).includes(termoDig)))
-  const conferidosPorNome = {}, confExib = {}
+  const conferidosPorNome = {}, confExib = {}, confSep = {}
   for (const l of conferidosLancs) {
     const base = autoConc.has(l) ? 'Correções conciliadas (estorno ↔ origem)' : (l.leitura?.entidade || '(sem nome)')
     // Linha desvinculada (separada) fica no seu próprio grupo também nos Conciliados.
     const sep = !autoConc.has(l) && base !== '(sem nome)' && separados.has(sepKey(l))
     const k = sep ? `${base} · ${sepKey(l)}` : base
     confExib[k] = base
+    if (sep) confSep[k] = true
     ;(conferidosPorNome[k] = conferidosPorNome[k] || []).push(l)
   }
-  const conferidosGrupos = Object.entries(conferidosPorNome).map(([nome, lancs]) => ({ nome: confExib[nome] || nome, lancs }))
+  // Junta blocos de NOME QUASE IDÊNTICO (mesmo fornecedor — o núcleo ignora o sufixo LTDA/EIRELI
+  // e o CNPJ colado), igual ao "em aberto" já faz. Assim "CLARA SOLUTIONS" e "CLARA SOLUTIONS LTDA"
+  // viram UM bloco só. NÃO junta linha DESVINCULADA (fica no seu grupo), nem nome marcado como
+  // ISOLADO, nem os grupos especiais (correções / sem nome). É só agrupamento VISUAL — reversível
+  // pelo Desvincular; nada é gravado nem "arrasta" outras linhas.
+  const especialConf = k => confExib[k] === '(sem nome)' || confExib[k] === 'Correções conciliadas (estorno ↔ origem)'
+  const chavesConf = Object.keys(conferidosPorNome)
+  const tkConf = Object.fromEntries(chavesConf.map(k => [k, tokensNome(confExib[k])]))
+  const clustersConf = []
+  for (const k of chavesConf) {
+    const isoK = confSep[k] || especialConf(k) || nomesIsolados.has(chaveNome(confExib[k]))
+    const alvo = isoK ? null : clustersConf.find(cl => !cl.isolado && cl.membros.some(m => mesmoFornecedor(confExib[k], tkConf[k], confExib[m], tkConf[m])))
+    if (alvo) alvo.membros.push(k); else clustersConf.push({ membros: [k], isolado: isoK })
+  }
+  const conferidosGrupos = clustersConf.map(cl => {
+    const membros = cl.membros.slice().sort((a, b) => (confExib[b] || '').length - (confExib[a] || '').length)
+    const lancs = ordenarPorData(cl.membros.flatMap(m => conferidosPorNome[m]))
+    return { nome: confExib[membros[0]] || membros[0], lancs }
+  })
   const conferidosVis = termoBusca ? conferidosGrupos.filter(casaBusca) : conferidosGrupos
   // Blocos de conciliados que NÃO fecham em zero (perna quebrada / baixa sem par de verdade) —
   // base do botão "Reabrir os que não zeraram". Cada bloco que zera de verdade (nome+NF+valor)
