@@ -115,10 +115,11 @@ function baixadosPorNF(lancs) {
 //   é o saldo inicial do mês seguinte, para aparecer também no razão da Conciliação.
 export async function itensAbertosConta(compId, contaCod, contaNome, classifRaw, aberturaPrevia) {
   const porEntidade = ehPorEntidade(contaNome)
-  const [{ data: rz }, { data: aj }, { data: acs }] = await Promise.all([
+  const [{ data: rz }, { data: aj }, { data: acs }, { data: audit }] = await Promise.all([
     supabase.from('razao').select('id, data, contrapartida, historico, debito, credito').eq('competencia_id', compId).eq('conta', contaCod).order('data'),
     supabase.from('ajuste_leitura').select('razao_id, nf, entidade, historico').eq('competencia_id', compId),
     supabase.from('lancamentos').select('id, data, conta_debito, conta_credito, valor, historico, razao_id, origem').eq('competencia_id', compId),
+    supabase.from('auditoria').select('razao_id, item, detalhe').eq('competencia_id', compId).eq('modulo', 'Conciliação'),
   ])
   const ajById = {}; for (const a of (aj || [])) ajById[a.razao_id] = a
   const acertoLancs = (acs || [])
@@ -149,7 +150,43 @@ export async function itensAbertosConta(compId, contaCod, contaNome, classifRaw,
     }]
   }
   const baixados = baixadosPorNF(lanc)
-  const abertos = lanc.filter(l => !baixados.has(l) && Math.abs((Number(l.debito) || 0) - (Number(l.credito) || 0)) >= 0.005)
+  // BAIXA MANUAL do mês (o usuário selecionou linhas que ZERAM entre si e mandou baixar/confirmar):
+  // "o que se faz à mão é soberano". Esses conjuntos SAEM do em aberto e, portanto, NÃO arrastam
+  // para o mês seguinte — senão o que foi conciliado à mão (ex.: título + pagamento de NFs/valores
+  // diferentes, caso BARBARA BEDIN) voltava errado. Cobre conexão/vínculo manual, vínculo aprovado
+  // e "Confirmado em lote" (grupo de nome que zerou e foi confirmado). Cada conjunto soma zero por
+  // construção, então retirá-lo não desequilibra a conta. Casa pela MESMA chave da tela: razão pelo
+  // razao_id; abertura pela chave SEM nome (AB·conta·data·NF··valor).
+  const ehBaixaManualDet = det => {
+    const s = String(det || '')
+    return s.startsWith('Confirmado em lote') || /conex[aã]o manual|v[ií]nculo (?:manual|aprovado)/i.test(s)
+  }
+  const dataAbArr = l => (l.data && l.data !== 'abertura') ? String(l.data) : ''
+  const centsOf = l => Math.round(((Number(l.debito) || 0) - (Number(l.credito) || 0)) * 100)
+  // Perna do RAZÃO: casa pelo razao_id (estável). Perna da ABERTURA (saldo anterior): casa por
+  // DATA + VALOR, IGNORANDO NF e nome — a chave gravada em julho usava a NF ANTIGA (antes da
+  // correção de leitura), então casar por NF não funcionaria mais; data+valor é estável. A trava
+  // de zero abaixo protege contra colisão (dois títulos de mesma data/valor).
+  const baixadaRz = new Set()   // razao_id (perna de razão / acerto)
+  const baixadaAb = new Set()   // "data·cents" (perna de abertura)
+  for (const a of (audit || [])) {
+    if (!ehBaixaManualDet(a.detalhe)) continue
+    if (a.razao_id) baixadaRz.add(a.razao_id)
+    const p = String(a.item || '').split('·')
+    if (p[0] === 'AB' && p.length === 6) baixadaAb.add(`${(p[2] || '').trim()}·${(p[5] || '').trim()}`) // data·cents
+  }
+  const ehBaixaManual = l => (l.abertura || l._abertura)
+    ? baixadaAb.has(`${dataAbArr(l)}·${centsOf(l)}`)
+    : baixadaRz.has(l.acerto ? String(l.id).replace(/^ac_/, '') : l.id)
+  // TRAVA DE SEGURANÇA: cada baixa manual tem UMA perna no razão e a OUTRA no saldo anterior.
+  // Só descartamos o conjunto se ele REALMENTE somar zero (todas as pernas casaram) — senão, se
+  // uma perna (ex.: a abertura, com chave por NF que pode ter mudado) não casar, retirar a outra
+  // desequilibraria o saldo arrastado. Se não zera, NÃO aplica (mantém o comportamento atual e
+  // seguro). O saldo arrastado sempre bate com o saldo da conta.
+  const candidatas = lanc.filter(l => !baixados.has(l) && ehBaixaManual(l))
+  const netCand = candidatas.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
+  const aplicaManual = candidatas.length > 0 && Math.abs(netCand) < 0.005
+  const abertos = lanc.filter(l => !baixados.has(l) && !(aplicaManual && ehBaixaManual(l)) && Math.abs((Number(l.debito) || 0) - (Number(l.credito) || 0)) >= 0.005)
   // Vira "saldo anterior" para o mês seguinte, preservando NF/entidade p/ casar as baixas.
   return abertos.map((l, i) => ({
     id: `arr-${compId}-${i}`,
