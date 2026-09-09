@@ -1985,6 +1985,16 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     let nomeAtual = loteForn?.nomeAtual || ''
     if (!nomeAtual) { const cnt = {}; for (const l of (lines || [])) { const e = String(l.leitura?.entidade || '').trim(); if (e) cnt[e] = (cnt[e] || 0) + 1 }; nomeAtual = Object.keys(cnt).sort((a, b) => cnt[b] - cnt[a])[0] || '' }
     if (!nm) { setLoteForn(null); return }
+    // GUARD: não sobrescrever silenciosamente linhas que JÁ têm um nome PRÓPRIO identificado e
+    // DIFERENTE do alvo (e que não é o mesmo cliente). Evita varrer, por engano, fornecedores
+    // distintos (ex.: GODADDY, MICROSOFT) para dentro de outro nome (ex.: CLARA SOLUTIONS LTDA)
+    // numa seleção larga. Só pede confirmação — não bloqueia um merge deliberado.
+    const kNm = chaveNome(nm)
+    const conflitos = [...new Set((lines || [])
+      .filter(l => l.leitura?.ident && (l.leitura.conf === 'alta' || l.leitura.conf === 'media'))
+      .map(l => String(l.leitura?.entidade || '').trim())
+      .filter(e => e && chaveNome(e) !== kNm && !mesmoCliente(tokensNome(e), tokensNome(nm))))]
+    if (conflitos.length && !window.confirm(`Atenção: ${conflitos.length} nome(s) já identificado(s) e diferente(s) serão substituídos por "${nm}":\n\n${conflitos.slice(0, 8).join(', ')}${conflitos.length > 8 ? ' …' : ''}\n\nSão fornecedores distintos? Se sim, cancele e selecione só as linhas certas. Aplicar mesmo assim?`)) { setLoteForn(null); return }
     const razaoLinhas = (lines || []).filter(l => !l.acerto) // razão + saldo anterior
     const acertoLinhas = (lines || []).filter(l => l.acerto)  // lançamentos gerados (sem nome de origem)
     // Renomeia por APELIDO: cada nome atual dos selecionados vira o nome correto — vale para
