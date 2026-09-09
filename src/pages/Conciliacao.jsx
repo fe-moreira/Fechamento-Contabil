@@ -2035,13 +2035,20 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     if (!(val > 0)) { setMsg('Informe um valor maior que zero.'); return }
     const eSint = erroContaSintetica(plano, deb, cred)
     if (eSint) { setMsg(eSint); return }
+    // A data TEM QUE SER do mês de fechamento (aberto). Se o usuário digitou uma data de OUTRO
+    // mês (ex.: julho, já fechado), NÃO lança calado nem move em silêncio — BLOQUEIA e avisa,
+    // para ele corrigir a data. (Se o campo vier vazio, usa o último dia desta competência.)
+    const md = String(form.data || '').match(/^(\d{4})-(\d{2})/)
+    const mc = String(competencia || '').match(/^(\d{1,2})\/(\d{4})$/)
+    if (md && mc && (Number(md[1]) !== Number(mc[2]) || Number(md[2]) !== Number(mc[1]))) {
+      setMsg(`Não lancei: a data ${fmtDataBR(form.data)} é de OUTRO mês, não do fechamento aberto (${competencia}). Não é permitido lançar com data de outro mês (ex.: um mês já fechado) — ajuste a data para ${competencia}.`)
+      return
+    }
     // CONFIRMA O PERÍODO: o lançamento entra na competência ABERTA em que você está. Confirmar o
     // mês evita lançar sem querer no período errado (ex.: fazendo agosto e caindo em outro mês).
     if (!window.confirm(`Lançar em ${competencia}?\n\nEste lançamento manual entra no fechamento de ${competencia} (que está ABERTO). Confirme que é o período certo.`)) return
     const id = await getCompetenciaId()
     if (!id) { setMsg('Abra um fechamento para esta competência.'); return }
-    // A data SEMPRE cai no mês de fechamento (aberto) — nunca num mês fechado. Se o usuário
-    // digitar uma data fora, dataNaCompetencia joga pro último dia desta competência.
     const dataLanc = dataNaCompetencia(form.data, competencia) || null
     const { error } = await supabase.from('lancamentos').insert({
       competencia_id: id, data: dataLanc, conta_debito: deb, conta_credito: cred,
