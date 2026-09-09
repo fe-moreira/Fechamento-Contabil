@@ -1396,6 +1396,15 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       <i className="ti ti-rotate-2" /> Reabrir selecionados ({selReabrirCount})
     </button>
   ) : null
+  // Saldo TOTAL de uma seção (tem que ser ZERO): mostra na ponta do cabeçalho para bater o olho
+  // se fecha. Vermelho quando não fecha (não pode acontecer — algo baixado sem par).
+  const ovNet = ls => (ls || []).reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
+  const saldoSecao = net => {
+    const z = Math.abs(net) < 0.005
+    return <span style={{ marginLeft: 'auto', fontSize: 11.5, fontWeight: 700, padding: '2px 9px', borderRadius: 10, whiteSpace: 'nowrap', color: z ? theme.green : theme.red, background: z ? 'rgba(48,164,108,0.12)' : 'rgba(229,72,77,0.14)' }}>{z ? 'saldo R$ 0,00 ✓' : `saldo ${moneyDC(net)} — NÃO FECHA`}</span>
+  }
+  const netConferidos = ovNet(conferidosLancs)
+  const netBaixadosNF = ovNet([...baixados])
   // Baixados AUTOMATICAMENTE por NF (par título + pagamento com a mesma NF). Também podem ser
   // REABERTOS: o usuário puxa a NF de volta para o em aberto para vincular do jeito certo à mão.
   const baixadosPorNome = {}
@@ -1405,7 +1414,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const blocoReabrirBaixados = baixadosGrupos.length > 0 ? (
     <div style={{ marginTop: 6 }}>
       <button onClick={() => setVerBaixados(v => !v)} style={{ background: 'none', border: 'none', color: termoBusca ? theme.accent : theme.sub, cursor: 'pointer', fontSize: 12.5, padding: '6px 2px', display: 'flex', alignItems: 'center', gap: 6 }}>
-        <i className={`ti ${(verBaixados || termoBusca) ? 'ti-chevron-down' : 'ti-chevron-right'}`} /> <i className="ti ti-link" style={{ color: theme.accent }} /> Baixados automaticamente por NF ({[...baixados].filter(l => Math.abs(ov(l)) >= 0.005).length}){termoBusca ? ` — ${baixadosVis.length} com “${buscaNome}” (reabra aqui)` : verBaixados ? ' — clique para ocultar' : ' — clique para ver e reabrir (vincular à mão)'}
+        <i className={`ti ${(verBaixados || termoBusca) ? 'ti-chevron-down' : 'ti-chevron-right'}`} /> <i className="ti ti-link" style={{ color: theme.accent }} /> Baixados automaticamente por NF ({[...baixados].filter(l => Math.abs(ov(l)) >= 0.005).length}){termoBusca ? ` — ${baixadosVis.length} com “${buscaNome}” (reabra aqui)` : verBaixados ? ' — clique para ocultar' : ' — clique para ver e reabrir (vincular à mão)'}{saldoSecao(netBaixadosNF)}
       </button>
       {(verBaixados || termoBusca) && baixadosVis.map((g, gi) => (
         <div key={gi} style={{ background: theme.card, border: `1px solid ${theme.cb}`, borderRadius: 12, overflow: 'hidden', marginBottom: 10, opacity: 0.9 }}>
@@ -2663,7 +2672,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       {conferidosGrupos.length > 0 && (
         <div style={{ marginTop: 6 }}>
           <button onClick={() => setVerConferidos(v => !v)} style={{ background: 'none', border: 'none', color: termoBusca ? theme.accent : theme.sub, cursor: 'pointer', fontSize: 12.5, padding: '6px 2px', display: 'flex', alignItems: 'center', gap: 6 }}>
-            <i className={`ti ${(verConferidos || termoBusca) ? 'ti-chevron-down' : 'ti-chevron-right'}`} /> <i className="ti ti-circle-check" style={{ color: theme.green }} /> Conciliados / conferidos neste mês ({conferidosLancs.length}){termoBusca ? ` — ${conferidosVis.length} com “${buscaNome}” (reabra aqui)` : verConferidos ? ' — clique para ocultar' : ' — clique para ver e reabrir'}
+            <i className={`ti ${(verConferidos || termoBusca) ? 'ti-chevron-down' : 'ti-chevron-right'}`} /> <i className="ti ti-circle-check" style={{ color: theme.green }} /> Conciliados / conferidos neste mês ({conferidosLancs.length}){termoBusca ? ` — ${conferidosVis.length} com “${buscaNome}” (reabra aqui)` : verConferidos ? ' — clique para ocultar' : ' — clique para ver e reabrir'}{saldoSecao(netConferidos)}
           </button>
           {btnReabrirNaoZeram}{btnReabrirSel}
           {(verConferidos || termoBusca) && conferidosVis.map((g, gi) => {
@@ -2713,7 +2722,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         {conferidosGrupos.length > 0 && (
           <div style={{ marginTop: 6 }}>
             <button onClick={() => setVerConferidos(v => !v)} style={{ background: 'none', border: 'none', color: termoBusca ? theme.accent : theme.sub, cursor: 'pointer', fontSize: 12.5, padding: '6px 2px', display: 'flex', alignItems: 'center', gap: 6 }}>
-              <i className={`ti ${(verConferidos || termoBusca) ? 'ti-chevron-down' : 'ti-chevron-right'}`} /> <i className="ti ti-circle-check" style={{ color: theme.green }} /> Conciliados / conferidos neste mês ({conferidosLancs.length}){termoBusca ? ` — ${conferidosVis.length} com “${buscaNome}” (reabra aqui)` : verConferidos ? ' — clique para ocultar' : ' — clique para ver e reabrir'}
+              <i className={`ti ${(verConferidos || termoBusca) ? 'ti-chevron-down' : 'ti-chevron-right'}`} /> <i className="ti ti-circle-check" style={{ color: theme.green }} /> Conciliados / conferidos neste mês ({conferidosLancs.length}){termoBusca ? ` — ${conferidosVis.length} com “${buscaNome}” (reabra aqui)` : verConferidos ? ' — clique para ocultar' : ' — clique para ver e reabrir'}{saldoSecao(netConferidos)}
             </button>
             {btnReabrirNaoZeram}{btnReabrirSel}
             {(verConferidos || termoBusca) && conferidosVis.map((g, gi) => {
