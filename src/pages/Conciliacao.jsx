@@ -1395,11 +1395,16 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // pelo Desvincular; nada é gravado nem "arrasta" outras linhas.
   const especialConf = k => confExib[k] === '(sem nome)' || confExib[k] === 'Correções conciliadas (estorno ↔ origem)'
   const chavesConf = Object.keys(conferidosPorNome)
-  const tkConf = Object.fromEntries(chavesConf.map(k => [k, tokensNome(confExib[k])]))
+  // CONSERVADOR: junta SÓ quando o NÚCLEO do nome é IDÊNTICO (o núcleo já ignora o sufixo LTDA/
+  // EIRELI e o CNPJ colado). NÃO usa a regra frouxa de "mesmo cliente" (sobreposição de tokens),
+  // que embolava fornecedores diferentes em blocos gigantes que não zeram. Assim "CLARA SOLUTIONS"
+  // e "CLARA SOLUTIONS LTDA" juntam, mas nomes que só compartilham uma palavra NÃO.
+  const nucConf = Object.fromEntries(chavesConf.map(k => [k, nucleoNome(confExib[k])]))
+  const nucEq = (a, b) => nucConf[a] && nucConf[a].length >= 3 && nucConf[a] === nucConf[b]
   const clustersConf = []
   for (const k of chavesConf) {
     const isoK = confSep[k] || especialConf(k) || nomesIsolados.has(chaveNome(confExib[k]))
-    const alvo = isoK ? null : clustersConf.find(cl => !cl.isolado && cl.membros.some(m => mesmoFornecedor(confExib[k], tkConf[k], confExib[m], tkConf[m])))
+    const alvo = isoK ? null : clustersConf.find(cl => !cl.isolado && cl.membros.some(m => nucEq(k, m)))
     if (alvo) alvo.membros.push(k); else clustersConf.push({ membros: [k], isolado: isoK })
   }
   const conferidosGrupos = clustersConf.map(cl => {
