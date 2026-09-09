@@ -2622,14 +2622,20 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
             <i className={`ti ${(verConferidos || termoBusca) ? 'ti-chevron-down' : 'ti-chevron-right'}`} /> <i className="ti ti-circle-check" style={{ color: theme.green }} /> Conciliados / conferidos neste mês ({conferidosLancs.length}){termoBusca ? ` — ${conferidosVis.length} com “${buscaNome}” (reabra aqui)` : verConferidos ? ' — clique para ocultar' : ' — clique para ver e reabrir'}
           </button>
           {btnReabrirNaoZeram}
-          {(verConferidos || termoBusca) && conferidosVis.map((g, gi) => (
-            <div key={gi} style={{ background: theme.card, border: `1px solid ${theme.cb}`, borderRadius: 12, overflow: 'hidden', marginBottom: 10, opacity: 0.9 }}>
+          {(verConferidos || termoBusca) && conferidosVis.map((g, gi) => {
+            const netG = g.lancs.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
+            const zerouG = Math.abs(netG) < 0.005
+            return (
+            <div key={gi} style={{ background: theme.card, border: `1px solid ${zerouG ? theme.cb : theme.red}`, borderRadius: 12, overflow: 'hidden', marginBottom: 10, opacity: 0.95 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', background: theme.input, gap: 8 }}>
-                <span style={{ color: theme.text, fontSize: 13, fontWeight: 600 }}><i className="ti ti-circle-check" style={{ color: theme.green, marginRight: 6 }} />{g.nome}</span>
-                <button className="btn btn-ghost" style={{ fontSize: 12, padding: '4px 10px', color: theme.yellow, borderColor: theme.yellow }} onClick={() => reabrirConferidos(g.lancs)}><i className="ti ti-rotate-2" /> Reabrir ({g.lancs.length})</button>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                  <span style={{ color: theme.text, fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}><i className="ti ti-circle-check" style={{ color: theme.green, marginRight: 6 }} />{g.nome}</span>
+                  <span style={{ fontSize: 11.5, fontWeight: 700, whiteSpace: 'nowrap', padding: '2px 8px', borderRadius: 10, flexShrink: 0, color: zerouG ? theme.green : theme.red, background: zerouG ? 'rgba(48,164,108,0.12)' : 'rgba(229,72,77,0.12)' }}>{zerouG ? 'zerou · R$ 0,00' : `não fecha · ${moneyDC(netG)}`}</span>
+                </span>
+                <button className="btn btn-ghost" style={{ fontSize: 12, padding: '4px 10px', color: theme.yellow, borderColor: theme.yellow, flexShrink: 0 }} onClick={() => reabrirConferidos(g.lancs)}><i className="ti ti-rotate-2" /> Reabrir bloco ({g.lancs.length})</button>
               </div>
               <div style={{ overflowX: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 640 }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 680 }}>
                   <tbody>
                     {g.lancs.map((l, i) => (
                       <tr key={i} style={{ borderTop: `1px solid ${theme.border}`, fontSize: 12 }}>
@@ -2638,13 +2644,17 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
                         <td style={{ ...td, color: theme.sub, fontFamily: 'monospace', fontSize: 11, maxWidth: 320 }}>{l.historico}</td>
                         <td style={{ ...tdR, color: theme.green }}>{Number(l.debito) ? money(l.debito) : '—'}</td>
                         <td style={{ ...tdR, color: theme.red }}>{Number(l.credito) ? money(l.credito) : '—'}</td>
+                        <td style={{ ...td, textAlign: 'center', whiteSpace: 'nowrap' }}>
+                          <button title="Reabrir só esta linha" onClick={() => reabrirConferidos([l])} style={{ background: 'none', border: `1px solid ${theme.yellow}`, color: theme.yellow, borderRadius: 10, fontSize: 10.5, fontWeight: 700, padding: '2px 8px', cursor: 'pointer' }}><i className="ti ti-rotate-2" /> reabrir</button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
             </div>
-          ))}
+            )
+          })}
         </div>
       )}
       {blocoReabrirBaixados}
@@ -2661,14 +2671,20 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
               <i className={`ti ${(verConferidos || termoBusca) ? 'ti-chevron-down' : 'ti-chevron-right'}`} /> <i className="ti ti-circle-check" style={{ color: theme.green }} /> Conciliados / conferidos neste mês ({conferidosLancs.length}){termoBusca ? ` — ${conferidosVis.length} com “${buscaNome}” (reabra aqui)` : verConferidos ? ' — clique para ocultar' : ' — clique para ver e reabrir'}
             </button>
             {btnReabrirNaoZeram}
-            {(verConferidos || termoBusca) && conferidosVis.map((g, gi) => (
-              <div key={gi} style={{ background: theme.card, border: `1px solid ${theme.cb}`, borderRadius: 12, overflow: 'hidden', marginBottom: 10, opacity: 0.9 }}>
+            {(verConferidos || termoBusca) && conferidosVis.map((g, gi) => {
+              const netG = g.lancs.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
+              const zerouG = Math.abs(netG) < 0.005
+              return (
+              <div key={gi} style={{ background: theme.card, border: `1px solid ${zerouG ? theme.cb : theme.red}`, borderRadius: 12, overflow: 'hidden', marginBottom: 10, opacity: 0.95 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', background: theme.input, gap: 8 }}>
-                  <span style={{ color: theme.text, fontSize: 13, fontWeight: 600 }}><i className="ti ti-circle-check" style={{ color: theme.green, marginRight: 6 }} />{g.nome}</span>
-                  <button className="btn btn-ghost" style={{ fontSize: 12, padding: '4px 10px', color: theme.yellow, borderColor: theme.yellow }} onClick={() => reabrirConferidos(g.lancs)}><i className="ti ti-rotate-2" /> Reabrir ({g.lancs.length})</button>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                    <span style={{ color: theme.text, fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}><i className="ti ti-circle-check" style={{ color: theme.green, marginRight: 6 }} />{g.nome}</span>
+                    <span style={{ fontSize: 11.5, fontWeight: 700, whiteSpace: 'nowrap', padding: '2px 8px', borderRadius: 10, flexShrink: 0, color: zerouG ? theme.green : theme.red, background: zerouG ? 'rgba(48,164,108,0.12)' : 'rgba(229,72,77,0.12)' }}>{zerouG ? 'zerou · R$ 0,00' : `não fecha · ${moneyDC(netG)}`}</span>
+                  </span>
+                  <button className="btn btn-ghost" style={{ fontSize: 12, padding: '4px 10px', color: theme.yellow, borderColor: theme.yellow, flexShrink: 0 }} onClick={() => reabrirConferidos(g.lancs)}><i className="ti ti-rotate-2" /> Reabrir bloco ({g.lancs.length})</button>
                 </div>
                 <div style={{ overflowX: 'auto' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 640 }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 680 }}>
                     <tbody>
                       {g.lancs.map((l, i) => (
                         <tr key={i} style={{ borderTop: `1px solid ${theme.border}`, fontSize: 12 }}>
@@ -2676,13 +2692,17 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
                           <td style={{ ...td, color: theme.sub, fontFamily: 'monospace', fontSize: 11, maxWidth: 320 }}>{l.historico}</td>
                           <td style={{ ...tdR, color: theme.green }}>{Number(l.debito) ? money(l.debito) : '—'}</td>
                           <td style={{ ...tdR, color: theme.red }}>{Number(l.credito) ? money(l.credito) : '—'}</td>
+                          <td style={{ ...td, textAlign: 'center', whiteSpace: 'nowrap' }}>
+                            <button title="Reabrir só esta linha" onClick={() => reabrirConferidos([l])} style={{ background: 'none', border: `1px solid ${theme.yellow}`, color: theme.yellow, borderRadius: 10, fontSize: 10.5, fontWeight: 700, padding: '2px 8px', cursor: 'pointer' }}><i className="ti ti-rotate-2" /> reabrir</button>
+                          </td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
               </div>
-            ))}
+              )
+            })}
           </div>
         )}
         </>
