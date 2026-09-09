@@ -10,7 +10,7 @@ import { montarBalancete, parsePlano, composicaoAbertura, difConciliacao, applyM
 import { abrePdfTimbrado } from '../lib/pdf'
 import { gerarExcelTimbrado } from '../lib/excel'
 import { listarComentariosConta, adicionarComentario, excluirComentario } from '../lib/comentarios'
-import { resolverEntidade, aplicarLink } from '../lib/conciliacaoCore'
+import { resolverEntidade, aplicarLink, ehNomeGenerico } from '../lib/conciliacaoCore'
 import { aberturaComp, excluirSaldoInicialTudo } from '../lib/cargaInicial'
 import { extrairNfHistorico } from '../lib/lerNota'
 import CampoConta from '../components/CampoConta'
@@ -977,9 +977,14 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         l = { ...l, _origEntidade: orig }
         const ov = aberAjMap[`${conta.conta}·${Math.round(((Number(l.debito) || 0) - (Number(l.credito) || 0)) * 100)}·${chaveNome(orig)}`]
         if (ov) {
-          leitura = { ...leitura, entidade: ov.entidade || leitura.entidade, nf: (ov.nf != null && ov.nf !== '') ? ov.nf : leitura.nf, ident: true }
+          // IGNORA override de nome GENÉRICO (ex.: "VALOR REF. TRANSF. CARTÃO", "Saldo anterior ·
+          // X", "Reclassificação ·"): esses forçavam o título para um rótulo que embolava vários
+          // fornecedores. Nesse caso mantém o nome LIDO de verdade e deixa o fluxo normal (fiscal/
+          // apelido) agir. nf/histórico do override continuam valendo.
+          const entOk = ov.entidade && !ehNomeGenerico(ov.entidade)
+          leitura = { ...leitura, entidade: entOk ? ov.entidade : leitura.entidade, nf: (ov.nf != null && ov.nf !== '') ? ov.nf : leitura.nf, ident: entOk ? true : leitura.ident }
           if (ov.historico) hist = ov.historico
-          manualAbert = true
+          if (entOk) manualAbert = true
         }
       }
       // Nome OFICIAL do Fiscal pela NF: é o nome da nota, então SOBREPÕE a leitura do histórico
