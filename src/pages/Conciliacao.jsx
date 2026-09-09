@@ -725,6 +725,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const [acertoNomes, setAcertoNomes] = useState({}) // nome de fornecedor por lançamento de acerto: {uuid: nome}
   const [baixasReabertas, setBaixasReabertas] = useState(new Set()) // baixas por NF que o usuário PUXOU de volta p/ em aberto: {`conta·nfKey`} — não baixa de novo no automático
   const [conciliadosReabertos, setConciliadosReabertos] = useState(new Set()) // grupos que ZERARAM por NOME e o usuário reabriu: {chaveReabrir} — NÃO conciliam sozinhos de novo (compõem o saldo até baixa manual)
+  const [unificadosConf, setUnificadosConf] = useState(new Set()) // nomes cuja UNIFICAÇÃO o usuário confirmou (chaveNome) — esconde os chips "Unificado de" e mantém aprendido
   const [sugestoesRejeitadas, setSugestoesRejeitadas] = useState(new Set()) // sugestões de vínculo que o usuário NÃO aprovou: {chaveSug} — não sugere de novo
   const [modoPorNome, setModoPorNome] = useState({}) // por conta: força "conciliar por nome" ligado/desligado {conta: true|false} — sobrepõe a detecção pelo nome
   // Chave ESTÁVEL de um item de saldo inicial (não muda ao editar NF/nome/histórico): conta +
@@ -748,12 +749,13 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     setSugestoesRejeitadas(new Set(Array.isArray(d.sugestoesRejeitadas) ? d.sugestoesRejeitadas : []))
     setModoPorNome(d.modoPorNome && typeof d.modoPorNome === 'object' ? d.modoPorNome : {})
     setSeparados(new Set(Array.isArray(d.separados) ? d.separados : []))
+    setUnificadosConf(new Set((Array.isArray(d.unificadosConfirmados) ? d.unificadosConfirmados : []).map(chaveNome)))
   }
   useEffect(() => { if (empresaId) carregarNomes() }, [empresaId]) // eslint-disable-line react-hooks/exhaustive-deps
-  async function salvarNomes(conf, iso, aliases = nomesAlias, aberAj = aberturaAj, acNomes = acertoNomes, baixasReab = baixasReabertas, sugRej = sugestoesRejeitadas, modoPN = modoPorNome, sep = separados, aliasF = aliasesForcados, concReab = conciliadosReabertos) {
+  async function salvarNomes(conf, iso, aliases = nomesAlias, aberAj = aberturaAj, acNomes = acertoNomes, baixasReab = baixasReabertas, sugRej = sugestoesRejeitadas, modoPN = modoPorNome, sep = separados, aliasF = aliasesForcados, concReab = conciliadosReabertos, unifConf = unificadosConf) {
     await supabase.from('cargas_cadastro').delete().eq('cliente_id', empresaId).eq('tipo', 'conciliacao_nomes')
     // vigencia é NOT NULL — usa a competência atual (o registro é único por cliente, lido sempre o mais recente).
-    const { error } = await supabase.from('cargas_cadastro').insert({ cliente_id: empresaId, tipo: 'conciliacao_nomes', vigencia: competencia || '00/0000', dados: { confiaveis: [...conf], isolados: [...iso], aliases: aliases || {}, aberturaAjustes: aberAj || {}, acertoNomes: acNomes || {}, baixasReabertas: [...baixasReab], sugestoesRejeitadas: [...sugRej], modoPorNome: modoPN || {}, separados: [...(sep || [])], aliasesForcados: aliasF || {}, conciliadosReabertos: [...(concReab || [])] }, usuario })
+    const { error } = await supabase.from('cargas_cadastro').insert({ cliente_id: empresaId, tipo: 'conciliacao_nomes', vigencia: competencia || '00/0000', dados: { confiaveis: [...conf], isolados: [...iso], aliases: aliases || {}, aberturaAjustes: aberAj || {}, acertoNomes: acNomes || {}, baixasReabertas: [...baixasReab], sugestoesRejeitadas: [...sugRej], modoPorNome: modoPN || {}, separados: [...(sep || [])], aliasesForcados: aliasF || {}, conciliadosReabertos: [...(concReab || [])], unificadosConfirmados: [...(unifConf || [])] }, usuario })
     if (error) { setMsg('Não consegui salvar: ' + error.message); return error }
   }
   // Chave estável de uma linha (para "separar" determinístico): razão pelo id, abertura pela
@@ -772,6 +774,22 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     const k = chaveNome(nome); if (!k) return
     const iso = new Set(nomesIsolados); iso.add(k); setNomesIsolados(iso)
     await salvarNomes(nomesConf, iso)
+    carregarLanc()
+  }
+  // CONFIRMAR a unificação de um grupo: pergunta o NOME OFICIAL (sugere o atual), APRENDE os
+  // apelidos (variações → oficial, vale p/ os próximos meses) e marca a unificação como confirmada
+  // — aí os chips "Unificado de" somem (não precisa mais ficar aparecendo).
+  async function confirmarUnificacao(g) {
+    const oficial = window.prompt('Confirmar unificação — qual é o NOME OFICIAL deste fornecedor? (vale para os próximos meses)', g.nome)
+    if (oficial == null) return
+    const nome = String(oficial).trim(); if (!nome) { setMsg('Nome vazio — cancelado.'); return }
+    const ids = (g.lancs || []).map(l => l.id).filter(x => x != null)
+    const { aliasForcado } = aplicarLink(g.lancs, ids, aliasesForcados, nome) // aprende variações → oficial (pula genérico)
+    const novoUnif = new Set(unificadosConf); novoUnif.add(chaveNome(nome))
+    const novoConf = new Set(nomesConf); novoConf.add(chaveNome(nome))
+    setAliasesForcados(aliasForcado); setUnificadosConf(novoUnif); setNomesConf(novoConf)
+    await salvarNomes(novoConf, nomesIsolados, nomesAlias, aberturaAj, acertoNomes, baixasReabertas, sugestoesRejeitadas, modoPorNome, separados, aliasForcado, conciliadosReabertos, novoUnif)
+    setMsg(`Unificação confirmada como "${nome}" — aprendido para os próximos meses.`)
     carregarLanc()
   }
   // Desvincular UMA linha (este fornecedor é diferente): não basta marcar "isolado" — se a
@@ -2560,7 +2578,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
                     <i className="ti ti-pencil" style={{ fontSize: 14 }} />
                   </button>
                 )}
-                {g.unido && <span title={`Nomes unidos: ${g.variacoes.join(' · ')}`} style={{ background: 'rgba(74,124,255,0.18)', color: theme.accent, fontSize: 10.5, fontWeight: 700, padding: '2px 8px', borderRadius: 20, textTransform: 'uppercase', letterSpacing: .3, cursor: 'help' }}><i className="ti ti-arrows-join" /> {g.variacoes.length} nomes unidos</span>}
+                {g.unido && !unificadosConf.has(chaveNome(g.nome)) && <span title={`Nomes unidos: ${g.variacoes.join(' · ')}`} style={{ background: 'rgba(74,124,255,0.18)', color: theme.accent, fontSize: 10.5, fontWeight: 700, padding: '2px 8px', borderRadius: 20, textTransform: 'uppercase', letterSpacing: .3, cursor: 'help' }}><i className="ti ti-arrows-join" /> {g.variacoes.length} nomes unidos</span>}
                 {anom && <span style={{ background: 'rgba(229,72,77,0.18)', color: theme.red, fontSize: 10.5, fontWeight: 700, padding: '2px 8px', borderRadius: 20, textTransform: 'uppercase', letterSpacing: .3 }}><i className="ti ti-alert-octagon" /> saldo {natAnom}</span>}
               </span>
               <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -2574,7 +2592,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
                 <span style={{ color: anom ? theme.red : theme.text, fontSize: 14, fontWeight: 600 }}>{money(gt)}</span>
               </span>
             </div>
-            {g.unido && (
+            {g.unido && !unificadosConf.has(chaveNome(g.nome)) && (
               <div style={{ padding: '8px 16px', borderTop: `1px solid ${theme.border}`, background: 'rgba(74,124,255,0.05)', fontSize: 11.5, color: theme.sub, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                 <span style={{ whiteSpace: 'nowrap' }}><i className="ti ti-arrows-join" style={{ color: theme.accent, marginRight: 6 }} />Unificado de:</span>
                 {g.variacoes.map((v, vi) => (
@@ -2587,6 +2605,11 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
                     </button>
                   </span>
                 ))}
+                <button title="Confirmar que é o mesmo fornecedor — fixa o nome oficial, aprende para os próximos meses e some com este aviso."
+                  onClick={e => { e.stopPropagation(); confirmarUnificacao(g) }}
+                  style={{ marginLeft: 'auto', background: 'none', border: `1px solid ${theme.green}`, color: theme.green, borderRadius: 12, fontSize: 11, fontWeight: 700, padding: '3px 11px', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                  <i className="ti ti-check" /> Confirmar nome
+                </button>
               </div>
             )}
             {sugsCard.map((p, pi) => (
