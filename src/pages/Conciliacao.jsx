@@ -1623,7 +1623,11 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       // A correção (estorno) HERDA o cliente/fornecedor do lançamento reclassificado, para
       // agrupar junto dele e o par ZERAR — senão a correção cai em "não identificado" e
       // desbalanceia os totais (débito ≠ crédito).
-      const nomeHerda = (acao?.leitura?.ident && String(acao.leitura.entidade || '').trim()) ? acao.leitura.entidade.trim() : ''
+      // Herda o MELHOR nome disponível da linha corrigida: o nome lido (mesmo sem "ident"
+      // firme) e, se não houver, o nome extraído do próprio histórico. Assim o estorno cai no
+      // GRUPO do fornecedor/cliente em vez de "(não identificado)" (o par zera junto).
+      const nomeHerda = String(acao?.leitura?.entidade || '').trim()
+        || (acao?.historico ? String(lerHistorico(acao.historico).entidade || '').trim() : '')
       if (lanIns?.id && nomeHerda) {
         const acMap = { ...acertoNomes, [lanIns.id]: nomeHerda }
         setAcertoNomes(acMap)
