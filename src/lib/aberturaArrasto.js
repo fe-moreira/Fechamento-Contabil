@@ -1,5 +1,6 @@
 import { supabase } from './supabase'
 import { extrairNfHistorico } from './lerNota'
+import { lerTudo } from './lerTudo'
 
 // Arrasto da COMPOSIÇÃO de saldo: computa os títulos/lançamentos ainda EM ABERTO de uma
 // conta (cliente/fornecedor) ao FIM de uma competência, para virarem a composição de
@@ -115,11 +116,14 @@ function baixadosPorNF(lancs) {
 //   é o saldo inicial do mês seguinte, para aparecer também no razão da Conciliação.
 export async function itensAbertosConta(compId, contaCod, contaNome, classifRaw, aberturaPrevia) {
   const porEntidade = ehPorEntidade(contaNome)
-  const [{ data: rz }, { data: aj }, { data: acs }, { data: audit }] = await Promise.all([
-    supabase.from('razao').select('id, data, contrapartida, historico, debito, credito').eq('competencia_id', compId).eq('conta', contaCod).order('data'),
-    supabase.from('ajuste_leitura').select('razao_id, nf, entidade, historico').eq('competencia_id', compId),
-    supabase.from('lancamentos').select('id, data, conta_debito, conta_credito, valor, historico, razao_id, origem').eq('competencia_id', compId),
-    supabase.from('auditoria').select('razao_id, item, detalhe').eq('competencia_id', compId).eq('modulo', 'Conciliação'),
+  // PAGINA TUDO (corte de 1.000 do Supabase): a razão de uma conta pode passar de 1.000 linhas
+  // (ex.: 214 fornecedores) — sem paginar, o arrasto lia SÓ as 1.000 primeiras e o "saldo
+  // anterior" saía truncado/errado. lançamentos/ajustes/auditoria idem. Ver CLAUDE.md regra 7.
+  const [rz, aj, acs, audit] = await Promise.all([
+    lerTudo(() => supabase.from('razao').select('id, data, contrapartida, historico, debito, credito').eq('competencia_id', compId).eq('conta', contaCod).order('data')),
+    lerTudo(() => supabase.from('ajuste_leitura').select('razao_id, nf, entidade, historico').eq('competencia_id', compId)),
+    lerTudo(() => supabase.from('lancamentos').select('id, data, conta_debito, conta_credito, valor, historico, razao_id, origem').eq('competencia_id', compId)),
+    lerTudo(() => supabase.from('auditoria').select('razao_id, item, detalhe').eq('competencia_id', compId).eq('modulo', 'Conciliação')),
   ])
   const ajById = {}; for (const a of (aj || [])) ajById[a.razao_id] = a
   const acertoLancs = (acs || [])
