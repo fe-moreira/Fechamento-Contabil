@@ -2020,6 +2020,12 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     const kAlvo = chaveNome(alvo)
     const razaoLinhas = comNome.filter(l => !l.acerto)   // razão + saldo anterior
     const acertoLinhas = comNome.filter(l => l.acerto)   // lançamentos gerados
+    // IMPORTANTE (regra do usuário): "Vincular" age SÓ nas linhas SELECIONADAS — NÃO cria apelido
+    // GLOBAL (nem normal, nem forçado). O apelido forçado juntava, sem trava de "mesmo cliente",
+    // TODAS as linhas daquele nome no grupo alvo (ex.: VICTOR/L&M/MJSJ caindo dentro de LENON =
+    // "traz tudo"). Aqui cada linha é renomeada individualmente: razão via ajuste_leitura (razao_id),
+    // abertura via aberturaAj (por título), acerto via acertoNomes (uuid). O aprendizado GLOBAL para
+    // os próximos meses fica só no botão "Confirmar nome" (ação explícita), nunca no Vincular.
     const aliases = { ...nomesAlias }
     const aliasF = { ...aliasesForcados }
     const aberAjNovo = { ...aberturaAj }
@@ -2027,9 +2033,9 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     const sep = new Set(separados)
     for (const l of razaoLinhas) {
       const k = chaveNome(l.leitura?.entidade || '')
-      // Apelido normal + apelido FORÇADO (sem a trava do "mesmo cliente"): garante que o nome
-      // antigo continue caindo no grupo alvo nos próximos meses, mesmo entre nomes diferentes.
-      if (k && k !== kAlvo) { aliases[k] = alvo; aliasF[k] = alvo; iso.delete(k) }
+      // Só tira este nome do "isolado" para a PRÓPRIA linha poder ir ao grupo alvo — sem criar
+      // apelido global que arrastaria outras linhas do mesmo nome que você NÃO selecionou.
+      if (k && k !== kAlvo) iso.delete(k)
       // Desfaz o desvínculo determinístico desta linha, para ela poder voltar ao grupo.
       sep.delete(sepKey(l))
       // Saldo inicial: fixa o nome no próprio item (garante o mesmo grupo).
