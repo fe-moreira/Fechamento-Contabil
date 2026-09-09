@@ -695,6 +695,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     }
   }, [carregando])
   const [selReabrir, setSelReabrir] = useState(new Set()) // linhas de CONCILIADOS marcadas p/ reabrir em lote (por _uid)
+  const [selReabrirNF, setSelReabrirNF] = useState(new Set()) // linhas de BAIXADOS POR NF marcadas p/ reabrir em lote (por _uid)
   const [acao, setAcao] = useState(null)   // lançamento clicado (justificar/corrigir)
   const [verCorr, setVerCorr] = useState(null) // lançamento já tratado (ver o que foi feito / desfazer)
   const [plano, setPlano] = useState([])   // [{ cod, nome }] para os seletores de conta
@@ -1403,34 +1404,63 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   for (const l of [...baixados]) { if (Math.abs(ov(l)) < 0.005) continue; const k = l.leitura?.entidade || '(sem nome)'; (baixadosPorNome[k] = baixadosPorNome[k] || []).push(l) }
   const baixadosGrupos = Object.entries(baixadosPorNome).map(([nome, lancs]) => ({ nome, lancs }))
   const baixadosVis = termoBusca ? baixadosGrupos.filter(casaBusca) : baixadosGrupos
+  // Mesma régua do MANUAL, agora também no AUTOMÁTICO: saldo POR conta (tem que zerar), reabrir
+  // INDIVIDUAL (só a linha) e reabrir EM LOTE (só o que eu seleciono / só os que não zeraram).
+  const qtdNFNaoZeram = baixadosGrupos.reduce((s, g) => s + (Math.abs(g.lancs.reduce((a, l) => a + ov(l), 0)) >= 0.005 ? g.lancs.length : 0), 0)
+  const selReabrirNFCount = [...baixados].filter(l => selReabrirNF.has(l._uid)).length
+  const btnReabrirNFNaoZeram = qtdNFNaoZeram > 0 ? (
+    <button className="btn btn-ghost" style={{ fontSize: 12, padding: '4px 10px', color: theme.yellow, borderColor: theme.yellow, marginLeft: 10 }}
+      onClick={() => reabrirBaixaNF(baixadosGrupos.filter(g => Math.abs(g.lancs.reduce((a, l) => a + ov(l), 0)) >= 0.005).flatMap(g => g.lancs))}
+      title="Reabre os blocos do automático que NÃO fecham em zero. Voltam para o em aberto para vincular à mão.">
+      <i className="ti ti-rotate-2" /> Reabrir os que não zeraram ({qtdNFNaoZeram})
+    </button>
+  ) : null
+  const btnReabrirNFSel = selReabrirNFCount > 0 ? (
+    <button className="btn btn-ghost" style={{ fontSize: 12, padding: '4px 10px', color: theme.yellow, borderColor: theme.yellow, marginLeft: 10 }}
+      onClick={reabrirBaixaNFSel} title="Reabre SÓ as linhas que você marcou (de qualquer bloco do automático). Voltam para o em aberto.">
+      <i className="ti ti-rotate-2" /> Reabrir selecionados ({selReabrirNFCount})
+    </button>
+  ) : null
   const blocoReabrirBaixados = baixadosGrupos.length > 0 ? (
     <div style={{ marginTop: 6 }}>
       <button onClick={() => setVerBaixados(v => !v)} style={{ background: 'none', border: 'none', color: termoBusca ? theme.accent : theme.sub, cursor: 'pointer', fontSize: 12.5, padding: '6px 2px', display: 'flex', alignItems: 'center', gap: 6 }}>
         <i className={`ti ${(verBaixados || termoBusca) ? 'ti-chevron-down' : 'ti-chevron-right'}`} /> <i className="ti ti-link" style={{ color: theme.accent }} /> Baixados automaticamente por NF ({[...baixados].filter(l => Math.abs(ov(l)) >= 0.005).length}){termoBusca ? ` — ${baixadosVis.length} com “${buscaNome}” (reabra aqui)` : verBaixados ? ' — clique para ocultar' : ' — clique para ver e reabrir (vincular à mão)'}{saldoSecao(netBaixadosNF)}
       </button>
-      {(verBaixados || termoBusca) && baixadosVis.map((g, gi) => (
-        <div key={gi} style={{ background: theme.card, border: `1px solid ${theme.cb}`, borderRadius: 12, overflow: 'hidden', marginBottom: 10, opacity: 0.9 }}>
+      {btnReabrirNFNaoZeram}{btnReabrirNFSel}
+      {(verBaixados || termoBusca) && baixadosVis.map((g, gi) => {
+        const netG = g.lancs.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
+        const zerouG = Math.abs(netG) < 0.005
+        return (
+        <div key={gi} style={{ background: theme.card, border: `1px solid ${zerouG ? theme.cb : theme.red}`, borderRadius: 12, overflow: 'hidden', marginBottom: 10, opacity: 0.95 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', background: theme.input, gap: 8 }}>
-            <span style={{ color: theme.text, fontSize: 13, fontWeight: 600 }}><i className="ti ti-link" style={{ color: theme.accent, marginRight: 6 }} />{g.nome}</span>
-            <button className="btn btn-ghost" style={{ fontSize: 12, padding: '4px 10px', color: theme.yellow, borderColor: theme.yellow }} onClick={() => reabrirBaixaNF(g.lancs)}><i className="ti ti-rotate-2" /> Reabrir p/ vincular ({g.lancs.length})</button>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+              <span style={{ color: theme.text, fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}><i className="ti ti-link" style={{ color: theme.accent, marginRight: 6 }} />{g.nome}</span>
+              <span style={{ fontSize: 11.5, fontWeight: 700, whiteSpace: 'nowrap', padding: '2px 8px', borderRadius: 10, flexShrink: 0, color: zerouG ? theme.green : theme.red, background: zerouG ? 'rgba(48,164,108,0.12)' : 'rgba(229,72,77,0.12)' }}>{zerouG ? 'zerou · R$ 0,00' : `não fecha · ${moneyDC(netG)}`}</span>
+            </span>
+            <button className="btn btn-ghost" style={{ fontSize: 12, padding: '4px 10px', color: theme.yellow, borderColor: theme.yellow, flexShrink: 0 }} onClick={() => reabrirBaixaNF(g.lancs)}><i className="ti ti-rotate-2" /> Reabrir bloco ({g.lancs.length})</button>
           </div>
           <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 640 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 680 }}>
               <tbody>
                 {g.lancs.map((l, i) => (
                   <tr key={i} style={{ borderTop: `1px solid ${theme.border}`, fontSize: 12 }}>
+                    <td style={{ ...td, textAlign: 'center' }} onClick={e => e.stopPropagation()}><input type="checkbox" title="Marcar para reabrir" checked={selReabrirNF.has(l._uid)} onChange={() => toggleSelReabrirNF(l)} style={{ cursor: 'pointer' }} /></td>
                     <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{fmtDataBR(l.data) || '—'}</td>
                     <td style={{ ...td, color: theme.sub }}>NF {l.leitura?.nf || '—'}</td>
                     <td style={{ ...td, color: theme.sub, fontFamily: 'monospace', fontSize: 11, maxWidth: 320 }}>{l.historico}</td>
                     <td style={{ ...tdR, color: theme.green }}>{Number(l.debito) ? money(l.debito) : '—'}</td>
                     <td style={{ ...tdR, color: theme.red }}>{Number(l.credito) ? money(l.credito) : '—'}</td>
+                    <td style={{ ...td, textAlign: 'center', whiteSpace: 'nowrap' }}>
+                      <button title="Reabrir só esta linha" onClick={() => reabrirBaixaNF([l])} style={{ background: 'none', border: `1px solid ${theme.yellow}`, color: theme.yellow, borderRadius: 10, fontSize: 10.5, fontWeight: 700, padding: '2px 8px', cursor: 'pointer' }}><i className="ti ti-rotate-2" /> reabrir</button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
         </div>
-      ))}
+        )
+      })}
     </div>
   ) : null
   const algoEmAberto = lista.length > 0 || conferidosGrupos.length > 0
@@ -2241,6 +2271,15 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     await salvarNomes(nomesConf, nomesIsolados, nomesAlias, aberturaAj, acertoNomes, s)
     setMsg(`${lancs.length} lançamento(s) reaberto(s) — voltaram para o em aberto para vincular à mão.`)
     carregarLanc(); onMudou && onMudou()
+  }
+  // Marca/desmarca uma linha de BAIXADOS POR NF (automático) para reabrir em lote.
+  const toggleSelReabrirNF = l => setSelReabrirNF(prev => { const s = new Set(prev); s.has(l._uid) ? s.delete(l._uid) : s.add(l._uid); return s })
+  // Reabre SÓ as linhas do automático que o usuário marcou (mesma regra do manual: só o que eu seleciono).
+  async function reabrirBaixaNFSel() {
+    const alvo = [...baixados].filter(l => selReabrirNF.has(l._uid))
+    if (!alvo.length) return
+    await reabrirBaixaNF(alvo)
+    setSelReabrirNF(new Set())
   }
 
   // Desfazer uma correção/estorno: remove o lançamento de acerto e o registro de
