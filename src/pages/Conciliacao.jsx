@@ -731,7 +731,10 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const [modoPorNome, setModoPorNome] = useState({}) // por conta: força "conciliar por nome" ligado/desligado {conta: true|false} — sobrepõe a detecção pelo nome
   // Chave ESTÁVEL de um item de saldo inicial (não muda ao editar NF/nome/histórico): conta +
   // valor + nome ORIGINAL da carga. Usa _origEntidade quando já foi ajustado antes.
-  const chaveAberturaAj = l => `${conta.conta}·${Math.round(((Number(l.debito) || 0) - (Number(l.credito) || 0)) * 100)}·${chaveNome(l._origEntidade || l.leitura?.entidade || '')}`
+  // INCLUI A DATA: cada linha "Saldo anterior" é INDIVIDUAL. Sem a data, duas linhas de mesmo
+  // valor + mesmo nome (ex.: dois "CLARA SOLUTIONS LTDA" de R$ 22.530) caíam na MESMA chave e
+  // editar a NF de uma mexia na outra. Com a data, cada uma tem sua própria chave.
+  const chaveAberturaAj = l => `${conta.conta}·${(l.data && l.data !== 'abertura') ? String(l.data) : ''}·${Math.round(((Number(l.debito) || 0) - (Number(l.credito) || 0)) * 100)}·${chaveNome(l._origEntidade || l.leitura?.entidade || '')}`
 
   // Cadastro permanente de nomes do cliente (confiáveis + isolados + apelidos) — cargas_cadastro
   // tipo 'conciliacao_nomes', um por cliente (vale para todos os meses).
@@ -1021,7 +1024,15 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       if (l._abertura) {
         const orig = l._origEntidade || leitura.entidade
         l = { ...l, _origEntidade: orig }
-        const ov = aberAjMap[`${conta.conta}·${Math.round(((Number(l.debito) || 0) - (Number(l.credito) || 0)) * 100)}·${chaveNome(orig)}`]
+        const valCents = Math.round(((Number(l.debito) || 0) - (Number(l.credito) || 0)) * 100)
+        const dtAb = (l.data && l.data !== 'abertura') ? String(l.data) : ''
+        const kNome = chaveNome(orig)
+        // Chave NOVA (com data) = individual por linha. Fallback para a chave ANTIGA (sem data) só
+        // quando ela é ÚNICA entre as aberturas (não há gêmea de mesmo valor+nome): preserva ajustes
+        // salvos antes desta mudança sem reintroduzir a colisão que mexia na linha-gêmea.
+        const kNovo = `${conta.conta}·${dtAb}·${valCents}·${kNome}`
+        const kAntigo = `${conta.conta}·${valCents}·${kNome}`
+        const ov = aberAjMap[kNovo] || ((abUndatedCount[kAntigo] || 0) <= 1 ? aberAjMap[kAntigo] : undefined)
         if (ov) {
           // IGNORA override de nome GENÉRICO (ex.: "VALOR REF. TRANSF. CARTÃO", "Saldo anterior ·
           // X", "Reclassificação ·"): esses forçavam o título para um rótulo que embolava vários
@@ -1107,6 +1118,13 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       if (abVistos.has(k)) return false
       abVistos.add(k); return true
     })
+    // Quantas aberturas compartilham cada chave ANTIGA (sem data) — usado pelo `bump` para só
+    // aplicar o ajuste no formato antigo quando NÃO há gêmea (senão a colisão voltaria).
+    const abUndatedCount = {}
+    for (const a of aberturaDedup) {
+      const kk = `${conta.conta}·${Math.round(((Number(a.debito) || 0) - (Number(a.credito) || 0)) * 100)}·${chaveNome(a.leitura?.entidade || '')}`
+      abUndatedCount[kk] = (abUndatedCount[kk] || 0) + 1
+    }
     // Títulos de abertura (saldo anterior) primeiro; depois o movimento do mês; por fim os acertos.
     // `_uid` = identificador ÚNICO por linha (índice). A seleção do checkbox (baixa manual) é
     // por linha, então NUNCA pode agrupar por valor+nome como o sepKey faz — senão marcar uma
