@@ -3895,20 +3895,28 @@ function ModalLancamento({ lanc, conta, lab, plano, natCredito, residuo = 0, onC
   const partidaOk = form.conta_debito && form.conta_credito && Number(form.valor) > 0
   const podeRegistrar = tipo === 'Justificativa' ? txt.trim() : (ajusteMudou || partidaOk || txt.trim())
 
-  function registrar() {
-    if (tipo === 'Justificativa') return onRegistrar('Justificativa', { detalhe: txt.trim() })
-    // Ajuste de leitura puro (mudou NF/nome/histórico, sem partida): resolve-se aqui na
-    // Conciliação e NÃO vira sugestão de lançamento — só entra no relatório de correções.
-    // Por isso o detalhe começa sempre com "Ajuste de leitura" (marcador estável).
-    const soAjuste = ajusteMudou && !partidaOk
-    onRegistrar('Correção', {
-      detalhe: soAjuste
-        ? 'Ajuste de leitura' + (txt.trim() ? ` — ${txt.trim()}` : '')
-        : (txt.trim() || form.historico),
-      ajuste: ajusteMudou ? { entidade: ajuste.entidade.trim(), nf: ajuste.nf.trim(), historico: ajuste.historico.trim() } : null,
-      lancamento: partidaOk ? form : null,
-      dedut: (partidaOk && destinoEhDespesa) ? { conta: String(destinoConta), valor: Number(form.valor) || 0, tipo: dedutDest } : null,
-    })
+  // Trava anti-duplo-clique: enquanto grava, o botão fica desabilitado e uma 2ª chamada é
+  // ignorada. Sem isso, clicar várias vezes (ou clicar de novo achando que travou) inseria o
+  // MESMO estorno/correção repetidas vezes (ex.: 11 lançamentos idênticos de R$ 99,60).
+  const [salvando, setSalvando] = useState(false)
+  async function registrar() {
+    if (salvando) return
+    setSalvando(true)
+    try {
+      if (tipo === 'Justificativa') { await onRegistrar('Justificativa', { detalhe: txt.trim() }); return }
+      // Ajuste de leitura puro (mudou NF/nome/histórico, sem partida): resolve-se aqui na
+      // Conciliação e NÃO vira sugestão de lançamento — só entra no relatório de correções.
+      // Por isso o detalhe começa sempre com "Ajuste de leitura" (marcador estável).
+      const soAjuste = ajusteMudou && !partidaOk
+      await onRegistrar('Correção', {
+        detalhe: soAjuste
+          ? 'Ajuste de leitura' + (txt.trim() ? ` — ${txt.trim()}` : '')
+          : (txt.trim() || form.historico),
+        ajuste: ajusteMudou ? { entidade: ajuste.entidade.trim(), nf: ajuste.nf.trim(), historico: ajuste.historico.trim() } : null,
+        lancamento: partidaOk ? form : null,
+        dedut: (partidaOk && destinoEhDespesa) ? { conta: String(destinoConta), valor: Number(form.valor) || 0, tipo: dedutDest } : null,
+      })
+    } finally { setSalvando(false) }
   }
 
   return (
@@ -3998,7 +4006,7 @@ function ModalLancamento({ lanc, conta, lab, plano, natCredito, residuo = 0, onC
             <button className="btn btn-ghost" onClick={() => setTipo(null)}><i className="ti ti-chevron-left" /> Voltar</button>
             <div style={{ display: 'flex', gap: 8 }}>
               <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
-              <button className="btn" disabled={!podeRegistrar} onClick={registrar}>Registrar</button>
+              <button className="btn" disabled={!podeRegistrar || salvando} onClick={registrar}>{salvando ? 'Registrando…' : 'Registrar'}</button>
             </div>
           </div>
         )}
