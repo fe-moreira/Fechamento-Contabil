@@ -732,7 +732,7 @@ export default function CompMovimento() {
       )}
 
       {carregando && (
-        <p style={{ color: theme.sub, fontSize: 13 }}><i className="ti ti-loader" /> Carregando balancetes…</p>
+        <p style={{ color: theme.sub, fontSize: 13 }}><i className="ti ti-loader" /> Carregando Comparativo de Movimento…</p>
       )}
 
       {semDados && (
