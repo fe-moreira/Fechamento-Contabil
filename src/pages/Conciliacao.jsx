@@ -2798,6 +2798,15 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         )
       })()}
 
+      {/* Barra flutuante: reabrir as linhas de Conciliados marcadas (aparece perto de onde você marca). */}
+      {selReabrirCount > 0 && (
+        <div style={{ position: 'fixed', left: '50%', bottom: 20, transform: 'translateX(-50%)', zIndex: 61, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '10px 16px', background: theme.card, border: `1px solid ${theme.yellow}`, borderRadius: 12, boxShadow: '0 8px 30px rgba(0,0,0,0.4)' }}>
+          <span style={{ color: theme.text, fontSize: 13 }}><b>{selReabrirCount}</b> linha(s) marcada(s) para reabrir</span>
+          <button className="btn" style={{ fontSize: 12.5, background: theme.yellow, borderColor: theme.yellow, color: '#1a1a1a' }} onClick={reabrirSelecionados}><i className="ti ti-rotate-2" /> Reabrir selecionados</button>
+          <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={() => setSelReabrir(new Set())}><i className="ti ti-x" /> Limpar</button>
+        </div>
+      )}
+
       {novoLanc && (
         <ModalNovoLancamento conta={conta} competencia={competencia} plano={plano} onClose={() => setNovoLanc(false)} onCriar={criarLancamento} />
       )}
