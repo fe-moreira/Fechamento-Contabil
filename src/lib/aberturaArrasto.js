@@ -1,4 +1,5 @@
 import { supabase } from './supabase'
+import { extrairNfHistorico } from './lerNota'
 
 // Arrasto da COMPOSIÇÃO de saldo: computa os títulos/lançamentos ainda EM ABERTO de uma
 // conta (cliente/fornecedor) ao FIM de uma competência, para virarem a composição de
@@ -36,8 +37,10 @@ export function mesmoCliente(a, b) {
 
 function lerHistorico(h) {
   const s = String(h || '').trim()
-  const nfm = s.match(/\bNF\.?\s*(?:N[ºo°.]*\s*)?(\d{2,9})/i) || s.match(/\bNOTA\s*(?:FISCAL)?\s*N?[ºo°.]*\s*(\d{2,9})/i) || s.match(/\bN[ºo°]\.?\s*(\d{2,9})/i)
-  const nf = nfm ? nfm[1] : (s.match(/\b(\d{3,9})\b/)?.[1] || '')
+  // NF pela regra ÚNICA (ignora competência "07/2026", CNPJ/CPF e ACUM.). `nfm` só recorta o
+  // marcador do nome abaixo.
+  const nfm = s.match(/\bNF\.?\s*(?:N[ºo°.]*\s*)?(\d{1,9})/i) || s.match(/\bNOTA\s*(?:FISCAL)?\s*N?[ºo°.]*\s*(\d{1,9})/i) || s.match(/\bN[ºo°]\.?\s*(\d{1,9})/i)
+  const nf = extrairNfHistorico(s)
   const corpo = s.split(/\s(?:CF\b|NF\b|NOTA\s+FISCAL|RPS\b)/i)[0].trim()
   let entidade = '', ident = false
   const mRec = corpo.match(/\b(?:RECEBIMENTO|RECEBTO|PAGAMENTO|PAGTO)\s+(?:A\s+|DE\s+|AO\s+)?(.+)$/i)

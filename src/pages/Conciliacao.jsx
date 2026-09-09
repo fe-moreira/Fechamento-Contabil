@@ -12,6 +12,7 @@ import { gerarExcelTimbrado } from '../lib/excel'
 import { listarComentariosConta, adicionarComentario, excluirComentario } from '../lib/comentarios'
 import { resolverEntidade, aplicarLink } from '../lib/conciliacaoCore'
 import { aberturaComp, excluirSaldoInicialTudo } from '../lib/cargaInicial'
+import { extrairNfHistorico } from '../lib/lerNota'
 import CampoConta from '../components/CampoConta'
 
 const dataHora = iso => { const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) }
@@ -152,12 +153,10 @@ function recorteDe(old, neu) {
 
 function lerHistorico(h) {
   const s = String(h || '').trim()
-  const nfm = s.match(/\bNF\.?\s*(?:N[ºo°.]*\s*)?(\d{2,9})/i) || s.match(/\bNOTA\s*(?:FISCAL)?\s*N?[ºo°.]*\s*(\d{2,9})/i) || s.match(/\bN[ºo°]\.?\s*(\d{2,9})/i)
-  // Formato de documento do Domínio no fim do recebimento/pagamento: "<série>-<número><parcela>"
-  // (ex.: "1-000584A" → NF 584; "1-000544" → 544). O número do meio é a nota — sem esse padrão o
-  // "000584" fica grudado no "A" e nenhum número era lido. Tira os zeros à esquerda.
-  const docm = !nfm ? s.match(/\b\d{1,3}-(\d{4,7})[A-Z]?\b/) : null
-  const nf = nfm ? nfm[1] : (docm ? String(Number(docm[1])) : (s.match(/\b(\d{3,9})\b/)?.[1] || ''))
+  // NF pela regra ÚNICA (ignora competência "07/2026", CNPJ/CPF e ACUM.). `nfm` fica só para
+  // recortar o marcador do NOME abaixo (não é mais a fonte do número da nota).
+  const nfm = s.match(/\bNF\.?\s*(?:N[ºo°.]*\s*)?(\d{1,9})/i) || s.match(/\bNOTA\s*(?:FISCAL)?\s*N?[ºo°.]*\s*(\d{1,9})/i) || s.match(/\bN[ºo°]\.?\s*(\d{1,9})/i)
+  const nf = extrairNfHistorico(s)
 
   // O nome do cliente/fornecedor vem antes do bloco fiscal (CF./NF/NOTA/RPS).
   const corpo = s.split(/\s(?:CF\b|NF\b|NOTA\s+FISCAL|RPS\b)/i)[0].trim()
