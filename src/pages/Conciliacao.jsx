@@ -3364,6 +3364,11 @@ function RelatoriosComposicao({ conta, emAberto, zerados, contraDe, auto = new S
   // Em blocos por cliente/fornecedor, no papel timbrado da Attentive.
   async function excel(linhas, sub) {
     const blocos = agruparPorCliente(linhas)
+    // Nome da ABA do Excel: sem caracteres proibidos (\ / ? * : [ ]) e no máximo 31 caracteres —
+    // senão o ExcelJS estoura e o arquivo não baixa (ex.: "Conciliados manual (link / confirmação
+    // / estorno)" tem barras e passa de 31). O nome do ARQUIVO também não pode ter "/".
+    const abaLimpa = sub.replace(/[\\/?*:[\]]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 31)
+    const arqLimpo = sub.replace(/[\\/?*:[\]]/g, '-').replace(/[()]/g, '').replace(/\s+/g, '-').toLowerCase()
     await gerarExcelTimbrado({
       titulo: titulo(sub),
       sub: `${blocos.length} ${blocos.length === 1 ? 'cliente/fornecedor' : 'clientes/fornecedores'} · ${linhas.length} lançamento(s)`,
@@ -3378,8 +3383,8 @@ function RelatoriosComposicao({ conta, emAberto, zerados, contraDe, auto = new S
         totais: ['', '', '', 'Subtotal', somaDeb(b.lancs), somaCred(b.lancs), moneyDC(netDe(b.lancs))],
       })),
       totais: ['', '', '', 'TOTAL GERAL', somaDeb(linhas), somaCred(linhas), moneyDC(netDe(linhas))],
-      arquivo: `conciliacao_${conta.conta}_${sub.replace(/\s+/g, '-').toLowerCase()}.xlsx`,
-      aba: sub,
+      arquivo: `conciliacao_${conta.conta}_${arqLimpo}.xlsx`,
+      aba: abaLimpa,
     })
   }
 
