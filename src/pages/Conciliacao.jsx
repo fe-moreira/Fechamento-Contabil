@@ -854,6 +854,11 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const trataAbLegacy = l => legacyAbUnico(l) && tratadosAb.has(chaveAberturaLegacy(l))
   const chaveTrat = l => l.acerto ? String(l.id).replace(/^ac_/, '') : (l._abertura ? chaveAbertura(l) : l.id)
   const jaTratada = l => l._abertura ? (tratadosAb.has(chaveAbertura(l)) || trataAbLegacy(l)) : tratados.has(l.id)
+  // Item de "Saldo anterior" ARRASTADO de um mês anterior (esta NÃO é a competência de abertura do
+  // cliente): já veio validado do mês fechado — entra como CONFERIDO ("certo"), sem pedir "revisar"
+  // nem exigir confirmação para o grupo resolver/cruzar com o pagamento do mês. O usuário ainda pode
+  // abrir e corrigir. Na competência de abertura (saldo inicial digitado da carga), NÃO se aplica.
+  const aberturaHerdada = l => !!l?._abertura && !abertura.inicial
   const foiConfirmado = l => confirmados.has(chaveTrat(l)) || (l._abertura && confirmados.has(chaveAbBaixa(l))) || (l._abertura && legacyAbUnico(l) && confirmados.has(chaveAberturaLegacy(l))) || (!l._abertura && !l.acerto && itemUnico(l) && confirmados.has(itemConc(l))) // saiu do em aberto (conciliado)
   // VÍNCULO/CONEXÃO manual: o par explícito que o usuário linkou e mandou baixar (zera entre si).
   // SAI SEMPRE do em aberto — não depende do grupo do nome zerar inteiro (o resto do nome pode
@@ -1245,7 +1250,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // confirmadas à mão (conferir/confirmar/estornar). Enquanto houver pendente, fica EM ABERTO e
   // aparece o botão "Confirmar" (a sugestão). Abertura (sem id) e acerto não contam como pendente.
   // E um grupo REABERTO pelo usuário também nunca concilia sozinho.
-  const semPendente = g => g.lancs.every(l => !l.id || l.acerto || jaTratada(l))
+  const semPendente = g => g.lancs.every(l => !l.id || l.acerto || jaTratada(l) || aberturaHerdada(l))
   const ehResolvida = g => !g.unk && Math.abs(g.total) < 0.005 && g.lancs.length > 0 && !g.lancs.some(reaberto) && semPendente(g)
   const resolvidasEnt = listaTodas.filter(ehResolvida)
   const lista = listaTodas.filter(g => !ehResolvida(g))
@@ -2500,13 +2505,15 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
               </thead>
               <tbody>
                 {grp.map((l, i) => {
-                  const rev = l.leitura.conf !== 'alta'
+                  const herdada = aberturaHerdada(l)
+                  const rev = l.leitura.conf !== 'alta' && !herdada
                   const semNF = semTit.has(l)
+                  const tratado = jaTratada(l) || herdada
                   const contras = contraDe(l)
                   return (
                     <tr key={i} onClick={() => abrirLinha(l)}
-                      style={{ borderTop: `1px solid ${theme.border}`, cursor: 'pointer', opacity: (l.acerto || jaTratada(l)) ? 0.7 : 1, background: (l.acerto || jaTratada(l)) ? 'rgba(48,164,108,0.08)' : semNF ? 'rgba(229,72,77,0.08)' : 'transparent' }}
-                      title={l.acerto ? `${tagAcertoLanc(l).titulo} — clique para ver ou desfazer` : jaTratada(l) ? 'Já conferido — clique para ver ou desfazer' : semNF ? 'Baixa com NF que não confere com o título — justifique ou corrija' : 'Justificar ou corrigir este lançamento'}>
+                      style={{ borderTop: `1px solid ${theme.border}`, cursor: 'pointer', opacity: (l.acerto || tratado) ? 0.7 : 1, background: (l.acerto || tratado) ? 'rgba(48,164,108,0.08)' : semNF ? 'rgba(229,72,77,0.08)' : 'transparent' }}
+                      title={l.acerto ? `${tagAcertoLanc(l).titulo} — clique para ver ou desfazer` : herdada ? 'Veio validado do mês anterior — clique para corrigir se precisar' : jaTratada(l) ? 'Já conferido — clique para ver ou desfazer' : semNF ? 'Baixa com NF que não confere com o título — justifique ou corrija' : 'Justificar ou corrigir este lançamento'}>
                       <td style={{ ...td, textAlign: 'center' }} onClick={e => e.stopPropagation()}>
                         <input type="checkbox" title="Conectar com outro (baixa manual)" checked={selLin.has(selKeyU(l))} onChange={() => toggleSelLin(l)} style={{ cursor: 'pointer', width: 15, height: 15 }} />
                       </td>
@@ -2523,8 +2530,8 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
                       <td style={{ ...td, textAlign: 'center' }}>
                         {l.acerto
                           ? <span title={tagAcertoLanc(l).titulo} style={{ color: theme.accent, fontSize: 10.5, fontWeight: 700, whiteSpace: 'nowrap' }}><i className={`ti ${tagAcertoLanc(l).icon}`} /> {tagAcertoLanc(l).txt}</span>
-                          : jaTratada(l)
-                            ? <span title="Já conferido" style={{ color: theme.green, fontSize: 10.5, fontWeight: 700, whiteSpace: 'nowrap' }}><i className="ti ti-circle-check" /> {l._abertura ? 'conferido' : 'corrigido'}</span>
+                          : tratado
+                            ? <span title={herdada ? 'Veio validado do mês anterior' : 'Já conferido'} style={{ color: theme.green, fontSize: 10.5, fontWeight: 700, whiteSpace: 'nowrap' }}><i className="ti ti-circle-check" /> {l._abertura ? 'conferido' : 'corrigido'}</span>
                             : semNF
                               ? <span title="NF não confere com nenhum título" style={{ color: theme.red, fontSize: 10.5, fontWeight: 700 }}>NF s/ título</span>
                               : rev
