@@ -246,3 +246,33 @@ describe('J) LINK do SALDO ANTERIOR (sem id) — abertura entra no vínculo e o 
     expect(nomes(conciliados)).toEqual(['ATTENTIVE CONTABILIDADE E SERVICOS S/S LTDA'])
   })
 })
+
+// --- guard anti-poluição de apelidos (nomes genéricos) -------------------------------------
+import { ehNomeGenerico } from './conciliacaoCore.js'
+describe('ehNomeGenerico / guard de apelido forçado', () => {
+  it('reconhece rótulos de operação como genéricos', () => {
+    expect(ehNomeGenerico('VALOR REF. TRANSF. REALIZADA PARA SANTANDER - CARTÃO DE CRÉDITO NOTA FISCAL DE SERVIÇO TOMADO')).toBe(true)
+    expect(ehNomeGenerico('Reclassificação · · FORNECEDORES NACIONAIS')).toBe(true)
+    expect(ehNomeGenerico('A UTILIZAR - ACUM. 184')).toBe(true)
+    expect(ehNomeGenerico('Saldo anterior · BARBARA BEDIN ·')).toBe(true)
+    expect(ehNomeGenerico('ESTACIONAMENTOS')).toBe(true)
+  })
+  it('reconhece fornecedores reais como NÃO genéricos', () => {
+    expect(ehNomeGenerico('CLARA SOLUTIONS LTDA')).toBe(false)
+    expect(ehNomeGenerico('GODADDY')).toBe(false)
+    expect(ehNomeGenerico('DCR RH SOLUTIONS LTDA')).toBe(false)
+  })
+  it('apelido forçado NÃO remapeia a partir de nome genérico (não polui)', () => {
+    const af = { [ 'valor ref. transf. cartao' ]: 'CLARA SOLUTIONS LTDA' }
+    // um pagamento genérico não vira CLARA
+    expect(resolverEntidade('VALOR REF. TRANSF. CARTAO', { aliasForcado: af })).toBe('VALOR REF. TRANSF. CARTAO')
+  })
+  it('apelido forçado NÃO remapeia um fornecedor real PARA um alvo genérico', () => {
+    const af = { 'dell computadores do brasil ltda': 'VALOR REF. TRANSF. CARTAO' }
+    expect(resolverEntidade('DELL COMPUTADORES DO BRASIL LTDA', { aliasForcado: af })).toBe('DELL COMPUTADORES DO BRASIL LTDA')
+  })
+  it('apelido forçado entre nomes REAIS continua funcionando', () => {
+    const af = { 'andressa granato apoio administrativo': 'GRANATO & NESPATTI APOIO ADMINISTRATIVO LTDA' }
+    expect(resolverEntidade('ANDRESSA GRANATO APOIO ADMINISTRATIVO', { aliasForcado: af })).toBe('GRANATO & NESPATTI APOIO ADMINISTRATIVO LTDA')
+  })
+})

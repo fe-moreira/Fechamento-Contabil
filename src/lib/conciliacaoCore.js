@@ -42,6 +42,19 @@ export function mesmoCliente(a, b) {
   return inter.length / menor >= 0.6 && inter.some(t => t.length >= 4)
 }
 
+// --- nome GENÉRICO (não é fornecedor) ------------------------------------------------------
+// Texto de OPERAÇÃO/lançamento que aparece igual para MUITOS fornecedores diferentes — não deve
+// virar chave nem alvo de apelido: senão um link some com o texto genérico ("VALOR REF. TRANSF.
+// CARTÃO", "Reclassificação", "A UTILIZAR", "Saldo anterior") arrasta TODOS os fornecedores com
+// esse mesmo texto para um nome só (bola de neve). Aqui detectamos esses rótulos.
+const GENERICO_RX = /^(?:valor\s+ref|reclassifica|a\s+utilizar|saldo\s+anterior|adiantament|transf(?:erencia)?\b|cartao\s+de\s+credito|nota\s+fiscal\s+de\s+servico|desp(?:esa|\.)?\s|pagamento\b|recebimento\b|estacionament|paypal\b)/i
+export function ehNomeGenerico(nome) {
+  const s = String(nome || '').trim()
+  if (!s) return true
+  const semAcento = s.normalize('NFD').replace(/[̀-ͯ]/g, '')
+  return GENERICO_RX.test(semAcento)
+}
+
 // --- ov padrão para os testes (débito - crédito) -------------------------------------------
 export const ovDC = l => (Number(l.debito) || 0) - (Number(l.credito) || 0)
 
@@ -60,12 +73,18 @@ export function resolverEntidade(nomeLido, { corrigido = false, aliasNormal = {}
   // (nem apelido normal, nem vínculo forçado — e, na tela, nem pelo nome do fiscal por NF). O
   // nome fica exatamente o que o usuário pôs. Ver testes C, D, G e "correção-vence-tudo".
   if (corrigido) return nome
+  // GUARD anti-poluição: NUNCA remapeia um nome GENÉRICO (texto de operação que se repete em
+  // vários fornecedores), nem para um alvo genérico. Isso neutraliza os apelidos poluídos (ex.:
+  // "VALOR REF. TRANSF. CARTÃO" → um fornecedor) sem apagar dado, e mantém as unificações de
+  // nomes de verdade.
+  if (ehNomeGenerico(nome)) return nome
   // a) apelido normal (com trava do "mesmo cliente")
   const al = aliasNormal[chaveNome(nome)]
-  if (al && al !== nome && mesmoCliente(tokensNome(nome), tokensNome(al))) nome = al
-  // b) vínculo forçado (o usuário mandou juntar) — aplica mesmo entre nomes diferentes
+  if (al && al !== nome && !ehNomeGenerico(al) && mesmoCliente(tokensNome(nome), tokensNome(al))) nome = al
+  // b) vínculo forçado (o usuário mandou juntar) — aplica mesmo entre nomes diferentes, MAS só
+  //    entre nomes REAIS (nunca de/para um rótulo genérico).
   const alF = aliasForcado[chaveNome(nome)]
-  if (alF && alF !== nome) nome = alF
+  if (alF && alF !== nome && !ehNomeGenerico(alF)) nome = alF
   return nome
 }
 
@@ -130,10 +149,10 @@ export function aplicarLink(lancs, ids, aliasForcado = {}, nomeAlvo = '') {
   // Canônico: o digitado; senão o nome identificado MAIS LONGO entre os selecionados.
   let alvo = String(nomeAlvo || '').trim()
   if (!alvo) {
-    alvo = comNome
-      .map(l => String(l?.leitura?.entidade || '').trim())
-      .filter(Boolean)
-      .sort((a, b) => b.length - a.length)[0] || ''
+    const nomes = comNome.map(l => String(l?.leitura?.entidade || '').trim()).filter(Boolean)
+    // Prefere um nome REAL (não genérico) como canônico; só cai no genérico se não houver outro.
+    const reais = nomes.filter(n => !ehNomeGenerico(n))
+    alvo = (reais.length ? reais : nomes).sort((a, b) => b.length - a.length)[0] || ''
   }
   const kAlvo = chaveNome(alvo)
   const novoAliasForcado = { ...aliasForcado }
@@ -141,7 +160,11 @@ export function aplicarLink(lancs, ids, aliasForcado = {}, nomeAlvo = '') {
   for (const l of comNome) {
     const nome = String(l?.leitura?.entidade || '').trim()
     const k = chaveNome(nome)
-    if (k && k !== kAlvo) {
+    // NÃO cria apelido forçado a partir de (ou para) um nome GENÉRICO — evita a bola de neve em
+    // que um texto de pagamento genérico ("VALOR REF. TRANSF. CARTÃO", "A UTILIZAR"…) passa a
+    // arrastar todos os fornecedores. A baixa do par continua (por id/chave na auditoria); só não
+    // aprende um "nome → nome" que polui os próximos meses.
+    if (k && k !== kAlvo && !ehNomeGenerico(nome) && !ehNomeGenerico(alvo)) {
       novoAliasForcado[k] = alvo                       // força o vínculo para os próximos meses
       // link vence correção anterior — mas só há o que limpar em linha de RAZÃO (tem id).
       // Abertura (saldo anterior) não tem id nem ajuste_leitura, então nunca entra aqui.
