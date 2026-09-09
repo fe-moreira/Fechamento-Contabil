@@ -1725,7 +1725,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       const novoNome = String(aj.entidade).trim()
       if (antigo && novoNome && chaveNome(antigo) !== chaveNome(novoNome)) { setUltimaCorrecao({ old: antigo, neu: novoNome }); setSugDismiss(new Set()) }
     }
-    setMsg(ajustouLeitura ? 'Leitura ajustada — o sistema vai recruzar.' : virouLancamento ? 'Correção registrada — lançamento enviado para o painel Contabilizar.' : `${tipo} registrada na auditoria.`)
+    setMsg(ajustouLeitura ? 'Leitura ajustada — o sistema vai recruzar.' : virouLancamento ? `✓ Lançamento FEITO no mês de fechamento ${competencia} — enviado ao painel Contabilizar. (Um estorno de item de mês anterior entra sempre nesta competência, nunca na data do mês fechado.)` : `${tipo} registrada na auditoria.`)
     if (ehAb) setTratadosAb(prev => new Set(prev).add(chaveAbertura(acao))) // abertura: marca pela chave
     else if (acao?.id) setTratados(prev => new Set(prev).add(acao.id)) // marca a linha como tratada na hora
     // Ajustar a leitura (nome/NF) de uma linha de ABERTURA já conferida MUDA a chave estável.
@@ -2040,13 +2040,16 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     if (!window.confirm(`Lançar em ${competencia}?\n\nEste lançamento manual entra no fechamento de ${competencia} (que está ABERTO). Confirme que é o período certo.`)) return
     const id = await getCompetenciaId()
     if (!id) { setMsg('Abra um fechamento para esta competência.'); return }
+    // A data SEMPRE cai no mês de fechamento (aberto) — nunca num mês fechado. Se o usuário
+    // digitar uma data fora, dataNaCompetencia joga pro último dia desta competência.
+    const dataLanc = dataNaCompetencia(form.data, competencia) || null
     const { error } = await supabase.from('lancamentos').insert({
-      competencia_id: id, data: form.data || null, conta_debito: deb, conta_credito: cred,
+      competencia_id: id, data: dataLanc, conta_debito: deb, conta_credito: cred,
       valor: val, historico: form.historico || null, origem: 'manual', razao_id: null, usuario,
     })
     if (error) { setMsg('Não consegui gerar o lançamento: ' + error.message); return }
     setNovoLanc(false)
-    setMsg(`Lançamento de ${money(val)} gerado nesta conta — entrou no Contabilizar e atualizou o saldo.`)
+    setMsg(`✓ Lançamento de ${money(val)} FEITO no mês de fechamento ${competencia} — entrou no Contabilizar e atualizou o saldo.`)
     carregarLanc()
   }
 
