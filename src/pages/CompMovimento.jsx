@@ -1050,7 +1050,13 @@ function ModalRazao({ detalhe, empresaId, compsAnteriores, compIdAnterior, usuar
     setMovers(mv)
     // Respeita o filtro de centro de custo do comparativo: no drill-down mostra só as linhas
     // dos centros marcados (assim o Total bate com a célula filtrada).
-    setLinhas([...analisarCulpados(rows, anteriores), ...lancRows].filter(passaCC))
+    // ORDENA TUDO POR DATA (ascendente): o razão vinha por data, mas os lançamentos/ajustes eram
+    // grudados no fim — por isso um AJUSTE de julho aparecia DEPOIS de agosto. Agora as duas
+    // fontes entram na mesma ordem cronológica. Linha sem data vai para o fim.
+    const chaveData = l => String(l.data || '') || '9999-99-99'
+    setLinhas([...analisarCulpados(rows, anteriores), ...lancRows]
+      .filter(passaCC)
+      .sort((a, b) => chaveData(a).localeCompare(chaveData(b))))
     } catch (e) {
       // Sem isso, qualquer erro numa das consultas deixava o modal preso em "Carregando…" pra sempre.
       setMsg('Erro ao carregar o razão desta conta: ' + (e?.message || String(e)))
