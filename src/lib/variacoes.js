@@ -1,5 +1,6 @@
 import { supabase } from './supabase'
 import { parsePlano } from './balancete'
+import { lerTudo } from './lerTudo'
 
 const ANO = 2026
 
@@ -48,15 +49,15 @@ export async function apurarVariacoes(empresaId, opts = {}) {
   // SISTEMA VIVO (opt-in): lançamentos confirmados por competência, para embutir na matriz.
   const lancPorComp = {}
   if (opts.comLancamentos) {
-    const { data: lancs } = await supabase.from('lancamentos')
-      .select('competencia_id, conta_debito, conta_credito, valor').in('competencia_id', comps.map(c => c.id))
+    const lancs = await lerTudo(() => supabase.from('lancamentos')
+      .select('competencia_id, conta_debito, conta_credito, valor').in('competencia_id', comps.map(c => c.id)))
     for (const l of (lancs || [])) (lancPorComp[l.competencia_id] ||= []).push(l)
   }
 
   const matriz = {}, nomes = {}, mesPorComp = {}, mesesComDados = []
   for (const c of comps) {
     mesPorComp[c.id] = c.mes
-    const { data: bal } = await supabase.from('balancete').select('conta, nome, saldo_final').eq('competencia_id', c.id)
+    const bal = await lerTudo(() => supabase.from('balancete').select('conta, nome, saldo_final').eq('competencia_id', c.id))
     const lancsC = lancPorComp[c.id] || []
     if ((!bal || !bal.length) && !lancsC.length) continue
     mesesComDados.push(c.mes)
@@ -86,8 +87,11 @@ export async function apurarVariacoes(empresaId, opts = {}) {
   // conta = 1º trecho do item (sempre o código). Itens de outros gates do Status (ex.:
   // "Conta 326 · saldo…", "326 → 623 · …") têm 1º trecho não-numérico e não colidem com o
   // código puro da variação.
-  const { data: aud } = await supabase.from('auditoria').select('item, competencia_id')
-    .in('competencia_id', comps.map(c => c.id)).in('modulo', ['Comparativo', 'Status'])
+  // PAGINA TUDO (regra 7): a auditoria de justificativas passa de 1.000 linhas no ano — sem
+  // paginar, as justificativas MAIS NOVAS ficavam além do corte e NÃO eram lidas, então a
+  // variação recém-justificada continuava aparecendo como pendente. lerTudo garante ler todas.
+  const aud = await lerTudo(() => supabase.from('auditoria').select('item, competencia_id')
+    .in('competencia_id', comps.map(c => c.id)).in('modulo', ['Comparativo', 'Status']))
   // POR MÊS (igual ao Comparativo): a justificativa do Comparativo tem item "conta · Mai/2026" →
   // vale só naquele mês. A justificativa feita direto no gate do Status ("conta · NOME") não tem
   // mês → vale para a conta (compat). Assim, para fechar você justifica CADA mês (fev, mar, abr…).
