@@ -122,7 +122,10 @@ export function extrairEntidade(s) {
   // Ex.: "ACUM TENDA NEGOCIOS IMOBILIARIOS S A" → "TENDA NEGOCIOS IMOBILIARIOS S A". Cobre também
   // o formato numerado "ACUM. 27 —". Só do INÍCIO e como token isolado (não afeta nome que só
   // contenha essas letras no meio).
-  e = e.replace(/^\s*ACUM(?:ULADOR)?\.?(?:\s*\d+)?\s*[-–—:]?\s+/i, '')
+  // `\b` após ACUM/ACUMULADOR garante TOKEN isolado (não pega "ACUMULADO", "ACUMEN"). Os
+  // separadores finais são TODOS opcionais — antes o regex exigia um espaço a mais e falhava em
+  // "ACUM CIMED REMEDIOS S A" (ACUM + nome direto, sem número/traço), deixando o "ACUM" no nome.
+  e = e.replace(/^\s*ACUM(?:ULADOR)?\b\.?(?:\s*\d+)?\s*[-–—:.]?\s*/i, '')
   e = e.replace(/\bC[F]?\.?\s*NF.*/i, '').replace(/\bNF.*/i, '').replace(/\bN[ºo°]\.?.*/i, '').replace(/\bREF\.?.*/i, '').replace(/\bDOC.*/i, '')
   // "categoria - entidade": pega a entidade (último trecho). Mas se o último trecho for só
   // sufixo societário (ME/EPP/LTDA/SA) ou muito curto, a entidade é o trecho ANTERIOR
