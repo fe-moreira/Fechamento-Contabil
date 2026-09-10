@@ -126,6 +126,12 @@ export function extrairEntidade(s) {
   // separadores finais são TODOS opcionais — antes o regex exigia um espaço a mais e falhava em
   // "ACUM CIMED REMEDIOS S A" (ACUM + nome direto, sem número/traço), deixando o "ACUM" no nome.
   e = e.replace(/^\s*ACUM(?:ULADOR)?\b\.?(?:\s*\d+)?\s*[-–—:.]?\s*/i, '')
+  // Fiscal do Domínio no MEIO do histórico: "… - ACUM. 28 - CLIENTE …" ou "… - ACUM. 58 | CLIENTE …".
+  // O número é o ACUMULADOR interno; o CLIENTE vem DEPOIS, separado por traço OU pipe (|). Pega o
+  // cliente e joga fora tudo antes (categoria/natureza + acumulador). Sem isso, o formato com "|"
+  // não era dividido e o nome saía como "ACUM 58 CIMED …".
+  const mAcum = e.match(/\bACUM(?:ULADOR)?\.?\s*\d+\s*[|\-–—:]\s*(.+)$/i)
+  if (mAcum && mAcum[1].trim()) e = mAcum[1]
   e = e.replace(/\bC[F]?\.?\s*NF.*/i, '').replace(/\bNF.*/i, '').replace(/\bN[ºo°]\.?.*/i, '').replace(/\bREF\.?.*/i, '').replace(/\bDOC.*/i, '')
   // "categoria - entidade": pega a entidade (último trecho). Mas se o último trecho for só
   // sufixo societário (ME/EPP/LTDA/SA) ou muito curto, a entidade é o trecho ANTERIOR
@@ -135,7 +141,10 @@ export function extrairEntidade(s) {
     const ult = parts[parts.length - 1].trim()
     e = (/^(ME|EPP|EIRELI|LTDA|S\/?A|S\/?S)\.?$/i.test(ult) || normHist(ult).length < 4) ? parts[parts.length - 2] : ult
   }
-  return normHist(e)
+  const out = normHist(e)
+  // Sobrou só o rótulo do acumulador ("ACUM"/"ACUMULADOR") sem cliente de verdade → não identifica
+  // (some da lista de clientes em vez de aparecer um item "ACUM" sem nome).
+  return /^ACUM(ULADOR)?$/i.test(out) ? '' : out
 }
 
 // Um termo só serve para semear a memória a partir de texto livre se parecer um
