@@ -3472,6 +3472,12 @@ function CardConferencia({ conta, reg, compId, usuario, saldoAjuste = 0, composi
   }
 
   async function salvar() {
+    // AVISO: marcou "conciliada" mas não subiu documento NEM escreveu a justificativa → a conta
+    // continua VERMELHA (a cor exige documento que bate = verde, ou conciliada + justificativa =
+    // amarela). Sem isso a pessoa salva e não entende por que segue vermelha.
+    if (conciliada && !just.trim() && !bate) {
+      if (!window.confirm('Você marcou "conciliada", mas NÃO escreveu a justificativa (e não há documento que bate).\n\nAssim a conta continua VERMELHA (pendente). Escreva o motivo (ex.: "aguardando extrato do cliente") para ela ficar AMARELA.\n\nSalvar mesmo assim (segue vermelha)?')) return
+    }
     setSalvando(true); setErro(''); setMsg('')
     let novoPath = path
     // Se há um arquivo novo selecionado, armazena no Storage (bucket privado).
