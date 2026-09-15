@@ -2202,12 +2202,16 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     // saem do em aberto e vão para "Conciliados". Vale para qualquer origem: saldo anterior
     // (abertura, sem id), estorno/reclassificação (acerto) ou lançamento do razão. A abertura é
     // chaveada pelo nome FINAL (alvo), para o "Confirmado" bater na releitura.
+    // Só (re)baixa o que AINDA NÃO está tratado. Assim, quando o Vincular é usado sobre linhas JÁ
+    // BAIXADAS (juntar dois blocos de conciliados/automático do mesmo fornecedor), ele apenas
+    // renomeia/junta o nome — não insere baixa de novo nem "reabre" nada.
+    const pendentes = comNome.filter(l => !jaTratada(l))
     const net = comNome.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
     let baixou = false
-    if (comNome.length >= 2 && Math.abs(net) < 0.005) {
+    if (pendentes.length >= 1 && comNome.length >= 2 && Math.abs(net) < 0.005) {
       const cid = await getCompetenciaId()
       if (cid) {
-        const rows = comNome.map(l => ({
+        const rows = pendentes.map(l => ({
           competencia_id: cid, modulo: 'Conciliação',
           item: l._abertura ? chaveAbertura(l, alvo) : `${conta.conta} · ${l.data || ''} · NF ${l.leitura?.nf || '—'}`,
           tipo: 'Justificativa',
@@ -2215,7 +2219,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
           razao_id: l._abertura ? null : (l.acerto ? String(l.id).replace(/^ac_/, '') : l.id), usuario,
         }))
         const { error } = await supabase.from('auditoria').insert(rows)
-        if (!error) { marcarTratadas(comNome); baixou = true }
+        if (!error) { marcarTratadas(pendentes); baixou = true }
       }
     }
     setSelLin(new Set()); setLoteForn(null)
@@ -3045,14 +3049,26 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         )
       })()}
 
-      {/* Barra flutuante: reabrir as linhas de Conciliados marcadas (aparece perto de onde você marca). */}
-      {selReabrirCount > 0 && (
-        <div style={{ position: 'fixed', left: '50%', bottom: 20, transform: 'translateX(-50%)', zIndex: 61, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '10px 16px', background: theme.card, border: `1px solid ${theme.yellow}`, borderRadius: 12, boxShadow: '0 8px 30px rgba(0,0,0,0.4)' }}>
-          <span style={{ color: theme.text, fontSize: 13 }}><b>{selReabrirCount}</b> linha(s) marcada(s) para reabrir</span>
-          <button className="btn" style={{ fontSize: 12.5, background: theme.yellow, borderColor: theme.yellow, color: '#1a1a1a' }} onClick={reabrirSelecionados}><i className="ti ti-rotate-2" /> Reabrir selecionados</button>
-          <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={() => setSelReabrir(new Set())}><i className="ti ti-x" /> Limpar</button>
-        </div>
-      )}
+      {/* Barra flutuante das linhas JÁ BAIXADAS marcadas (Conciliados manuais + Baixados por NF):
+          além de REABRIR, dá para VINCULAR/CORRIGIR o fornecedor sem reabrir — para juntar blocos
+          separados do mesmo fornecedor e arrumar o nome, igual ao "em aberto". */}
+      {(selReabrirCount + selReabrirNFCount) > 0 && (() => {
+        const selConf = conferidosLancs.filter(l => selReabrir.has(l._uid))
+        const selNF = [...baixados].filter(l => selReabrirNF.has(l._uid))
+        const todas = [...selConf, ...selNF]
+        const comNome = todas.filter(l => (l.leitura?.entidade || '').trim() || l.acerto)
+        const limpar = () => { setSelReabrir(new Set()); setSelReabrirNF(new Set()) }
+        return (
+          <div style={{ position: 'fixed', left: '50%', bottom: 20, transform: 'translateX(-50%)', zIndex: 61, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '10px 16px', background: theme.card, border: `1px solid ${theme.yellow}`, borderRadius: 12, boxShadow: '0 8px 30px rgba(0,0,0,0.4)' }}>
+            <span style={{ color: theme.text, fontSize: 13 }}><b>{todas.length}</b> baixada(s) marcada(s){selConf.length && selNF.length ? ' (manual + automático)' : ''}</span>
+            <button className="btn" style={{ fontSize: 12.5, background: theme.yellow, borderColor: theme.yellow, color: '#1a1a1a' }} title="Reabrir as marcadas — voltam para o em aberto (de qualquer bloco)." onClick={() => { const c = selConf.slice(), n = selNF.slice(); limpar(); if (c.length) reabrirConferidos(c); if (n.length) reabrirBaixaNF(n) }}><i className="ti ti-rotate-2" /> Reabrir ({todas.length})</button>
+            <span aria-hidden style={{ width: 1, alignSelf: 'stretch', background: theme.border, margin: '2px 4px' }} />
+            <button className="btn btn-ghost" disabled={!comNome.length} title={comNome.length ? 'Arrumar o nome do fornecedor destas linhas JÁ BAIXADAS — SEM reabrir. Junta blocos separados do mesmo fornecedor.' : 'Marque linhas com nome (título/pagamento/saldo anterior).'} style={{ fontSize: 12.5, opacity: comNome.length ? 1 : 0.5, cursor: comNome.length ? 'pointer' : 'not-allowed' }} onClick={() => { if (!comNome.length) return; const ls = comNome.slice(); limpar(); setLoteForn({ lines: ls }) }}><i className="ti ti-user-edit" /> Corrigir fornecedor</button>
+            <button className="btn btn-ghost" disabled={comNome.length < 2} title={comNome.length >= 2 ? 'Juntar estas linhas JÁ BAIXADAS num fornecedor só (mesmo nome) — SEM reabrir. Para unir dois blocos do mesmo fornecedor escritos diferente.' : 'Marque 2+ linhas (com nome) para juntar num fornecedor só.'} style={{ fontSize: 12.5, color: theme.accent, borderColor: theme.accent, opacity: comNome.length >= 2 ? 1 : 0.5, cursor: comNome.length >= 2 ? 'pointer' : 'not-allowed' }} onClick={() => { if (comNome.length < 2) return; const ls = comNome.slice(); limpar(); setLoteForn({ lines: ls, vincular: true }) }}><i className="ti ti-users" /> Vincular fornecedor</button>
+            <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={limpar}><i className="ti ti-x" /> Limpar</button>
+          </div>
+        )
+      })()}
 
       {novoLanc && (
         <ModalNovoLancamento conta={conta} competencia={competencia} plano={plano} onClose={() => setNovoLanc(false)} onCriar={criarLancamento} />
