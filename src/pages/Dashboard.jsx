@@ -90,10 +90,16 @@ export default function Dashboard() {
       const inicioMes = new Date(hoje.getFullYear(), hoje.getMonth(), 1).toISOString()
       const [{ data: cli }, { data: comps }, { data: ts }, { data: rasc }, { data: respRows }] = await Promise.all([
         supabase.from('clientes').select('*'),
-        supabase.from('competencias').select('cliente_id, ano, mes, status, razao_importado, pct, created_at, integracoes'),
+        // IMPORTANTE: NÃO trazer a coluna `integracoes` inteira aqui — ela é um JSONB gordo
+        // (chega a 546 kB numa competência; ~4,8 MB somando todas) e esta consulta lê TODAS as
+        // competências de TODOS os clientes. Puxar o blob todo fazia esta query levar ~3,8s (e
+        // estourar o statement timeout). O Dashboard só usa `integracoes.encerramento` daqui,
+        // então pedimos só esse sub-caminho ao PostgREST (payload minúsculo).
+        supabase.from('competencias').select('cliente_id, ano, mes, status, razao_importado, pct, created_at, encerramento:integracoes->encerramento'),
         supabase.from('timesheet').select('cliente_id, cliente_nome, segundos, created_at').gte('created_at', inicioMes),
         // Trabalhos financeiros salvos para continuar depois (rascunhos), de qualquer usuário.
-        supabase.from('competencias').select('cliente_id, ano, mes, integracoes, updated_at').not('integracoes->financeira', 'is', null),
+        // Idem: só o sub-caminho `integracoes.financeira` (não o blob inteiro).
+        supabase.from('competencias').select('cliente_id, ano, mes, updated_at, financeira:integracoes->financeira').not('integracoes->financeira', 'is', null),
         // Responsável pelo fechamento por vigência (mesmo depósito da consolidação/carga tributária).
         supabase.from('cargas_cadastro').select('cliente_id, vigencia, dados').eq('tipo', 'depara').eq('obs', 'responsavel_fechamento'),
       ])
@@ -166,7 +172,7 @@ export default function Dashboard() {
       let respDiverg = 0, respProprio = 0, respEncTotal = 0, respSemResp = 0
       for (const c of clientes) {
         const cp = compAlvo[c.id]
-        const enc = cp?.integracoes?.encerramento || {}
+        const enc = cp?.encerramento || {}
         const encPor = enc.por || ''
         // Dono = responsável da VIGÊNCIA (a mais recente ≤ competência-alvo). Não usa o Analista.
         const dono = responsavelNaCompetencia(histResp[c.id] || [], compVig)
@@ -238,7 +244,7 @@ export default function Dashboard() {
       const nomeTodos = Object.fromEntries(todos.map(c => [c.id, c.razao_social]))
       const rascunhos = []
       for (const c of (rasc || [])) {
-        const fin = c.integracoes?.financeira || {}
+        const fin = c.financeira || {}
         for (const [conta, b] of Object.entries(fin.bancos || {})) {
           if (b?.estado === 'rascunho') rascunhos.push({
             cliente_id: c.cliente_id, cliente: nomeTodos[c.cliente_id] || '—', ano: c.ano, mes: c.mes,
