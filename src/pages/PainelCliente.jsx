@@ -394,7 +394,9 @@ export default function PainelCliente() {
           indices, dist, distTotal, ata: dist.ata || { distribuido: 0, pago: 0, pagoMes: 0, saldo: 0 },
           cargaBase, // base da carga tributária ('bruto'|'liquido') ou null (não configurado)
           comparativo,
-          variacoesConta: new Set((comparativo.itens || []).map(i => String(i.conta))).size,
+          // Só até o mês em foco (i.mes <= mesFoco): divergência de mês seguinte (aberto só p/ o
+          // Comparativo) não conta como pendência deste fechamento — mesma régua do badge/Status.
+          variacoesConta: new Set((comparativo.itens || []).filter(i => i.mes <= mesFoco).map(i => String(i.conta))).size,
           topClientes, totReceitaRazao,
         }
     },

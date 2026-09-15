@@ -90,9 +90,10 @@ export function AppDataProvider({ children }) {
     const br = await apurarBancoResultado(empresaId, comp.id)
     p += (br.lancamentos || []).filter(l => !l.tratado).length // justificados/corrigidos saem da contagem
     const variacoes = await apurarVariacoes(empresaId, { comLancamentos: true })
-    // Conta por CONTA (não por mês/lançamento) — bate com a lista do Status E com o header do
-    // Comp. Movimento (mesma régua, todos os meses após o último fechado; sem cortar no mês atual).
-    p += new Set((variacoes.itens || []).map(i => String(i.conta))).size
+    // Conta por CONTA (não por mês/lançamento) — e SÓ até o mês selecionado (i.mes <= mes): a
+    // divergência de um mês SEGUINTE (ex.: agosto, aberto só para o Comparativo) NÃO pode contar
+    // como pendência do fechamento de junho/julho. Mesma régua do progresso.js.
+    p += new Set((variacoes.itens || []).filter(i => i.mes <= mes).map(i => String(i.conta))).size
     setPendencias(p)
   }
   useEffect(() => { recalcularPendencias() }, [empresaId, competencia])

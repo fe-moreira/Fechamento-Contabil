@@ -608,11 +608,13 @@ export default function CompMovimento() {
   // Tratada = justificada NAQUELE mês (sem herança) OU aceita por já estar dentro do período fechado.
   const tratadaCel = (key, reduzido, mes) => mes <= ultimoFechado || justificadas.has(chaveCelula(reduzido, mes))
 
-  // Pendências = variações não justificadas em meses DEPOIS do último fechado. Só analíticas.
+  // Pendências = variações não justificadas em meses DEPOIS do último fechado e ATÉ o mês do
+  // fechamento atual (fechMes). Uma variação de um mês SEGUINTE (ex.: agosto, aberto só para o
+  // Comparativo) não é pendência do fechamento de junho/julho — mesma régua do badge/Status/progresso.
   let pendentes = 0
   for (const { reduzido, key, sintetica } of contas) {
     if (sintetica) continue
-    if (comps.some(c => c.mes > ultimoFechado && desviante(key, c.mes) && !tratadaCel(key, reduzido, c.mes))) pendentes++
+    if (comps.some(c => c.mes > ultimoFechado && (fechMes == null || c.mes <= fechMes) && desviante(key, c.mes) && !tratadaCel(key, reduzido, c.mes))) pendentes++
   }
 
   // Níveis de sintéticas disponíveis (grau), para o filtro por nível do comparativo.

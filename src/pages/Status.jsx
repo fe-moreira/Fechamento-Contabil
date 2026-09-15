@@ -275,9 +275,9 @@ export default function Status() {
       descricao: 'Contas com variação acima de 10% em relação ao mês anterior, ainda não justificadas (Comp. Movimento).',
       // Uma linha por CONTA (não por lançamento): é a conta que distorce; o culpado
       // exato o usuário confere no Comp. Movimento. Os meses afetados vão no detalhe.
-      // Conta TODOS os meses após o último fechado (não corta no mês atual) — assim o número
-      // BATE com o "N conta(s) com variação a justificar" do Comp. Movimento (fonte única).
-      itens: Object.values((dados.variacoes?.itens || []).reduce((acc, v) => {
+      // SÓ até o mês selecionado (v.mes <= mesAtualStatus): a divergência de um mês SEGUINTE
+      // (ex.: agosto, aberto só para o Comparativo) não é pendência do fechamento de junho/julho.
+      itens: Object.values((dados.variacoes?.itens || []).filter(v => v.mes <= mesAtualStatus).reduce((acc, v) => {
         const k = String(v.conta)
         if (!acc[k]) acc[k] = { conta: v.conta, nome: v.nome, meses: [] }
         if (!acc[k].meses.includes(v.mes)) acc[k].meses.push(v.mes)
