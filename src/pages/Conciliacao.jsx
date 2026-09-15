@@ -737,6 +737,10 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const [unificadosConf, setUnificadosConf] = useState(new Set()) // nomes cuja UNIFICAÇÃO o usuário confirmou (chaveNome) — esconde os chips "Unificado de" e mantém aprendido
   const [sugestoesRejeitadas, setSugestoesRejeitadas] = useState(new Set()) // sugestões de vínculo que o usuário NÃO aprovou: {chaveSug} — não sugere de novo
   const [modoPorNome, setModoPorNome] = useState({}) // por conta: força "conciliar por nome" ligado/desligado {conta: true|false} — sobrepõe a detecção pelo nome
+  // Parcelamentos MANUAIS (nota × parcelas): agrupa visualmente a nota e as parcelas do MESMO
+  // fornecedor/cliente, com saldo a pagar. Cada grupo: {id, conta, entidade(chaveNome), nf,
+  // membros:[sepKey...], origem:'manual'}. É só agrupamento/visual — NÃO baixa.
+  const [parcelamentos, setParcelamentos] = useState([])
   // Chave ESTÁVEL de um item de saldo inicial (não muda ao editar NF/nome/histórico): conta +
   // valor + nome ORIGINAL da carga. Usa _origEntidade quando já foi ajustado antes.
   // INCLUI A DATA: cada linha "Saldo anterior" é INDIVIDUAL. Sem a data, duas linhas de mesmo
@@ -762,17 +766,52 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     setModoPorNome(d.modoPorNome && typeof d.modoPorNome === 'object' ? d.modoPorNome : {})
     setSeparados(new Set(Array.isArray(d.separados) ? d.separados : []))
     setUnificadosConf(new Set((Array.isArray(d.unificadosConfirmados) ? d.unificadosConfirmados : []).map(chaveNome)))
+    setParcelamentos(Array.isArray(d.parcelamentos) ? d.parcelamentos : [])
   }
   useEffect(() => { if (empresaId) carregarNomes() }, [empresaId]) // eslint-disable-line react-hooks/exhaustive-deps
-  async function salvarNomes(conf, iso, aliases = nomesAlias, aberAj = aberturaAj, acNomes = acertoNomes, baixasReab = baixasReabertas, sugRej = sugestoesRejeitadas, modoPN = modoPorNome, sep = separados, aliasF = aliasesForcados, concReab = conciliadosReabertos, unifConf = unificadosConf) {
+  async function salvarNomes(conf, iso, aliases = nomesAlias, aberAj = aberturaAj, acNomes = acertoNomes, baixasReab = baixasReabertas, sugRej = sugestoesRejeitadas, modoPN = modoPorNome, sep = separados, aliasF = aliasesForcados, concReab = conciliadosReabertos, unifConf = unificadosConf, parcel = parcelamentos) {
     await supabase.from('cargas_cadastro').delete().eq('cliente_id', empresaId).eq('tipo', 'conciliacao_nomes')
     // vigencia é NOT NULL — usa a competência atual (o registro é único por cliente, lido sempre o mais recente).
-    const { error } = await supabase.from('cargas_cadastro').insert({ cliente_id: empresaId, tipo: 'conciliacao_nomes', vigencia: competencia || '00/0000', dados: { confiaveis: [...conf], isolados: [...iso], aliases: aliases || {}, aberturaAjustes: aberAj || {}, acertoNomes: acNomes || {}, baixasReabertas: [...baixasReab], sugestoesRejeitadas: [...sugRej], modoPorNome: modoPN || {}, separados: [...(sep || [])], aliasesForcados: aliasF || {}, conciliadosReabertos: [...(concReab || [])], unificadosConfirmados: [...(unifConf || [])] }, usuario })
+    const { error } = await supabase.from('cargas_cadastro').insert({ cliente_id: empresaId, tipo: 'conciliacao_nomes', vigencia: competencia || '00/0000', dados: { confiaveis: [...conf], isolados: [...iso], aliases: aliases || {}, aberturaAjustes: aberAj || {}, acertoNomes: acNomes || {}, baixasReabertas: [...baixasReab], sugestoesRejeitadas: [...sugRej], modoPorNome: modoPN || {}, separados: [...(sep || [])], aliasesForcados: aliasF || {}, conciliadosReabertos: [...(concReab || [])], unificadosConfirmados: [...(unifConf || [])], parcelamentos: Array.isArray(parcel) ? parcel : [] }, usuario })
     if (error) { setMsg('Não consegui salvar: ' + error.message); return error }
   }
   // Chave estável de uma linha (para "separar" determinístico): razão pelo id, abertura pela
   // chave de abertura, acerto pelo uuid.
   const sepKey = l => l?._abertura ? 'ab:' + chaveAberturaAj(l) : l?.acerto ? 'ac:' + String(l.id).replace(/^ac_/, '') : 'rz:' + (l?.id ?? '')
+
+  // ===== Parcelamento (nota × parcelas) — MANUAL, só cliente/fornecedor por enquanto =====
+  // Grupo a que uma linha pertence NESTA conta (por sepKey). null se nenhum.
+  const parcelDe = l => parcelamentos.find(p => p.conta === conta.conta && Array.isArray(p.membros) && p.membros.includes(sepKey(l))) || null
+  // Vincula as linhas SELECIONADAS (nota + parcelas do MESMO fornecedor) num parcelamento. NÃO baixa.
+  async function vincularParcelamento(alvo) {
+    if (bloqueadoFechado()) return
+    const linhas = (alvo || []).filter(l => (l.leitura?.entidade || '').trim())
+    if (linhas.length < 2) { setMsg('Marque a NOTA + as parcelas (2 linhas ou mais) para vincular o parcelamento.'); return }
+    const ents = [...new Set(linhas.map(l => chaveNome(l.leitura?.entidade || '')))]
+    if (ents.length > 1) { setMsg('São fornecedores diferentes — o parcelamento é sempre da mesma nota/fornecedor. Selecione só a nota e as parcelas dela.'); return }
+    const nf = [...new Set(linhas.map(l => String(l.leitura?.nf || '').trim()).filter(Boolean))][0] || ''
+    if (!window.confirm(`Vincular ${linhas.length} linha(s) como PARCELAMENTO${nf ? ' da NF ' + nf : ''}?\n\nA nota e as parcelas ficam agrupadas, com o saldo a pagar. NÃO baixa — só quando quitar tudo.`)) return
+    const chaves = linhas.map(sepKey)
+    const id = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : 'p' + Date.now()
+    // Tira essas linhas de qualquer parcelamento anterior desta conta e cria o novo.
+    const limpo = parcelamentos.map(p => p.conta === conta.conta ? { ...p, membros: (p.membros || []).filter(k => !chaves.includes(k)) } : p).filter(p => !(p.conta === conta.conta && (p.membros || []).length < 2))
+    const novo = [...limpo, { id, conta: conta.conta, entidade: ents[0], nf, membros: chaves, origem: 'manual' }]
+    setParcelamentos(novo)
+    await salvarNomes(nomesConf, nomesIsolados, nomesAlias, aberturaAj, acertoNomes, baixasReabertas, sugestoesRejeitadas, modoPorNome, separados, aliasesForcados, conciliadosReabertos, unificadosConf, novo)
+    setSelLin(new Set())
+    setMsg(`Parcelamento vinculado${nf ? ' (NF ' + nf + ')' : ''} — ${linhas.length} linha(s) agrupadas. Não baixou (só agrupou).`)
+    carregarLanc()
+  }
+  // Tira do parcelamento — desfaz o grupo inteiro (as linhas voltam soltas). NÃO mexe em baixa.
+  async function tirarParcelamento(pid) {
+    if (bloqueadoFechado()) return
+    if (!window.confirm('Tirar este parcelamento? A nota e as parcelas voltam a aparecer soltas na composição. Não mexe em baixa nenhuma.')) return
+    const novo = parcelamentos.filter(p => p.id !== pid)
+    setParcelamentos(novo)
+    await salvarNomes(nomesConf, nomesIsolados, nomesAlias, aberturaAj, acertoNomes, baixasReabertas, sugestoesRejeitadas, modoPorNome, separados, aliasesForcados, conciliadosReabertos, unificadosConf, novo)
+    setMsg('Parcelamento desfeito — linhas soltas de novo.')
+    carregarLanc()
+  }
   // Chave da SELEÇÃO (checkbox / baixa manual): SEMPRE por linha única (_uid). O sepKey agrupa
   // aberturas por valor+nome (para desvincular nomes), o que faz o checkbox marcar duas notas de
   // mesmo valor de uma vez — por isso a seleção usa o _uid, nunca o sepKey.
@@ -2670,6 +2709,24 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         // Sugestões de vínculo DESTE cliente (par título ↔ pagamento, cliente + valor batem,
         // NF diferente): mostradas dentro do card, no contexto, para revisar e aprovar aqui.
         const sugsCard = sugeridosVinculo.filter(p => grp.includes(p.a) && grp.includes(p.b))
+        // PARCELAMENTO: monta a sequência de render intercalando um CABEÇALHO (nota + saldo a
+        // pagar) antes das linhas de cada grupo de parcelamento, e mantém as demais soltas.
+        const valAbs = x => Math.abs((Number(x.debito) || 0) - (Number(x.credito) || 0))
+        const vistosPar = new Set()
+        const renderSeq = []
+        for (const l of grp) {
+          const pg = parcelDe(l)
+          if (!pg) { renderSeq.push({ kind: 'linha', l, parcel: false }); continue }
+          if (vistosPar.has(pg.id)) continue
+          vistosPar.add(pg.id)
+          const membros = grp.filter(x => parcelDe(x)?.id === pg.id)
+          const valorNota = membros.filter(x => Number(x[ladoOrigem]) > 0.005).reduce((s, x) => s + valAbs(x), 0)
+          const pago = membros.filter(x => Number(x[ladoBaixa]) > 0.005).reduce((s, x) => s + valAbs(x), 0)
+          let totalP = 0
+          for (const x of membros) { const m = String(x.historico || '').match(/\b(\d{1,2})\s*\/\s*(\d{1,2})\b/); if (m) totalP = Math.max(totalP, Number(m[2]) || 0) }
+          renderSeq.push({ kind: 'header', pg, valorNota, pago, falta: valorNota - pago, npag: membros.filter(x => Number(x[ladoBaixa]) > 0.005).length, totalP })
+          for (const x of membros) renderSeq.push({ kind: 'linha', l: x, parcel: true })
+        }
         return (
           <div key={gi} style={{ background: theme.card, border: `1px solid ${borda}`, borderRadius: 12, overflow: 'hidden', marginBottom: 12 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '13px 16px', background: theme.input, flexWrap: 'wrap', gap: 8 }}>
@@ -2744,7 +2801,25 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
                 </tr>
               </thead>
               <tbody>
-                {grp.map((l, i) => {
+                {renderSeq.map((it, i) => {
+                  if (it.kind === 'header') {
+                    const pg = it.pg
+                    return (
+                      <tr key={'ph' + i} style={{ borderTop: `1px solid ${theme.accent}`, background: 'rgba(74,124,255,0.08)' }}>
+                        <td colSpan={8} style={{ padding: '7px 12px' }}>
+                          <span style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', fontSize: 12 }}>
+                            <span style={{ fontWeight: 800, color: theme.accent, whiteSpace: 'nowrap' }}><i className="ti ti-receipt-2" /> NF {pg.nf || '—'} · Parcelamento</span>
+                            <span style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>nota {money(it.valorNota)}</span>
+                            <span style={{ color: theme.green, whiteSpace: 'nowrap' }}>pago {money(it.pago)}</span>
+                            <span style={{ fontWeight: 800, whiteSpace: 'nowrap', color: Math.abs(it.falta) < 0.005 ? theme.green : theme.red }}>{Math.abs(it.falta) < 0.005 ? '✓ quitado' : 'falta ' + money(Math.abs(it.falta))}</span>
+                            <span style={{ color: theme.sub, whiteSpace: 'nowrap' }}>{it.totalP ? `${it.npag}/${it.totalP} pagas` : `${it.npag} pagamento(s)`}</span>
+                            <button title="Tirar do parcelamento — a nota e as parcelas voltam soltas (não mexe em baixa nenhuma)" onClick={e => { e.stopPropagation(); tirarParcelamento(pg.id) }} style={{ marginLeft: 'auto', background: 'none', border: `1px solid ${theme.yellow}`, color: theme.yellow, borderRadius: 10, fontSize: 10.5, fontWeight: 700, padding: '2px 8px', cursor: 'pointer', whiteSpace: 'nowrap' }}><i className="ti ti-arrows-split" /> Tirar do parcelamento</button>
+                          </span>
+                        </td>
+                      </tr>
+                    )
+                  }
+                  const l = it.l
                   const herdada = aberturaHerdada(l)
                   const rev = l.leitura.conf !== 'alta' && !herdada
                   const semNF = semTit.has(l)
@@ -2752,7 +2827,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
                   const contras = contraDe(l)
                   return (
                     <tr key={i} onClick={() => abrirLinha(l)}
-                      style={{ borderTop: `1px solid ${theme.border}`, cursor: 'pointer', opacity: (l.acerto || tratado) ? 0.7 : 1, background: (l.acerto || tratado) ? 'rgba(48,164,108,0.08)' : semNF ? 'rgba(229,72,77,0.08)' : 'transparent' }}
+                      style={{ borderTop: `1px solid ${theme.border}`, borderLeft: it.parcel ? '3px solid rgba(74,124,255,0.55)' : undefined, cursor: 'pointer', opacity: (l.acerto || tratado) ? 0.7 : 1, background: (l.acerto || tratado) ? 'rgba(48,164,108,0.08)' : semNF ? 'rgba(229,72,77,0.08)' : it.parcel ? 'rgba(74,124,255,0.03)' : 'transparent' }}
                       title={l.acerto ? `${tagAcertoLanc(l).titulo} — clique para ver ou desfazer` : herdada ? 'Veio validado do mês anterior — clique para corrigir se precisar' : jaTratada(l) ? 'Já conferido — clique para ver ou desfazer' : semNF ? 'Baixa com NF que não confere com o título — justifique ou corrija' : 'Justificar ou corrigir este lançamento'}>
                       <td style={{ ...td, textAlign: 'center' }} onClick={e => e.stopPropagation()}>
                         <input type="checkbox" title="Conectar com outro (baixa manual)" checked={selLin.has(selKeyU(l))} onChange={() => toggleSelLin(l)} style={{ cursor: 'pointer', width: 15, height: 15 }} />
@@ -2921,6 +2996,11 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
             <button className="btn btn-ghost" disabled={vincaveis.length < 2} title={vincaveis.length < 2 ? 'Marque 2+ linhas (com nome) para juntar num cliente só.' : 'Juntar os selecionados num cliente/fornecedor só — mesmo com nomes diferentes ou separados antes. Vale para todos os meses.'} style={{ fontSize: 12.5, color: theme.accent, borderColor: theme.accent, opacity: vincaveis.length >= 2 ? 1 : 0.5, cursor: vincaveis.length >= 2 ? 'pointer' : 'not-allowed' }} onClick={() => vincaveis.length >= 2 && setLoteForn({ lines: vincaveis, vincular: true })}>
               <i className="ti ti-arrows-join" /> Vincular
             </button>
+            {ehEntidadeConta && (
+              <button className="btn btn-ghost" disabled={vincaveis.length < 2} title={vincaveis.length < 2 ? 'Marque a NOTA + as parcelas (2+ linhas do mesmo fornecedor).' : 'Agrupar a nota e as parcelas do mesmo fornecedor (parcelamento) — mostra o saldo a pagar. NÃO baixa.'} style={{ fontSize: 12.5, color: theme.accent, borderColor: theme.accent, opacity: vincaveis.length >= 2 ? 1 : 0.5, cursor: vincaveis.length >= 2 ? 'pointer' : 'not-allowed' }} onClick={() => vincaveis.length >= 2 && vincularParcelamento(vincaveis)}>
+                <i className="ti ti-receipt-2" /> Vincular parcelamento
+              </button>
+            )}
             <button className="btn btn-ghost" disabled={!desvincaveis.length} title={!desvincaveis.length ? 'Selecione um título ou o saldo anterior (com nome).' : 'Manter estes nomes separados (não unir com parecidos) — vale para todos os meses'} style={{ fontSize: 12.5, color: theme.yellow, borderColor: theme.yellow, opacity: desvincaveis.length ? 1 : 0.5, cursor: desvincaveis.length ? 'pointer' : 'not-allowed' }} onClick={() => desvincaveis.length && desvincularLote(desvincaveis)}>
               <i className="ti ti-arrows-split" /> Desvincular
             </button>
