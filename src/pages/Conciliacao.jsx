@@ -782,24 +782,44 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // ===== Parcelamento (nota × parcelas) — MANUAL, só cliente/fornecedor por enquanto =====
   // Grupo a que uma linha pertence NESTA conta (por sepKey). null se nenhum.
   const parcelDe = l => parcelamentos.find(p => p.conta === conta.conta && Array.isArray(p.membros) && p.membros.includes(sepKey(l))) || null
-  // Vincula as linhas SELECIONADAS (nota + parcelas do MESMO fornecedor) num parcelamento. NÃO baixa.
+  // Vincula as linhas SELECIONADAS num parcelamento. NÃO baixa (não depende de zerar). Agrupa PELO
+  // NÚMERO da NF: cada nota vira um parcelamento — assim dá para marcar várias notas + suas parcelas
+  // de uma vez e o sistema separa por número, sem fazer uma por uma. Sem número de NF, cai no modo
+  // antigo (um grupo só, do mesmo fornecedor).
+  const nomeCanonicoGrupo = g => { const ns = g.map(l => String(l.leitura?.entidade || '').trim()).filter(Boolean); const reais = ns.filter(n => !ehNomeGenerico(n)); return (reais.length ? reais : ns).sort((a, b) => b.length - a.length)[0] || '' }
   async function vincularParcelamento(alvo) {
     if (bloqueadoFechado()) return
     const linhas = (alvo || []).filter(l => (l.leitura?.entidade || '').trim())
     if (linhas.length < 2) { setMsg('Marque a NOTA + as parcelas (2 linhas ou mais) para vincular o parcelamento.'); return }
-    const ents = [...new Set(linhas.map(l => chaveNome(l.leitura?.entidade || '')))]
-    if (ents.length > 1) { setMsg('São fornecedores diferentes — o parcelamento é sempre da mesma nota/fornecedor. Selecione só a nota e as parcelas dela.'); return }
-    const nf = [...new Set(linhas.map(l => String(l.leitura?.nf || '').trim()).filter(Boolean))][0] || ''
-    if (!window.confirm(`Vincular ${linhas.length} linha(s) como PARCELAMENTO${nf ? ' da NF ' + nf : ''}?\n\nA nota e as parcelas ficam agrupadas, com o saldo a pagar. NÃO baixa — só quando quitar tudo.`)) return
-    const chaves = linhas.map(sepKey)
-    const id = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : 'p' + Date.now()
-    // Tira essas linhas de qualquer parcelamento anterior desta conta e cria o novo.
-    const limpo = parcelamentos.map(p => p.conta === conta.conta ? { ...p, membros: (p.membros || []).filter(k => !chaves.includes(k)) } : p).filter(p => !(p.conta === conta.conta && (p.membros || []).length < 2))
-    const novo = [...limpo, { id, conta: conta.conta, entidade: ents[0], nf, membros: chaves, origem: 'manual' }]
+    // Agrupa pelo NÚMERO da NF (ignora zeros à esquerda; competência não é NF).
+    const porNF = {}
+    const semNF = []
+    for (const l of linhas) { const k = nfKey(l.leitura?.nf); if (!k) { semNF.push(l); continue } ;(porNF[k] = porNF[k] || []).push(l) }
+    const nfsValidas = Object.keys(porNF).filter(k => porNF[k].length >= 2)
+    const foraNF = semNF.length + Object.keys(porNF).filter(k => porNF[k].length < 2).reduce((s, k) => s + porNF[k].length, 0)
+    let grupos = []
+    if (nfsValidas.length) {
+      grupos = nfsValidas.map(k => ({ nf: String(porNF[k][0].leitura?.nf || '').trim(), membros: porNF[k], entidade: nomeCanonicoGrupo(porNF[k]) }))
+      const totL = grupos.reduce((s, g) => s + g.membros.length, 0)
+      if (!window.confirm(`Vincular ${grupos.length} parcelamento(s) pelo NÚMERO da NF (${totL} linha(s))?${foraNF ? `\n\n${foraNF} linha(s) sem número de NF (ou NF única) ficam de fora — vincule à parte se precisar.` : ''}\n\nNÃO baixa — é só a ligação (nota × parcelas) com o saldo a pagar.`)) return
+    } else {
+      // Nenhuma NF casou (número em branco): modo antigo — um grupo só, do MESMO fornecedor.
+      const ents = [...new Set(linhas.map(l => chaveNome(l.leitura?.entidade || '')))]
+      if (ents.length > 1) { setMsg('Sem número de NF para casar e são fornecedores diferentes — preencha o número da nota ("Alterar nota fiscal") ou selecione só as parcelas de uma nota.'); return }
+      grupos = [{ nf: '', membros: linhas, entidade: linhas[0].leitura?.entidade || '' }]
+      if (!window.confirm(`Vincular ${linhas.length} linha(s) como UM parcelamento (sem número de NF para casar)?\n\nNÃO baixa — é só a ligação com o saldo a pagar.`)) return
+    }
+    // Tira as linhas reaproveitadas de qualquer parcelamento anterior desta conta e cria os novos.
+    const todasChaves = new Set(grupos.flatMap(g => g.membros.map(sepKey)))
+    const limpo = parcelamentos
+      .map(p => p.conta === conta.conta ? { ...p, membros: (p.membros || []).filter(k => !todasChaves.has(k)) } : p)
+      .filter(p => !(p.conta === conta.conta && (p.membros || []).length < 2))
+    const criados = grupos.map(g => ({ id: (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : 'p' + Date.now() + Math.random().toString(36).slice(2), conta: conta.conta, entidade: g.entidade, nf: g.nf, membros: g.membros.map(sepKey), origem: 'manual' }))
+    const novo = [...limpo, ...criados]
     setParcelamentos(novo)
     await salvarNomes(nomesConf, nomesIsolados, nomesAlias, aberturaAj, acertoNomes, baixasReabertas, sugestoesRejeitadas, modoPorNome, separados, aliasesForcados, conciliadosReabertos, unificadosConf, novo)
     setSelLin(new Set())
-    setMsg(`Parcelamento vinculado${nf ? ' (NF ' + nf + ')' : ''} — ${linhas.length} linha(s) agrupadas. Não baixou (só agrupou).`)
+    setMsg(`${criados.length} parcelamento(s) vinculado(s)${nfsValidas.length ? ' pelo número da NF' : ''} — ${criados.reduce((s, g) => s + g.membros.length, 0)} linha(s) agrupadas. Não baixou (só agrupou).`)
     carregarLanc()
   }
   // Tira do parcelamento — desfaz o grupo inteiro (as linhas voltam soltas). NÃO mexe em baixa.
@@ -2987,34 +3007,39 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         return (
           <div style={{ position: 'fixed', left: '50%', bottom: 20, transform: 'translateX(-50%)', zIndex: 60, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '10px 16px', background: theme.card, border: `1px solid ${theme.accent}`, borderRadius: 12, boxShadow: '0 8px 30px rgba(0,0,0,0.4)' }}>
             <span style={{ color: theme.text, fontSize: 13 }}><b>{selLancs.length}</b> selecionado(s) · líquido <b style={{ color: zera ? theme.green : theme.yellow }}>{money(Math.abs(net))} {net < 0 ? 'C' : net > 0 ? 'D' : ''}</b> {zera ? '(zera)' : '(não zera)'}</span>
+            {/* ——— Grupo NOME (fornecedor/cliente) ——— */}
             <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={() => setLoteForn({ lines: selLancs })}>
               <i className="ti ti-user-edit" /> Corrigir {lab}
             </button>
+            <button className="btn btn-ghost" disabled={vincaveis.length < 2} title={vincaveis.length < 2 ? 'Marque 2+ linhas (com nome) para juntar num cliente só.' : 'Juntar os selecionados num CLIENTE/FORNECEDOR só (mesmo nome) — mesmo com nomes diferentes ou separados antes. NÃO baixa nada. Vale para todos os meses.'} style={{ fontSize: 12.5, color: theme.accent, borderColor: theme.accent, opacity: vincaveis.length >= 2 ? 1 : 0.5, cursor: vincaveis.length >= 2 ? 'pointer' : 'not-allowed' }} onClick={() => vincaveis.length >= 2 && setLoteForn({ lines: vincaveis, vincular: true })}>
+              <i className="ti ti-users" /> Vincular fornecedor
+            </button>
+            <button className="btn btn-ghost" disabled={!desvincaveis.length} title={!desvincaveis.length ? 'Selecione um título ou o saldo anterior (com nome).' : 'Manter estes nomes separados (não unir com parecidos) — vale para todos os meses'} style={{ fontSize: 12.5, color: theme.yellow, borderColor: theme.yellow, opacity: desvincaveis.length ? 1 : 0.5, cursor: desvincaveis.length ? 'pointer' : 'not-allowed' }} onClick={() => desvincaveis.length && desvincularLote(desvincaveis)}>
+              <i className="ti ti-arrows-split" /> Desvincular fornecedor
+            </button>
+            <span aria-hidden style={{ width: 1, alignSelf: 'stretch', background: theme.border, margin: '2px 4px' }} />
             <button className="btn btn-ghost" disabled={!reclassificaveis.length} title={!reclassificaveis.length ? 'Selecione lançamentos do razão para reclassificar.' : 'Trocar a conta destes lançamentos (uma conta por linha ou a mesma para todos)'} style={{ fontSize: 12.5, opacity: reclassificaveis.length ? 1 : 0.5, cursor: reclassificaveis.length ? 'pointer' : 'not-allowed' }} onClick={() => reclassificaveis.length && setReclassLote({ lines: reclassificaveis })}>
               <i className="ti ti-arrows-exchange" /> Reclassificar conta
             </button>
-            <button className="btn btn-ghost" disabled={vincaveis.length < 2} title={vincaveis.length < 2 ? 'Marque 2+ linhas (com nome) para juntar num cliente só.' : 'Juntar os selecionados num cliente/fornecedor só — mesmo com nomes diferentes ou separados antes. Vale para todos os meses.'} style={{ fontSize: 12.5, color: theme.accent, borderColor: theme.accent, opacity: vincaveis.length >= 2 ? 1 : 0.5, cursor: vincaveis.length >= 2 ? 'pointer' : 'not-allowed' }} onClick={() => vincaveis.length >= 2 && setLoteForn({ lines: vincaveis, vincular: true })}>
-              <i className="ti ti-arrows-join" /> Vincular
-            </button>
-            {ehEntidadeConta && (
-              <button className="btn btn-ghost" disabled={vincaveis.length < 2} title={vincaveis.length < 2 ? 'Marque a NOTA + as parcelas (2+ linhas do mesmo fornecedor).' : 'Agrupar a nota e as parcelas do mesmo fornecedor (parcelamento) — mostra o saldo a pagar. NÃO baixa.'} style={{ fontSize: 12.5, color: theme.accent, borderColor: theme.accent, opacity: vincaveis.length >= 2 ? 1 : 0.5, cursor: vincaveis.length >= 2 ? 'pointer' : 'not-allowed' }} onClick={() => vincaveis.length >= 2 && vincularParcelamento(vincaveis)}>
-                <i className="ti ti-receipt-2" /> Vincular parcelamento
-              </button>
-            )}
-            <button className="btn btn-ghost" disabled={!desvincaveis.length} title={!desvincaveis.length ? 'Selecione um título ou o saldo anterior (com nome).' : 'Manter estes nomes separados (não unir com parecidos) — vale para todos os meses'} style={{ fontSize: 12.5, color: theme.yellow, borderColor: theme.yellow, opacity: desvincaveis.length ? 1 : 0.5, cursor: desvincaveis.length ? 'pointer' : 'not-allowed' }} onClick={() => desvincaveis.length && desvincularLote(desvincaveis)}>
-              <i className="ti ti-arrows-split" /> Desvincular
-            </button>
+            <span aria-hidden style={{ width: 1, alignSelf: 'stretch', background: theme.border, margin: '2px 4px' }} />
+            {/* ——— Grupo NOTA FISCAL / baixa (longe do "Vincular fornecedor" de propósito) ——— */}
             {(() => {
               // Conectar (baixar) só quando ZERA (2+ linhas cujo líquido é 0). Se não zera,
               // o botão fica desabilitado — não dá nem para apertar.
               const podeConectar = selLancs.length >= 2 && zera
-              const motivo = selLancs.length < 2 ? 'Selecione ao menos 2 lançamentos (nota + pagamento).' : !zera ? `Só dá para conectar quando o líquido ZERA — aqui sobra ${money(Math.abs(net))} ${net < 0 ? 'C' : 'D'}.` : 'Conectar e baixar (vão para Conciliados)'
+              const motivo = selLancs.length < 2 ? 'Selecione ao menos 2 lançamentos (nota + pagamento).' : !zera ? `Só dá para conectar quando o líquido ZERA — aqui sobra ${money(Math.abs(net))} ${net < 0 ? 'C' : 'D'}.` : 'Conectar e baixar ESTA seleção como UM par (o líquido tem que zerar) — vão para Conciliados'
               return (
                 <button className="btn" disabled={!podeConectar} title={motivo} style={{ fontSize: 12.5, background: podeConectar ? theme.green : undefined, borderColor: podeConectar ? theme.green : undefined, opacity: podeConectar ? 1 : 0.5, cursor: podeConectar ? 'pointer' : 'not-allowed' }} onClick={conectarSelecionados}>
                   <i className="ti ti-link" /> Conectar (baixar)
                 </button>
               )
             })()}
+            {ehEntidadeConta && (
+              <button className="btn btn-ghost" disabled={vincaveis.length < 2} title={vincaveis.length < 2 ? 'Marque a NOTA + as parcelas (2+ linhas) para vincular o parcelamento.' : 'Agrupar nota + parcelas em parcelamento(s), casando PELO NÚMERO da NF — cada nota vira um grupo, não precisa fazer uma por uma. NÃO baixa (não depende de zerar) — é só a ligação visual com o saldo a pagar.'} style={{ fontSize: 12.5, color: theme.accent, borderColor: theme.accent, opacity: vincaveis.length >= 2 ? 1 : 0.5, cursor: vincaveis.length >= 2 ? 'pointer' : 'not-allowed' }} onClick={() => vincaveis.length >= 2 && vincularParcelamento(vincaveis)}>
+                <i className="ti ti-stack-2" /> Vincular parcelamento
+              </button>
+            )}
+            <span aria-hidden style={{ width: 1, alignSelf: 'stretch', background: theme.border, margin: '2px 4px' }} />
             <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={() => setSelLin(new Set())}><i className="ti ti-x" /> Limpar</button>
           </div>
         )
