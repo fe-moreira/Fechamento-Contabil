@@ -3960,12 +3960,19 @@ function ModalLancamento({ lanc, conta, lab, plano, natCredito, residuo = 0, onC
               <button className="btn btn-ghost" style={{ flex: 1 }} onClick={() => setTipo('Justificativa')}><i className="ti ti-flag" /> Justificar</button>
               <button className="btn" style={{ flex: 1 }} onClick={() => setTipo('Correção')}><i className="ti ti-pencil-bolt" /> Corrigir</button>
             </div>
+            <button className="btn btn-ghost" style={{ width: '100%', marginTop: 10, fontSize: 13 }} onClick={() => setTipo('NF')}><i className="ti ti-receipt" /> Alterar nota fiscal (só a NF — não mexe no lançamento)</button>
             <button className="btn btn-ghost" style={{ width: '100%', marginTop: 10, fontSize: 13 }} onClick={estornarLanc}><i className="ti ti-arrow-back-up" /> Estornar este lançamento (partida inversa)</button>
           </>
         ) : tipo === 'Justificativa' ? (
           <>
             <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 10 }}>Fica registrada na auditoria com seu usuário e a data.</p>
             <textarea className="input" rows={3} value={txt} onChange={e => setTxt(e.target.value)} autoFocus placeholder="Por que este lançamento está assim (variação esperada, etc.)…" />
+          </>
+        ) : tipo === 'NF' ? (
+          <>
+            <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 10 }}><i className="ti ti-receipt" style={{ color: theme.accent, marginRight: 6 }} /><b style={{ color: theme.text }}>Alterar nota fiscal</b> — só informa/corrige o <b>número da NF</b> desta linha. <b>Não</b> cria lançamento e <b>não</b> mexe no débito/crédito. Fica salvo e é reaplicado (ajuste de leitura).</p>
+            <div style={{ maxWidth: 260 }}><label>Número da NF</label><input className="input" value={ajuste.nf} onChange={setAj('nf')} autoFocus placeholder="Nº da nota fiscal" /></div>
+            <div style={{ marginTop: 12 }}><label>Observação na auditoria (opcional)</label><input className="input" value={txt} onChange={e => setTxt(e.target.value)} placeholder="Ex.: NF não veio no razão — informada à mão" /></div>
           </>
         ) : (
           <>
