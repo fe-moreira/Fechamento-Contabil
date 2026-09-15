@@ -857,11 +857,23 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     const nome = String(oficial).trim(); if (!nome) { setMsg('Nome vazio — cancelado.'); return }
     const ids = (g.lancs || []).map(l => l.id).filter(x => x != null)
     const { aliasForcado } = aplicarLink(g.lancs, ids, aliasesForcados, nome) // aprende variações → oficial (pula genérico)
+    // APLICA o nome oficial em TODAS as linhas do grupo — não basta aprender p/ o futuro. Sem isto,
+    // as linhas de saldo anterior (aberturaAj) e os acertos mantinham o nome ANTIGO e o grupo
+    // continuava mostrando outro nome que não o que o usuário definiu no "Confirmar nome".
+    const aberAj = { ...aberturaAj }
+    const acMap = { ...acertoNomes }
+    const razaoIds = []
+    for (const l of (g.lancs || [])) {
+      if (l._abertura) { const key = chaveAberturaAj(l); aberAj[key] = { ...(aberAj[key] || {}), entidade: nome } }
+      else if (l.acerto) { const rid = String(l.id).replace(/^ac_/, ''); if (rid) acMap[rid] = nome }
+      else if (l.id != null) razaoIds.push(l.id)
+    }
+    if (razaoIds.length) { const cid = await getCompetenciaId(); if (cid) { try { await supabase.from('ajuste_leitura').upsert(razaoIds.map(rid => ({ competencia_id: cid, razao_id: rid, entidade: nome, usuario })), { onConflict: 'razao_id' }) } catch { /* segue */ } } }
     const novoUnif = new Set(unificadosConf); novoUnif.add(chaveNome(nome))
     const novoConf = new Set(nomesConf); novoConf.add(chaveNome(nome))
-    setAliasesForcados(aliasForcado); setUnificadosConf(novoUnif); setNomesConf(novoConf)
-    await salvarNomes(novoConf, nomesIsolados, nomesAlias, aberturaAj, acertoNomes, baixasReabertas, sugestoesRejeitadas, modoPorNome, separados, aliasForcado, conciliadosReabertos, novoUnif)
-    setMsg(`Unificação confirmada como "${nome}" — aprendido para os próximos meses.`)
+    setAliasesForcados(aliasForcado); setUnificadosConf(novoUnif); setNomesConf(novoConf); setAberturaAj(aberAj); setAcertoNomes(acMap)
+    await salvarNomes(novoConf, nomesIsolados, nomesAlias, aberAj, acMap, baixasReabertas, sugestoesRejeitadas, modoPorNome, separados, aliasForcado, conciliadosReabertos, novoUnif)
+    setMsg(`Unificação confirmada como "${nome}" — nome aplicado nas linhas e aprendido para os próximos meses.`)
     carregarLanc()
   }
   // Desvincular UMA linha (este fornecedor é diferente): não basta marcar "isolado" — se a
