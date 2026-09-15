@@ -2769,7 +2769,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
                     <i className="ti ti-pencil" style={{ fontSize: 14 }} />
                   </button>
                 )}
-                {g.unido && !unificadosConf.has(chaveNome(g.nome)) && <span title={`Nomes unidos: ${g.variacoes.join(' · ')}`} style={{ background: 'rgba(74,124,255,0.18)', color: theme.accent, fontSize: 10.5, fontWeight: 700, padding: '2px 8px', borderRadius: 20, textTransform: 'uppercase', letterSpacing: .3, cursor: 'help' }}><i className="ti ti-arrows-join" /> {g.variacoes.length} nomes unidos</span>}
+                {g.unido && !g.variacoes.some(v => unificadosConf.has(chaveNome(v))) && <span title={`Nomes unidos: ${g.variacoes.join(' · ')}`} style={{ background: 'rgba(74,124,255,0.18)', color: theme.accent, fontSize: 10.5, fontWeight: 700, padding: '2px 8px', borderRadius: 20, textTransform: 'uppercase', letterSpacing: .3, cursor: 'help' }}><i className="ti ti-arrows-join" /> {g.variacoes.length} nomes unidos</span>}
                 {anom && <span style={{ background: 'rgba(229,72,77,0.18)', color: theme.red, fontSize: 10.5, fontWeight: 700, padding: '2px 8px', borderRadius: 20, textTransform: 'uppercase', letterSpacing: .3 }}><i className="ti ti-alert-octagon" /> saldo {natAnom}</span>}
               </span>
               <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -2783,7 +2783,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
                 <span style={{ color: anom ? theme.red : theme.text, fontSize: 14, fontWeight: 600 }}>{money(gt)}</span>
               </span>
             </div>
-            {g.unido && !unificadosConf.has(chaveNome(g.nome)) && (
+            {g.unido && !g.variacoes.some(v => unificadosConf.has(chaveNome(v))) && (
               <div style={{ padding: '8px 16px', borderTop: `1px solid ${theme.border}`, background: 'rgba(74,124,255,0.05)', fontSize: 11.5, color: theme.sub, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                 <span style={{ whiteSpace: 'nowrap' }}><i className="ti ti-arrows-join" style={{ color: theme.accent, marginRight: 6 }} />Unificado de:</span>
                 {g.variacoes.map((v, vi) => (
