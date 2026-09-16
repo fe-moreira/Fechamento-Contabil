@@ -1650,7 +1650,10 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const totalSemTitulo = lista.reduce((n, g) => n + baixaSemTitulo(g).size, 0)
   // Linhas pendentes (não tratadas) de uma entidade e se ela pode ser confirmada em lote:
   // composição já ZERADA, nome identificado, sem erro de NF/natureza e com pendências.
-  const pendentesEnt = g => g.lancs.filter(l => l.id && !l.acerto && !jaTratada(l))
+  // Pendentes de uma entidade que já ZEROU: TODAS as pernas ainda não baixadas — inclusive as de
+  // "Saldo anterior" (abertura, que NÃO têm id) e os acertos. Antes exigia `l.id`, então a perna de
+  // abertura ficava de fora e o "Confirmar" baixava só a de razão, deixando a outra em aberto.
+  const pendentesEnt = g => g.lancs.filter(l => (l.id != null || l._abertura) && !l.acerto && !jaTratada(l) && !foiConfirmado(l))
   const podeConfirmarEnt = g => Math.abs(g.total) < 0.005 && g.total >= -0.005 && !g.unk && baixaSemTitulo(g).size === 0 && pendentesEnt(g).length > 0
   const confirmaveis = lista.filter(podeConfirmarEnt)
   // SUGESTÕES DE VÍNCULO: pares EM ABERTO do MESMO cliente e MESMO valor em lados opostos
@@ -1910,10 +1913,13 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // identificada pela chave estável "AB·…" no campo item; razão vai pelo razao_id (uuid).
   const linhaAuditoria = (l, id, nome) => ({
     competencia_id: id, modulo: 'Conciliação',
-    item: l._abertura ? chaveAbertura(l) : `${conta.conta} · ${l.data || ''} · NF ${l.leitura.nf || '—'}`,
+    // Abertura (saldo anterior): chave SEM nome (conta·data·NF·valor) — o nome da perna de abertura
+    // costuma vir diferente do bloco (ex.: "CORPOTEC ... LTDA" × "ADIANTAMENTO DE CLIENTES CORPOTEC")
+    // e, chaveando pelo nome, a baixa não era reconhecida na releitura e a perna voltava pro em aberto.
+    item: l._abertura ? chaveAbBaixa(l) : `${conta.conta} · ${l.data || ''} · NF ${l.leitura.nf || '—'}`,
     tipo: 'Justificativa',
-    detalhe: `Confirmado em lote — ${nome}: composição identificada e zerada no mês (título e baixa se compensam), sem NF.`,
-    razao_id: l._abertura ? null : l.id, usuario,
+    detalhe: `Confirmado em lote — ${nome}: composição identificada e zerada no mês (título e baixa se compensam).`,
+    razao_id: l._abertura ? null : (l.acerto ? String(l.id).replace(/^ac_/, '') : l.id), usuario,
   })
   const marcarTratadas = linhas => {
     setTratados(prev => { const s = new Set(prev); linhas.filter(l => !l._abertura).forEach(l => s.add(l.id)); return s })
@@ -1921,7 +1927,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   }
   async function confirmarEntidade(grupo, nome) {
     if (bloqueadoFechado()) return
-    const alvo = (grupo || []).filter(l => l.id && !l.acerto && !jaTratada(l))
+    const alvo = (grupo || []).filter(l => (l.id != null || l._abertura) && !l.acerto && !jaTratada(l) && !foiConfirmado(l))
     if (!alvo.length) return
     if (!window.confirm(`Confirmar ${alvo.length} lançamento(s) de "${nome}" como conferidos? A composição já está zerada (título e baixa se compensam) — isso marca as linhas como revisadas com justificativa, sem abrir uma a uma.`)) return
     const id = await getCompetenciaId()
@@ -1975,27 +1981,18 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     const net = alvo.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
     // Conectar SÓ quando ZERA. Se sobra diferença, não conecta (o botão já fica desabilitado).
     if (Math.abs(net) >= 0.005) { setMsg(`Só dá para conectar quando o líquido ZERA. Ainda sobra ${money(Math.abs(net))} ${net < 0 ? 'C' : 'D'} — ajuste a seleção.`); return }
-    // Se a seleção mistura fornecedores com NOMES DIFERENTES (não são o mesmo cliente), PEDE o nome
-    // correto do fornecedor antes de unir. Isso (a) evita fundir por engano fornecedores distintos
-    // — o que poluía os apelidos — e (b) deixa o bloco com o NOME certo. O nome confirmado vira o
-    // canônico do vínculo (e é aprendido p/ os próximos meses).
+    // MESMO BLOCO: só baixa quando os selecionados são o MESMO fornecedor/cliente (mesmo bloco). Se
+    // estiverem em BLOCOS DIFERENTES, NÃO baixa — mesmo batendo NF/valor — porque o par ficaria
+    // espalhado em blocos diferentes no relatório de zeramento. Avisa para VINCULAR o fornecedor
+    // primeiro (o botão "Vincular fornecedor" junta os selecionados num nome só) e só então baixar.
     const nomesSel = [...new Set(alvo.map(l => String(l.leitura?.entidade || '').trim()).filter(Boolean))]
-    const tksSel = nomesSel.map(tokensNome)
-    const fornecedoresDiferentes = nomesSel.length > 1 && !tksSel.every(t => mesmoCliente(t, tksSel[0]))
-    let nomeAlvo = ''
-    if (fornecedoresDiferentes) {
-      const sugestao = nomesSel.slice().sort((a, b) => b.length - a.length)[0] || ''
-      const r = window.prompt(
-        `Estes lançamentos têm nomes de FORNECEDOR diferentes:\n\n· ${nomesSel.join('\n· ')}\n\n` +
-        `São o MESMO fornecedor? Confirme (ou corrija) o nome certo deste bloco — vale para os próximos meses.\n` +
-        `Se forem fornecedores DIFERENTES de verdade, clique Cancelar e não conecte.`, sugestao)
-      if (r == null) return // cancelou → não conecta
-      nomeAlvo = String(r).trim()
-      if (!nomeAlvo) { setMsg('Nome do fornecedor vazio — conexão cancelada.'); return }
-    } else if (!window.confirm(`Conectar ${alvo.length} lançamento(s)? Eles zeram entre si e vão para Conciliados.`)) {
+    const blocosDiferentes = nomesSel.length > 1 && !nomesSel.every(n => mesmoFornecedor(nomesSel[0], tokensNome(nomesSel[0]), n, tokensNome(n)))
+    if (blocosDiferentes) {
+      setMsg(`Batem em valor, mas estão em ${String(lab || 'fornecedor').toLowerCase()}s/blocos diferentes: ${nomesSel.join(' × ')}. Para baixarem juntos e ficarem no MESMO bloco no relatório, primeiro clique em "Vincular fornecedor" (junta num nome só) e depois baixe.`)
       return
     }
-    await baixarConexao(alvo, undefined, nomeAlvo)
+    if (!window.confirm(`Conectar ${alvo.length} lançamento(s)? Eles zeram entre si e vão para Conciliados.`)) return
+    await baixarConexao(alvo, undefined, '')
   }
   // Ao CONECTAR, dá o mesmo nome às linhas do vínculo — mas SÓ NAS LINHAS SELECIONADAS. NÃO cria
   // apelido GLOBAL (que arrastava todo o resto do fornecedor para o bloco, ex.: SILVIA/GMMG/IGOR
