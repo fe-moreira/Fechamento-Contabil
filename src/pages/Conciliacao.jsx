@@ -2038,10 +2038,10 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   })
   async function conectarSelecionados() {
     const alvo = lanc.filter(l => selLin.has(selKeyU(l)))
-    if (alvo.length < 2) { setMsg('Selecione ao menos 2 lançamentos (a nota e o pagamento) para baixar.'); return }
+    if (alvo.length < 2) { window.alert('Não dá para baixar: selecione ao menos 2 lançamentos (a nota e o pagamento).'); return }
     const net = alvo.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
     // Baixa SÓ quando ZERA. Se sobra diferença, não baixa (o botão já fica desabilitado).
-    if (Math.abs(net) >= 0.005) { setMsg(`Só dá para baixar quando o líquido ZERA. Ainda sobra ${money(Math.abs(net))} ${net < 0 ? 'C' : 'D'} — ajuste a seleção.`); return }
+    if (Math.abs(net) >= 0.005) { window.alert(`Não dá para baixar: o líquido NÃO ZERA — ainda sobra ${money(Math.abs(net))} ${net < 0 ? 'C' : 'D'}. Ajuste a seleção para o total dar zero.`); return }
     // MESMO BLOCO: só baixa quando os selecionados são o MESMO fornecedor/cliente (mesmo bloco). Se
     // estiverem em BLOCOS DIFERENTES, NÃO baixa — mesmo batendo NF/valor — porque o par ficaria
     // espalhado em blocos diferentes no relatório de zeramento. Avisa para VINCULAR o fornecedor
@@ -2049,7 +2049,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     const nomesSel = [...new Set(alvo.map(l => String(l.leitura?.entidade || '').trim()).filter(Boolean))]
     const blocosDiferentes = nomesSel.length > 1 && !nomesSel.every(n => mesmoFornecedor(nomesSel[0], tokensNome(nomesSel[0]), n, tokensNome(n)))
     if (blocosDiferentes) {
-      setMsg(`Batem em valor, mas estão em ${String(lab || 'fornecedor').toLowerCase()}s/blocos diferentes: ${nomesSel.join(' × ')}. Para baixarem juntos e ficarem no MESMO bloco no relatório, primeiro clique em "Vincular fornecedor" (junta num nome só) e depois baixe.`)
+      window.alert(`Não dá para baixar juntos: são ${String(lab || 'fornecedor').toLowerCase()}s DIFERENTES (${nomesSel.join(' × ')}).\n\nO valor até zera, mas cada um é de um fornecedor. Se são o MESMO, clique primeiro em "Vincular fornecedor" (junta num nome só) e depois baixe. Se são diferentes de verdade, baixe cada um com o seu par.`)
       return
     }
     if (!window.confirm(`Baixar ${alvo.length} lançamento(s)? Eles zeram entre si e vão para Conciliados.`)) return
