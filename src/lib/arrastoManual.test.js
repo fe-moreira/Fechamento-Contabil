@@ -13,34 +13,44 @@ const baixaAbertura = (data, cents, nf = '') => ({ detalhe: 'Confirmado em lote'
 const linhaRazao = (id, data, deb, cred, nf = '') => ({ id, data, debito: deb, credito: cred, leitura: { nf } })
 const linhaAbertura = (data, deb, cred, nf = '') => ({ _abertura: true, abertura: true, data, debito: deb, credito: cred, leitura: { nf, abertura: true } })
 
-describe('descartarBaixadasManuais — colisão de gêmeas sem NF', () => {
-  it('duas gêmeas sem NF, só UMA baixada → arrasta exatamente UMA (não zero, não as duas)', () => {
+describe('descartarBaixadasManuais — trava "baixa que não zera não baixa"', () => {
+  it('par completo (título crédito + pagamento débito) baixado e ZERA → remove os dois', () => {
     const lanc = [
-      linhaRazao('a', '2026-06-01', 0, 1000),  // gêmea 1 (crédito 1.000, sem NF)
-      linhaRazao('b', '2026-06-01', 0, 1000),  // gêmea 2 (crédito 1.000, sem NF)
+      linhaRazao('t', '2026-06-01', 0, 1000), // título crédito 1.000
+      linhaRazao('p', '2026-06-05', 1000, 0), // pagamento débito 1.000
     ]
-    // uma única baixa registrada para a chave "7865 · 2026-06-01 · NF —"
-    const audit = [baixaRazao('2026-06-01')]
-    const abertos = descartarBaixadasManuais(lanc, new Set(), audit, CONTA)
-    expect(abertos).toHaveLength(1) // consumiu 1, sobrou 1 — NÃO retirou as duas
-  })
-
-  it('duas gêmeas, DUAS baixadas → não arrasta nenhuma', () => {
-    const lanc = [linhaRazao('a', '2026-06-01', 0, 1000), linhaRazao('b', '2026-06-01', 0, 1000)]
-    const audit = [baixaRazao('2026-06-01'), baixaRazao('2026-06-01')]
+    const audit = [baixaRazao('2026-06-01'), baixaRazao('2026-06-05')]
     expect(descartarBaixadasManuais(lanc, new Set(), audit, CONTA)).toHaveLength(0)
   })
 
-  it('par título(abertura)+pagamento(razão) sem NF baixado → tira as DUAS pernas, equilíbrio zero', () => {
+  it('TRAVA: só UMA perna do par reconhecida (reimportação quebrou o vínculo) → NÃO remove, carrega as duas', () => {
+    const lanc = [
+      linhaRazao('t', '2026-06-01', 0, 1000), // título crédito 1.000 (reconhecido)
+      linhaRazao('p', '2026-06-05', 1000, 0), // pagamento débito 1.000 (SEM registro)
+    ]
+    const audit = [baixaRazao('2026-06-01')] // só o título tem baixa registrada → conjunto não zera
+    const abertos = descartarBaixadasManuais(lanc, new Set(), audit, CONTA)
+    expect(abertos).toHaveLength(2) // não zera → não baixa → as duas seguem em aberto
+    expect(abertos.reduce((s, l) => s + l.debito - l.credito, 0)).toBe(0) // equilibradas
+  })
+
+  it('gêmeas: DOIS pares completos baixados (zeram) → remove todos', () => {
+    const lanc = [
+      linhaRazao('t1', '2026-06-01', 0, 1000), linhaRazao('t2', '2026-06-01', 0, 1000), // 2 títulos crédito
+      linhaRazao('p1', '2026-06-05', 1000, 0), linhaRazao('p2', '2026-06-05', 1000, 0), // 2 pagamentos débito
+    ]
+    const audit = [baixaRazao('2026-06-01'), baixaRazao('2026-06-01'), baixaRazao('2026-06-05'), baixaRazao('2026-06-05')]
+    expect(descartarBaixadasManuais(lanc, new Set(), audit, CONTA)).toHaveLength(0)
+  })
+
+  it('par título(abertura)+pagamento(razão) sem NF baixado e zera → tira as DUAS pernas', () => {
     const lanc = [
       linhaAbertura('2026-06-01', 0, 1000),   // título: crédito 1.000 (cents -100000)
-      linhaRazao('p', '2026-06-01', 1000, 0), // pagamento: débito 1.000
+      linhaRazao('p', '2026-06-05', 1000, 0), // pagamento: débito 1.000
     ]
-    const audit = [baixaAbertura('2026-06-01', -100000), baixaRazao('2026-06-01')]
+    const audit = [baixaAbertura('2026-06-01', -100000), baixaRazao('2026-06-05')]
     const abertos = descartarBaixadasManuais(lanc, new Set(), audit, CONTA)
     expect(abertos).toHaveLength(0)
-    const net = abertos.reduce((s, l) => s + l.debito - l.credito, 0)
-    expect(net).toBe(0)
   })
 
   it('linha do automático (Set baixados) nunca arrasta, mesmo sem baixa manual', () => {
