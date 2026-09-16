@@ -1492,6 +1492,17 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // é "reabra o par certo"; a primeira é completar a abertura em Base de Informações.
   const difAbertura = ehEntidade ? ((Number(conta.saldo_inicial) || 0) - aberturaSoma) : 0
   const difBaixa = dif - difAbertura
+  // DIAGNÓSTICO TEMPORÁRIO (remover depois): quando a abertura não bate, imprime no console a
+  // composição de abertura por fornecedor, para achar exatamente de onde vem a diferença.
+  if (typeof window !== 'undefined' && ehEntidade && Math.abs(difAbertura) > 1) {
+    try {
+      const abs = lanc.filter(l => l._abertura)
+      const porEnt = {}
+      for (const l of abs) { const k = `${(l.leitura?.entidade || '(sem)')}${nfKey(l.leitura?.nf) ? '' : ' [semNF]'}`; const o = porEnt[k] || (porEnt[k] = { n: 0, net: 0 }); o.n++; o.net += (Number(l.debito) || 0) - (Number(l.credito) || 0) }
+      const lista = Object.entries(porEnt).map(([k, v]) => ({ ent: k, n: v.n, net: Math.round(v.net * 100) / 100 })).sort((a, b) => Math.abs(b.net) - Math.abs(a.net)).slice(0, 30)
+      console.log('[AMARR]', conta.conta, conta.nome, { saldo_inicial: Math.round((Number(conta.saldo_inicial) || 0) * 100) / 100, aberturaSoma: Math.round(aberturaSoma * 100) / 100, difAbertura: Math.round(difAbertura * 100) / 100, nAbertura: abs.length, top: lista })
+    } catch { /* diag */ }
+  }
 
   // Termos de busca (nome / NF / valor) — definidos AQUI (antes das seções de reabrir) para que
   // a busca alcance também os CONCILIADOS e os BAIXADOS por NF, e não só o em aberto.
