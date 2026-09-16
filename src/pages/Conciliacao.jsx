@@ -2020,10 +2020,10 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   })
   async function conectarSelecionados() {
     const alvo = lanc.filter(l => selLin.has(selKeyU(l)))
-    if (alvo.length < 2) { setMsg('Selecione ao menos 2 lançamentos (a nota e o pagamento) para conectar.'); return }
+    if (alvo.length < 2) { setMsg('Selecione ao menos 2 lançamentos (a nota e o pagamento) para baixar.'); return }
     const net = alvo.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
-    // Conectar SÓ quando ZERA. Se sobra diferença, não conecta (o botão já fica desabilitado).
-    if (Math.abs(net) >= 0.005) { setMsg(`Só dá para conectar quando o líquido ZERA. Ainda sobra ${money(Math.abs(net))} ${net < 0 ? 'C' : 'D'} — ajuste a seleção.`); return }
+    // Baixa SÓ quando ZERA. Se sobra diferença, não baixa (o botão já fica desabilitado).
+    if (Math.abs(net) >= 0.005) { setMsg(`Só dá para baixar quando o líquido ZERA. Ainda sobra ${money(Math.abs(net))} ${net < 0 ? 'C' : 'D'} — ajuste a seleção.`); return }
     // MESMO BLOCO: só baixa quando os selecionados são o MESMO fornecedor/cliente (mesmo bloco). Se
     // estiverem em BLOCOS DIFERENTES, NÃO baixa — mesmo batendo NF/valor — porque o par ficaria
     // espalhado em blocos diferentes no relatório de zeramento. Avisa para VINCULAR o fornecedor
@@ -2034,7 +2034,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       setMsg(`Batem em valor, mas estão em ${String(lab || 'fornecedor').toLowerCase()}s/blocos diferentes: ${nomesSel.join(' × ')}. Para baixarem juntos e ficarem no MESMO bloco no relatório, primeiro clique em "Vincular fornecedor" (junta num nome só) e depois baixe.`)
       return
     }
-    if (!window.confirm(`Conectar ${alvo.length} lançamento(s)? Eles zeram entre si e vão para Conciliados.`)) return
+    if (!window.confirm(`Baixar ${alvo.length} lançamento(s)? Eles zeram entre si e vão para Conciliados.`)) return
     await baixarConexao(alvo, undefined, '')
   }
   // Ao CONECTAR, dá o mesmo nome às linhas do vínculo — mas SÓ NAS LINHAS SELECIONADAS. NÃO cria
@@ -3012,7 +3012,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
                       style={{ borderTop: `1px solid ${theme.border}`, borderLeft: it.parcel ? '3px solid rgba(74,124,255,0.55)' : undefined, cursor: 'pointer', opacity: (l.acerto || tratado) ? 0.7 : 1, background: (l.acerto || tratado) ? 'rgba(48,164,108,0.08)' : semNF ? 'rgba(229,72,77,0.08)' : it.parcel ? 'rgba(74,124,255,0.03)' : 'transparent' }}
                       title={l.acerto ? `${tagAcertoLanc(l).titulo} — clique para ver ou desfazer` : herdada ? 'Veio validado do mês anterior — clique para corrigir se precisar' : jaTratada(l) ? 'Já conferido — clique para ver ou desfazer' : semNF ? 'Baixa com NF que não confere com o título — justifique ou corrija' : 'Justificar ou corrigir este lançamento'}>
                       <td style={{ ...td, textAlign: 'center' }} onClick={e => e.stopPropagation()}>
-                        <input type="checkbox" title="Conectar com outro (baixa manual)" checked={selLin.has(selKeyU(l))} onChange={() => toggleSelLin(l)} style={{ cursor: 'pointer', width: 15, height: 15 }} />
+                        <input type="checkbox" title="Selecionar para baixar (baixa manual)" checked={selLin.has(selKeyU(l))} onChange={() => toggleSelLin(l)} style={{ cursor: 'pointer', width: 15, height: 15 }} />
                       </td>
                       <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{fmtDataBR(l.data) || '—'}</td>
                       <td style={{ ...td, color: semNF ? theme.red : theme.sub, fontWeight: 600 }}>NF {l.leitura.nf || '—'}</td>
@@ -3189,10 +3189,10 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
               // Conectar (baixar) só quando ZERA (2+ linhas cujo líquido é 0). Se não zera,
               // o botão fica desabilitado — não dá nem para apertar.
               const podeConectar = selLancs.length >= 2 && zera
-              const motivo = selLancs.length < 2 ? 'Selecione ao menos 2 lançamentos (nota + pagamento).' : !zera ? `Só dá para conectar quando o líquido ZERA — aqui sobra ${money(Math.abs(net))} ${net < 0 ? 'C' : 'D'}.` : 'Conectar e baixar ESTA seleção como UM par (o líquido tem que zerar) — vão para Conciliados'
+              const motivo = selLancs.length < 2 ? 'Selecione ao menos 2 lançamentos (nota + pagamento).' : !zera ? `Só dá para baixar quando o líquido ZERA — aqui sobra ${money(Math.abs(net))} ${net < 0 ? 'C' : 'D'}.` : 'Baixar ESTA seleção (o líquido tem que zerar) — vão para Conciliados'
               return (
                 <button className="btn" disabled={!podeConectar} title={motivo} style={{ fontSize: 12.5, background: podeConectar ? theme.green : undefined, borderColor: podeConectar ? theme.green : undefined, opacity: podeConectar ? 1 : 0.5, cursor: podeConectar ? 'pointer' : 'not-allowed' }} onClick={conectarSelecionados}>
-                  <i className="ti ti-link" /> Conectar (baixar)
+                  <i className="ti ti-link" /> Baixar
                 </button>
               )
             })()}
@@ -3416,7 +3416,7 @@ function ListaLancamentos({ lanc, carregando, contraDe, planoMap, tratados = new
                 <tr key={i} onClick={() => onTratar(l)} style={{ borderTop: `1px solid ${theme.border}`, cursor: 'pointer', opacity: (l.acerto || tratados.has(l.id)) ? 0.7 : 1, background: (l.acerto || tratados.has(l.id)) ? 'rgba(48,164,108,0.08)' : 'transparent' }} title={l.acerto ? `${tagAcertoLanc(l).titulo} — clique para ver ou desfazer` : tratados.has(l.id) ? 'Já tratado — clique para ver ou desfazer' : 'Justificar ou corrigir este lançamento'}>
                   {selectable && (
                     <td style={{ ...td, textAlign: 'center' }} onClick={e => e.stopPropagation()}>
-                      <input type="checkbox" title="Conectar com outro (baixa manual)" checked={selLin?.has(selKey(l))} onChange={() => onToggleSel(l)} style={{ cursor: 'pointer', width: 15, height: 15 }} />}
+                      <input type="checkbox" title="Selecionar para baixar (baixa manual)" checked={selLin?.has(selKey(l))} onChange={() => onToggleSel(l)} style={{ cursor: 'pointer', width: 15, height: 15 }} />}
                     </td>
                   )}
                   <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{fmtDataBR(l.data) || '—'}</td>
