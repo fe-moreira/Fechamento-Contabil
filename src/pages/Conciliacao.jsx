@@ -713,6 +713,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const ajCred = lanc.reduce((s, l) => l.acerto ? s + (Number(l.credito) || 0) : s, 0)
   const ajNet = ajDeb - ajCred
   const [carregando, setCarregando] = useState(true)
+  const [processando, setProcessando] = useState(false) // indicador VISÍVEL de "pensando" (ações + recargas)
   // Preserva a POSIÇÃO DE SCROLL nas recargas IN-PLACE (reabrir/confirmar/conectar/corrigir): sem
   // isso a tela some no "Carregando…" e o navegador volta pro topo. Só restaura quando é a MESMA
   // conta (troca de conta abre no topo normalmente).
@@ -1063,7 +1064,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     const _ck = `${compId}·${conta.conta}`
     scrollRef.current = (_ck === contaKeyRef.current && typeof window !== 'undefined') ? window.scrollY : null
     contaKeyRef.current = _ck
-    setCarregando(true)
+    setCarregando(true); setProcessando(true)
     const contasRz = await contasDoRazao()
     const [rz, { data: aj }, { data: acs }, abertura, { data: cn }, { data: compInteg }] = await Promise.all([
       lerRazaoContas(compId, contasRz),
@@ -1248,7 +1249,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     // nota marca outra de mesmo valor (ex.: duas aberturas de R$ 7.385,96, NF 3232 e 3255).
     const _todas = [...aberturaDedup.map(a => bump({ ...a, _abertura: true })), ...rzProc, ...acertoLancs]
     setLanc(_todas.map((l, i) => ({ ...l, _uid: `u${i}` })))
-    setCarregando(false)
+    setCarregando(false); setProcessando(false)
   }
   useEffect(() => { carregarLanc() }, [compId, conta.conta]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1492,17 +1493,6 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // é "reabra o par certo"; a primeira é completar a abertura em Base de Informações.
   const difAbertura = ehEntidade ? ((Number(conta.saldo_inicial) || 0) - aberturaSoma) : 0
   const difBaixa = dif - difAbertura
-  // DIAGNÓSTICO TEMPORÁRIO (remover depois): quando a abertura não bate, imprime no console a
-  // composição de abertura por fornecedor, para achar exatamente de onde vem a diferença.
-  if (typeof window !== 'undefined' && ehEntidade && Math.abs(difAbertura) > 1) {
-    try {
-      const abs = lanc.filter(l => l._abertura)
-      const porEnt = {}
-      for (const l of abs) { const k = `${(l.leitura?.entidade || '(sem)')}${nfKey(l.leitura?.nf) ? '' : ' [semNF]'}`; const o = porEnt[k] || (porEnt[k] = { n: 0, net: 0 }); o.n++; o.net += (Number(l.debito) || 0) - (Number(l.credito) || 0) }
-      const lista = Object.entries(porEnt).map(([k, v]) => ({ ent: k, n: v.n, net: Math.round(v.net * 100) / 100 })).sort((a, b) => Math.abs(b.net) - Math.abs(a.net)).slice(0, 30)
-      console.log('[AMARR]', conta.conta, conta.nome, { saldo_inicial: Math.round((Number(conta.saldo_inicial) || 0) * 100) / 100, aberturaSoma: Math.round(aberturaSoma * 100) / 100, difAbertura: Math.round(difAbertura * 100) / 100, nAbertura: abs.length, top: lista })
-    } catch { /* diag */ }
-  }
 
   // Termos de busca (nome / NF / valor) — definidos AQUI (antes das seções de reabrir) para que
   // a busca alcance também os CONCILIADOS e os BAIXADOS por NF, e não só o em aberto.
@@ -1968,12 +1958,14 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     const semTit = baixaSemTitulo({ lancs: grupo })
     const avisoNF = semTit.size ? `\n\nATENÇÃO: ${semTit.size} pagamento(s) têm NF que NÃO bate com a dos títulos (ex.: adiantamento/outro documento). Só confirme se for o mesmo fornecedor e valor.` : ''
     if (!window.confirm(`Confirmar ${alvo.length} lançamento(s) de "${nome}" como conferidos? A composição já está zerada (título e baixa se compensam) — isso marca as linhas como revisadas com justificativa, sem abrir uma a uma.${avisoNF}`)) return
+    setProcessando(true)
     const id = await getCompetenciaId()
     const { error } = await supabase.from('auditoria').insert(alvo.map(l => linhaAuditoria(l, id, nome)))
-    if (error) { setMsg('Não consegui confirmar em lote: ' + error.message); return }
+    if (error) { setProcessando(false); setMsg('Não consegui confirmar em lote: ' + error.message); return }
     marcarTratadas(alvo)
     setMsg(`${alvo.length} lançamento(s) de "${nome}" confirmado(s).`)
-    carregarTratados()
+    await carregarTratados()
+    setProcessando(false)
   }
 
   // Confirma que o NOME do fornecedor/cliente está certo numa linha "revisar" (mesmo sem
@@ -2661,6 +2653,14 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       </div>
 
       {msg && <p style={{ color: theme.green, fontSize: 13, marginBottom: 12 }}><i className="ti ti-circle-check" /> {msg}</p>}
+      {/* Indicador VISÍVEL de processamento — fica fixo no topo enquanto o sistema recalcula/grava,
+          para não parecer que "não está acontecendo nada". */}
+      {processando && (
+        <div style={{ position: 'fixed', top: 14, left: '50%', transform: 'translateX(-50%)', zIndex: 200, display: 'flex', alignItems: 'center', gap: 10, padding: '9px 18px', background: theme.accent, color: '#fff', borderRadius: 24, boxShadow: '0 8px 30px rgba(0,0,0,0.35)', fontSize: 13, fontWeight: 700 }}>
+          <i className="ti ti-loader-2" style={{ display: 'inline-block', animation: 'girar 0.8s linear infinite' }} /> Processando…
+          <style>{'@keyframes girar{from{transform:rotate(0)}to{transform:rotate(360deg)}}'}</style>
+        </div>
+      )}
 
       {/* Resumo + amarração — débito/crédito/saldo já incluem as correções pendentes. */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(150px,1fr))', gap: 12, marginBottom: Math.abs(ajNet) > 0.005 ? 6 : 16 }}>
