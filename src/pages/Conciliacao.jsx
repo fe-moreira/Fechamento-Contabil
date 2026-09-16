@@ -2112,11 +2112,13 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     const { error } = await supabase.from('auditoria').insert(rows)
     if (error) { setMsg('Não consegui conectar: ' + error.message); return false }
     marcarTratadas(alvo)
-    // Unifica e APRENDE o fornecedor final (nomes lidos diferentes → um só, nos próximos meses).
-    const canonical = await unificarNomesConectados(alvo, nomeAlvo)
+    // A BAIXA NÃO MEXE NO NOME/FORNECEDOR (regra do usuário): baixar é só o ZERAMENTO entre os
+    // selecionados. Antes, baixar UNIFICAVA os nomes (o crédito de um fornecedor virava o nome do
+    // outro ao baixar juntos) e esse "nome-link" sobrevivia ao reabrir — por isso "mexia num e mexia
+    // no outro". Quem diz o fornecedor é o "Vincular" (explícito) ou a correção; a baixa não.
     setSelLin(new Set()); setConectarDif(null)
     carregarTratados(); carregarLanc(); onMudou && onMudou()
-    if (!extraRazaoId) setMsg(`${alvo.length} lançamento(s) conectado(s) — foram para Conciliados.${canonical ? ` Fornecedor unificado como "${canonical}" e aprendido para os próximos meses.` : ''}`)
+    if (!extraRazaoId) setMsg(`${alvo.length} lançamento(s) baixado(s) — foram para Conciliados.`)
     return true
   }
   // Aprova SUGESTÕES DE VÍNCULO (cliente + valor batem, NF diferente): baixa os pares como
@@ -2520,7 +2522,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   async function reabrirConferidos(lancs) {
     if (bloqueadoFechado()) return
     if (!lancs?.length) return
-    if (!window.confirm(`Reabrir ${lancs.length} lançamento(s)? Eles voltam para "em aberto" para você revisar/corrigir de novo.`)) return
+    if (!window.confirm(`Reabrir ${lancs.length} lançamento(s)? Eles voltam para "em aberto" (sem a baixa) para você revisar/corrigir de novo. O fornecedor continua o mesmo — só sai se você Corrigir/Desvincular.`)) return
     for (const l of lancs) {
       // Par de correção auto-conciliado (estorno ↔ origem): reabrir = DESFAZER a correção —
       // remove o lançamento de acerto, a auditoria e o ajuste de leitura (pela origem).
