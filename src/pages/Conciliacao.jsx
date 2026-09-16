@@ -308,6 +308,36 @@ const ehCompetencia = nf => {
 // Um valor que é COMPETÊNCIA (06/2026) NÃO é NF → devolve '' (não agrupa/baixa por ele).
 const nfKey = nf => ehCompetencia(nf) ? '' : String(nf ?? '').replace(/\D/g, '').replace(/^0+/, '')
 
+// APRENDER O PADRÃO DA NF POR EXEMPLO: o usuário informa a NF de UM histórico (ex.: em
+// "…SPE LTDA 98-2/8" a NF é 98) e a gente descobre ONDE aquele número está para puxar o mesmo
+// nos outros lançamentos SEM NF (ex.: "…SPE LTDA 99-3/8" → 99). Retorna uma função (historico → NF)
+// ou null se não deu para inferir. O usuário SEMPRE revisa o resultado antes de gravar.
+function inferirNFmatcher(historico, nfVal) {
+  const H = String(historico || '')
+  const V = String(nfVal ?? '').replace(/\D/g, '').replace(/^0+/, '')
+  if (!V || !H) return null
+  const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  // Acha o número V isolado (sem outro dígito colado) no histórico — casa mesmo com zeros à esquerda.
+  const re = new RegExp(`(?<![\\d])0*${esc(V)}(?![\\d])`, 'g')
+  const m = re.exec(H)
+  if (!m) return null
+  const idx = m.index, fim = idx + m[0].length
+  const sufBruto = H.slice(fim, fim + 12)
+  const preBruto = H.slice(Math.max(0, idx - 14), idx)
+  const gen = s => esc(s).replace(/\d+/g, '\\d+')  // generaliza qualquer dígito no contexto
+  // 1) Âncora pelo SUFIXO distintivo (contém não-dígito), ex.: "-2/8" → "(\d+)-\d+/\d+".
+  const sufTok = (sufBruto.match(/^\S*/) || [''])[0]
+  if (sufTok && /\D/.test(sufTok)) {
+    try { const r = new RegExp(`(\\d+)${gen(sufTok)}`); return h => { const mm = String(h || '').match(r); return mm ? mm[1].replace(/^0+/, '') || mm[1] : '' } } catch { /* segue */ }
+  }
+  // 2) Âncora pela PALAVRA anterior, ex.: "SERV 1234" → "SERV\s*(\d+)".
+  const preTok = (preBruto.match(/(\S+)\s*$/) || [])[1]
+  if (preTok && /\D/.test(preTok)) {
+    try { const r = new RegExp(`${gen(preTok)}\\s*(\\d+)`); return h => { const mm = String(h || '').match(r); return mm ? mm[1].replace(/^0+/, '') || mm[1] : '' } } catch { /* segue */ }
+  }
+  return null
+}
+
 // Baixa (conciliação) por NÚMERO DA NOTA + cliente: um débito e um crédito só se
 // conciliam (zeram) quando têm a MESMA NF (ignorando zeros à esquerda) e o cliente bate
 // (nome aproximado). Valor igual com NF diferente NÃO zera (ex.: faturou NF 3256 e
@@ -697,6 +727,8 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const [selReabrir, setSelReabrir] = useState(new Set()) // linhas de CONCILIADOS marcadas p/ reabrir em lote (por _uid)
   const [selReabrirNF, setSelReabrirNF] = useState(new Set()) // linhas de BAIXADOS POR NF marcadas p/ reabrir em lote (por _uid)
   const [acao, setAcao] = useState(null)   // lançamento clicado (justificar/corrigir)
+  const [propNF, setPropNF] = useState(null)     // { itens:[{l, nf}] } — propostas de NF por padrão aprendido
+  const [selPropNF, setSelPropNF] = useState(new Set()) // índices marcados na revisão de propostas de NF
   const [verCorr, setVerCorr] = useState(null) // lançamento já tratado (ver o que foi feito / desfazer)
   const [plano, setPlano] = useState([])   // [{ cod, nome }] para os seletores de conta
   const [partidas, setPartidas] = useState({}) // chave (data|histórico) -> lançamentos da partida (p/ contrapartida)
@@ -1813,10 +1845,62 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         setTratadosAb(prev => { const s = new Set(prev); s.delete(chaveAntiga); s.add(chaveNova); return s })
       }
     }
+    // APRENDER A NF POR EXEMPLO: se você informou o NÚMERO da NF de um lançamento, a gente descobre
+    // o padrão (onde o número está no histórico) e PROPÕE a mesma NF para os outros lançamentos da
+    // conta que estão SEM NF — numa lista para você revisar e aprovar (não grava sozinho).
+    if (ajustouLeitura && ehEntidadeConta && nfKey(aj?.nf) && nfKey(aj.nf) !== nfKey(acao?.leitura?.nf)) {
+      const matcher = inferirNFmatcher(acao?.historico, aj.nf)
+      if (matcher) {
+        const alvoAtual = acao
+        const itens = []
+        for (const l of lanc) {
+          if (l === alvoAtual) continue
+          if (nfKey(l.leitura?.nf)) continue        // já tem NF identificada → não mexe
+          const nfProp = matcher(l.historico)
+          if (nfProp && nfKey(nfProp)) itens.push({ l, nf: String(nfProp).trim() })
+        }
+        if (itens.length) { setPropNF({ itens }); setSelPropNF(new Set(itens.map((_, i) => i))) }
+      }
+    }
     setAcao(null)
     carregarTratados()
     if (virouLancamento) { onMudou && onMudou(); carregarLanc() } // atualiza saldo e mostra o acerto na composição
     else if (ajustouLeitura) carregarLanc()
+  }
+  // Aplica as propostas de NF SELECIONADAS: grava a NF em cada lançamento sem NF (razão via
+  // ajuste_leitura, saldo anterior via aberturaAj), preservando nome/histórico já ajustados.
+  async function aplicarPropostasNF(indices) {
+    if (bloqueadoFechado()) return
+    const escolhidos = (propNF?.itens || []).filter((_, i) => indices.has(i))
+    if (!escolhidos.length) { setPropNF(null); return }
+    const id = await getCompetenciaId()
+    // Razão: preserva entidade/histórico já existentes no ajuste; só acrescenta a NF.
+    const razaoItens = escolhidos.filter(x => x.l.id != null && !x.l._abertura && !x.l.acerto)
+    const ids = razaoItens.map(x => x.l.id)
+    const existentes = {}
+    if (ids.length) {
+      const { data } = await supabase.from('ajuste_leitura').select('razao_id, entidade, historico').in('razao_id', ids)
+      for (const a of (data || [])) existentes[a.razao_id] = a
+    }
+    if (razaoItens.length) {
+      const rows = razaoItens.map(x => ({
+        competencia_id: id, razao_id: x.l.id, nf: String(x.nf).trim(),
+        entidade: existentes[x.l.id]?.entidade ?? null, historico: existentes[x.l.id]?.historico ?? null, usuario,
+      }))
+      const { error } = await supabase.from('ajuste_leitura').upsert(rows, { onConflict: 'razao_id' })
+      if (error) { setMsg('Não consegui gravar as NFs: ' + error.message); return }
+    }
+    // Saldo anterior (abertura): grava a NF no aberturaAj (por item), preservando o resto.
+    const abItens = escolhidos.filter(x => x.l._abertura)
+    if (abItens.length) {
+      let map = { ...aberturaAj }
+      for (const x of abItens) { const key = chaveAberturaAj(x.l); map = { ...map, [key]: { ...(map[key] || {}), nf: String(x.nf).trim() } } }
+      setAberturaAj(map)
+      await salvarNomes(nomesConf, nomesIsolados, nomesAlias, map, acertoNomes)
+    }
+    setPropNF(null); setSelPropNF(new Set())
+    setMsg(`${escolhidos.length} NF(s) preenchida(s) pelo mesmo padrão. Confira a composição — agora casam por número.`)
+    carregarLanc()
   }
 
   // Confirma EM LOTE uma entidade (cliente/fornecedor) cuja composição já está ZERADA:
@@ -3105,6 +3189,45 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
           onClose={() => setAcao(null)} onRegistrar={registrar}
           onDesvincular={async nome => { const alvo = acao; setAcao(null); await desvincularLinha(alvo, nome); setMsg(`"${String(nome || '').trim()}" desvinculado — separado dos nomes parecidos.`) }} />
       )}
+      {propNF && (() => {
+        const itens = propNF.itens || []
+        const todos = itens.length > 0 && itens.every((_, i) => selPropNF.has(i))
+        const toggle = i => setSelPropNF(prev => { const s = new Set(prev); s.has(i) ? s.delete(i) : s.add(i); return s })
+        return (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 90, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }} onClick={() => setPropNF(null)}>
+            <div onClick={e => e.stopPropagation()} style={{ background: theme.card, border: `1px solid ${theme.accent}`, borderRadius: 14, width: 'min(820px, 96vw)', maxHeight: '86vh', display: 'flex', flexDirection: 'column', boxShadow: '0 10px 40px rgba(0,0,0,0.5)' }}>
+              <div style={{ padding: '14px 18px', borderBottom: `1px solid ${theme.border}` }}>
+                <div style={{ fontSize: 15, fontWeight: 700, color: theme.text, display: 'flex', alignItems: 'center', gap: 8 }}><i className="ti ti-receipt-2" style={{ color: theme.accent }} /> Puxar a NF pelo mesmo critério</div>
+                <div style={{ fontSize: 12.5, color: theme.sub, marginTop: 4 }}>Encontrei <b style={{ color: theme.text }}>{itens.length}</b> lançamento(s) <b>sem NF</b> nesta conta que seguem o padrão que você acabou de informar. Revise e aprove os que estiverem certos — só grava o que você marcar.</div>
+              </div>
+              <div style={{ overflow: 'auto', padding: '4px 0' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+                  <thead>
+                    <tr style={{ position: 'sticky', top: 0, background: theme.input }}>
+                      <th style={{ ...th, width: 34, textAlign: 'center' }}><input type="checkbox" checked={todos} onChange={() => setSelPropNF(todos ? new Set() : new Set(itens.map((_, i) => i)))} style={{ cursor: 'pointer', width: 15, height: 15 }} /></th>
+                      <th style={th}>Data</th><th style={th}>Histórico</th><th style={{ ...th, textAlign: 'right' }}>NF a puxar</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {itens.map((x, i) => (
+                      <tr key={i} onClick={() => toggle(i)} style={{ borderTop: `1px solid ${theme.border}`, cursor: 'pointer', background: selPropNF.has(i) ? 'rgba(74,124,255,0.06)' : 'transparent' }}>
+                        <td style={{ ...td, textAlign: 'center' }} onClick={e => e.stopPropagation()}><input type="checkbox" checked={selPropNF.has(i)} onChange={() => toggle(i)} style={{ cursor: 'pointer', width: 15, height: 15 }} /></td>
+                        <td style={{ ...td, color: theme.sub, whiteSpace: 'nowrap' }}>{fmtDataBR(x.l.data) || '—'}</td>
+                        <td style={{ ...td, color: theme.sub, fontFamily: 'monospace', fontSize: 11, maxWidth: 460 }}>{x.l.historico}</td>
+                        <td style={{ ...tdR, fontWeight: 700, color: theme.accent }}>NF {x.nf}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ padding: '12px 18px', borderTop: `1px solid ${theme.border}`, display: 'flex', gap: 10, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={() => setPropNF(null)}><i className="ti ti-x" /> Cancelar</button>
+                <button className="btn" disabled={selPropNF.size === 0} style={{ fontSize: 12.5, background: selPropNF.size ? theme.accent : undefined, borderColor: selPropNF.size ? theme.accent : undefined, opacity: selPropNF.size ? 1 : 0.5, cursor: selPropNF.size ? 'pointer' : 'not-allowed' }} onClick={() => aplicarPropostasNF(selPropNF)}><i className="ti ti-checks" /> Aprovar selecionados ({selPropNF.size})</button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
       {verCorr && (
         <ModalCorrigido linha={verCorr} conta={conta} compId={compId} planoMap={planoMap} lab={lab}
           onClose={() => setVerCorr(null)} onDesfazer={() => desfazerCorrecao(verCorr)}
