@@ -721,8 +721,16 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const contaKeyRef = useRef('')
   useEffect(() => {
     if (!carregando && scrollRef.current != null) {
-      const y = scrollRef.current; scrollRef.current = null
-      requestAnimationFrame(() => requestAnimationFrame(() => { try { window.scrollTo(0, y) } catch { /* noop */ } }))
+      const a = scrollRef.current; scrollRef.current = null
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        try {
+          if (typeof a === 'number') { window.scrollTo(0, a); return } // compat
+          const esc = s => (window.CSS && CSS.escape) ? CSS.escape(s) : String(s).replace(/["\\]/g, '\\$&')
+          let el = null
+          for (const k of (a.follow || [])) { el = document.querySelector(`[data-fornec="${esc(k)}"]`); if (el) break }
+          if (el) window.scrollBy(0, el.getBoundingClientRect().top - a.top) // recoloca o fornecedor no mesmo ponto
+        } catch { /* noop */ }
+      }))
     }
   }, [carregando])
   const [selReabrir, setSelReabrir] = useState(new Set()) // linhas de CONCILIADOS marcadas p/ reabrir em lote (por _uid)
@@ -1062,7 +1070,15 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   async function carregarLanc() {
     // guarda o scroll para restaurar depois (só na MESMA conta — troca de conta abre no topo)
     const _ck = `${compId}·${conta.conta}`
-    scrollRef.current = (_ck === contaKeyRef.current && typeof window !== 'undefined') ? window.scrollY : null
+    // Âncora de scroll: guarda o FORNECEDOR que está no topo da tela (e a lista dos seguintes, em
+    // ordem) + o offset dele. Depois da recarga a gente reposiciona nesse mesmo fornecedor; se ele
+    // sumiu (foi baixado/tratado), cai no PRÓXIMO — assim dá pra continuar de onde parou sem rolar.
+    if (_ck === contaKeyRef.current && typeof document !== 'undefined') {
+      const els = [...document.querySelectorAll('[data-fornec]')]
+      let i = els.findIndex(e => e.getBoundingClientRect().bottom > 80)
+      if (i < 0) i = els.length - 1
+      scrollRef.current = i >= 0 ? { follow: els.slice(i).map(e => e.dataset.fornec), top: els[i].getBoundingClientRect().top } : null
+    } else scrollRef.current = null
     contaKeyRef.current = _ck
     setCarregando(true); setProcessando(true)
     const contasRz = await contasDoRazao()
@@ -2894,7 +2910,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
           for (const x of membros) renderSeq.push({ kind: 'linha', l: x, parcel: true })
         }
         return (
-          <div key={gi} style={{ background: theme.card, border: `1px solid ${borda}`, borderRadius: 12, overflow: 'hidden', marginBottom: 12 }}>
+          <div key={gi} data-fornec={chaveNome(g.nome)} style={{ background: theme.card, border: `1px solid ${borda}`, borderRadius: 12, overflow: 'hidden', marginBottom: 12 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '13px 16px', background: theme.input, flexWrap: 'wrap', gap: 8 }}>
               <span style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                 {podeConfirmar && (
