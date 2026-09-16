@@ -2096,6 +2096,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // lançamento de acerto da diferença (desconto/juros), que também deve sair do em aberto.
   async function baixarConexao(alvo, extraRazaoId, nomeAlvo = '') {
     if (bloqueadoFechado()) return false
+    setProcessando(true) // indicador VISÍVEL já no clique
     const id = await getCompetenciaId()
     // A baixa da ABERTURA é gravada pela chave SEM NOME (conta·data·NF·valor) — o nome é instável
     // (unificação do vínculo, CNPJ colado no pagamento), e chavear pelo nome fazia a perna do
@@ -2524,7 +2525,9 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     if (bloqueadoFechado()) return
     if (!lancs?.length) return
     if (!window.confirm(`Reabrir ${lancs.length} lançamento(s)? Eles voltam para "em aberto" (sem a baixa) para você revisar/corrigir de novo. O fornecedor continua o mesmo — só sai se você Corrigir/Desvincular.`)) return
-    for (const l of lancs) {
+    setProcessando(true) // indicador VISÍVEL já no clique (os deletes demoram)
+    // Deletes em PARALELO (antes era um a um — lento para 50+ linhas).
+    await Promise.all(lancs.map(async l => {
       // Par de correção auto-conciliado (estorno ↔ origem): reabrir = DESFAZER a correção —
       // remove o lançamento de acerto, a auditoria e o ajuste de leitura (pela origem).
       if (autoConc.has(l)) {
@@ -2532,7 +2535,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         await supabase.from('lancamentos').delete().eq('competencia_id', compId).eq('razao_id', rid)
         await supabase.from('auditoria').delete().eq('competencia_id', compId).eq('modulo', 'Conciliação').eq('razao_id', rid)
         await supabase.from('ajuste_leitura').delete().eq('competencia_id', compId).eq('razao_id', rid)
-        continue
+        return
       }
       // Remove o registro que fez a linha sair (confirmação em lote OU conferência individual).
       if (l._abertura) {
@@ -2553,14 +2556,14 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         let q = supabase.from('auditoria').delete().eq('competencia_id', compId).eq('modulo', 'Conciliação')
         q = l.acerto ? q.eq('razao_id', String(l.id).replace(/^ac_/, '')) : q.eq('razao_id', l.id)
         await q
+        // A confirmação em lote SOBREVIVE à reimportação do razão pela chave ESTÁVEL (conta·data·NF,
+        // no campo `item`) — o razao_id novo não acha o registro antigo. Para razão com item ÚNICO,
+        // apaga também por essa chave; senão o "Reabrir" não surtia efeito.
+        if (!l.acerto && itemUnico(l)) {
+          await supabase.from('auditoria').delete().eq('competencia_id', compId).eq('modulo', 'Conciliação').eq('item', itemConc(l))
+        }
       }
-      // A confirmação em lote SOBREVIVE à reimportação do razão pela chave ESTÁVEL (conta·data·
-      // NF, no campo `item`) — o razao_id novo não acha o registro antigo. Então, para linhas de
-      // razão com item ÚNICO, apaga também por essa chave; senão o "Reabrir" não surtia efeito.
-      if (!l._abertura && !l.acerto && itemUnico(l)) {
-        await supabase.from('auditoria').delete().eq('competencia_id', compId).eq('modulo', 'Conciliação').eq('item', itemConc(l))
-      }
-    }
+    }))
     // PERSISTE o reabrir: os que zeraram POR NOME (automático, sem par de verdade — NF/valor
     // diferentes) voltam pro em aberto e NÃO conciliam sozinhos de novo. Ficam compondo o saldo
     // até você baixar à mão (que aí vira conexão manual). autoConc (estorno↔origem) já foi
@@ -2581,6 +2584,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     if (bloqueadoFechado()) return
     if (!lancs?.length) return
     if (!window.confirm(`Reabrir ${lancs.length} lançamento(s) que o sistema baixou por NF? Voltam para "em aberto" para você vincular manualmente (não baixam mais sozinhos).`)) return
+    setProcessando(true) // indicador VISÍVEL já no clique
     const s = new Set(baixasReabertas)
     for (const l of lancs) { const nf = nfKey(l.leitura?.nf); if (nf) s.add(`${conta.conta}·${nf}`) }
     setBaixasReabertas(s)
