@@ -1669,7 +1669,11 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // "Saldo anterior" (abertura, que NÃO têm id) e os acertos. Antes exigia `l.id`, então a perna de
   // abertura ficava de fora e o "Confirmar" baixava só a de razão, deixando a outra em aberto.
   const pendentesEnt = g => g.lancs.filter(l => (l.id != null || l._abertura) && !l.acerto && !jaTratada(l) && !foiConfirmado(l))
-  const podeConfirmarEnt = g => Math.abs(g.total) < 0.005 && g.total >= -0.005 && !g.unk && baixaSemTitulo(g).size === 0 && pendentesEnt(g).length > 0
+  // Pode confirmar em lote quando o grupo ZEROU, é identificado e tem pendências. NÃO exige mais
+  // que a NF da baixa case com a do título: um pagamento pode referenciar OUTRO documento (ex.:
+  // adiantamento "003872" pagando a nota "213") — o par é do mesmo fornecedor e zera. A NF diferente
+  // vira só um AVISO no diálogo de confirmação (o flag vermelho "NF s/ título" continua na linha).
+  const podeConfirmarEnt = g => Math.abs(g.total) < 0.005 && g.total >= -0.005 && !g.unk && pendentesEnt(g).length > 0
   const confirmaveis = lista.filter(podeConfirmarEnt)
   // SUGESTÕES DE VÍNCULO: pares EM ABERTO do MESMO cliente e MESMO valor em lados opostos
   // (um título/débito, um pagamento/crédito) que NÃO casaram por NF — a NF veio diferente ou
@@ -1944,7 +1948,11 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     if (bloqueadoFechado()) return
     const alvo = (grupo || []).filter(l => (l.id != null || l._abertura) && !l.acerto && !jaTratada(l) && !foiConfirmado(l))
     if (!alvo.length) return
-    if (!window.confirm(`Confirmar ${alvo.length} lançamento(s) de "${nome}" como conferidos? A composição já está zerada (título e baixa se compensam) — isso marca as linhas como revisadas com justificativa, sem abrir uma a uma.`)) return
+    // Aviso quando a NF do pagamento NÃO bate com a do título (ex.: adiantamento 003872 pagando a
+    // nota 213): o par é do mesmo fornecedor e zera, mas deixa claro que os números diferem.
+    const semTit = baixaSemTitulo({ lancs: grupo })
+    const avisoNF = semTit.size ? `\n\nATENÇÃO: ${semTit.size} pagamento(s) têm NF que NÃO bate com a dos títulos (ex.: adiantamento/outro documento). Só confirme se for o mesmo fornecedor e valor.` : ''
+    if (!window.confirm(`Confirmar ${alvo.length} lançamento(s) de "${nome}" como conferidos? A composição já está zerada (título e baixa se compensam) — isso marca as linhas como revisadas com justificativa, sem abrir uma a uma.${avisoNF}`)) return
     const id = await getCompetenciaId()
     const { error } = await supabase.from('auditoria').insert(alvo.map(l => linhaAuditoria(l, id, nome)))
     if (error) { setMsg('Não consegui confirmar em lote: ' + error.message); return }
