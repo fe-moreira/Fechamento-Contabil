@@ -26,6 +26,15 @@ describe('extrairNfHistorico', () => {
   it('documento do Domínio "1-000584A" → 584 (sem zeros)', () => {
     expect(extrairNfHistorico('VALOR REF. RECEBIMENTO CLIENTE 1-000584A')).toBe('584')
   })
+  it('preserva a LETRA da parcela (16557A/B/C são notas distintas)', () => {
+    expect(extrairNfHistorico('VALOR REF. COMPRA DE MERCADORIA PARA REVENDA - ALMA TEXTIL CF. NF 16557A')).toBe('16557A')
+    expect(extrairNfHistorico('VALOR REF. COMPRA DE MERCADORIA PARA REVENDA - ALMA TEXTIL CF. NF 16557B')).toBe('16557B')
+    expect(extrairNfHistorico('COMPRA - ALMA TEXTIL CF. NF 16500c')).toBe('16500C') // normaliza p/ maiúscula
+  })
+  it('não confunde palavra colada com letra de parcela ("NF 123COMERCIO" → 123)', () => {
+    expect(extrairNfHistorico('VALOR REF. NF 123COMERCIO LTDA')).toBe('123')
+    expect(extrairNfHistorico('RECEBIMENTO CLIENTE NF 12345 COMERCIO')).toBe('12345')
+  })
   it('sem número de nota → vazio', () => {
     expect(extrairNfHistorico('VALOR REF. NAGO COMPANY')).toBe('')
     expect(extrairNfHistorico('VALOR REF. PAGAMENTO PESCUMA INNOVATE IT CONSULTING LTDA NF NOTA DE DÉBITO')).toBe('')

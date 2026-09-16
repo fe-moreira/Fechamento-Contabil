@@ -1228,18 +1228,15 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     // Dedup só de DUPLICATA EXATA (a mesma nota importada 2x): mesma NF **exata** (com a letra da
     // parcela, ex.: 186008A ≠ 186008B) + mesmo fornecedor + mesmo valor + mesma data. NÃO usa nfKey
     // (que tira zeros/letra) — senão colapsava PARCELAS distintas da mesma NF e perdia saldo inicial.
-    const abVistos = new Set()
-    const aberturaDedup = (abertura || []).filter(a => {
-      const nfRaw = String(a.leitura?.nf ?? '').trim().toUpperCase()
-      if (!nfRaw) return true
-      const k = `${nfRaw}·${Math.round(((Number(a.debito) || 0) - (Number(a.credito) || 0)) * 100)}·${chaveNome(a.leitura?.entidade || '')}·${String(a.data || '')}`
-      if (abVistos.has(k)) return false
-      abVistos.add(k); return true
-    })
+    // NÃO deduplicar a abertura: se o mês anterior tem 3 lançamentos com a MESMA NF (parcelas
+    // 16557A/B/C que o parser lê como "16557"), os 3 são títulos REAIS e TODOS têm que arrastar —
+    // colapsar por NF·valor·nome·data derrubava parcelas legítimas e o saldo inicial vinha curto
+    // (ex.: −192k em julho). O `itensAbertosConta` já entrega 1 item por linha real do razão.
+    const aberturaTodos = (abertura || [])
     // Quantas aberturas compartilham cada chave ANTIGA (sem data) — usado pelo `bump` para só
     // aplicar o ajuste no formato antigo quando NÃO há gêmea (senão a colisão voltaria).
     const abUndatedCount = {}
-    for (const a of aberturaDedup) {
+    for (const a of aberturaTodos) {
       const kk = `${conta.conta}·${Math.round(((Number(a.debito) || 0) - (Number(a.credito) || 0)) * 100)}·${chaveNome(a.leitura?.entidade || '')}`
       abUndatedCount[kk] = (abUndatedCount[kk] || 0) + 1
     }
@@ -1247,7 +1244,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     // `_uid` = identificador ÚNICO por linha (índice). A seleção do checkbox (baixa manual) é
     // por linha, então NUNCA pode agrupar por valor+nome como o sepKey faz — senão marcar uma
     // nota marca outra de mesmo valor (ex.: duas aberturas de R$ 7.385,96, NF 3232 e 3255).
-    const _todas = [...aberturaDedup.map(a => bump({ ...a, _abertura: true })), ...rzProc, ...acertoLancs]
+    const _todas = [...aberturaTodos.map(a => bump({ ...a, _abertura: true })), ...rzProc, ...acertoLancs]
     setLanc(_todas.map((l, i) => ({ ...l, _uid: `u${i}` })))
     setCarregando(false); setProcessando(false)
   }

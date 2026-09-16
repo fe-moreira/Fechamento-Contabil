@@ -17,12 +17,15 @@ export function extrairNfHistorico(h) {
     .replace(/\b\d{2}\.\d{3}\.\d{3}\b/g, ' ')                  // CNPJ raiz: 57.220.178
     .replace(/\b\d{3}\.\d{3}\.\d{3}-?\d{0,2}\b/g, ' ')         // CPF: 123.456.789-00
     .replace(/\bACUM(?:ULADOR)?\.?\s*\d+/ig, ' ')             // acumulador do Domínio: ACUM. 623
-  // "NF/NOTA/Nº <número>[ /AAAA ]" — número da nota, 1 a 9 dígitos.
-  const m = limpo.match(/\b(?:NF|NOTA(?:\s+FISCAL)?|N[ºo°])\.?\s*(?:N[ºo°.]*\s*)?(\d{1,9})(\s*\/\s*\d{2,4})?/i)
+  // "NF/NOTA/Nº <número>[letra da parcela][ /AAAA ]" — número da nota, 1 a 9 dígitos, com uma
+  // LETRA de parcela opcional colada (16557A/B/C são notas DISTINTAS — a letra tem que ficar,
+  // senão as parcelas colapsam numa só e o saldo/arrasto perde lançamentos). `nfKey` ignora a
+  // letra p/ o casamento por NF; ela serve para diferenciar e exibir a parcela.
+  const m = limpo.match(/\b(?:NF|NOTA(?:\s+FISCAL)?|N[ºo°])\.?\s*(?:N[ºo°.]*\s*)?(\d{1,9})([A-Za-z](?![A-Za-z]))?(\s*\/\s*\d{2,4})?/i)
   if (m) {
     // "<1-12>/<ano>" logo após o marcador = COMPETÊNCIA (mês/ano de referência), não é nota.
-    if (m[2] && Number(m[1]) >= 1 && Number(m[1]) <= 12) return ''
-    return m[1]
+    if (m[3] && Number(m[1]) >= 1 && Number(m[1]) <= 12) return ''
+    return m[1] + (m[2] ? m[2].toUpperCase() : '')
   }
   // Documento do Domínio "série-número[parcela]" no fim: "1-000584A" → 584 (tira zeros à esquerda).
   const doc = limpo.match(/\b\d{1,3}-(\d{4,7})[A-Za-z]?\b/)
