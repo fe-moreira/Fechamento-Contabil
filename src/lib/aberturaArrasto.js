@@ -173,15 +173,25 @@ export async function itensAbertosConta(compId, contaCod, contaNome, classifRaw,
   // de zero abaixo protege contra colisão (dois títulos de mesma data/valor).
   const baixadaRz = new Set()   // razao_id (perna de razão / acerto)
   const baixadaAb = new Set()   // "data·cents" (perna de abertura)
+  const baixadaItem = new Set() // "conta · data · NF" (perna de razão, chave ESTÁVEL — igual à tela)
   for (const a of (audit || [])) {
     if (!ehBaixaManualDet(a.detalhe)) continue
     if (a.razao_id) baixadaRz.add(a.razao_id)
-    const p = String(a.item || '').split('·')
+    const it = String(a.item || '')
+    const p = it.split('·')
     if (p[0] === 'AB' && p.length === 6) baixadaAb.add(`${(p[2] || '').trim()}·${(p[5] || '').trim()}`) // data·cents
+    else if (it.includes(' · NF ')) baixadaItem.add(it.trim()) // "conta · data · NF X" (perna de razão)
   }
+  // Chave ESTÁVEL da perna de razão, IGUAL à gravada/lida pela tela ("conta · data · NF"). Reconhece
+  // a baixa mesmo depois de REIMPORTAR o razão (ids novos) — o razao_id sozinho deixaria a perna sem
+  // casar, a trava de zero abaixo NÃO disparava e o par baixado voltava a arrastar (saldo de abertura
+  // inflado, ex.: +190k em julho). Só vale quando a chave é ÚNICA na conta (senão marcaria a gêmea).
+  const itemArr = l => `${contaCod} · ${l.data || ''} · NF ${l.leitura?.nf || '—'}`
+  const itemArrCount = {}
+  for (const l of lanc) { if (!l.abertura && !l._abertura && !l.acerto) { const k = itemArr(l); itemArrCount[k] = (itemArrCount[k] || 0) + 1 } }
   const ehBaixaManual = l => (l.abertura || l._abertura)
     ? baixadaAb.has(`${dataAbArr(l)}·${centsOf(l)}`)
-    : baixadaRz.has(l.acerto ? String(l.id).replace(/^ac_/, '') : l.id)
+    : (baixadaRz.has(l.acerto ? String(l.id).replace(/^ac_/, '') : l.id) || (!l.acerto && itemArrCount[itemArr(l)] === 1 && baixadaItem.has(itemArr(l))))
   // TRAVA DE SEGURANÇA: cada baixa manual tem UMA perna no razão e a OUTRA no saldo anterior.
   // Só descartamos o conjunto se ele REALMENTE somar zero (todas as pernas casaram) — senão, se
   // uma perna (ex.: a abertura, com chave por NF que pode ter mudado) não casar, retirar a outra
