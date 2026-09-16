@@ -995,9 +995,10 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // NF COMPLETA (com a letra da parcela: 5238A ≠ 5238B). Antes usava nfKey (que tira a letra), então
   // baixar/tratar UMA parcela de abertura marcava a GÊMEA de mesmo valor — baixava linha não
   // selecionada e o bloco ficava com diferença. Cada lançamento é individual: a letra tem que entrar.
-  // NF + índice de ocorrência (5238A~1): garante chave ÚNICA por linha mesmo entre gêmeas idênticas.
-  // O "~seq" fica DENTRO do campo NF (não cria novo "·"), então os parsers de 6 partes seguem válidos.
-  const nfAb = l => `${String(l.leitura?.nf ?? '').trim().toUpperCase()}${l._abSeq ? '~' + l._abSeq : ''}`
+  // NF COMPLETA (com a letra da parcela: 5238A ≠ 5238B) — distingue parcelas de mesmo valor sem o
+  // índice de ocorrência instável (que quebrava o Reabrir). Gêmeas SEM NF de mesmo valor são
+  // idênticas de fato: baixam/reabrem juntas (consistente, sem perna solta).
+  const nfAb = l => String(l.leitura?.nf ?? '').trim().toUpperCase()
   const chaveAbertura = (l, nome) => `AB·${conta.conta}·${dataAb(l)}·${nfAb(l)}·${baixaTxt(nome != null ? nome : (l.leitura?.entidade || ''))}·${Math.round(((Number(l.debito) || 0) - (Number(l.credito) || 0)) * 100)}`
   // Formato ANTIGO (sem data) — só para reconhecer conferências gravadas ANTES desta mudança,
   // e apenas quando a linha é ÚNICA por esse formato (senão marcaria o gêmeo de novo).
@@ -1266,18 +1267,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     // `_uid` = identificador ÚNICO por linha (índice). A seleção do checkbox (baixa manual) é
     // por linha, então NUNCA pode agrupar por valor+nome como o sepKey faz — senão marcar uma
     // nota marca outra de mesmo valor (ex.: duas aberturas de R$ 7.385,96, NF 3232 e 3255).
-    // ÍNDICE DE OCORRÊNCIA por linha de abertura: mesmo que duas linhas de saldo anterior sejam
-    // IDÊNTICAS (mesma conta·data·NF·valor), cada uma recebe um número (0,1,2…) na ordem estável do
-    // arrasto — entra na chave de baixa. Assim baixar/tratar UMA nunca marca a outra: cada
-    // lançamento é individual, sem link, para todas as empresas. (Razão já é individual pelo id.)
-    // Calculado APÓS o bump (que pode ajustar a NF), para casar com a chave que a tela lê.
-    const abBumped = aberturaTodos.map(a => bump({ ...a, _abertura: true }))
-    const _abSeqCount = {}
-    for (const a of abBumped) {
-      const k = `${conta.conta}·${(a.data && a.data !== 'abertura') ? a.data : ''}·${String(a.leitura?.nf ?? '').trim().toUpperCase()}·${Math.round(((Number(a.debito) || 0) - (Number(a.credito) || 0)) * 100)}`
-      a._abSeq = _abSeqCount[k] || 0; _abSeqCount[k] = a._abSeq + 1
-    }
-    const _todas = [...abBumped, ...rzProc, ...acertoLancs]
+    const _todas = [...aberturaTodos.map(a => bump({ ...a, _abertura: true })), ...rzProc, ...acertoLancs]
     setLanc(_todas.map((l, i) => ({ ...l, _uid: `u${i}` })))
     setCarregando(false); setProcessando(false)
   }
@@ -2542,8 +2532,12 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         // no nome do pagamento). Apaga TODA baixa desta abertura pela chave SEM NOME (conta·data·NF·
         // valor), senão o registro sobrevive e a linha não reabre.
         const cents = Math.round(((Number(l.debito) || 0) - (Number(l.credito) || 0)) * 100)
-        const like = `AB·${conta.conta}·${dataAb(l)}·${nfKey(l.leitura?.nf)}·%·${cents}`
-        await supabase.from('auditoria').delete().eq('competencia_id', compId).eq('modulo', 'Conciliação').like('item', like)
+        const nf = nfAb(l)
+        // Apaga por conta·data·NF·valor com o NOME curinga (a baixa pode ter gravado outro nome
+        // embutido). Duas formas: a NF completa atual, e o formato antigo com índice "~N" (revertido)
+        // — senão o registro "~1" sobrevive e a linha não reabre.
+        await supabase.from('auditoria').delete().eq('competencia_id', compId).eq('modulo', 'Conciliação').like('item', `AB·${conta.conta}·${dataAb(l)}·${nf}·%·${cents}`)
+        await supabase.from('auditoria').delete().eq('competencia_id', compId).eq('modulo', 'Conciliação').like('item', `AB·${conta.conta}·${dataAb(l)}·${nf}~%·%·${cents}`)
       } else {
         let q = supabase.from('auditoria').delete().eq('competencia_id', compId).eq('modulo', 'Conciliação')
         q = l.acerto ? q.eq('razao_id', String(l.id).replace(/^ac_/, '')) : q.eq('razao_id', l.id)
