@@ -995,7 +995,9 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // NF COMPLETA (com a letra da parcela: 5238A ≠ 5238B). Antes usava nfKey (que tira a letra), então
   // baixar/tratar UMA parcela de abertura marcava a GÊMEA de mesmo valor — baixava linha não
   // selecionada e o bloco ficava com diferença. Cada lançamento é individual: a letra tem que entrar.
-  const nfAb = l => String(l.leitura?.nf ?? '').trim().toUpperCase()
+  // NF + índice de ocorrência (5238A~1): garante chave ÚNICA por linha mesmo entre gêmeas idênticas.
+  // O "~seq" fica DENTRO do campo NF (não cria novo "·"), então os parsers de 6 partes seguem válidos.
+  const nfAb = l => `${String(l.leitura?.nf ?? '').trim().toUpperCase()}${l._abSeq ? '~' + l._abSeq : ''}`
   const chaveAbertura = (l, nome) => `AB·${conta.conta}·${dataAb(l)}·${nfAb(l)}·${baixaTxt(nome != null ? nome : (l.leitura?.entidade || ''))}·${Math.round(((Number(l.debito) || 0) - (Number(l.credito) || 0)) * 100)}`
   // Formato ANTIGO (sem data) — só para reconhecer conferências gravadas ANTES desta mudança,
   // e apenas quando a linha é ÚNICA por esse formato (senão marcaria o gêmeo de novo).
@@ -1264,7 +1266,18 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     // `_uid` = identificador ÚNICO por linha (índice). A seleção do checkbox (baixa manual) é
     // por linha, então NUNCA pode agrupar por valor+nome como o sepKey faz — senão marcar uma
     // nota marca outra de mesmo valor (ex.: duas aberturas de R$ 7.385,96, NF 3232 e 3255).
-    const _todas = [...aberturaTodos.map(a => bump({ ...a, _abertura: true })), ...rzProc, ...acertoLancs]
+    // ÍNDICE DE OCORRÊNCIA por linha de abertura: mesmo que duas linhas de saldo anterior sejam
+    // IDÊNTICAS (mesma conta·data·NF·valor), cada uma recebe um número (0,1,2…) na ordem estável do
+    // arrasto — entra na chave de baixa. Assim baixar/tratar UMA nunca marca a outra: cada
+    // lançamento é individual, sem link, para todas as empresas. (Razão já é individual pelo id.)
+    // Calculado APÓS o bump (que pode ajustar a NF), para casar com a chave que a tela lê.
+    const abBumped = aberturaTodos.map(a => bump({ ...a, _abertura: true }))
+    const _abSeqCount = {}
+    for (const a of abBumped) {
+      const k = `${conta.conta}·${(a.data && a.data !== 'abertura') ? a.data : ''}·${String(a.leitura?.nf ?? '').trim().toUpperCase()}·${Math.round(((Number(a.debito) || 0) - (Number(a.credito) || 0)) * 100)}`
+      a._abSeq = _abSeqCount[k] || 0; _abSeqCount[k] = a._abSeq + 1
+    }
+    const _todas = [...abBumped, ...rzProc, ...acertoLancs]
     setLanc(_todas.map((l, i) => ({ ...l, _uid: `u${i}` })))
     setCarregando(false); setProcessando(false)
   }
