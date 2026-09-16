@@ -1068,7 +1068,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     const [rz, { data: aj }, { data: acs }, abertura, { data: cn }, { data: compInteg }] = await Promise.all([
       lerRazaoContas(compId, contasRz),
       supabase.from('ajuste_leitura').select('razao_id, nf, entidade, historico').eq('competencia_id', compId),
-      supabase.from('lancamentos').select('id, data, conta_debito, conta_credito, valor, historico, razao_id, origem').eq('competencia_id', compId),
+      supabase.from('lancamentos').select('id, data, conta_debito, conta_credito, valor, historico, razao_id, origem, documento').eq('competencia_id', compId),
       composicaoAbertura(empresaId, compId, conta.conta, conta.classifRaw, conta.nome),
       supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'conciliacao_nomes').order('created_at', { ascending: false }).limit(1).maybeSingle(),
       supabase.from('competencias').select('integracoes').eq('id', compId).maybeSingle(),
@@ -1210,6 +1210,10 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
           debito: ehDeb ? (Number(a.valor) || 0) : 0,
           credito: ehDeb ? 0 : (Number(a.valor) || 0),
         }, null)
+        // NF do acerto: se o histórico não trouxe número, usa o campo `documento` do lançamento
+        // (é onde o usuário grava a NF pelo modal "Lançamento já tratado" → Salvar NF). Assim o
+        // acerto passa a casar por número (baixa/relatório) mesmo sem NF no texto.
+        if (!nfKey(base.leitura?.nf) && a.documento) { const nfDoc = String(a.documento).replace(/^\s*NF\.?\s*/i, '').trim(); if (nfKey(nfDoc)) base.leitura = { ...base.leitura, nf: nfDoc } }
         // Nome atribuído a este acerto ("Corrigir fornecedor") tem prioridade; senão, herda o
         // cliente da linha do razão que a correção estorna (pelo razao_id).
         const nomeAc = acNomesMap[a.id] || (a.razao_id ? clientePorRazao[a.razao_id] : '')
@@ -2603,6 +2607,20 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     setMsg(nm ? `Fornecedor "${nm}" definido para o lançamento de acerto.` : 'Nome do acerto removido.')
     carregarLanc()
   }
+  // Informa/arruma a NF de um lançamento de ACERTO já tratado — é só INFORMAÇÃO (não é correção de
+  // partida). Grava no campo `documento` do lançamento; o loader lê de lá para casar por número.
+  async function salvarNFAcerto(linha, nf) {
+    if (bloqueadoFechado()) return
+    const rid = linha?._acertoId || String(linha?.id || '').replace(/^ac_/, '')
+    if (!rid) return
+    const id = await getCompetenciaId()
+    const nfLimpa = String(nf || '').trim()
+    const { error } = await supabase.from('lancamentos').update({ documento: nfLimpa ? ('NF ' + nfLimpa) : null }).eq('id', rid).eq('competencia_id', id)
+    if (error) { setMsg('Não consegui salvar a NF: ' + error.message); return }
+    setVerCorr(null)
+    setMsg(nfLimpa ? `NF ${nfLimpa} salva no lançamento.` : 'NF removida do lançamento.')
+    carregarLanc()
+  }
 
   return (
     <Wrapper>
@@ -3253,6 +3271,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
           onClose={() => setVerCorr(null)} onDesfazer={() => desfazerCorrecao(verCorr)}
           onCorrigir={() => { const alvo = verCorr; setVerCorr(null); setAcao(alvo) }}
           onCorrigirNome={corrigirNomeAcerto}
+          onSalvarNF={salvarNFAcerto}
           onDesvincular={async () => { const alvo = verCorr; setVerCorr(null); await desvincularLinha(alvo); setMsg(`Desvinculado — separado dos nomes parecidos.`) }} />
       )}
       {verComposic && (
@@ -3490,10 +3509,11 @@ function SugestoesDiferenca({ conta, compId, dif }) {
 //            (marcando "pendência do cliente", entra no Relatório de Pendências).
 // Lançamento JÁ TRATADO: mostra o que foi feito (correção/estorno/justificativa)
 // e o lançamento de acerto gerado — e permite DESFAZER. Não reabre a tela de tratar.
-function ModalCorrigido({ linha, compId, planoMap = {}, lab = 'fornecedor', onClose, onDesfazer, onCorrigir, onCorrigirNome, onDesvincular }) {
+function ModalCorrigido({ linha, compId, planoMap = {}, lab = 'fornecedor', onClose, onDesfazer, onCorrigir, onCorrigirNome, onSalvarNF, onDesvincular }) {
   const [dados, setDados] = useState(null)
   const [busy, setBusy] = useState(false)
   const [nomeAcerto, setNomeAcerto] = useState(String(linha.leitura?.entidade || '').trim())
+  const [nfAcerto, setNfAcerto] = useState(String(linha.leitura?.nf || '').trim())
   useEffect(() => {
     let vivo = true
     ;(async () => {
@@ -3549,6 +3569,19 @@ function ModalCorrigido({ linha, compId, planoMap = {}, lab = 'fornecedor', onCl
               <button className="btn" disabled={busy} onClick={async () => { setBusy(true); await onCorrigirNome(linha, nomeAcerto) }}><i className="ti ti-user-check" /> Salvar nome</button>
             </div>
             <p style={{ color: theme.sub, fontSize: 11, margin: '6px 0 0' }}>Define o {lab} deste lançamento de acerto — ele passa a agrupar por esse nome na conta.</p>
+          </div>
+        )}
+
+        {/* NF do lançamento já tratado: é só INFORMAÇÃO (não é correção). Sempre dá para incluir/
+            arrumar o número da nota, mesmo já tratado e sem NF. */}
+        {onSalvarNF && linha.acerto && (
+          <div style={{ borderTop: `1px solid ${theme.border}`, paddingTop: 12, marginTop: 12 }}>
+            <label style={{ fontSize: 12, color: theme.sub }}>Número da NF deste lançamento</label>
+            <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+              <input className="input" value={nfAcerto} onChange={e => setNfAcerto(e.target.value)} placeholder="Ex.: 71576883" style={{ flex: 1 }} />
+              <button className="btn" disabled={busy} onClick={async () => { setBusy(true); await onSalvarNF(linha, nfAcerto) }}><i className="ti ti-receipt-2" /> Salvar NF</button>
+            </div>
+            <p style={{ color: theme.sub, fontSize: 11, margin: '6px 0 0' }}>Só acrescenta a informação da nota (não mexe no débito/crédito) — ajuda a casar por número.</p>
           </div>
         )}
 
