@@ -992,7 +992,11 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const dataAb = l => (l.data && l.data !== 'abertura') ? String(l.data) : ''
   // `nome` opcional: força a chave pelo nome FINAL (ex.: após vincular, a abertura passa a se
   // chamar `alvo` na releitura). Sem `nome`, usa o nome atual da linha (comportamento original).
-  const chaveAbertura = (l, nome) => `AB·${conta.conta}·${dataAb(l)}·${nfKey(l.leitura?.nf)}·${baixaTxt(nome != null ? nome : (l.leitura?.entidade || ''))}·${Math.round(((Number(l.debito) || 0) - (Number(l.credito) || 0)) * 100)}`
+  // NF COMPLETA (com a letra da parcela: 5238A ≠ 5238B). Antes usava nfKey (que tira a letra), então
+  // baixar/tratar UMA parcela de abertura marcava a GÊMEA de mesmo valor — baixava linha não
+  // selecionada e o bloco ficava com diferença. Cada lançamento é individual: a letra tem que entrar.
+  const nfAb = l => String(l.leitura?.nf ?? '').trim().toUpperCase()
+  const chaveAbertura = (l, nome) => `AB·${conta.conta}·${dataAb(l)}·${nfAb(l)}·${baixaTxt(nome != null ? nome : (l.leitura?.entidade || ''))}·${Math.round(((Number(l.debito) || 0) - (Number(l.credito) || 0)) * 100)}`
   // Formato ANTIGO (sem data) — só para reconhecer conferências gravadas ANTES desta mudança,
   // e apenas quando a linha é ÚNICA por esse formato (senão marcaria o gêmeo de novo).
   const chaveAberturaLegacy = l => `AB·${conta.conta}·${nfKey(l.leitura?.nf)}·${baixaTxt(l.leitura?.entidade || '')}·${Math.round(((Number(l.debito) || 0) - (Number(l.credito) || 0)) * 100)}`
