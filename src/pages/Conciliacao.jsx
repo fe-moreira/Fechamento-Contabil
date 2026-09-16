@@ -2805,7 +2805,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         )
       })()}
 
-      {carregando ? (
+      {carregando && lanc.length === 0 ? (
         <p style={{ color: theme.sub, fontSize: 13 }}>Carregando…</p>
       ) : lanc.length === 0 ? (
         <Aviso icon="ti-inbox" texto="Sem lançamentos nesta conta." />
@@ -3404,7 +3404,7 @@ function ListaLancamentos({ lanc, carregando, contraDe, planoMap, tratados = new
             </tr>
           </thead>
           <tbody>
-            {carregando ? (
+            {carregando && lanc.length === 0 ? (
               <tr><td colSpan={nCols} style={{ ...td, color: theme.sub }}>Carregando…</td></tr>
             ) : lanc.length === 0 ? (
               <tr><td colSpan={nCols} style={{ ...td, color: theme.sub }}>Sem lançamentos nesta conta.</td></tr>
