@@ -1009,6 +1009,11 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // pro em aberto). A baixa por chave sem nome não depende disso. `chaveAberturaSemNome` converte
   // um item AB· já gravado (com nome) para essa forma, esvaziando o segmento do nome.
   const chaveAbBaixa = l => chaveAbertura(l, '')
+  // Chave da baixa de abertura COM o FORNECEDOR (núcleo do nome — estável, ignora sufixo LTDA/CNPJ).
+  // Sem isso, dois fornecedores DIFERENTES com mesma data+valor+sem NF (ex.: FLASH 1.000 × LALAMOVE
+  // 1.000, ambos 01.06) tinham a MESMA chave sem-nome e baixar um marcava o outro ("conectados").
+  // O núcleo separa. O sem-nome vira só um fallback, e só quando é ÚNICO (não recria a colisão).
+  const chaveAbBaixaForn = l => chaveAbertura(l, nucleoNome(l.leitura?.entidade || ''))
   const chaveAberturaSemNome = item => { const p = String(item || '').split('·'); return (p[0] === 'AB' && p.length === 6) ? (p[4] = '', p.join('·')) : null }
   // Chave estável de uma linha de razão pelo `item` (conta·data·NF) — igual à gravada na
   // auditoria por registrar()/baixarConexao(). Casa mesmo após reimportar o razão.
@@ -1024,6 +1029,12 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const abLegacyCount = {}
   for (const l of lanc) { if (l._abertura) { const k = chaveAberturaLegacy(l); abLegacyCount[k] = (abLegacyCount[k] || 0) + 1 } }
   const legacyAbUnico = l => abLegacyCount[chaveAberturaLegacy(l)] === 1
+  // Quantas aberturas compartilham a chave SEM NOME (conta·data·NF·valor). Só reconhecemos a baixa
+  // por essa chave (compat com registros antigos) quando é ÚNICA — senão fornecedores diferentes de
+  // mesmo valor/data (FLASH × LALAMOVE) colidiriam de novo.
+  const abBaixaSemNomeCount = {}
+  for (const l of lanc) { if (l._abertura) { const k = chaveAbBaixa(l); abBaixaSemNomeCount[k] = (abBaixaSemNomeCount[k] || 0) + 1 } }
+  const abBaixaUnico = l => abBaixaSemNomeCount[chaveAbBaixa(l)] === 1
   const trataAbLegacy = l => legacyAbUnico(l) && tratadosAb.has(chaveAberturaLegacy(l))
   const chaveTrat = l => l.acerto ? String(l.id).replace(/^ac_/, '') : (l._abertura ? chaveAbertura(l) : l.id)
   const jaTratada = l => l._abertura ? (tratadosAb.has(chaveAbertura(l)) || trataAbLegacy(l)) : tratados.has(l.id)
@@ -1032,11 +1043,11 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // nem exigir confirmação para o grupo resolver/cruzar com o pagamento do mês. O usuário ainda pode
   // abrir e corrigir. Na competência de abertura (saldo inicial digitado da carga), NÃO se aplica.
   const aberturaHerdada = l => !!l?._abertura && !abertura.inicial
-  const foiConfirmado = l => confirmados.has(chaveTrat(l)) || (l._abertura && confirmados.has(chaveAbBaixa(l))) || (l._abertura && legacyAbUnico(l) && confirmados.has(chaveAberturaLegacy(l))) || (!l._abertura && !l.acerto && itemUnico(l) && confirmados.has(itemConc(l))) // saiu do em aberto (conciliado)
+  const foiConfirmado = l => confirmados.has(chaveTrat(l)) || (l._abertura && confirmados.has(chaveAbBaixaForn(l))) || (l._abertura && abBaixaUnico(l) && confirmados.has(chaveAbBaixa(l))) || (l._abertura && legacyAbUnico(l) && confirmados.has(chaveAberturaLegacy(l))) || (!l._abertura && !l.acerto && itemUnico(l) && confirmados.has(itemConc(l))) // saiu do em aberto (conciliado)
   // VÍNCULO/CONEXÃO manual: o par explícito que o usuário linkou e mandou baixar (zera entre si).
   // SAI SEMPRE do em aberto — não depende do grupo do nome zerar inteiro (o resto do nome pode
   // seguir aberto). É a régua do usuário: "cliquei e conciliei → tem que baixar". Ver ATTENTIVE.
-  const ehConexaoManual = l => conexoesManuais.has(chaveTrat(l)) || (l._abertura && conexoesManuais.has(chaveAbBaixa(l))) || (!l._abertura && !l.acerto && itemUnico(l) && conexoesManuais.has(itemConc(l)))
+  const ehConexaoManual = l => conexoesManuais.has(chaveTrat(l)) || (l._abertura && conexoesManuais.has(chaveAbBaixaForn(l))) || (l._abertura && abBaixaUnico(l) && conexoesManuais.has(chaveAbBaixa(l))) || (!l._abertura && !l.acerto && itemUnico(l) && conexoesManuais.has(itemConc(l)))
   // REABERTO pelo usuário: um grupo que ZEROU POR NOME (automático) e o usuário mandou reabrir
   // porque não era um par de verdade (NF/valor diferentes). Chave ÚNICA POR LINHA — razão pelo
   // uuid (NUNCA por conta·data·NF: linhas SEM NF colidem e reabriam o que já estava certo);
@@ -1957,10 +1968,10 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // identificada pela chave estável "AB·…" no campo item; razão vai pelo razao_id (uuid).
   const linhaAuditoria = (l, id, nome) => ({
     competencia_id: id, modulo: 'Conciliação',
-    // Abertura (saldo anterior): chave SEM nome (conta·data·NF·valor) — o nome da perna de abertura
-    // costuma vir diferente do bloco (ex.: "CORPOTEC ... LTDA" × "ADIANTAMENTO DE CLIENTES CORPOTEC")
-    // e, chaveando pelo nome, a baixa não era reconhecida na releitura e a perna voltava pro em aberto.
-    item: l._abertura ? chaveAbBaixa(l) : `${conta.conta} · ${l.data || ''} · NF ${l.leitura.nf || '—'}`,
+    // Abertura (saldo anterior): chave com o FORNECEDOR (núcleo do nome) — distingue fornecedores
+    // diferentes de mesmo valor/data/sem NF (FLASH × LALAMOVE). O núcleo é estável (ignora sufixo
+    // LTDA/CNPJ, e o nome já vem limpo do prefixo de tipo pelo limparNomeEntidade).
+    item: l._abertura ? chaveAbBaixaForn(l) : `${conta.conta} · ${l.data || ''} · NF ${l.leitura.nf || '—'}`,
     tipo: 'Justificativa',
     detalhe: `Confirmado em lote — ${nome}: composição identificada e zerada no mês (título e baixa se compensam).`,
     razao_id: l._abertura ? null : (l.acerto ? String(l.id).replace(/^ac_/, '') : l.id), usuario,
@@ -2092,7 +2103,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     // baixava). Sem nome, as DUAS pernas baixam sempre.
     const rows = alvo.map(l => ({
       competencia_id: id, modulo: 'Conciliação',
-      item: l._abertura ? chaveAbBaixa(l) : `${conta.conta} · ${l.data || ''} · NF ${l.leitura?.nf || '—'}`,
+      item: l._abertura ? chaveAbBaixaForn(l) : `${conta.conta} · ${l.data || ''} · NF ${l.leitura?.nf || '—'}`,
       tipo: 'Justificativa',
       detalhe: `Confirmado em lote — conexão manual (nota + pagamento).`,
       // Acerto (estorno/lançamento) é identificado pelo uuid do próprio lançamento (sem "ac_").
