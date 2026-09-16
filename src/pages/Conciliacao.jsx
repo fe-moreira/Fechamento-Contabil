@@ -1561,9 +1561,23 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const netBaixadosNF = ovNet([...baixados])
   // Baixados AUTOMATICAMENTE por NF (par título + pagamento com a mesma NF). Também podem ser
   // REABERTOS: o usuário puxa a NF de volta para o em aberto para vincular do jeito certo à mão.
-  const baixadosPorNome = {}
-  for (const l of [...baixados]) { if (Math.abs(ov(l)) < 0.005) continue; const k = l.leitura?.entidade || '(sem nome)'; (baixadosPorNome[k] = baixadosPorNome[k] || []).push(l) }
-  const baixadosGrupos = Object.entries(baixadosPorNome).map(([nome, lancs]) => ({ nome, lancs }))
+  // Agrupa os BAIXADOS por FORNECEDOR (mesmoFornecedor) — igual aos blocos em aberto — e NÃO por
+  // nome EXATO: senão o mesmo fornecedor escrito diferente ("AUTONOMO MAYARA…" × "MAYARA… LTDA PJ 2")
+  // vira DOIS blocos que "não fecham", quando na verdade o par (mesma NF) zerou junto. Assim eles
+  // aparecem no MESMO bloco (com os dois nomes), tenha o usuário confirmado o nome ou não. Respeita
+  // os nomes ISOLADOS (desvinculados de propósito não juntam).
+  const baixClusters = []
+  for (const l of [...baixados]) {
+    if (Math.abs(ov(l)) < 0.005) continue
+    const nm = l.leitura?.entidade || '(sem nome)'
+    const semNome = nm === '(sem nome)'
+    const tk = tokensNome(nm)
+    const iso = !semNome && nomesIsolados.has(chaveNome(nm))
+    const alvo = (semNome || iso) ? null : baixClusters.find(c => !c.iso && !c.semNome && mesmoFornecedor(c.nome, c.tk, nm, tk))
+    if (alvo) { alvo.lancs.push(l); if (nm.length > alvo.nome.length) { alvo.nome = nm; alvo.tk = tk }; if (!alvo.nomes.includes(nm)) alvo.nomes.push(nm) }
+    else baixClusters.push({ nome: nm, tk, iso, semNome, lancs: [l], nomes: [nm] })
+  }
+  const baixadosGrupos = baixClusters.map(c => ({ nome: c.nome, lancs: c.lancs, nomes: c.nomes }))
   const baixadosVis = termoBusca ? baixadosGrupos.filter(casaBusca) : baixadosGrupos
   // Mesma régua do MANUAL, agora também no AUTOMÁTICO: saldo POR conta (tem que zerar), reabrir
   // INDIVIDUAL (só a linha) e reabrir EM LOTE (só o que eu seleciono / só os que não zeraram).
@@ -1596,6 +1610,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', background: theme.input, gap: 8 }}>
             <span style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
               <span style={{ color: theme.text, fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}><i className="ti ti-link" style={{ color: theme.accent, marginRight: 6 }} />{g.nome}</span>
+              {(g.nomes || []).length > 1 && <span title={`Mesmo fornecedor, nomes: ${g.nomes.join(' · ')}`} style={{ fontSize: 10.5, fontWeight: 700, whiteSpace: 'nowrap', padding: '2px 8px', borderRadius: 20, flexShrink: 0, color: theme.accent, background: 'rgba(74,124,255,0.14)', cursor: 'help' }}><i className="ti ti-arrows-join" /> {g.nomes.length} nomes</span>}
               <span style={{ fontSize: 11.5, fontWeight: 700, whiteSpace: 'nowrap', padding: '2px 8px', borderRadius: 10, flexShrink: 0, color: zerouG ? theme.green : theme.red, background: zerouG ? 'rgba(48,164,108,0.12)' : 'rgba(229,72,77,0.12)' }}>{zerouG ? 'zerou · R$ 0,00' : `não fecha · ${moneyDC(netG)}`}</span>
             </span>
             <button className="btn btn-ghost" style={{ fontSize: 12, padding: '4px 10px', color: theme.yellow, borderColor: theme.yellow, flexShrink: 0 }} onClick={() => reabrirBaixaNF(g.lancs)}><i className="ti ti-rotate-2" /> Reabrir bloco ({g.lancs.length})</button>
