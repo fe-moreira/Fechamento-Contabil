@@ -93,14 +93,27 @@ const brDataIso = iso => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso 
 
 // Índice do razão E dos lançamentos ajustados (correções feitas no sistema também
 // carregam o acumulador no histórico) — agrupado por acumulador, só históricos com "Acum.".
-async function carregarIndiceFiscal(empresaId, competencia) {
+// "Impressão digital" barata da competência: contagens + últimos carimbos das 3 tabelas que
+// alimentam o índice (razão, lançamentos, ajuste_leitura). Se não mudou nada, dá pra REUSAR o
+// índice já montado — sem reler milhares de linhas toda vez que se entra na Integração.
+async function fingerprintFiscal(compId) {
+  const cnt = t => supabase.from(t).select('*', { count: 'exact', head: true }).eq('competencia_id', compId).then(r => r.count || 0)
+  const ult = (t, col) => supabase.from(t).select(col).eq('competencia_id', compId).order(col, { ascending: false }).limit(1).maybeSingle().then(r => r.data?.[col] || '')
+  const [nRz, nLc, nAj, ajU, lcU] = await Promise.all([cnt('razao'), cnt('lancamentos'), cnt('ajuste_leitura'), ult('ajuste_leitura', 'updated_at'), ult('lancamentos', 'created_at')])
+  return `${nRz}·${nLc}·${nAj}·${ajU}·${lcU}`
+}
+
+async function carregarIndiceFiscal(empresaId, competencia, cachedIdx) {
   const [mes, ano] = (competencia || '').split('/').map(Number)
   const { data: comp } = await supabase.from('competencias').select('id')
     .eq('cliente_id', empresaId).eq('ano', ano).eq('mes', mes).maybeSingle()
   const byAcum = {}
   const nfAcum = new Set()   // todas as NFs citadas em históricos fiscais (com "Acum.")
-  if (!comp) return { byAcum, nfAcum, compId: null }
+  if (!comp) return { byAcum, nfAcum, compId: null, fp: '' }
   const compId = comp.id
+  // Nada mudou desde a última carga desta competência → reusa o índice pronto (sem reler tudo).
+  const fp = await fingerprintFiscal(compId)
+  if (cachedIdx && cachedIdx.fp === fp) return cachedIdx
   const add = (hist, valor, data) => {
     const acum = acumDoHistorico(hist); if (!acum) return
     const nfs = nfsDoHistorico(hist)
@@ -125,12 +138,12 @@ async function carregarIndiceFiscal(empresaId, competencia) {
   // Correções de leitura sobrescrevem o histórico exibido (ex.: acumulador ajustado
   // de 1602 → 614) sem mudar o razão. Usa o histórico corrigido quando existir.
   const ajuste = {}
-  const { data: aj } = await supabase.from('ajuste_leitura').select('razao_id, historico')
+  const aj = await lerTudo('ajuste_leitura', 'razao_id, historico')  // só desta competência, paginado
   for (const a of (aj || [])) if (a.historico) ajuste[a.razao_id] = a.historico
   for (const r of (rz || [])) add(ajuste[r.id] || r.historico, (Number(r.debito) || 0) + (Number(r.credito) || 0), r.data)
   const lc = await lerTudo('lancamentos', 'data, historico, valor')
   for (const l of (lc || [])) add(l.historico, Math.abs(Number(l.valor) || 0), l.data)
-  return { byAcum, nfAcum, compId }
+  return { byAcum, nfAcum, compId, fp }
 }
 
 // Cruza as linhas do arquivo (acumulador) com o índice → resumo por acumulador.
@@ -443,12 +456,15 @@ function unificarFolha(...listas) {
 }
 // Índice do razão (+ lançamentos ajustados) por rubrica: valor por código (o maior lado,
 // débito ou crédito — a rubrica entra como partida dobrada) e o conjunto de valores lançados.
-async function carregarIndiceFolha(empresaId, competencia) {
+async function carregarIndiceFolha(empresaId, competencia, cachedIdx) {
   const [mes, ano] = (competencia || '').split('/').map(Number)
   const { data: comp } = await supabase.from('competencias').select('id')
     .eq('cliente_id', empresaId).eq('ano', ano).eq('mes', mes).maybeSingle()
   const byCod = {}, valores = new Set()
-  if (!comp) return { byCod, valores, compId: null }
+  if (!comp) return { byCod, valores, compId: null, fp: '' }
+  // Nada mudou desde a última carga → reusa o índice pronto (sem reler tudo).
+  const fp = await fingerprintFiscal(comp.id)
+  if (cachedIdx && cachedIdx.fp === fp) return cachedIdx
   const add = (hist, deb, cred) => {
     const cod = rubDoHistorico(hist); if (!cod) return
     const b = (byCod[cod] ||= { cod, deb: 0, cred: 0, porNome: {} })
@@ -490,7 +506,7 @@ async function carregarIndiceFolha(empresaId, competencia) {
   // razão do Domínio já traz da folha e o valor apareceria DOBRADO na conferência.
   const lc = await lerTudo('lancamentos', 'historico, valor, origem')
   for (const l of lc) { if (l.origem === 'correcao') continue; const v = Math.abs(Number(l.valor) || 0); add(l.historico, v, v) }
-  return { byCod, valores, compId: comp.id }
+  return { byCod, valores, compId: comp.id, fp }
 }
 // Cruza os eventos unificados com o índice do razão. Casa pelo código; se o código não
 // existir (ex.: código do evento diferente do da rubrica), tenta pelo valor. Rubricas
@@ -820,7 +836,7 @@ function Fiscal({ competencia, empresaId, cliente, user, est, onEstado }) {
     const cached = idxCacheFiscal.get(key)
     if (cached) { setRazIdx(cached.idx); setCompId(cached.idx.compId); setNcAcum(cached.nc); setCarregando(false) }
     else { setCarregando(true); setRazIdx(null); setNcAcum(null) }
-    const pIdx = carregarIndiceFiscal(empresaId, competencia)
+    const pIdx = carregarIndiceFiscal(empresaId, competencia, cached?.idx)
     const pNc = supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'depara').eq('obs', 'acumuladores_nao_contabiliza')
       .order('created_at', { ascending: false }).limit(1).maybeSingle()
       .then(({ data }) => new Set((Array.isArray(data?.dados) ? data.dados : []).map(x => normAcum(x.cod)).filter(Boolean)))
@@ -1027,20 +1043,25 @@ function Fiscal({ competencia, empresaId, cliente, user, est, onEstado }) {
   const semMov = atual?.semMovimento
 
   // Dois blocos: "não contabiliza" (demonstrativo, pode ter diferença) e os que CONTABILIZAM
-  // (têm que fechar em zero). Os cartões do topo e a Diferença refletem SÓ o bloco que contabiliza.
+  // (têm que fechar em zero). A DIFERENÇA reflete só o bloco que contabiliza; o "Total do
+  // documento" mostra o TOTAL GERAL (os dois blocos somados) — que é o total do arquivo e o
+  // que casa com o Resumo por Acumulador do Domínio.
   const resumoNC = resumoAtual.filter(a => a.naoContab)
   const resumoC = resumoAtual.filter(a => !a.naoContab)
-  const totDoc = resumoC.reduce((s, a) => s + a.docTotal, 0)
-  const totId = resumoC.reduce((s, a) => s + a.idTotal, 0)
-  const totDif = Math.round((totDoc - totId) * 100) / 100
-  const totQtd = resumoC.reduce((s, a) => s + a.qtd, 0)
-  const totQtdId = resumoC.reduce((s, a) => s + a.qtdId, 0)
+  const totDocC = resumoC.reduce((s, a) => s + a.docTotal, 0)
+  const totIdC = resumoC.reduce((s, a) => s + a.idTotal, 0)
+  const totDif = Math.round((totDocC - totIdC) * 100) / 100
+  const totQtd = resumoAtual.reduce((s, a) => s + a.qtd, 0)
+  const totQtdId = resumoAtual.reduce((s, a) => s + a.qtdId, 0)
   // Demonstrativo do bloco "não contabiliza" (não entra no verde nem na Diferença do topo).
   const ncDoc = resumoNC.reduce((s, a) => s + a.docTotal, 0)
   const ncId = resumoNC.reduce((s, a) => s + a.idTotal, 0)
   const ncDif = Math.round((ncDoc - ncId) * 100) / 100
   const ncQtd = resumoNC.reduce((s, a) => s + a.qtd, 0)
   const ncQtdId = resumoNC.reduce((s, a) => s + a.qtdId, 0)
+  // Total GERAL do documento = não contabiliza + contabiliza (o total do arquivo inteiro).
+  const totDoc = Math.round((totDocC + ncDoc) * 100) / 100
+  const totId = Math.round((totIdC + ncId) * 100) / 100
   // Uma linha da tabela de acumuladores (serve para os dois blocos).
   const linhaAcum = a => {
     const bate = Math.abs(a.dif) < 0.005
@@ -1198,12 +1219,22 @@ function Fiscal({ competencia, empresaId, cliente, user, est, onEstado }) {
             <tfoot>
               <tr style={{ borderTop: `2px solid ${theme.border}`, background: theme.input, fontWeight: 700 }}>
                 <td style={FS.td}>{resumoNC.length > 0 ? 'Total contabiliza' : 'Total'}</td>
-                <td style={FS.td}>{totQtdId}/{totQtd}</td>
-                <td style={FS.tdR}>{money(totDoc)}</td>
-                <td style={{ ...FS.tdR, color: theme.green }}>{money(totId)}</td>
+                <td style={FS.td}>{totQtdId - ncQtdId}/{totQtd - ncQtd}</td>
+                <td style={FS.tdR}>{money(totDocC)}</td>
+                <td style={{ ...FS.tdR, color: theme.green }}>{money(totIdC)}</td>
                 <td style={{ ...FS.tdR, color: Math.abs(totDif) < 0.005 ? theme.green : theme.red }}>{money(totDif)}</td>
                 <td style={FS.td}></td>
               </tr>
+              {resumoNC.length > 0 && (
+                <tr style={{ borderTop: `1px solid ${theme.border}`, background: theme.input, fontWeight: 700 }}>
+                  <td style={FS.td} title="Não contabiliza + Contabiliza — o total do arquivo, que casa com o Resumo por Acumulador do Domínio">Total do documento (geral)</td>
+                  <td style={FS.td}>{totQtdId}/{totQtd}</td>
+                  <td style={FS.tdR}>{money(totDoc)}</td>
+                  <td style={{ ...FS.tdR, color: theme.green }}>{money(totId)}</td>
+                  <td style={FS.tdR}></td>
+                  <td style={FS.td}></td>
+                </tr>
+              )}
             </tfoot>
           </table>
         </div>
@@ -1398,7 +1429,7 @@ function Folha({ competencia, empresaId, cliente, user, est, onEstado, onSemMov 
     const cached = idxCacheFolha.get(key)
     if (cached) { setIdx(cached.idx); setNcProv(cached.nc); setCarregando(false) }
     else { setCarregando(true); setIdx(null); setNcProv(null) }
-    const pIdx = carregarIndiceFolha(empresaId, competencia)
+    const pIdx = carregarIndiceFolha(empresaId, competencia, cached?.idx)
     const pNc = supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'depara').eq('obs', 'proventos_nao_contabiliza')
       .order('created_at', { ascending: false }).limit(1).maybeSingle()
       .then(({ data }) => new Set((Array.isArray(data?.dados) ? data.dados : []).map(x => normRub(x.cod)).filter(Boolean)))
