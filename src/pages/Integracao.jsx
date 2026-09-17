@@ -1425,40 +1425,28 @@ function Folha({ competencia, empresaId, cliente, user, est, onEstado, onSemMov 
   const ncDoc = resumoNC.reduce((s, r) => s + r.valor, 0)
   const ncRaz = resumoNC.reduce((s, r) => s + r.razao, 0)
   const ncDif = Math.round(resumoNC.reduce((s, r) => s + r.dif, 0) * 100) / 100
-  // Uma linha da tabela de rubricas (serve para os dois blocos). O "não contabiliza" mostra a
-  // diferença REAL (demonstrativo) e não tem botão de justificar.
-  const linhaRub = r => {
-    const aberto = justAberto === r.cod
-    return (
-      <Fragment key={r.cod}>
-        <tr style={{ borderTop: `1px solid ${theme.border}`, background: r.naoContab ? 'rgba(245,166,35,0.10)' : (r.ok ? 'transparent' : 'rgba(229,72,77,0.06)') }}>
-          <td style={FS.td}>{r.cod}{r.naoContab && <span title="Provento cadastrado como NÃO contabilizado (Base de Informações) — a diferença é só demonstrativa e não entra na conta." style={{ marginLeft: 8, fontSize: 10, fontWeight: 700, color: theme.yellow, background: 'rgba(245,166,35,0.16)', padding: '1px 7px', borderRadius: 20, textTransform: 'uppercase', letterSpacing: .3 }}>não contabiliza</span>}</td>
-          <td style={FS.td}>{r.nome || '—'}{r.via === 'valor' && <span style={{ color: theme.sub, fontSize: 11 }} title="Identificado pelo valor (código do evento diferente do da rubrica no razão)"> · por valor</span>}{r.just && <span style={{ color: theme.yellow, fontSize: 11 }}> · justificada</span>}</td>
-          <td style={FS.tdR}>{money(r.valor)}</td>
-          <td style={{ ...FS.tdR, color: theme.green }}>{money(r.razao)}</td>
-          <td style={{ ...FS.tdR, color: r.naoContab ? theme.yellow : r.ok ? theme.sub : theme.red, fontWeight: 600 }}>{money(r.dif)}</td>
-          <td style={{ ...FS.td, textAlign: 'center' }}>
-            {r.naoContab
-              ? <i className="ti ti-alert-triangle" style={{ color: theme.yellow }} title="Não contabiliza (demonstrativo)" />
-              : Math.abs(r.dif) < 0.005
-                ? <i className="ti ti-circle-check" style={{ color: theme.green }} />
-                : <button className="btn btn-ghost" style={{ fontSize: 11, padding: '2px 8px' }} onClick={() => { setJustAberto(aberto ? null : r.cod); setJustTxt(justif[r.cod] || '') }} title="Justificar (ex.: rubrica informativa, não contabilizada)"><i className="ti ti-flag" style={{ color: r.just ? theme.yellow : theme.sub }} /> {r.just ? 'editar' : 'justificar'}</button>}
-          </td>
-        </tr>
-        {aberto && (
-          <tr><td colSpan={6} style={{ padding: '10px 14px', background: theme.input }}>
-            <label style={{ fontSize: 12, color: theme.sub }}>Justificativa da rubrica {r.cod} — {r.nome} (ex.: evento informativo "INF - ...", não gera lançamento contábil)</label>
-            <textarea className="input" rows={2} value={justTxt} onChange={e => setJustTxt(e.target.value)} placeholder="Explique por que esta rubrica não precisa bater com o razão…" style={{ marginTop: 6 }} />
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>
-              {r.just && <button className="btn btn-ghost" style={{ fontSize: 12, color: theme.red, borderColor: theme.red }} onClick={() => salvarJustificativa(r.cod, '')}>remover</button>}
-              <button className="btn btn-ghost" style={{ fontSize: 12 }} onClick={() => { setJustAberto(null); setJustTxt('') }}>cancelar</button>
-              <button className="btn" style={{ fontSize: 12 }} disabled={!justTxt.trim()} onClick={() => salvarJustificativa(r.cod, justTxt)}>salvar</button>
-            </div>
-          </td></tr>
-        )}
-      </Fragment>
-    )
-  }
+  // Uma linha da tabela de rubricas (serve para os dois blocos). A Folha NÃO justifica mais
+  // rubrica a rubrica — o que já foi justificado antes CONTINUA valendo (fica verde), mas rubrica
+  // nova que não bate resolve pelo cadastro "Proventos não contabilizados" (Base de Informações),
+  // não por justificativa. Por isso não há mais botão de justificar aqui.
+  const linhaRub = r => (
+    <Fragment key={r.cod}>
+      <tr style={{ borderTop: `1px solid ${theme.border}`, background: r.naoContab ? 'rgba(245,166,35,0.10)' : (r.ok ? 'transparent' : 'rgba(229,72,77,0.06)') }}>
+        <td style={FS.td}>{r.cod}{r.naoContab && <span title="Provento cadastrado como NÃO contabilizado (Base de Informações) — a diferença é só demonstrativa e não entra na conta." style={{ marginLeft: 8, fontSize: 10, fontWeight: 700, color: theme.yellow, background: 'rgba(245,166,35,0.16)', padding: '1px 7px', borderRadius: 20, textTransform: 'uppercase', letterSpacing: .3 }}>não contabiliza</span>}</td>
+        <td style={FS.td}>{r.nome || '—'}{r.via === 'valor' && <span style={{ color: theme.sub, fontSize: 11 }} title="Identificado pelo valor (código do evento diferente do da rubrica no razão)"> · por valor</span>}{r.just && <span style={{ color: theme.yellow, fontSize: 11 }}> · justificada</span>}</td>
+        <td style={FS.tdR}>{money(r.valor)}</td>
+        <td style={{ ...FS.tdR, color: theme.green }}>{money(r.razao)}</td>
+        <td style={{ ...FS.tdR, color: r.naoContab ? theme.yellow : r.ok ? theme.sub : theme.red, fontWeight: 600 }}>{money(r.dif)}</td>
+        <td style={{ ...FS.td, textAlign: 'center' }}>
+          {r.naoContab
+            ? <i className="ti ti-alert-triangle" style={{ color: theme.yellow }} title="Não contabiliza (demonstrativo)" />
+            : r.ok
+              ? <i className="ti ti-circle-check" style={{ color: theme.green }} title={r.just ? 'Justificada (mantida do histórico)' : 'Bate com o razão'} />
+              : <i className="ti ti-alert-triangle" style={{ color: theme.red }} title="Não bate — cadastre em Proventos não contabilizados (Base de Informações) se não deve subir pro razão" />}
+        </td>
+      </tr>
+    </Fragment>
+  )
   const fSubHeadStyle = { background: theme.input, borderTop: `2px solid ${theme.border}` }
   const fSubHeadTd = { ...FS.td, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: .4, color: theme.sub, padding: '6px 14px' }
 
@@ -1678,7 +1666,7 @@ function Folha({ competencia, empresaId, cliente, user, est, onEstado, onSemMov 
           </table>
         </div>
         <p style={{ color: theme.sub, fontSize: 11.5, margin: '10px 0 0' }}>
-          Unifica folha + adiantamento e cruza cada rubrica com o razão pelo padrão <b style={{ color: theme.text }}>"VALOR REF. &lt;código&gt; - &lt;nome&gt;"</b> (lê também os lançamentos ajustados) — atualiza sozinho ao abrir. Rubricas informativas que não são contabilizadas podem ser <b style={{ color: theme.text }}>justificadas</b> para fechar em zero.
+          Unifica folha + adiantamento e cruza cada rubrica com o razão pelo padrão <b style={{ color: theme.text }}>"VALOR REF. &lt;código&gt; - &lt;nome&gt;"</b> (lê também os lançamentos ajustados) — atualiza sozinho ao abrir. Rubricas que <b style={{ color: theme.text }}>não sobem pro razão</b> (informativas/proventos não contabilizados) são cadastradas em <b style={{ color: theme.text }}>Base de Informações → Proventos não contabilizados</b> — não se justifica mais rubrica a rubrica.
         </p>
       </>}
       {erro && <p style={{ color: theme.red, fontSize: 13, margin: '12px 0 0' }}>{erro}</p>}
