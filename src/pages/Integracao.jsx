@@ -167,16 +167,55 @@ function statusTipoFiscal(t, razIdx, chave, ncAcum = null) {
   if (t.justificativa) return 'ok' // só Saídas tem justificar
   const resumo = (t.rows && razIdx) ? cruzarFiscal(t.rows, razIdx, chave, ncAcum) : (t.resumo || [])
   if (!resumo.length) return 'sem'
-  const dif = resumo.reduce((s, a) => s + Math.abs(a.dif || 0), 0)
+  // "não contabiliza" não entra na conta do verde (pode ter diferença de propósito).
+  const dif = resumo.filter(a => !a.naoContab).reduce((s, a) => s + Math.abs(a.dif || 0), 0)
   return dif < 0.05 ? 'ok' : 'diverge'
 }
-// Estado GERAL da fiscal (regra do verde): verde só quando os 3 tipos batem; amarelo
-// (andamento) se importou algo mas ainda não bateu; vermelho (null) se não importou nada.
-function estadoFiscal(tipos, razIdx, ncAcum = null) {
-  const st = CHAVES_FISCAL.map(k => statusTipoFiscal(tipos?.[k], razIdx, COLS_FISCAL[k].chave, ncAcum))
-  if (st.every(s => s === 'ok')) return 'validado'
-  if (st.some(s => s !== 'sem')) return 'andamento'
+// Total do acumulador IMPORTADO por tipo (soma dos docTotal). null = ainda pendente.
+// É o mesmo número da coluna "Acumulador importado" do Resumo final e do "Total do documento"
+// do card do tipo.
+function impFiscalTipo(t, razIdx, chave, ncAcum = null) {
+  if (!t) return null
+  if (t.semMovimento) return 0
+  if (t.rows && razIdx) return cruzarFiscal(t.rows, razIdx, chave, ncAcum).reduce((s, a) => s + a.docTotal, 0)
+  if (t.resumo) return t.resumo.reduce((s, a) => s + a.docTotal, 0)
   return null
+}
+// O "Resumo por Acumulador" (Domínio) bate com o acumulador importado em TODOS os tipos?
+// Só cobra os tipos que TÊM total no resumo do Domínio (os demais não travam). Sem resumo
+// importado → não trava (devolve true).
+function resumoFinalBate(tipos, razIdx, ncAcum, resumoTotais) {
+  if (!resumoTotais) return true
+  for (const k of CHAVES_FISCAL) {
+    const ref = resumoTotais[k]
+    if (ref == null) continue
+    const imp = impFiscalTipo(tipos?.[k], razIdx, COLS_FISCAL[k].chave, ncAcum)
+    if (imp == null || Math.abs(imp - ref) >= 0.005) return false
+  }
+  return true
+}
+// Diferença total do Resumo final (|importado − resumo do Domínio| por tipo).
+function difResumoFinal(tipos, razIdx, ncAcum, resumoTotais) {
+  if (!resumoTotais) return 0
+  let d = 0
+  for (const k of CHAVES_FISCAL) {
+    const ref = resumoTotais[k]
+    if (ref == null) continue
+    const imp = impFiscalTipo(tipos?.[k], razIdx, COLS_FISCAL[k].chave, ncAcum)
+    if (imp != null) d += Math.abs(imp - ref)
+  }
+  return Math.round(d * 100) / 100
+}
+// Estado GERAL da fiscal (regra do verde): verde só quando os 3 tipos batem com o razão E o
+// Resumo final (Domínio × acumulador importado) também bate; amarelo (andamento) se importou
+// algo mas ainda não bateu; vermelho (null) se não importou nada.
+function estadoFiscal(tipos, razIdx, ncAcum = null, resumoTotais = null) {
+  const st = CHAVES_FISCAL.map(k => statusTipoFiscal(tipos?.[k], razIdx, COLS_FISCAL[k].chave, ncAcum))
+  const base = st.every(s => s === 'ok') ? 'validado' : st.some(s => s !== 'sem') ? 'andamento' : null
+  // Se um Resumo por Acumulador (Domínio) foi importado e algum tipo NÃO bate, a fiscal NÃO
+  // pode ficar verde — cai para "em conferência" até o resumo fechar.
+  if (base === 'validado' && !resumoFinalBate(tipos, razIdx, ncAcum, resumoTotais)) return 'andamento'
+  return base
 }
 const docFiscal = e => e === 'validado' ? 'Fiscal · 3 tipos conferidos' : e === 'andamento' ? 'Fiscal · em conferência' : null
 // Diferença total (soma das diferenças por acumulador dos tipos que ainda não bateram).
@@ -186,14 +225,19 @@ function difFiscal(tipos, razIdx, ncAcum = null) {
     const t = tipos?.[k]
     if (!t || t.semMovimento || t.justificativa) continue
     const resumo = (t.rows && razIdx) ? cruzarFiscal(t.rows, razIdx, COLS_FISCAL[k].chave, ncAcum) : (t.resumo || [])
-    dif += resumo.reduce((s, a) => s + Math.abs(a.dif || 0), 0)
+    dif += resumo.filter(a => !a.naoContab).reduce((s, a) => s + Math.abs(a.dif || 0), 0)
   }
   return Math.round(dif * 100) / 100
 }
+// Diferença GERAL da fiscal para o Status: a do razão×acumulador MAIS a do Resumo final.
+function difFiscalGeral(tipos, razIdx, ncAcum = null, resumoTotais = null) {
+  return Math.round((difFiscal(tipos, razIdx, ncAcum) + difResumoFinal(tipos, razIdx, ncAcum, resumoTotais)) * 100) / 100
+}
 
 // `ncAcum` (opcional): Set de códigos de acumulador (normalizados) que NÃO contabilizam — cadastrados
-// na Base de Informações. Esses saem da diferença (dif=0) e ganham o selo `naoContab` (aparecem na
-// lista, mas não cobram diferença nem seguram o verde).
+// na Base de Informações. Ganham o selo `naoContab` e vão para o TOPO da lista, num bloco à parte:
+// eles PODEM ter diferença (é só demonstrativo — não têm que estar no razão), então NÃO cobram
+// diferença nem seguram o verde. Quem tem que fechar em zero é só o bloco que contabiliza.
 function cruzarFiscal(rows, idx, chave, ncAcum = null) {
   const porAcum = {}
   for (const row of rows) {
@@ -205,9 +249,12 @@ function cruzarFiscal(rows, idx, chave, ncAcum = null) {
   return Object.values(porAcum)
     .map(a => {
       const nc = !!(ncAcum && ncAcum.has(normAcum(a.acum)))
-      return { ...a, naoContab: nc, dif: nc ? 0 : Math.round((a.docTotal - a.idTotal) * 100) / 100 }
+      // Mantém a diferença REAL mesmo no "não contabiliza" (demonstrativo); ela só não entra na
+      // conta do verde (ver statusTipoFiscal/difFiscal, que filtram os naoContab).
+      return { ...a, naoContab: nc, dif: Math.round((a.docTotal - a.idTotal) * 100) / 100 }
     })
-    .sort((x, y) => Math.abs(y.dif) - Math.abs(x.dif) || Number(x.acum) - Number(y.acum))
+    // "não contabiliza" primeiro (bloco de cima), depois os demais por diferença.
+    .sort((x, y) => (y.naoContab ? 1 : 0) - (x.naoContab ? 1 : 0) || Math.abs(y.dif) - Math.abs(x.dif) || Number(x.acum) - Number(y.acum))
 }
 
 // Lê o arquivo do acumulador (colunas conforme o tipo) → linhas normalizadas. NF/Data são
@@ -444,11 +491,10 @@ async function carregarIndiceFolha(empresaId, competencia) {
 // justificadas (informativas, ex.: "INF - ...") entram como resolvidas.
 function cruzarFolha(eventos, idx, justif = {}, ncProv = null) {
   return eventos.map(e => {
-    // Provento marcado como "não contabilizado" para este cliente: some no fiscal/folha,
-    // mas não sobe pro contábil — resolve sozinho (OK, dif 0), sem justificar um a um.
-    if (ncProv && ncProv.has(normRub(e.cod))) {
-      return { ...e, razao: 0, dif: 0, via: null, just: '', naoContab: true, ok: true }
-    }
+    // Provento marcado como "não contabilizado" para este cliente: vai para um bloco à parte
+    // (demonstrativo) — mostra a diferença REAL, mas NÃO segura o verde (ok:true), porque não
+    // tem que estar no razão.
+    const nc = !!(ncProv && ncProv.has(normRub(e.cod)))
     const b = idx.byCod[e.cod]
     let razao = null, via = 'codigo'
     if (b) {
@@ -476,8 +522,9 @@ function cruzarFolha(eventos, idx, justif = {}, ncProv = null) {
     }
     const dif = Math.round((e.valor - razao) * 100) / 100
     const just = justif[e.cod] || ''
-    return { ...e, razao, dif, via, just, ok: Math.abs(dif) < 0.005 || !!just }
-  }).sort((a, b) => (a.ok === b.ok ? 0 : a.ok ? 1 : -1) || Math.abs(b.dif) - Math.abs(a.dif) || Number(a.cod) - Number(b.cod))
+    return { ...e, razao, dif, via, just, naoContab: nc, ok: nc || Math.abs(dif) < 0.005 || !!just }
+    // "não contabiliza" primeiro (bloco de cima); depois resolvidos por último e por diferença.
+  }).sort((a, b) => (b.naoContab ? 1 : 0) - (a.naoContab ? 1 : 0) || (a.ok === b.ok ? 0 : a.ok ? 1 : -1) || Math.abs(b.dif) - Math.abs(a.dif) || Number(a.cod) - Number(b.cod))
 }
 
 export default function Integracao() {
@@ -749,15 +796,6 @@ function Fiscal({ competencia, empresaId, cliente, user, est, onEstado }) {
   const [pendResumo, setPendResumo] = useState(null) // { id, totais, path, nome } — pergunta substituir/complementar (Resumo)
   const [ncAcum, setNcAcum] = useState(null) // Set de acumuladores que NÃO contabilizam (Base de Informações)
 
-  // Carrega os acumuladores "não contabiliza" do cliente (cadastrados na Base de Informações).
-  useEffect(() => {
-    let ativo = true; setNcAcum(null)
-    supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'depara').eq('obs', 'acumuladores_nao_contabiliza')
-      .order('created_at', { ascending: false }).limit(1).maybeSingle()
-      .then(({ data }) => { if (ativo) setNcAcum(new Set((Array.isArray(data?.dados) ? data.dados : []).map(x => normAcum(x.cod)).filter(Boolean))) })
-    return () => { ativo = false }
-  }, [empresaId])
-
   const tipos = est?.tipos || {}
   const atual = tipos[sub]
   const nomeLabel = sub === 'entradas' ? 'Fornecedor' : 'Cliente'
@@ -766,23 +804,32 @@ function Fiscal({ competencia, empresaId, cliente, user, est, onEstado }) {
   // (sem as linhas guardadas), cai no resumo salvo.
   const resumoAtual = (atual?.rows && razIdx && sub !== 'resumo') ? cruzarFiscal(atual.rows, razIdx, COLS_FISCAL[sub].chave, ncAcum) : (atual?.resumo || [])
 
-  // Índice do razão + lançamentos ajustados da competência, para cruzar o arquivo.
+  // Índice do razão + os acumuladores "não contabiliza" (Base de Informações), carregados JUNTOS
+  // — só libera quando os dois chegam, para a validação rodar de uma vez (sem piscar amarelo→verde).
   useEffect(() => {
     let ativo = true
-    setCarregando(true); setRazIdx(null); setExpand(null)
-    carregarIndiceFiscal(empresaId, competencia).then(idx => { if (ativo) { setRazIdx(idx); setCompId(idx.compId); setCarregando(false) } })
+    setCarregando(true); setRazIdx(null); setNcAcum(null); setExpand(null)
+    const pIdx = carregarIndiceFiscal(empresaId, competencia)
+    const pNc = supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'depara').eq('obs', 'acumuladores_nao_contabiliza')
+      .order('created_at', { ascending: false }).limit(1).maybeSingle()
+      .then(({ data }) => new Set((Array.isArray(data?.dados) ? data.dados : []).map(x => normAcum(x.cod)).filter(Boolean)))
+      .catch(() => new Set())
+    Promise.all([pIdx, pNc]).then(([idx, nc]) => { if (ativo) { setRazIdx(idx); setCompId(idx.compId); setNcAcum(nc); setCarregando(false) } })
     return () => { ativo = false }
   }, [empresaId, competencia])
 
   // Mantém o estado da fiscal em dia quando o RAZÃO muda (importou/corrigiu) — sem depender
   // de reimportar. Verde só quando os 3 tipos batem; amarelo (andamento) se falta bater.
   const fiscalSt = CHAVES_FISCAL.map(k => statusTipoFiscal(tipos[k], razIdx, COLS_FISCAL[k].chave, ncAcum))
-  const fiscalDif = difFiscal(tipos, razIdx, ncAcum)
+  const resumoTotais = est?.resumoPdf?.totais || null
+  const fiscalDif = difFiscalGeral(tipos, razIdx, ncAcum, resumoTotais)
   useEffect(() => {
     if (carregando || !razIdx) return
     // Diferença aceita/justificada pelo responsável (no Status) → fica verde e não é rebaixada.
     if (est?.justAceita) return
-    const querido = fiscalSt.every(s => s === 'ok') ? 'validado' : fiscalSt.some(s => s !== 'sem') ? 'andamento' : null
+    // Verde só quando os 3 tipos batem E o Resumo final (Domínio) também fecha (estadoFiscal
+    // já rebaixa para "andamento" se o resumo importado não bater).
+    const querido = estadoFiscal(tipos, razIdx, ncAcum, resumoTotais)
     const difAtual = querido === 'andamento' ? fiscalDif : 0
     if (((est?.estado || null) !== querido || (est?.dif || 0) !== difAtual) && est?.estado !== 'sem_movimento') {
       onEstado({ ...est, estado: querido, dif: difAtual, doc: docFiscal(querido), usuario: user?.email || null })
@@ -833,15 +880,16 @@ function Fiscal({ competencia, empresaId, cliente, user, est, onEstado }) {
   async function gravarTipoFiscal(files, rowsFinal, doc) {
     const path = files.slice(-1)[0]?.path || ''
     const novoTipos = { ...tipos, [sub]: { doc, path, files, rows: rowsFinal, resumo: cruzarFiscal(rowsFinal, razIdx, COLS_FISCAL[sub].chave, ncAcum) } }
-    const e = estadoFiscal(novoTipos, razIdx, ncAcum)
+    const rt = est.resumoPdf?.totais || null
+    const e = estadoFiscal(novoTipos, razIdx, ncAcum, rt)
     // Novo arquivo re-avalia a diferença: solta uma justificativa anterior (justAceita).
-    await onEstado({ ...est, tipos: novoTipos, estado: e, dif: e === 'andamento' ? difFiscal(novoTipos, razIdx, ncAcum) : 0, doc: docFiscal(e), justAceita: false, usuario: user?.email || null })
+    await onEstado({ ...est, tipos: novoTipos, estado: e, dif: e === 'andamento' ? difFiscalGeral(novoTipos, razIdx, ncAcum, rt) : 0, doc: docFiscal(e), justAceita: false, usuario: user?.email || null })
   }
   // Exclui UM arquivo do tipo (só as linhas dele saem); se sobrar vazio, limpa o tipo.
   async function excluirArquivoFiscal(id) {
     const base = tipos[sub]; if (!base) return
     const files = filesFiscal(base)
-    if (files.length <= 1) { if (window.confirm('Excluir este arquivo? O tipo fica vazio.')) { const novoTipos = { ...tipos }; delete novoTipos[sub]; const e = estadoFiscal(novoTipos, razIdx, ncAcum); await onEstado({ ...est, tipos: novoTipos, estado: e, doc: docFiscal(e), usuario: user?.email || null }) } return }
+    if (files.length <= 1) { if (window.confirm('Excluir este arquivo? O tipo fica vazio.')) { const novoTipos = { ...tipos }; delete novoTipos[sub]; const e = estadoFiscal(novoTipos, razIdx, ncAcum, est.resumoPdf?.totais || null); await onEstado({ ...est, tipos: novoTipos, estado: e, doc: docFiscal(e), usuario: user?.email || null }) } return }
     if (!window.confirm('Excluir só este arquivo? As linhas dele saem do total; os outros arquivos continuam.')) return
     const rowsFinal = (base.rows || []).filter(r => (r.__arq || '__legado') !== id)
     const novosFiles = files.filter(f => f.id !== id)
@@ -865,12 +913,12 @@ function Fiscal({ competencia, empresaId, cliente, user, est, onEstado }) {
   // Marca / desfaz "sem movimento" para o tipo atual (ex.: cliente sem Saídas).
   async function marcarSemMovTipo() {
     const novoTipos = { ...tipos, [sub]: { semMovimento: true } }
-    const e = estadoFiscal(novoTipos, razIdx, ncAcum)
+    const e = estadoFiscal(novoTipos, razIdx, ncAcum, est.resumoPdf?.totais || null)
     await onEstado({ ...est, tipos: novoTipos, estado: e, doc: docFiscal(e), usuario: user?.email || null })
   }
   async function desfazerSemMov() {
     const novoTipos = { ...tipos }; delete novoTipos[sub]
-    const e = estadoFiscal(novoTipos, razIdx, ncAcum)
+    const e = estadoFiscal(novoTipos, razIdx, ncAcum, est.resumoPdf?.totais || null)
     await onEstado({ ...est, tipos: novoTipos, estado: e, doc: docFiscal(e), usuario: user?.email || null })
   }
   // Justificar (só Saídas): ex.: valor no acumulador de operação interna nossa. Marca a
@@ -882,7 +930,7 @@ function Fiscal({ competencia, empresaId, cliente, user, est, onEstado }) {
     if (!t) delete novoSaidas.justificativa
     const novoTipos = { ...tipos, saidas: novoSaidas }
     if (!Object.keys(novoSaidas).length) delete novoTipos.saidas
-    const e = estadoFiscal(novoTipos, razIdx, ncAcum)
+    const e = estadoFiscal(novoTipos, razIdx, ncAcum, est.resumoPdf?.totais || null)
     await onEstado({ ...est, tipos: novoTipos, estado: e, doc: docFiscal(e), usuario: user?.email || null })
     setJustAberto(false); setJustTxt('')
   }
@@ -959,22 +1007,68 @@ function Fiscal({ competencia, empresaId, cliente, user, est, onEstado }) {
     document.body.appendChild(a); a.click(); a.remove()
   }
   // Total importado do acumulador por tipo (null = ainda pendente).
-  const totalImportado = k => {
-    const t = tipos[k]
-    if (t?.semMovimento) return 0
-    if (t?.rows && razIdx) return cruzarFiscal(t.rows, razIdx, COLS_FISCAL[k]?.chave, ncAcum).reduce((s, a) => s + a.docTotal, 0)
-    if (t?.resumo) return t.resumo.reduce((s, a) => s + a.docTotal, 0)
-    return null
-  }
+  const totalImportado = k => impFiscalTipo(tipos[k], razIdx, COLS_FISCAL[k]?.chave, ncAcum)
 
   if (carregando) return <p style={{ color: theme.sub, fontSize: 13 }}>Carregando razão…</p>
   const semMov = atual?.semMovimento
 
-  const totDoc = resumoAtual.reduce((s, a) => s + a.docTotal, 0)
-  const totId = resumoAtual.reduce((s, a) => s + a.idTotal, 0)
+  // Dois blocos: "não contabiliza" (demonstrativo, pode ter diferença) e os que CONTABILIZAM
+  // (têm que fechar em zero). Os cartões do topo e a Diferença refletem SÓ o bloco que contabiliza.
+  const resumoNC = resumoAtual.filter(a => a.naoContab)
+  const resumoC = resumoAtual.filter(a => !a.naoContab)
+  const totDoc = resumoC.reduce((s, a) => s + a.docTotal, 0)
+  const totId = resumoC.reduce((s, a) => s + a.idTotal, 0)
   const totDif = Math.round((totDoc - totId) * 100) / 100
-  const totQtd = resumoAtual.reduce((s, a) => s + a.qtd, 0)
-  const totQtdId = resumoAtual.reduce((s, a) => s + a.qtdId, 0)
+  const totQtd = resumoC.reduce((s, a) => s + a.qtd, 0)
+  const totQtdId = resumoC.reduce((s, a) => s + a.qtdId, 0)
+  // Demonstrativo do bloco "não contabiliza" (não entra no verde nem na Diferença do topo).
+  const ncDoc = resumoNC.reduce((s, a) => s + a.docTotal, 0)
+  const ncId = resumoNC.reduce((s, a) => s + a.idTotal, 0)
+  const ncDif = Math.round((ncDoc - ncId) * 100) / 100
+  const ncQtd = resumoNC.reduce((s, a) => s + a.qtd, 0)
+  const ncQtdId = resumoNC.reduce((s, a) => s + a.qtdId, 0)
+  // Uma linha da tabela de acumuladores (serve para os dois blocos).
+  const linhaAcum = a => {
+    const bate = Math.abs(a.dif) < 0.005
+    const aberto = expand === a.acum
+    return (
+      <Fragment key={a.acum}>
+        <tr onClick={() => a.divs.length && setExpand(aberto ? null : a.acum)}
+          style={{ borderTop: `1px solid ${theme.border}`, cursor: a.divs.length ? 'pointer' : 'default', background: a.naoContab ? 'rgba(148,163,184,0.08)' : bate ? 'transparent' : 'rgba(229,72,77,0.06)' }}>
+          <td style={FS.td}>{a.acum}{a.naoContab && <span title="Cadastrado na Base de Informações como acumulador que NÃO contabiliza — a diferença é só demonstrativa e não entra na conta." style={{ marginLeft: 8, fontSize: 10, fontWeight: 700, color: theme.sub, background: 'rgba(148,163,184,0.18)', padding: '1px 7px', borderRadius: 20, textTransform: 'uppercase', letterSpacing: .3 }}>não contabiliza</span>}</td>
+          <td style={FS.td}>{a.qtdId}/{a.qtd}</td>
+          <td style={FS.tdR}>{money(a.docTotal)}</td>
+          <td style={{ ...FS.tdR, color: theme.green }}>{money(a.idTotal)}</td>
+          <td style={{ ...FS.tdR, color: a.naoContab ? theme.sub : bate ? theme.sub : theme.red, fontWeight: 600 }}>{money(a.dif)}</td>
+          <td style={{ ...FS.td, textAlign: 'center', color: theme.sub }}>{a.naoContab ? <i className="ti ti-file-off" title="Não contabiliza (demonstrativo)" /> : a.divs.length ? <i className={`ti ti-chevron-${aberto ? 'up' : 'down'}`} /> : <i className="ti ti-circle-check" style={{ color: theme.green }} />}</td>
+        </tr>
+        {aberto && a.divs.length > 0 && (
+          <tr><td colSpan={6} style={{ padding: 0, background: theme.input }}>
+            <div style={{ padding: '4px 0' }}>
+              <p style={{ fontSize: 11.5, color: theme.sub, margin: '6px 14px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: .3 }}>Lançado no acumulador e não identificado no razão ({a.divs.length})</p>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead><tr>
+                  <th style={FS.thS}>NF</th><th style={FS.thS}>Data</th><th style={FS.thS}>{nomeLabel}</th><th style={FS.thSR}>Valor</th>
+                </tr></thead>
+                <tbody>
+                  {a.divs.map((d, j) => (
+                    <tr key={j} style={{ borderTop: `1px solid ${theme.border}` }}>
+                      <td style={FS.tdS}>{d.nf || '—'}</td>
+                      <td style={FS.tdS}>{brDataIso(d.data)}</td>
+                      <td style={FS.tdS}>{d.forn || '—'}</td>
+                      <td style={{ ...FS.tdS, textAlign: 'right', color: theme.red }}>{money(d.valor)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </td></tr>
+        )}
+      </Fragment>
+    )
+  }
+  const subHeadStyle = { background: theme.input, borderTop: `2px solid ${theme.border}` }
+  const subHeadTd = { ...FS.td, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: .4, color: theme.sub, padding: '6px 14px' }
 
   return (
     <>
@@ -1072,53 +1166,28 @@ function Fiscal({ competencia, empresaId, cliente, user, est, onEstado }) {
               <th style={FS.th}>Acumulador</th><th style={FS.th}>NFs</th><th style={FS.thR}>Total documento</th><th style={FS.thR}>Razão</th><th style={FS.thR}>Diferença</th><th style={FS.th}></th>
             </tr></thead>
             <tbody>
-              {resumoAtual.map((a, i) => {
-                const bate = Math.abs(a.dif) < 0.005
-                const aberto = expand === a.acum
-                return (
-                  <Fragment key={a.acum}>
-                    <tr onClick={() => a.divs.length && setExpand(aberto ? null : a.acum)}
-                      style={{ borderTop: `1px solid ${theme.border}`, cursor: a.divs.length ? 'pointer' : 'default', background: a.naoContab ? 'rgba(148,163,184,0.08)' : bate ? 'transparent' : 'rgba(229,72,77,0.06)' }}>
-                      <td style={FS.td}>{a.acum}{a.naoContab && <span title="Cadastrado na Base de Informações como acumulador que NÃO contabiliza — não entra na diferença." style={{ marginLeft: 8, fontSize: 10, fontWeight: 700, color: theme.sub, background: 'rgba(148,163,184,0.18)', padding: '1px 7px', borderRadius: 20, textTransform: 'uppercase', letterSpacing: .3 }}>não contabiliza</span>}</td>
-                      <td style={FS.td}>{a.qtdId}/{a.qtd}</td>
-                      <td style={FS.tdR}>{money(a.docTotal)}</td>
-                      <td style={{ ...FS.tdR, color: theme.green }}>{a.naoContab ? '—' : money(a.idTotal)}</td>
-                      <td style={{ ...FS.tdR, color: a.naoContab ? theme.sub : bate ? theme.sub : theme.red, fontWeight: 600 }}>{a.naoContab ? '—' : money(a.dif)}</td>
-                      <td style={{ ...FS.td, textAlign: 'center', color: theme.sub }}>{a.naoContab ? <i className="ti ti-file-off" title="Não contabiliza" /> : a.divs.length ? <i className={`ti ti-chevron-${aberto ? 'up' : 'down'}`} /> : <i className="ti ti-circle-check" style={{ color: theme.green }} />}</td>
-                    </tr>
-                    {aberto && a.divs.length > 0 && (
-                      <tr><td colSpan={6} style={{ padding: 0, background: theme.input }}>
-                        <div style={{ padding: '4px 0' }}>
-                          <p style={{ fontSize: 11.5, color: theme.sub, margin: '6px 14px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: .3 }}>Lançado no acumulador e não identificado no razão ({a.divs.length})</p>
-                          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                            <thead><tr>
-                              <th style={FS.thS}>NF</th><th style={FS.thS}>Data</th><th style={FS.thS}>{nomeLabel}</th><th style={FS.thSR}>Valor</th>
-                            </tr></thead>
-                            <tbody>
-                              {a.divs.map((d, j) => (
-                                <tr key={j} style={{ borderTop: `1px solid ${theme.border}` }}>
-                                  <td style={FS.tdS}>{d.nf || '—'}</td>
-                                  <td style={FS.tdS}>{brDataIso(d.data)}</td>
-                                  <td style={FS.tdS}>{d.forn || '—'}</td>
-                                  <td style={{ ...FS.tdS, textAlign: 'right', color: theme.red }}>{money(d.valor)}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      </td></tr>
-                    )}
-                  </Fragment>
-                )
-              })}
+              {resumoNC.length > 0 && <>
+                <tr style={subHeadStyle}><td colSpan={6} style={subHeadTd}><i className="ti ti-file-off" style={{ marginRight: 6 }} />Não contabiliza — demonstrativo (não entra na diferença)</td></tr>
+                {resumoNC.map(linhaAcum)}
+                <tr style={{ borderTop: `1px solid ${theme.border}`, background: 'rgba(148,163,184,0.08)', fontWeight: 700 }}>
+                  <td style={FS.td}>Subtotal não contabiliza</td>
+                  <td style={FS.td}>{ncQtdId}/{ncQtd}</td>
+                  <td style={FS.tdR}>{money(ncDoc)}</td>
+                  <td style={{ ...FS.tdR, color: theme.green }}>{money(ncId)}</td>
+                  <td style={{ ...FS.tdR, color: theme.sub }}>{money(ncDif)}</td>
+                  <td style={FS.td}></td>
+                </tr>
+                <tr style={subHeadStyle}><td colSpan={6} style={subHeadTd}><i className="ti ti-checks" style={{ marginRight: 6 }} />Contabiliza — tem que fechar em zero</td></tr>
+              </>}
+              {resumoC.map(linhaAcum)}
             </tbody>
             <tfoot>
               <tr style={{ borderTop: `2px solid ${theme.border}`, background: theme.input, fontWeight: 700 }}>
-                <td style={FS.td}>Total</td>
+                <td style={FS.td}>{resumoNC.length > 0 ? 'Total contabiliza' : 'Total'}</td>
                 <td style={FS.td}>{totQtdId}/{totQtd}</td>
                 <td style={FS.tdR}>{money(totDoc)}</td>
                 <td style={{ ...FS.tdR, color: theme.green }}>{money(totId)}</td>
-                <td style={{ ...FS.tdR, color: Math.abs(totDif) < 0.005 ? theme.sub : theme.red }}>{money(totDif)}</td>
+                <td style={{ ...FS.tdR, color: Math.abs(totDif) < 0.005 ? theme.green : theme.red }}>{money(totDif)}</td>
                 <td style={FS.td}></td>
               </tr>
             </tfoot>
@@ -1244,7 +1313,7 @@ function ResumoFinal({ est, totalImportado, onImport, onExtrair, onExcluir, busy
             </tbody>
           </table>
         </div>
-        <p style={{ color: theme.sub, fontSize: 11.5, margin: '10px 2px 0' }}>Compara o total do "Resumo por Acumulador" (Domínio) com o total do acumulador que você importou em cada tipo. Verde quando bate (≤ 5 centavos).</p>
+        <p style={{ color: theme.sub, fontSize: 11.5, margin: '10px 2px 0' }}>Compara o total do "Resumo por Acumulador" (Domínio) com o total do acumulador que você importou em cada tipo (o mesmo "Total do documento" de cada card). Verde quando bate (≤ 5 centavos). <b>Enquanto algum tipo não bater, a Fiscal fica "em conferência" (não fica verde).</b></p>
       </div>
     </>
   )
@@ -1305,30 +1374,72 @@ function Folha({ competencia, empresaId, cliente, user, est, onEstado, onSemMov 
   const justif = est?.justif || {}
   const semMov = est?.estado === 'sem_movimento'
 
+  // Carrega o índice do razão E os proventos "não contabiliza" JUNTOS — só libera (carregando=false)
+  // quando os dois chegam. Assim a validação roda UMA vez com tudo em mãos, sem piscar de
+  // amarelo→verde (o "demora para ficar verde" era o 2º passo quando o cadastro chegava depois).
   useEffect(() => {
     let ativo = true
-    setCarregando(true); setIdx(null)
-    carregarIndiceFolha(empresaId, competencia).then(x => { if (ativo) { setIdx(x); setCarregando(false) } })
+    setCarregando(true); setIdx(null); setNcProv(null)
+    const pIdx = carregarIndiceFolha(empresaId, competencia)
+    const pNc = supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'depara').eq('obs', 'proventos_nao_contabiliza')
+      .order('created_at', { ascending: false }).limit(1).maybeSingle()
+      .then(({ data }) => new Set((Array.isArray(data?.dados) ? data.dados : []).map(x => normRub(x.cod)).filter(Boolean)))
+      .catch(() => new Set())
+    Promise.all([pIdx, pNc]).then(([x, nc]) => { if (ativo) { setIdx(x); setNcProv(nc); setCarregando(false) } })
     return () => { ativo = false }
   }, [empresaId, competencia])
-
-  // Carrega os proventos "não contabiliza" do cliente (cadastrados na Base de Informações).
-  useEffect(() => {
-    let ativo = true; setNcProv(null)
-    supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'depara').eq('obs', 'proventos_nao_contabiliza')
-      .order('created_at', { ascending: false }).limit(1).maybeSingle()
-      .then(({ data }) => { if (ativo) setNcProv(new Set((Array.isArray(data?.dados) ? data.dados : []).map(x => normRub(x.cod)).filter(Boolean))) })
-    return () => { ativo = false }
-  }, [empresaId])
 
   // Eventos unificados (folha mensal + adiantamento + 13º adiant. + complementar + PLR) e
   // o cruzamento AO VIVO com o razão atual.
   const eventos = unificarFolha(arquivos.folha?.eventos, arquivos.adiant?.eventos, arquivos.decimo_adiant?.eventos, arquivos.complementar?.eventos, arquivos.plr?.eventos)
   const resumo = (eventos.length && idx) ? cruzarFolha(eventos, idx, justif, ncProv) : []
-  const totDoc = resumo.reduce((s, r) => s + r.valor, 0)
-  const totRaz = resumo.reduce((s, r) => s + r.razao, 0)
-  const totDif = Math.round(resumo.filter(r => !r.just).reduce((s, r) => s + r.dif, 0) * 100) / 100
+  // Dois blocos: "não contabiliza" (demonstrativo, pode ter diferença) e as rubricas que
+  // CONTABILIZAM (têm que bater). Os totais e a diferença refletem SÓ o bloco que contabiliza.
+  const resumoNC = resumo.filter(r => r.naoContab)
+  const resumoC = resumo.filter(r => !r.naoContab)
+  const totDoc = resumoC.reduce((s, r) => s + r.valor, 0)
+  const totRaz = resumoC.reduce((s, r) => s + r.razao, 0)
+  const totDif = Math.round(resumoC.filter(r => !r.just).reduce((s, r) => s + r.dif, 0) * 100) / 100
   const pendentes = resumo.filter(r => !r.ok).length
+  const ncDoc = resumoNC.reduce((s, r) => s + r.valor, 0)
+  const ncRaz = resumoNC.reduce((s, r) => s + r.razao, 0)
+  const ncDif = Math.round(resumoNC.reduce((s, r) => s + r.dif, 0) * 100) / 100
+  // Uma linha da tabela de rubricas (serve para os dois blocos). O "não contabiliza" mostra a
+  // diferença REAL (demonstrativo) e não tem botão de justificar.
+  const linhaRub = r => {
+    const aberto = justAberto === r.cod
+    return (
+      <Fragment key={r.cod}>
+        <tr style={{ borderTop: `1px solid ${theme.border}`, background: r.naoContab ? 'rgba(148,163,184,0.08)' : (r.ok ? 'transparent' : 'rgba(229,72,77,0.06)') }}>
+          <td style={FS.td}>{r.cod}</td>
+          <td style={FS.td}>{r.nome || '—'}{r.via === 'valor' && <span style={{ color: theme.sub, fontSize: 11 }} title="Identificado pelo valor (código do evento diferente do da rubrica no razão)"> · por valor</span>}{r.just && <span style={{ color: theme.yellow, fontSize: 11 }}> · justificada</span>}</td>
+          <td style={FS.tdR}>{money(r.valor)}</td>
+          <td style={{ ...FS.tdR, color: theme.green }}>{money(r.razao)}</td>
+          <td style={{ ...FS.tdR, color: r.naoContab ? theme.sub : r.ok ? theme.sub : theme.red, fontWeight: 600 }}>{money(r.dif)}</td>
+          <td style={{ ...FS.td, textAlign: 'center' }}>
+            {r.naoContab
+              ? <i className="ti ti-file-off" style={{ color: theme.sub }} title="Não contabiliza (demonstrativo)" />
+              : Math.abs(r.dif) < 0.005
+                ? <i className="ti ti-circle-check" style={{ color: theme.green }} />
+                : <button className="btn btn-ghost" style={{ fontSize: 11, padding: '2px 8px' }} onClick={() => { setJustAberto(aberto ? null : r.cod); setJustTxt(justif[r.cod] || '') }} title="Justificar (ex.: rubrica informativa, não contabilizada)"><i className="ti ti-flag" style={{ color: r.just ? theme.yellow : theme.sub }} /> {r.just ? 'editar' : 'justificar'}</button>}
+          </td>
+        </tr>
+        {aberto && (
+          <tr><td colSpan={6} style={{ padding: '10px 14px', background: theme.input }}>
+            <label style={{ fontSize: 12, color: theme.sub }}>Justificativa da rubrica {r.cod} — {r.nome} (ex.: evento informativo "INF - ...", não gera lançamento contábil)</label>
+            <textarea className="input" rows={2} value={justTxt} onChange={e => setJustTxt(e.target.value)} placeholder="Explique por que esta rubrica não precisa bater com o razão…" style={{ marginTop: 6 }} />
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>
+              {r.just && <button className="btn btn-ghost" style={{ fontSize: 12, color: theme.red, borderColor: theme.red }} onClick={() => salvarJustificativa(r.cod, '')}>remover</button>}
+              <button className="btn btn-ghost" style={{ fontSize: 12 }} onClick={() => { setJustAberto(null); setJustTxt('') }}>cancelar</button>
+              <button className="btn" style={{ fontSize: 12 }} disabled={!justTxt.trim()} onClick={() => salvarJustificativa(r.cod, justTxt)}>salvar</button>
+            </div>
+          </td></tr>
+        )}
+      </Fragment>
+    )
+  }
+  const fSubHeadStyle = { background: theme.input, borderTop: `2px solid ${theme.border}` }
+  const fSubHeadTd = { ...FS.td, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: .4, color: theme.sub, padding: '6px 14px' }
 
   // A Folha só fica VERDE (validada) quando o razão está cruzado E batendo — ou seja, toda
   // rubrica bate com a contabilidade ou foi justificada. Só ter subido o arquivo não valida.
@@ -1520,45 +1631,26 @@ function Folha({ competencia, empresaId, cliente, user, est, onEstado, onSemMov 
               <th style={FS.th}>Rubrica</th><th style={FS.th}>Descrição</th><th style={FS.thR}>Folha</th><th style={FS.thR}>Razão</th><th style={FS.thR}>Diferença</th><th style={{ ...FS.th, textAlign: 'center' }}></th>
             </tr></thead>
             <tbody>
-              {resumo.map(r => {
-                const aberto = justAberto === r.cod
-                return (
-                  <Fragment key={r.cod}>
-                    <tr style={{ borderTop: `1px solid ${theme.border}`, background: r.naoContab ? theme.input : (r.ok ? 'transparent' : 'rgba(229,72,77,0.06)') }}>
-                      <td style={FS.td}>{r.cod}</td>
-                      <td style={FS.td}>{r.nome || '—'}{r.naoContab && <span style={{ color: theme.sub, fontSize: 11 }} title="Provento cadastrado como NÃO contabilizado (Base de Informações) — não precisa bater com o razão"> · não contabiliza</span>}{r.via === 'valor' && <span style={{ color: theme.sub, fontSize: 11 }} title="Identificado pelo valor (código do evento diferente do da rubrica no razão)"> · por valor</span>}{r.just && <span style={{ color: theme.yellow, fontSize: 11 }}> · justificada</span>}</td>
-                      <td style={FS.tdR}>{money(r.valor)}</td>
-                      <td style={{ ...FS.tdR, color: theme.green }}>{r.naoContab ? '—' : money(r.razao)}</td>
-                      <td style={{ ...FS.tdR, color: r.ok ? theme.sub : theme.red, fontWeight: 600 }}>{r.naoContab ? '—' : money(r.dif)}</td>
-                      <td style={{ ...FS.td, textAlign: 'center' }}>
-                        {r.naoContab
-                          ? <i className="ti ti-file-off" style={{ color: theme.sub }} title="Não contabiliza" />
-                          : Math.abs(r.dif) < 0.005
-                            ? <i className="ti ti-circle-check" style={{ color: theme.green }} />
-                            : <button className="btn btn-ghost" style={{ fontSize: 11, padding: '2px 8px' }} onClick={() => { setJustAberto(aberto ? null : r.cod); setJustTxt(justif[r.cod] || '') }} title="Justificar (ex.: rubrica informativa, não contabilizada)"><i className="ti ti-flag" style={{ color: r.just ? theme.yellow : theme.sub }} /> {r.just ? 'editar' : 'justificar'}</button>}
-                      </td>
-                    </tr>
-                    {aberto && (
-                      <tr><td colSpan={6} style={{ padding: '10px 14px', background: theme.input }}>
-                        <label style={{ fontSize: 12, color: theme.sub }}>Justificativa da rubrica {r.cod} — {r.nome} (ex.: evento informativo "INF - ...", não gera lançamento contábil)</label>
-                        <textarea className="input" rows={2} value={justTxt} onChange={e => setJustTxt(e.target.value)} placeholder="Explique por que esta rubrica não precisa bater com o razão…" style={{ marginTop: 6 }} />
-                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>
-                          {r.just && <button className="btn btn-ghost" style={{ fontSize: 12, color: theme.red, borderColor: theme.red }} onClick={() => salvarJustificativa(r.cod, '')}>remover</button>}
-                          <button className="btn btn-ghost" style={{ fontSize: 12 }} onClick={() => { setJustAberto(null); setJustTxt('') }}>cancelar</button>
-                          <button className="btn" style={{ fontSize: 12 }} disabled={!justTxt.trim()} onClick={() => salvarJustificativa(r.cod, justTxt)}>salvar</button>
-                        </div>
-                      </td></tr>
-                    )}
-                  </Fragment>
-                )
-              })}
+              {resumoNC.length > 0 && <>
+                <tr style={fSubHeadStyle}><td colSpan={6} style={fSubHeadTd}><i className="ti ti-file-off" style={{ marginRight: 6 }} />Não contabiliza — demonstrativo (não entra na diferença)</td></tr>
+                {resumoNC.map(linhaRub)}
+                <tr style={{ borderTop: `1px solid ${theme.border}`, background: 'rgba(148,163,184,0.08)', fontWeight: 700 }}>
+                  <td style={FS.td} colSpan={2}>Subtotal não contabiliza</td>
+                  <td style={FS.tdR}>{money(ncDoc)}</td>
+                  <td style={{ ...FS.tdR, color: theme.green }}>{money(ncRaz)}</td>
+                  <td style={{ ...FS.tdR, color: theme.sub }}>{money(ncDif)}</td>
+                  <td style={FS.td}></td>
+                </tr>
+                <tr style={fSubHeadStyle}><td colSpan={6} style={fSubHeadTd}><i className="ti ti-checks" style={{ marginRight: 6 }} />Contabiliza — tem que bater</td></tr>
+              </>}
+              {resumoC.map(linhaRub)}
             </tbody>
             <tfoot>
               <tr style={{ borderTop: `2px solid ${theme.border}`, background: theme.input, fontWeight: 700 }}>
-                <td style={FS.td} colSpan={2}>Total ({resumo.length} rubrica(s))</td>
+                <td style={FS.td} colSpan={2}>{resumoNC.length > 0 ? `Total contabiliza (${resumoC.length} rubrica(s))` : `Total (${resumo.length} rubrica(s))`}</td>
                 <td style={FS.tdR}>{money(totDoc)}</td>
                 <td style={{ ...FS.tdR, color: theme.green }}>{money(totRaz)}</td>
-                <td style={{ ...FS.tdR, color: Math.abs(totDif) < 0.005 ? theme.sub : theme.red }}>{money(totDif)}</td>
+                <td style={{ ...FS.tdR, color: Math.abs(totDif) < 0.005 ? theme.green : theme.red }}>{money(totDif)}</td>
                 <td style={FS.td}></td>
               </tr>
             </tfoot>
