@@ -111,9 +111,29 @@ const normNome = s => String(s || '').toUpperCase().normalize('NFD').replace(/[�
 // "61.111.913 TIAGO SANTOS COSTA" ≡ "TIAGO SANTOS COSTA" caem no MESMO bloco sozinhos.
 const SUFIXO_JUR = /\b(?:LTDA|EIRELI|EPP|MEI|ME|S\s?A)\b/g
 const nucleoNome = nome => normNome(nome).replace(/^(?:\d[\d ]*)/, '').replace(SUFIXO_JUR, ' ').replace(/\s+/g, ' ').trim()
+// Palavras de LIGAÇÃO e SUFIXO jurídico — não descrevem a atividade, ignoradas ao comparar
+// descritores. (O sufixo já sai do núcleo; aqui é só para não contarem como "descritor".)
+const CONECTORES_DESC = new Set(['DO', 'DA', 'DE', 'DOS', 'DAS', 'E', 'EM', 'LTDA', 'EIRELI', 'EPP', 'MEI', 'ME', 'SA'])
+// "Descritores" de um nome = as palavras GENÉRICAS de atividade (CONTABILIDADE, SERVICOS,
+// ADMINISTRATIVOS, COMERCIO…), fora ligações e sufixo jurídico. Servem para diferenciar
+// fornecedores da MESMA família de nome (mesmo token distintivo) mas ramos distintos.
+const descritoresNome = nome => new Set(normNome(nome).split(' ').filter(w => w.length >= 3 && GENERICAS.has(w) && !CONECTORES_DESC.has(w)))
+// Dois nomes CONFLITAM quando CADA lado tem um descritor que o outro não tem — ex.:
+// "ATTENTIVE CONTABILIDADE" (CONTABILIDADE) × "ATTENTIVE SERVICOS ADMINISTRATIVOS"
+// (ADMINISTRATIVOS): mesma "família" ATTENTIVE, mas ramos diferentes → fornecedores DIFERENTES.
+// Se um lado não tem descritor (ex.: só "LENON" × "LENON COMERCIO LTDA"), NÃO conflita —
+// é o mesmo, só que um veio mais curto. Assim o vínculo/união não "arrasta" outro bloco só
+// porque compartilha UMA palavra do nome (regra do usuário: junta só o que foi linkado).
+const descritoresConflitam = (nomeA, nomeB) => {
+  const da = descritoresNome(nomeA), db = descritoresNome(nomeB)
+  if (!da.size || !db.size) return false
+  return [...da].some(w => !db.has(w)) && [...db].some(w => !da.has(w))
+}
 // Mesmo fornecedor? por token distintivo (mesmoCliente) OU pelo NÚCLEO idêntico (>=3 chars).
+// O caminho por token só une se os DESCRITORES não conflitarem (senão "ATTENTIVE CONTABILIDADE"
+// puxaria "ATTENTIVE SERVICOS ADMINISTRATIVOS" só pela palavra ATTENTIVE em comum).
 const mesmoFornecedor = (nomeA, tkA, nomeB, tkB) => {
-  if (mesmoCliente(tkA, tkB)) return true
+  if (mesmoCliente(tkA, tkB) && !descritoresConflitam(nomeA, nomeB)) return true
   const na = nucleoNome(nomeA)
   return !!na && na.length >= 3 && na === nucleoNome(nomeB)
 }
@@ -2044,12 +2064,13 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     if (Math.abs(net) >= 0.005) { window.alert(`Não dá para baixar: o líquido NÃO ZERA — ainda sobra ${money(Math.abs(net))} ${net < 0 ? 'C' : 'D'}. Ajuste a seleção para o total dar zero.`); return }
     // MESMO BLOCO: só baixa quando os selecionados são o MESMO fornecedor/cliente (mesmo bloco). Se
     // estiverem em BLOCOS DIFERENTES, NÃO baixa — mesmo batendo NF/valor — porque o par ficaria
-    // espalhado em blocos diferentes no relatório de zeramento. Avisa para VINCULAR o fornecedor
-    // primeiro (o botão "Vincular fornecedor" junta os selecionados num nome só) e só então baixar.
+    // espalhado em blocos diferentes no relatório de zeramento. Avisa para dizer que é o MESMO
+    // fornecedor primeiro (o botão "Mesmo fornecedor" junta os selecionados num nome só) e só então baixar.
     const nomesSel = [...new Set(alvo.map(l => String(l.leitura?.entidade || '').trim()).filter(Boolean))]
     const blocosDiferentes = nomesSel.length > 1 && !nomesSel.every(n => mesmoFornecedor(nomesSel[0], tokensNome(nomesSel[0]), n, tokensNome(n)))
     if (blocosDiferentes) {
-      window.alert(`Não dá para baixar juntos: são ${String(lab || 'fornecedor').toLowerCase()}s DIFERENTES (${nomesSel.join(' × ')}).\n\nO valor até zera, mas cada um é de um fornecedor. Se são o MESMO, clique primeiro em "Vincular fornecedor" (junta num nome só) e depois baixe. Se são diferentes de verdade, baixe cada um com o seu par.`)
+      const l = String(lab || 'fornecedor').toLowerCase()
+      window.alert(`Não dá para baixar juntos: são ${l}s DIFERENTES (${nomesSel.join(' × ')}).\n\nO valor até zera, mas cada um é de um ${l}. Se são o MESMO, clique primeiro em "Mesmo ${l}" (deixa no mesmo bloco) e depois baixe. Se são diferentes de verdade, baixe cada um com o seu par.`)
       return
     }
     if (!window.confirm(`Baixar ${alvo.length} lançamento(s)? Eles zeram entre si e vão para Conciliados.`)) return
@@ -3201,11 +3222,11 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
             <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={() => setLoteForn({ lines: selLancs })}>
               <i className="ti ti-user-edit" /> Corrigir {lab}
             </button>
-            <button className="btn btn-ghost" disabled={vincaveis.length < 2} title={vincaveis.length < 2 ? 'Marque 2+ linhas (com nome) para juntar num cliente só.' : 'Juntar os selecionados num CLIENTE/FORNECEDOR só (mesmo nome) — mesmo com nomes diferentes ou separados antes. NÃO baixa nada. Vale para todos os meses.'} style={{ fontSize: 12.5, color: theme.accent, borderColor: theme.accent, opacity: vincaveis.length >= 2 ? 1 : 0.5, cursor: vincaveis.length >= 2 ? 'pointer' : 'not-allowed' }} onClick={() => vincaveis.length >= 2 && setLoteForn({ lines: vincaveis, vincular: true })}>
-              <i className="ti ti-users" /> Vincular fornecedor
+            <button className="btn btn-ghost" disabled={vincaveis.length < 2} title={vincaveis.length < 2 ? `Marque 2+ linhas (com nome) para dizer que são o mesmo ${lab}.` : `É o MESMO ${lab}: deixa os selecionados no mesmo bloco (mesmo nome). NÃO baixa nada — a baixa é só o que zera. O nome oficial aparece para você confirmar. Vale para todos os meses.`} style={{ fontSize: 12.5, color: theme.accent, borderColor: theme.accent, opacity: vincaveis.length >= 2 ? 1 : 0.5, cursor: vincaveis.length >= 2 ? 'pointer' : 'not-allowed' }} onClick={() => vincaveis.length >= 2 && setLoteForn({ lines: vincaveis, vincular: true })}>
+              <i className="ti ti-user-check" /> Mesmo {lab}
             </button>
-            <button className="btn btn-ghost" disabled={!desvincaveis.length} title={!desvincaveis.length ? 'Selecione um título ou o saldo anterior (com nome).' : 'Manter estes nomes separados (não unir com parecidos) — vale para todos os meses'} style={{ fontSize: 12.5, color: theme.yellow, borderColor: theme.yellow, opacity: desvincaveis.length ? 1 : 0.5, cursor: desvincaveis.length ? 'pointer' : 'not-allowed' }} onClick={() => desvincaveis.length && desvincularLote(desvincaveis)}>
-              <i className="ti ti-arrows-split" /> Desvincular fornecedor
+            <button className="btn btn-ghost" disabled={!desvincaveis.length} title={!desvincaveis.length ? 'Selecione um título ou o saldo anterior (com nome).' : `NÃO é o mesmo ${lab}: mantém estes nomes separados (não une com os parecidos) — vale para todos os meses.`} style={{ fontSize: 12.5, color: theme.yellow, borderColor: theme.yellow, opacity: desvincaveis.length ? 1 : 0.5, cursor: desvincaveis.length ? 'pointer' : 'not-allowed' }} onClick={() => desvincaveis.length && desvincularLote(desvincaveis)}>
+              <i className="ti ti-arrows-split" /> Não é o mesmo {lab}
             </button>
             <span aria-hidden style={{ width: 1, alignSelf: 'stretch', background: theme.border, margin: '2px 4px' }} />
             <button className="btn btn-ghost" disabled={!reclassificaveis.length} title={!reclassificaveis.length ? 'Selecione lançamentos do razão para reclassificar.' : 'Trocar a conta destes lançamentos (uma conta por linha ou a mesma para todos)'} style={{ fontSize: 12.5, opacity: reclassificaveis.length ? 1 : 0.5, cursor: reclassificaveis.length ? 'pointer' : 'not-allowed' }} onClick={() => reclassificaveis.length && setReclassLote({ lines: reclassificaveis })}>
