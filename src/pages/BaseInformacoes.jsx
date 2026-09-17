@@ -301,6 +301,7 @@ export default function BaseInformacoes() {
   const [dist, setDist] = useState(null)   // linha de dist_lucros_config
   const [resPL, setResPL] = useState(null) // linha de resultado_pl_config (contas de lucro/prejuízo)
   const [cargaTrib, setCargaTrib] = useState(null) // linha de carga_tributaria_config
+  const [naoContab, setNaoContab] = useState({ acum: [], prov: [] }) // acumuladores fiscais / proventos da folha que NÃO contabilizam
   const [respHist, setRespHist] = useState([]) // responsável pelo fechamento por vigência (mais recente primeiro)
   const [regime, setRegime] = useState('') // regime tributário do cliente (habilita o LALUR)
   const [modal, setModal] = useState(null)
@@ -343,11 +344,20 @@ export default function BaseInformacoes() {
       .order('created_at', { ascending: false }).limit(1).maybeSingle()
     setCargaTrib(error || !data ? null : { id: data.id, contas: Array.isArray(data.dados?.contas) ? data.dados.contas : [], base: data.dados?.base || 'bruto' })
   }
+  // Acumuladores fiscais / proventos da folha que NÃO contabilizam (por cliente). Guardados em
+  // cargas_cadastro (tipo 'depara' + obs marcador) — não exige tabela nova. `dados` = array de {cod, nome, obs}.
+  async function carregarNaoContab() {
+    const { data, error } = await supabase.from('cargas_cadastro').select('obs, dados')
+      .eq('cliente_id', empresaId).eq('tipo', 'depara').in('obs', ['acumuladores_nao_contabiliza', 'proventos_nao_contabiliza'])
+    if (error) { setNaoContab({ acum: [], prov: [] }); return }
+    const pick = o => { const r = (data || []).find(x => x.obs === o); return Array.isArray(r?.dados) ? r.dados : [] }
+    setNaoContab({ acum: pick('acumuladores_nao_contabiliza'), prov: pick('proventos_nao_contabiliza') })
+  }
   async function carregarRespHist() { setRespHist(await carregarResponsavelHist(empresaId)) }
   useEffect(() => {
-    setParticularidades([]); setContatos([]); setCargas({}); setPeriodo(''); setDist(null); setResPL(null); setCargaTrib(null); setRespHist([]); setCargaSaldos(false); setCargaFeita(false)
+    setParticularidades([]); setContatos([]); setCargas({}); setPeriodo(''); setDist(null); setResPL(null); setCargaTrib(null); setNaoContab({ acum: [], prov: [] }); setRespHist([]); setCargaSaldos(false); setCargaFeita(false)
     if (!empresaId) return
-    carregarCargas(); carregarDist(); carregarResPL(); carregarCargaTrib(); carregarRespHist()
+    carregarCargas(); carregarDist(); carregarResPL(); carregarCargaTrib(); carregarNaoContab(); carregarRespHist()
     supabase.from('clientes').select('particularidades, contatos, competencia_inicio, carga_saldos, carga_inicial_feita, regime_tributario').eq('id', empresaId).single()
       .then(({ data }) => {
         setParticularidades(data?.particularidades || [])
@@ -486,6 +496,18 @@ export default function BaseInformacoes() {
     if (error) { alert('Não foi possível salvar: ' + error.message); return }
     await carregarCargaTrib(); setModal(null)
   }
+  async function salvarNaoContab(qual, lista) {
+    const obs = qual === 'acum' ? 'acumuladores_nao_contabiliza' : 'proventos_nao_contabiliza'
+    const dados = (lista || [])
+      .map(x => ({ cod: String(x.cod || '').replace(/\D/g, '').replace(/^0+/, ''), nome: String(x.nome || '').trim(), obs: String(x.obs || '').trim() }))
+      .filter(x => x.cod)
+    await supabase.from('cargas_cadastro').delete().eq('cliente_id', empresaId).eq('tipo', 'depara').eq('obs', obs)
+    if (dados.length) {
+      const { error } = await supabase.from('cargas_cadastro').insert({ cliente_id: empresaId, tipo: 'depara', obs, vigencia: competencia || '00/0000', dados, usuario: user?.email })
+      if (error) { alert('Não foi possível salvar: ' + error.message); return }
+    }
+    await carregarNaoContab(); setModal(null)
+  }
 
   return (
     <Wrapper nome={empresaNome}>
@@ -551,6 +573,12 @@ export default function BaseInformacoes() {
         <SimplesCard icon="ti-receipt-tax" title="Carga tributária" sub="Contas de imposto + base (bruto/líquido)"
           badge={(cargaTrib?.contas?.length) ? { txt: `${cargaTrib.contas.length} conta(s)`, cor: theme.green, bg: 'rgba(48,164,108,0.15)' } : { txt: 'configurar', cor: theme.yellow, bg: 'rgba(245,166,35,0.15)' }}
           onClick={() => setModal({ tipo: 'cargaTrib' })} />
+        <SimplesCard icon="ti-file-invoice" title="Acumuladores fiscais não contabilizados" sub="Códigos do Fiscal que NÃO sobem pro contábil (não cobram diferença)"
+          badge={naoContab.acum.length ? { txt: `${naoContab.acum.length} código(s)`, cor: theme.green, bg: 'rgba(48,164,108,0.15)' } : { txt: 'cadastrar', cor: theme.yellow, bg: 'rgba(245,166,35,0.15)' }}
+          onClick={() => setModal({ tipo: 'naoContabAcum' })} />
+        <SimplesCard icon="ti-cash-off" title="Proventos da folha não contabilizados" sub="Códigos de provento que NÃO sobem pro contábil (sem justificar um a um)"
+          badge={naoContab.prov.length ? { txt: `${naoContab.prov.length} código(s)`, cor: theme.green, bg: 'rgba(48,164,108,0.15)' } : { txt: 'cadastrar', cor: theme.yellow, bg: 'rgba(245,166,35,0.15)' }}
+          onClick={() => setModal({ tipo: 'naoContabProv' })} />
         <SimplesCard icon="ti-user-check" title="Responsável pelo fechamento" sub={respHist.length ? `atual desde ${respHist[0].vigencia} · ${respHist.length} vigência(s)` : 'quem fecha este cliente (por vigência)'}
           badge={respHist.length ? { txt: respHist[0].responsavel, cor: theme.green, bg: 'rgba(48,164,108,0.15)' } : { txt: 'definir', cor: theme.yellow, bg: 'rgba(245,166,35,0.15)' }}
           onClick={() => setModal({ tipo: 'responsavel' })} />
@@ -638,6 +666,16 @@ export default function BaseInformacoes() {
       )}
       {modal?.tipo === 'cargaTrib' && (
         <ModalCargaTributaria inicial={cargaTrib} plano={plano} onClose={() => setModal(null)} onSalvar={salvarCargaTrib} />
+      )}
+      {modal?.tipo === 'naoContabAcum' && (
+        <ModalNaoContab titulo="Acumuladores fiscais não contabilizados"
+          sub="Códigos de acumulador do Fiscal que NÃO precisam ser contabilizados (não entram na diferença Fiscal × Razão)"
+          exemplo="Ex.: 1908" inicial={naoContab.acum} onClose={() => setModal(null)} onSalvar={l => salvarNaoContab('acum', l)} />
+      )}
+      {modal?.tipo === 'naoContabProv' && (
+        <ModalNaoContab titulo="Proventos da folha não contabilizados"
+          sub="Códigos de provento da Folha que NÃO precisam ser contabilizados (viram OK automático, sem justificar um a um)"
+          exemplo="Ex.: 1010" inicial={naoContab.prov} onClose={() => setModal(null)} onSalvar={l => salvarNaoContab('prov', l)} />
       )}
       {modal?.tipo === 'responsavel' && (
         <ModalResponsavel empresaId={empresaId} empresaNome={empresaNome} competencia={competencia} usuario={user?.email}
@@ -1971,6 +2009,36 @@ function ModalResultadoPL({ inicial, plano = [], onClose, onSalvar }) {
   )
 }
 
+// Lista simples de CÓDIGOS "não contabiliza" (acumulador fiscal ou provento da folha). Código +
+// descrição/motivo opcionais. Salva um array de {cod, nome, obs}.
+function ModalNaoContab({ titulo, sub, exemplo = '', inicial = [], onClose, onSalvar }) {
+  const [itens, setItens] = useState(inicial.length ? inicial.map(x => ({ cod: x.cod || '', nome: x.nome || '', obs: x.obs || '' })) : [{ cod: '', nome: '', obs: '' }])
+  const set = (i, campo, v) => setItens(l => l.map((x, j) => j === i ? { ...x, [campo]: v } : x))
+  const rem = i => setItens(l => l.filter((_, j) => j !== i))
+  const inp = { width: '100%', padding: '8px 10px', borderRadius: 8, border: `1px solid ${theme.cb}`, background: theme.input, color: theme.text, fontSize: 13, boxSizing: 'border-box' }
+  const grid = { display: 'grid', gridTemplateColumns: '110px 1fr 1fr 24px', gap: 8, alignItems: 'center' }
+  return (
+    <Modal titulo={titulo} sub={sub} onClose={onClose} largura={640}>
+      <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 14px', lineHeight: 1.55 }}>
+        Cadastre o <b>código</b> {exemplo && <span>({exemplo})</span>}. Descrição e motivo são <b>opcionais</b> (só para
+        você lembrar). O sistema passa a <b>ignorar</b> esses códigos no cruzamento — eles não cobram diferença.
+      </p>
+      <LinhaTitulo titulo="Códigos que não contabilizam" onAdd={() => setItens(l => [...l, { cod: '', nome: '', obs: '' }])} />
+      <div style={{ ...grid, marginBottom: 6, color: theme.sub, fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: .4 }}>
+        <span>Código</span><span>Descrição (opcional)</span><span>Motivo (opcional)</span><span />
+      </div>
+      {itens.map((c, i) => (
+        <div key={i} style={{ ...grid, marginBottom: 8 }}>
+          <input style={inp} value={c.cod} onChange={e => set(i, 'cod', e.target.value)} placeholder="1908" inputMode="numeric" />
+          <input style={inp} value={c.nome} onChange={e => set(i, 'nome', e.target.value)} placeholder="descrição" />
+          <input style={inp} value={c.obs} onChange={e => set(i, 'obs', e.target.value)} placeholder="motivo" />
+          <i className="ti ti-trash" onClick={() => rem(i)} style={{ color: theme.sub, cursor: 'pointer' }} />
+        </div>
+      ))}
+      <Rodape onClose={onClose} onSalvar={() => onSalvar(itens)} />
+    </Modal>
+  )
+}
 function ModalCargaTributaria({ inicial, plano = [], onClose, onSalvar }) {
   const [contas, setContas] = useState(inicial?.contas?.length
     ? inicial.contas.map(c => ({ cod: c.cod || '', nome: c.nome || '' }))

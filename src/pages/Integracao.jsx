@@ -10,7 +10,7 @@ import CampoConta from '../components/CampoConta'
 import CampoCentroCusto from '../components/CampoCentroCusto'
 import { normHist, casarHistorico, casarHistoricoNivel, aprender, parseValor, dataISO, aplicarPerfil, extrairEntidade, ehEmpresa, catByRowDeMerges, expandirMerges } from '../lib/financeiro'
 import { gerarExcelTimbrado } from '../lib/excel'
-import { eventosDeLinhas, COLS_FOLHA, novoRotuloArq, arquivosDoSlot, marcarEventos } from '../lib/folha'
+import { eventosDeLinhas, COLS_FOLHA, novoRotuloArq, arquivosDoSlot, marcarEventos, normRub } from '../lib/folha'
 import { gerarDominioCSV } from '../lib/dominio'
 import { contasConciliacaoAbertas, montarBalancete } from '../lib/balancete'
 
@@ -161,37 +161,40 @@ function somarTotaisResumo(files) {
 //  'sem'     → não importado (e não marcado sem movimento) → vermelho
 //  'diverge' → importado, mas ainda há diferença com o razão → amarelo
 //  'ok'      → importado e batendo (dif ≈ 0), OU sem movimento, OU justificado → verde
-function statusTipoFiscal(t, razIdx, chave) {
+function statusTipoFiscal(t, razIdx, chave, ncAcum = null) {
   if (!t) return 'sem'
   if (t.semMovimento) return 'ok'
   if (t.justificativa) return 'ok' // só Saídas tem justificar
-  const resumo = (t.rows && razIdx) ? cruzarFiscal(t.rows, razIdx, chave) : (t.resumo || [])
+  const resumo = (t.rows && razIdx) ? cruzarFiscal(t.rows, razIdx, chave, ncAcum) : (t.resumo || [])
   if (!resumo.length) return 'sem'
   const dif = resumo.reduce((s, a) => s + Math.abs(a.dif || 0), 0)
   return dif < 0.05 ? 'ok' : 'diverge'
 }
 // Estado GERAL da fiscal (regra do verde): verde só quando os 3 tipos batem; amarelo
 // (andamento) se importou algo mas ainda não bateu; vermelho (null) se não importou nada.
-function estadoFiscal(tipos, razIdx) {
-  const st = CHAVES_FISCAL.map(k => statusTipoFiscal(tipos?.[k], razIdx, COLS_FISCAL[k].chave))
+function estadoFiscal(tipos, razIdx, ncAcum = null) {
+  const st = CHAVES_FISCAL.map(k => statusTipoFiscal(tipos?.[k], razIdx, COLS_FISCAL[k].chave, ncAcum))
   if (st.every(s => s === 'ok')) return 'validado'
   if (st.some(s => s !== 'sem')) return 'andamento'
   return null
 }
 const docFiscal = e => e === 'validado' ? 'Fiscal · 3 tipos conferidos' : e === 'andamento' ? 'Fiscal · em conferência' : null
 // Diferença total (soma das diferenças por acumulador dos tipos que ainda não bateram).
-function difFiscal(tipos, razIdx) {
+function difFiscal(tipos, razIdx, ncAcum = null) {
   let dif = 0
   for (const k of CHAVES_FISCAL) {
     const t = tipos?.[k]
     if (!t || t.semMovimento || t.justificativa) continue
-    const resumo = (t.rows && razIdx) ? cruzarFiscal(t.rows, razIdx, COLS_FISCAL[k].chave) : (t.resumo || [])
+    const resumo = (t.rows && razIdx) ? cruzarFiscal(t.rows, razIdx, COLS_FISCAL[k].chave, ncAcum) : (t.resumo || [])
     dif += resumo.reduce((s, a) => s + Math.abs(a.dif || 0), 0)
   }
   return Math.round(dif * 100) / 100
 }
 
-function cruzarFiscal(rows, idx, chave) {
+// `ncAcum` (opcional): Set de códigos de acumulador (normalizados) que NÃO contabilizam — cadastrados
+// na Base de Informações. Esses saem da diferença (dif=0) e ganham o selo `naoContab` (aparecem na
+// lista, mas não cobram diferença nem seguram o verde).
+function cruzarFiscal(rows, idx, chave, ncAcum = null) {
   const porAcum = {}
   for (const row of rows) {
     const a = (porAcum[row.acum] ||= { acum: row.acum, docTotal: 0, idTotal: 0, qtd: 0, qtdId: 0, divs: [] })
@@ -200,7 +203,10 @@ function cruzarFiscal(rows, idx, chave) {
     else a.divs.push({ nf: row.nf, data: row.data, forn: row.forn, valor: row.valor })
   }
   return Object.values(porAcum)
-    .map(a => ({ ...a, dif: Math.round((a.docTotal - a.idTotal) * 100) / 100 }))
+    .map(a => {
+      const nc = !!(ncAcum && ncAcum.has(normAcum(a.acum)))
+      return { ...a, naoContab: nc, dif: nc ? 0 : Math.round((a.docTotal - a.idTotal) * 100) / 100 }
+    })
     .sort((x, y) => Math.abs(y.dif) - Math.abs(x.dif) || Number(x.acum) - Number(y.acum))
 }
 
@@ -436,8 +442,13 @@ async function carregarIndiceFolha(empresaId, competencia) {
 // Cruza os eventos unificados com o índice do razão. Casa pelo código; se o código não
 // existir (ex.: código do evento diferente do da rubrica), tenta pelo valor. Rubricas
 // justificadas (informativas, ex.: "INF - ...") entram como resolvidas.
-function cruzarFolha(eventos, idx, justif = {}) {
+function cruzarFolha(eventos, idx, justif = {}, ncProv = null) {
   return eventos.map(e => {
+    // Provento marcado como "não contabilizado" para este cliente: some no fiscal/folha,
+    // mas não sobe pro contábil — resolve sozinho (OK, dif 0), sem justificar um a um.
+    if (ncProv && ncProv.has(normRub(e.cod))) {
+      return { ...e, razao: 0, dif: 0, via: null, just: '', naoContab: true, ok: true }
+    }
     const b = idx.byCod[e.cod]
     let razao = null, via = 'codigo'
     if (b) {
@@ -736,6 +747,16 @@ function Fiscal({ competencia, empresaId, cliente, user, est, onEstado }) {
   const [justTxt, setJustTxt] = useState('')
   const [pendFiscal, setPendFiscal] = useState(null) // { rows, path, nome } — pergunta substituir/complementar
   const [pendResumo, setPendResumo] = useState(null) // { id, totais, path, nome } — pergunta substituir/complementar (Resumo)
+  const [ncAcum, setNcAcum] = useState(null) // Set de acumuladores que NÃO contabilizam (Base de Informações)
+
+  // Carrega os acumuladores "não contabiliza" do cliente (cadastrados na Base de Informações).
+  useEffect(() => {
+    let ativo = true; setNcAcum(null)
+    supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'depara').eq('obs', 'acumuladores_nao_contabiliza')
+      .order('created_at', { ascending: false }).limit(1).maybeSingle()
+      .then(({ data }) => { if (ativo) setNcAcum(new Set((Array.isArray(data?.dados) ? data.dados : []).map(x => normAcum(x.cod)).filter(Boolean))) })
+    return () => { ativo = false }
+  }, [empresaId])
 
   const tipos = est?.tipos || {}
   const atual = tipos[sub]
@@ -743,7 +764,7 @@ function Fiscal({ competencia, empresaId, cliente, user, est, onEstado }) {
   // Resumo recalculado AO VIVO com o índice atual (razão + lançamentos + ajustes) — assim
   // atualiza sozinho ao abrir, sem reimportar. Se o arquivo foi importado numa versão antiga
   // (sem as linhas guardadas), cai no resumo salvo.
-  const resumoAtual = (atual?.rows && razIdx && sub !== 'resumo') ? cruzarFiscal(atual.rows, razIdx, COLS_FISCAL[sub].chave) : (atual?.resumo || [])
+  const resumoAtual = (atual?.rows && razIdx && sub !== 'resumo') ? cruzarFiscal(atual.rows, razIdx, COLS_FISCAL[sub].chave, ncAcum) : (atual?.resumo || [])
 
   // Índice do razão + lançamentos ajustados da competência, para cruzar o arquivo.
   useEffect(() => {
@@ -755,8 +776,8 @@ function Fiscal({ competencia, empresaId, cliente, user, est, onEstado }) {
 
   // Mantém o estado da fiscal em dia quando o RAZÃO muda (importou/corrigiu) — sem depender
   // de reimportar. Verde só quando os 3 tipos batem; amarelo (andamento) se falta bater.
-  const fiscalSt = CHAVES_FISCAL.map(k => statusTipoFiscal(tipos[k], razIdx, COLS_FISCAL[k].chave))
-  const fiscalDif = difFiscal(tipos, razIdx)
+  const fiscalSt = CHAVES_FISCAL.map(k => statusTipoFiscal(tipos[k], razIdx, COLS_FISCAL[k].chave, ncAcum))
+  const fiscalDif = difFiscal(tipos, razIdx, ncAcum)
   useEffect(() => {
     if (carregando || !razIdx) return
     // Diferença aceita/justificada pelo responsável (no Status) → fica verde e não é rebaixada.
@@ -811,16 +832,16 @@ function Fiscal({ competencia, empresaId, cliente, user, est, onEstado }) {
   // Grava o tipo atual (files + linhas) recalculando o cruzamento e o estado geral do Fiscal.
   async function gravarTipoFiscal(files, rowsFinal, doc) {
     const path = files.slice(-1)[0]?.path || ''
-    const novoTipos = { ...tipos, [sub]: { doc, path, files, rows: rowsFinal, resumo: cruzarFiscal(rowsFinal, razIdx, COLS_FISCAL[sub].chave) } }
-    const e = estadoFiscal(novoTipos, razIdx)
+    const novoTipos = { ...tipos, [sub]: { doc, path, files, rows: rowsFinal, resumo: cruzarFiscal(rowsFinal, razIdx, COLS_FISCAL[sub].chave, ncAcum) } }
+    const e = estadoFiscal(novoTipos, razIdx, ncAcum)
     // Novo arquivo re-avalia a diferença: solta uma justificativa anterior (justAceita).
-    await onEstado({ ...est, tipos: novoTipos, estado: e, dif: e === 'andamento' ? difFiscal(novoTipos, razIdx) : 0, doc: docFiscal(e), justAceita: false, usuario: user?.email || null })
+    await onEstado({ ...est, tipos: novoTipos, estado: e, dif: e === 'andamento' ? difFiscal(novoTipos, razIdx, ncAcum) : 0, doc: docFiscal(e), justAceita: false, usuario: user?.email || null })
   }
   // Exclui UM arquivo do tipo (só as linhas dele saem); se sobrar vazio, limpa o tipo.
   async function excluirArquivoFiscal(id) {
     const base = tipos[sub]; if (!base) return
     const files = filesFiscal(base)
-    if (files.length <= 1) { if (window.confirm('Excluir este arquivo? O tipo fica vazio.')) { const novoTipos = { ...tipos }; delete novoTipos[sub]; const e = estadoFiscal(novoTipos, razIdx); await onEstado({ ...est, tipos: novoTipos, estado: e, doc: docFiscal(e), usuario: user?.email || null }) } return }
+    if (files.length <= 1) { if (window.confirm('Excluir este arquivo? O tipo fica vazio.')) { const novoTipos = { ...tipos }; delete novoTipos[sub]; const e = estadoFiscal(novoTipos, razIdx, ncAcum); await onEstado({ ...est, tipos: novoTipos, estado: e, doc: docFiscal(e), usuario: user?.email || null }) } return }
     if (!window.confirm('Excluir só este arquivo? As linhas dele saem do total; os outros arquivos continuam.')) return
     const rowsFinal = (base.rows || []).filter(r => (r.__arq || '__legado') !== id)
     const novosFiles = files.filter(f => f.id !== id)
@@ -844,12 +865,12 @@ function Fiscal({ competencia, empresaId, cliente, user, est, onEstado }) {
   // Marca / desfaz "sem movimento" para o tipo atual (ex.: cliente sem Saídas).
   async function marcarSemMovTipo() {
     const novoTipos = { ...tipos, [sub]: { semMovimento: true } }
-    const e = estadoFiscal(novoTipos, razIdx)
+    const e = estadoFiscal(novoTipos, razIdx, ncAcum)
     await onEstado({ ...est, tipos: novoTipos, estado: e, doc: docFiscal(e), usuario: user?.email || null })
   }
   async function desfazerSemMov() {
     const novoTipos = { ...tipos }; delete novoTipos[sub]
-    const e = estadoFiscal(novoTipos, razIdx)
+    const e = estadoFiscal(novoTipos, razIdx, ncAcum)
     await onEstado({ ...est, tipos: novoTipos, estado: e, doc: docFiscal(e), usuario: user?.email || null })
   }
   // Justificar (só Saídas): ex.: valor no acumulador de operação interna nossa. Marca a
@@ -861,7 +882,7 @@ function Fiscal({ competencia, empresaId, cliente, user, est, onEstado }) {
     if (!t) delete novoSaidas.justificativa
     const novoTipos = { ...tipos, saidas: novoSaidas }
     if (!Object.keys(novoSaidas).length) delete novoTipos.saidas
-    const e = estadoFiscal(novoTipos, razIdx)
+    const e = estadoFiscal(novoTipos, razIdx, ncAcum)
     await onEstado({ ...est, tipos: novoTipos, estado: e, doc: docFiscal(e), usuario: user?.email || null })
     setJustAberto(false); setJustTxt('')
   }
@@ -941,7 +962,7 @@ function Fiscal({ competencia, empresaId, cliente, user, est, onEstado }) {
   const totalImportado = k => {
     const t = tipos[k]
     if (t?.semMovimento) return 0
-    if (t?.rows && razIdx) return cruzarFiscal(t.rows, razIdx, COLS_FISCAL[k]?.chave).reduce((s, a) => s + a.docTotal, 0)
+    if (t?.rows && razIdx) return cruzarFiscal(t.rows, razIdx, COLS_FISCAL[k]?.chave, ncAcum).reduce((s, a) => s + a.docTotal, 0)
     if (t?.resumo) return t.resumo.reduce((s, a) => s + a.docTotal, 0)
     return null
   }
@@ -962,7 +983,7 @@ function Fiscal({ competencia, empresaId, cliente, user, est, onEstado }) {
       <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
         {TIPOS_FISCAL.map(([k, label, icon]) => {
           // Vermelho: nada importado · Amarelo: importado mas não bateu · Verde: batido/sem mov.
-          const stK = statusTipoFiscal(tipos[k], razIdx, COLS_FISCAL[k].chave)
+          const stK = statusTipoFiscal(tipos[k], razIdx, COLS_FISCAL[k].chave, ncAcum)
           const badge = tipos[k]?.semMovimento ? <i className="ti ti-circle-minus" style={{ color: theme.sub }} title="Sem movimento" />
             : stK === 'ok' ? <i className="ti ti-circle-check" style={{ color: theme.green }} title="Importado e batendo" />
             : stK === 'diverge' ? <i className="ti ti-alert-triangle" style={{ color: theme.yellow }} title="Importado, mas ainda não bateu" />
@@ -1057,13 +1078,13 @@ function Fiscal({ competencia, empresaId, cliente, user, est, onEstado }) {
                 return (
                   <Fragment key={a.acum}>
                     <tr onClick={() => a.divs.length && setExpand(aberto ? null : a.acum)}
-                      style={{ borderTop: `1px solid ${theme.border}`, cursor: a.divs.length ? 'pointer' : 'default', background: bate ? 'transparent' : 'rgba(229,72,77,0.06)' }}>
-                      <td style={FS.td}>{a.acum}</td>
+                      style={{ borderTop: `1px solid ${theme.border}`, cursor: a.divs.length ? 'pointer' : 'default', background: a.naoContab ? 'rgba(148,163,184,0.08)' : bate ? 'transparent' : 'rgba(229,72,77,0.06)' }}>
+                      <td style={FS.td}>{a.acum}{a.naoContab && <span title="Cadastrado na Base de Informações como acumulador que NÃO contabiliza — não entra na diferença." style={{ marginLeft: 8, fontSize: 10, fontWeight: 700, color: theme.sub, background: 'rgba(148,163,184,0.18)', padding: '1px 7px', borderRadius: 20, textTransform: 'uppercase', letterSpacing: .3 }}>não contabiliza</span>}</td>
                       <td style={FS.td}>{a.qtdId}/{a.qtd}</td>
                       <td style={FS.tdR}>{money(a.docTotal)}</td>
-                      <td style={{ ...FS.tdR, color: theme.green }}>{money(a.idTotal)}</td>
-                      <td style={{ ...FS.tdR, color: bate ? theme.sub : theme.red, fontWeight: 600 }}>{money(a.dif)}</td>
-                      <td style={{ ...FS.td, textAlign: 'center', color: theme.sub }}>{a.divs.length ? <i className={`ti ti-chevron-${aberto ? 'up' : 'down'}`} /> : <i className="ti ti-circle-check" style={{ color: theme.green }} />}</td>
+                      <td style={{ ...FS.tdR, color: theme.green }}>{a.naoContab ? '—' : money(a.idTotal)}</td>
+                      <td style={{ ...FS.tdR, color: a.naoContab ? theme.sub : bate ? theme.sub : theme.red, fontWeight: 600 }}>{a.naoContab ? '—' : money(a.dif)}</td>
+                      <td style={{ ...FS.td, textAlign: 'center', color: theme.sub }}>{a.naoContab ? <i className="ti ti-file-off" title="Não contabiliza" /> : a.divs.length ? <i className={`ti ti-chevron-${aberto ? 'up' : 'down'}`} /> : <i className="ti ti-circle-check" style={{ color: theme.green }} />}</td>
                     </tr>
                     {aberto && a.divs.length > 0 && (
                       <tr><td colSpan={6} style={{ padding: 0, background: theme.input }}>
@@ -1278,6 +1299,7 @@ function Folha({ competencia, empresaId, cliente, user, est, onEstado, onSemMov 
   const [justAberto, setJustAberto] = useState(null) // código com justificativa aberta
   const [justTxt, setJustTxt] = useState('')
   const [pendArq, setPendArq] = useState(null) // { alvo, file, path, eventos, rotulo, label } — pergunta substituir/complementar
+  const [ncProv, setNcProv] = useState(null) // Set de proventos que NÃO contabilizam (Base de Informações)
 
   const arquivos = est?.arquivos || {}
   const justif = est?.justif || {}
@@ -1290,10 +1312,19 @@ function Folha({ competencia, empresaId, cliente, user, est, onEstado, onSemMov 
     return () => { ativo = false }
   }, [empresaId, competencia])
 
+  // Carrega os proventos "não contabiliza" do cliente (cadastrados na Base de Informações).
+  useEffect(() => {
+    let ativo = true; setNcProv(null)
+    supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'depara').eq('obs', 'proventos_nao_contabiliza')
+      .order('created_at', { ascending: false }).limit(1).maybeSingle()
+      .then(({ data }) => { if (ativo) setNcProv(new Set((Array.isArray(data?.dados) ? data.dados : []).map(x => normRub(x.cod)).filter(Boolean))) })
+    return () => { ativo = false }
+  }, [empresaId])
+
   // Eventos unificados (folha mensal + adiantamento + 13º adiant. + complementar + PLR) e
   // o cruzamento AO VIVO com o razão atual.
   const eventos = unificarFolha(arquivos.folha?.eventos, arquivos.adiant?.eventos, arquivos.decimo_adiant?.eventos, arquivos.complementar?.eventos, arquivos.plr?.eventos)
-  const resumo = (eventos.length && idx) ? cruzarFolha(eventos, idx, justif) : []
+  const resumo = (eventos.length && idx) ? cruzarFolha(eventos, idx, justif, ncProv) : []
   const totDoc = resumo.reduce((s, r) => s + r.valor, 0)
   const totRaz = resumo.reduce((s, r) => s + r.razao, 0)
   const totDif = Math.round(resumo.filter(r => !r.just).reduce((s, r) => s + r.dif, 0) * 100) / 100
@@ -1305,7 +1336,7 @@ function Folha({ competencia, empresaId, cliente, user, est, onEstado, onSemMov 
     const evs = unificarFolha(novoArq.folha?.eventos, novoArq.adiant?.eventos, novoArq.decimo_adiant?.eventos, novoArq.complementar?.eventos, novoArq.plr?.eventos)
     if (!evs.length || !idx) return null
     // Verde só quando bate; importou mas ainda tem rubrica sem bater → amarelo (andamento).
-    const pend = cruzarFolha(evs, idx, novoJustif || {}).filter(r => !r.ok).length
+    const pend = cruzarFolha(evs, idx, novoJustif || {}, ncProv).filter(r => !r.ok).length
     return pend === 0 ? 'validado' : 'andamento'
   }
   // Mantém o estado em dia quando o RAZÃO muda (carrega/lança) — sem depender de reimportar.
@@ -1493,16 +1524,18 @@ function Folha({ competencia, empresaId, cliente, user, est, onEstado, onSemMov 
                 const aberto = justAberto === r.cod
                 return (
                   <Fragment key={r.cod}>
-                    <tr style={{ borderTop: `1px solid ${theme.border}`, background: r.ok ? 'transparent' : 'rgba(229,72,77,0.06)' }}>
+                    <tr style={{ borderTop: `1px solid ${theme.border}`, background: r.naoContab ? theme.input : (r.ok ? 'transparent' : 'rgba(229,72,77,0.06)') }}>
                       <td style={FS.td}>{r.cod}</td>
-                      <td style={FS.td}>{r.nome || '—'}{r.via === 'valor' && <span style={{ color: theme.sub, fontSize: 11 }} title="Identificado pelo valor (código do evento diferente do da rubrica no razão)"> · por valor</span>}{r.just && <span style={{ color: theme.yellow, fontSize: 11 }}> · justificada</span>}</td>
+                      <td style={FS.td}>{r.nome || '—'}{r.naoContab && <span style={{ color: theme.sub, fontSize: 11 }} title="Provento cadastrado como NÃO contabilizado (Base de Informações) — não precisa bater com o razão"> · não contabiliza</span>}{r.via === 'valor' && <span style={{ color: theme.sub, fontSize: 11 }} title="Identificado pelo valor (código do evento diferente do da rubrica no razão)"> · por valor</span>}{r.just && <span style={{ color: theme.yellow, fontSize: 11 }}> · justificada</span>}</td>
                       <td style={FS.tdR}>{money(r.valor)}</td>
-                      <td style={{ ...FS.tdR, color: theme.green }}>{money(r.razao)}</td>
-                      <td style={{ ...FS.tdR, color: r.ok ? theme.sub : theme.red, fontWeight: 600 }}>{money(r.dif)}</td>
+                      <td style={{ ...FS.tdR, color: theme.green }}>{r.naoContab ? '—' : money(r.razao)}</td>
+                      <td style={{ ...FS.tdR, color: r.ok ? theme.sub : theme.red, fontWeight: 600 }}>{r.naoContab ? '—' : money(r.dif)}</td>
                       <td style={{ ...FS.td, textAlign: 'center' }}>
-                        {Math.abs(r.dif) < 0.005
-                          ? <i className="ti ti-circle-check" style={{ color: theme.green }} />
-                          : <button className="btn btn-ghost" style={{ fontSize: 11, padding: '2px 8px' }} onClick={() => { setJustAberto(aberto ? null : r.cod); setJustTxt(justif[r.cod] || '') }} title="Justificar (ex.: rubrica informativa, não contabilizada)"><i className="ti ti-flag" style={{ color: r.just ? theme.yellow : theme.sub }} /> {r.just ? 'editar' : 'justificar'}</button>}
+                        {r.naoContab
+                          ? <i className="ti ti-file-off" style={{ color: theme.sub }} title="Não contabiliza" />
+                          : Math.abs(r.dif) < 0.005
+                            ? <i className="ti ti-circle-check" style={{ color: theme.green }} />
+                            : <button className="btn btn-ghost" style={{ fontSize: 11, padding: '2px 8px' }} onClick={() => { setJustAberto(aberto ? null : r.cod); setJustTxt(justif[r.cod] || '') }} title="Justificar (ex.: rubrica informativa, não contabilizada)"><i className="ti ti-flag" style={{ color: r.just ? theme.yellow : theme.sub }} /> {r.just ? 'editar' : 'justificar'}</button>}
                       </td>
                     </tr>
                     {aberto && (
