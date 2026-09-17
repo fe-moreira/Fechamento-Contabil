@@ -35,6 +35,12 @@ function somaNumerica(linhas) {
 // ---- Integração FISCAL: cruzamento acumulador × razão ----------------------
 const TIPOS_FISCAL = [['entradas', 'Entradas', 'ti-arrow-down-left'], ['saidas', 'Saídas', 'ti-arrow-up-right'], ['servicos', 'Serviços prestados', 'ti-briefcase']]
 const CHAVES_FISCAL = TIPOS_FISCAL.map(t => t[0])
+// Cache (por sessão) do índice do razão + "não contabiliza", por cliente·competência. Ao voltar
+// para a Integração, mostra na hora o que já foi carregado — sem spinner — e revalida em segundo
+// plano (stale-while-revalidate): nunca fica velho, mas também não faz esperar toda vez.
+const idxCacheFiscal = new Map()
+const idxCacheFolha = new Map()
+function cachePut(cache, key, val) { cache.delete(key); cache.set(key, val); if (cache.size > 8) cache.delete(cache.keys().next().value) }
 // Colunas do arquivo do acumulador por tipo (letras da planilha) e a CHAVE do cruzamento.
 // Entradas cruza NF a NF; Saídas e Serviços cruzam SÓ pelo acumulador (o total entra no
 // resumo). Colunas mudam por relatório.
@@ -806,15 +812,23 @@ function Fiscal({ competencia, empresaId, cliente, user, est, onEstado }) {
 
   // Índice do razão + os acumuladores "não contabiliza" (Base de Informações), carregados JUNTOS
   // — só libera quando os dois chegam, para a validação rodar de uma vez (sem piscar amarelo→verde).
+  // Reentrando na Integração: usa o cache na hora (sem spinner) e revalida em segundo plano.
   useEffect(() => {
     let ativo = true
-    setCarregando(true); setRazIdx(null); setNcAcum(null); setExpand(null)
+    setExpand(null)
+    const key = `${empresaId}·${competencia}`
+    const cached = idxCacheFiscal.get(key)
+    if (cached) { setRazIdx(cached.idx); setCompId(cached.idx.compId); setNcAcum(cached.nc); setCarregando(false) }
+    else { setCarregando(true); setRazIdx(null); setNcAcum(null) }
     const pIdx = carregarIndiceFiscal(empresaId, competencia)
     const pNc = supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'depara').eq('obs', 'acumuladores_nao_contabiliza')
       .order('created_at', { ascending: false }).limit(1).maybeSingle()
       .then(({ data }) => new Set((Array.isArray(data?.dados) ? data.dados : []).map(x => normAcum(x.cod)).filter(Boolean)))
       .catch(() => new Set())
-    Promise.all([pIdx, pNc]).then(([idx, nc]) => { if (ativo) { setRazIdx(idx); setCompId(idx.compId); setNcAcum(nc); setCarregando(false) } })
+    Promise.all([pIdx, pNc]).then(([idx, nc]) => {
+      cachePut(idxCacheFiscal, key, { idx, nc })
+      if (ativo) { setRazIdx(idx); setCompId(idx.compId); setNcAcum(nc); setCarregando(false) }
+    })
     return () => { ativo = false }
   }, [empresaId, competencia])
 
@@ -1034,13 +1048,13 @@ function Fiscal({ competencia, empresaId, cliente, user, est, onEstado }) {
     return (
       <Fragment key={a.acum}>
         <tr onClick={() => a.divs.length && setExpand(aberto ? null : a.acum)}
-          style={{ borderTop: `1px solid ${theme.border}`, cursor: a.divs.length ? 'pointer' : 'default', background: a.naoContab ? 'rgba(148,163,184,0.08)' : bate ? 'transparent' : 'rgba(229,72,77,0.06)' }}>
-          <td style={FS.td}>{a.acum}{a.naoContab && <span title="Cadastrado na Base de Informações como acumulador que NÃO contabiliza — a diferença é só demonstrativa e não entra na conta." style={{ marginLeft: 8, fontSize: 10, fontWeight: 700, color: theme.sub, background: 'rgba(148,163,184,0.18)', padding: '1px 7px', borderRadius: 20, textTransform: 'uppercase', letterSpacing: .3 }}>não contabiliza</span>}</td>
+          style={{ borderTop: `1px solid ${theme.border}`, cursor: a.divs.length ? 'pointer' : 'default', background: a.naoContab ? 'rgba(245,166,35,0.10)' : bate ? 'transparent' : 'rgba(229,72,77,0.06)' }}>
+          <td style={FS.td}>{a.acum}{a.naoContab && <span title="Cadastrado na Base de Informações como acumulador que NÃO contabiliza — a diferença é só demonstrativa e não entra na conta." style={{ marginLeft: 8, fontSize: 10, fontWeight: 700, color: theme.yellow, background: 'rgba(245,166,35,0.16)', padding: '1px 7px', borderRadius: 20, textTransform: 'uppercase', letterSpacing: .3 }}>não contabiliza</span>}</td>
           <td style={FS.td}>{a.qtdId}/{a.qtd}</td>
           <td style={FS.tdR}>{money(a.docTotal)}</td>
           <td style={{ ...FS.tdR, color: theme.green }}>{money(a.idTotal)}</td>
-          <td style={{ ...FS.tdR, color: a.naoContab ? theme.sub : bate ? theme.sub : theme.red, fontWeight: 600 }}>{money(a.dif)}</td>
-          <td style={{ ...FS.td, textAlign: 'center', color: theme.sub }}>{a.naoContab ? <i className="ti ti-file-off" title="Não contabiliza (demonstrativo)" /> : a.divs.length ? <i className={`ti ti-chevron-${aberto ? 'up' : 'down'}`} /> : <i className="ti ti-circle-check" style={{ color: theme.green }} />}</td>
+          <td style={{ ...FS.tdR, color: a.naoContab ? theme.yellow : bate ? theme.sub : theme.red, fontWeight: 600 }}>{money(a.dif)}</td>
+          <td style={{ ...FS.td, textAlign: 'center', color: theme.sub }}>{a.naoContab ? <i className="ti ti-alert-triangle" style={{ color: theme.yellow }} title="Não contabiliza (demonstrativo)" /> : a.divs.length ? <i className={`ti ti-chevron-${aberto ? 'up' : 'down'}`} /> : <i className="ti ti-circle-check" style={{ color: theme.green }} />}</td>
         </tr>
         {aberto && a.divs.length > 0 && (
           <tr><td colSpan={6} style={{ padding: 0, background: theme.input }}>
@@ -1167,14 +1181,14 @@ function Fiscal({ competencia, empresaId, cliente, user, est, onEstado }) {
             </tr></thead>
             <tbody>
               {resumoNC.length > 0 && <>
-                <tr style={subHeadStyle}><td colSpan={6} style={subHeadTd}><i className="ti ti-file-off" style={{ marginRight: 6 }} />Não contabiliza — demonstrativo (não entra na diferença)</td></tr>
+                <tr style={subHeadStyle}><td colSpan={6} style={{ ...subHeadTd, color: theme.yellow }}><i className="ti ti-alert-triangle" style={{ marginRight: 6 }} />Não contabiliza — demonstrativo (não entra na diferença)</td></tr>
                 {resumoNC.map(linhaAcum)}
-                <tr style={{ borderTop: `1px solid ${theme.border}`, background: 'rgba(148,163,184,0.08)', fontWeight: 700 }}>
+                <tr style={{ borderTop: `1px solid ${theme.border}`, background: 'rgba(245,166,35,0.10)', fontWeight: 700 }}>
                   <td style={FS.td}>Subtotal não contabiliza</td>
                   <td style={FS.td}>{ncQtdId}/{ncQtd}</td>
                   <td style={FS.tdR}>{money(ncDoc)}</td>
                   <td style={{ ...FS.tdR, color: theme.green }}>{money(ncId)}</td>
-                  <td style={{ ...FS.tdR, color: theme.sub }}>{money(ncDif)}</td>
+                  <td style={{ ...FS.tdR, color: theme.yellow }}>{money(ncDif)}</td>
                   <td style={FS.td}></td>
                 </tr>
                 <tr style={subHeadStyle}><td colSpan={6} style={subHeadTd}><i className="ti ti-checks" style={{ marginRight: 6 }} />Contabiliza — tem que fechar em zero</td></tr>
@@ -1377,15 +1391,22 @@ function Folha({ competencia, empresaId, cliente, user, est, onEstado, onSemMov 
   // Carrega o índice do razão E os proventos "não contabiliza" JUNTOS — só libera (carregando=false)
   // quando os dois chegam. Assim a validação roda UMA vez com tudo em mãos, sem piscar de
   // amarelo→verde (o "demora para ficar verde" era o 2º passo quando o cadastro chegava depois).
+  // Reentrando na Folha: usa o cache na hora (sem spinner) e revalida em segundo plano.
   useEffect(() => {
     let ativo = true
-    setCarregando(true); setIdx(null); setNcProv(null)
+    const key = `${empresaId}·${competencia}`
+    const cached = idxCacheFolha.get(key)
+    if (cached) { setIdx(cached.idx); setNcProv(cached.nc); setCarregando(false) }
+    else { setCarregando(true); setIdx(null); setNcProv(null) }
     const pIdx = carregarIndiceFolha(empresaId, competencia)
     const pNc = supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'depara').eq('obs', 'proventos_nao_contabiliza')
       .order('created_at', { ascending: false }).limit(1).maybeSingle()
       .then(({ data }) => new Set((Array.isArray(data?.dados) ? data.dados : []).map(x => normRub(x.cod)).filter(Boolean)))
       .catch(() => new Set())
-    Promise.all([pIdx, pNc]).then(([x, nc]) => { if (ativo) { setIdx(x); setNcProv(nc); setCarregando(false) } })
+    Promise.all([pIdx, pNc]).then(([x, nc]) => {
+      cachePut(idxCacheFolha, key, { idx: x, nc })
+      if (ativo) { setIdx(x); setNcProv(nc); setCarregando(false) }
+    })
     return () => { ativo = false }
   }, [empresaId, competencia])
 
@@ -1410,15 +1431,15 @@ function Folha({ competencia, empresaId, cliente, user, est, onEstado, onSemMov 
     const aberto = justAberto === r.cod
     return (
       <Fragment key={r.cod}>
-        <tr style={{ borderTop: `1px solid ${theme.border}`, background: r.naoContab ? 'rgba(148,163,184,0.08)' : (r.ok ? 'transparent' : 'rgba(229,72,77,0.06)') }}>
-          <td style={FS.td}>{r.cod}</td>
+        <tr style={{ borderTop: `1px solid ${theme.border}`, background: r.naoContab ? 'rgba(245,166,35,0.10)' : (r.ok ? 'transparent' : 'rgba(229,72,77,0.06)') }}>
+          <td style={FS.td}>{r.cod}{r.naoContab && <span title="Provento cadastrado como NÃO contabilizado (Base de Informações) — a diferença é só demonstrativa e não entra na conta." style={{ marginLeft: 8, fontSize: 10, fontWeight: 700, color: theme.yellow, background: 'rgba(245,166,35,0.16)', padding: '1px 7px', borderRadius: 20, textTransform: 'uppercase', letterSpacing: .3 }}>não contabiliza</span>}</td>
           <td style={FS.td}>{r.nome || '—'}{r.via === 'valor' && <span style={{ color: theme.sub, fontSize: 11 }} title="Identificado pelo valor (código do evento diferente do da rubrica no razão)"> · por valor</span>}{r.just && <span style={{ color: theme.yellow, fontSize: 11 }}> · justificada</span>}</td>
           <td style={FS.tdR}>{money(r.valor)}</td>
           <td style={{ ...FS.tdR, color: theme.green }}>{money(r.razao)}</td>
-          <td style={{ ...FS.tdR, color: r.naoContab ? theme.sub : r.ok ? theme.sub : theme.red, fontWeight: 600 }}>{money(r.dif)}</td>
+          <td style={{ ...FS.tdR, color: r.naoContab ? theme.yellow : r.ok ? theme.sub : theme.red, fontWeight: 600 }}>{money(r.dif)}</td>
           <td style={{ ...FS.td, textAlign: 'center' }}>
             {r.naoContab
-              ? <i className="ti ti-file-off" style={{ color: theme.sub }} title="Não contabiliza (demonstrativo)" />
+              ? <i className="ti ti-alert-triangle" style={{ color: theme.yellow }} title="Não contabiliza (demonstrativo)" />
               : Math.abs(r.dif) < 0.005
                 ? <i className="ti ti-circle-check" style={{ color: theme.green }} />
                 : <button className="btn btn-ghost" style={{ fontSize: 11, padding: '2px 8px' }} onClick={() => { setJustAberto(aberto ? null : r.cod); setJustTxt(justif[r.cod] || '') }} title="Justificar (ex.: rubrica informativa, não contabilizada)"><i className="ti ti-flag" style={{ color: r.just ? theme.yellow : theme.sub }} /> {r.just ? 'editar' : 'justificar'}</button>}
@@ -1632,13 +1653,13 @@ function Folha({ competencia, empresaId, cliente, user, est, onEstado, onSemMov 
             </tr></thead>
             <tbody>
               {resumoNC.length > 0 && <>
-                <tr style={fSubHeadStyle}><td colSpan={6} style={fSubHeadTd}><i className="ti ti-file-off" style={{ marginRight: 6 }} />Não contabiliza — demonstrativo (não entra na diferença)</td></tr>
+                <tr style={fSubHeadStyle}><td colSpan={6} style={{ ...fSubHeadTd, color: theme.yellow }}><i className="ti ti-alert-triangle" style={{ marginRight: 6 }} />Não contabiliza — demonstrativo (não entra na diferença)</td></tr>
                 {resumoNC.map(linhaRub)}
-                <tr style={{ borderTop: `1px solid ${theme.border}`, background: 'rgba(148,163,184,0.08)', fontWeight: 700 }}>
+                <tr style={{ borderTop: `1px solid ${theme.border}`, background: 'rgba(245,166,35,0.10)', fontWeight: 700 }}>
                   <td style={FS.td} colSpan={2}>Subtotal não contabiliza</td>
                   <td style={FS.tdR}>{money(ncDoc)}</td>
                   <td style={{ ...FS.tdR, color: theme.green }}>{money(ncRaz)}</td>
-                  <td style={{ ...FS.tdR, color: theme.sub }}>{money(ncDif)}</td>
+                  <td style={{ ...FS.tdR, color: theme.yellow }}>{money(ncDif)}</td>
                   <td style={FS.td}></td>
                 </tr>
                 <tr style={fSubHeadStyle}><td colSpan={6} style={fSubHeadTd}><i className="ti ti-checks" style={{ marginRight: 6 }} />Contabiliza — tem que bater</td></tr>
