@@ -13,6 +13,7 @@ import { listarComentariosConta, adicionarComentario, excluirComentario } from '
 import { resolverEntidade, aplicarLink, ehNomeGenerico } from '../lib/conciliacaoCore'
 import { aberturaComp, excluirSaldoInicialTudo } from '../lib/cargaInicial'
 import { extrairNfHistorico } from '../lib/lerNota'
+import { GENERICAS } from '../lib/genericas'
 import CampoConta from '../components/CampoConta'
 
 const dataHora = iso => { const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) }
@@ -88,26 +89,10 @@ const RUIDO = /\b(VENDA|VENDAS|COMPRA|COMPRAS|PAGTO|PAGAMENTO|RECEBIMENTO|RECEBT
 const tiraSufixo = e => e.replace(/\s+(S[./]?\s?A\.?|LTDA\.?|EIRELI|EPP|ME)\b.*$/i, '').replace(/\s+/g, ' ').trim()
 
 // ---- Unificação de nomes parecidos (mesmo cliente/fornecedor escrito de formas diferentes) ----
-// Palavras genéricas de razão social: não distinguem uma empresa de outra, então são ignoradas
-// na comparação (senão "...DE FORCA E LUZ" casaria empresas distintas).
-const GENERICAS = new Set(['COMPANHIA', 'CIA', 'DISTRIBUIDORA', 'DISTRIBUIDOR', 'ENERGIA', 'ENERGIAS', 'ELETRICA', 'ELETRICAS', 'FORCA', 'LUZ', 'COMERCIO', 'COMERCIAL', 'INDUSTRIA', 'INDUSTRIAL', 'SERVICO', 'SERVICOS', 'BRASIL', 'NACIONAL', 'GRUPO', 'HOLDING', 'PARTICIPACOES', 'EMPREENDIMENTOS', 'EMPREENDIMENTO', 'TRANSPORTE', 'TRANSPORTES', 'LOGISTICA', 'SOLUCOES', 'TECNOLOGIA', 'SISTEMAS', 'ASSOCIACAO', 'INSTITUTO', 'FUNDACAO', 'BANCO', 'SUPERMERCADO', 'SUPERMERCADOS', 'ALIMENTOS',
-  // Palavras de OPERAÇÃO/tipo de lançamento (não identificam o cliente) — antes fundiam
-  // clientes diferentes que só compartilhavam o tipo da operação (ex.: "REVENDA DE
-  // MERCADORIA - ESPERA DE ANCORAGEM ... EMPREENDIMENTOS IMOBILIARIOS SPE").
-  'REVENDA', 'REVENDAS', 'MERCADORIA', 'MERCADORIAS', 'ESPERA', 'ANCORAGEM', 'FATURAMENTO', 'FATURAM', 'FUTURO', 'RECEB', 'RECEBER', 'SIMPLES', 'LCTO', 'LANCAMENTO', 'ACUM', 'TRIB', 'ANTECIPACAO',
-  'RECEITA', 'RECEITAS', 'MONTAGEM', 'MONTAGENS', 'PROJETO', 'PROJETOS', 'REDES', 'REDE', 'PRESTACAO', 'PREST',
-  // Estrutura societária de incorporadoras/imobiliárias/engenharia (comum, não distingue).
-  'INCORPORACOES', 'INCORPORACAO', 'INCORPORADORA', 'IMOBILIARIOS', 'IMOBILIARIO', 'IMOBILIARIA', 'IMOBILIARIAS', 'SPE', 'CONSTRUTORA', 'CONSTRUCAO', 'CONSTRUCOES', 'ENGENHARIA', 'ENGENHARIAS', 'DESENVOLVIMENTO', 'DESENVOLVIMENTOS',
-  // Termos de ESCRITÓRIO CONTÁBIL (não distinguem uma firma da outra) e do prefixo fiscal
-  // "SERV. PREST. PROPAGANDA CUMULATIVO ACUM." — senão fundiam dezenas de contabilidades diferentes.
-  'SERV', 'PROPAGANDA', 'CUMULATIVO', 'CONTABIL', 'CONTABEIS', 'CONTABILIDADE', 'CONTABILIDADES', 'CONTABILISTAS', 'ASSESSORIA', 'ASSESSORIAS', 'CONSULTORIA', 'CONSULTORIAS', 'EMPRESARIAL', 'EMPRESARIAIS', 'GESTAO', 'TRIBUTARIA', 'TRIBUTARIOS', 'TRIBUTARIO', 'TRIBUTARIOS', 'ADMINISTRATIVA', 'ADMINISTRATIVOS', 'ADMINISTRATIVO', 'PERICIA', 'AUDITORIA', 'AUDITORES', 'ESCRITORIO', 'ORGANIZACAO', 'ORGANIZACOES', 'FINANCEIRA', 'FINANCEIRO', 'FINANCEIRAS', 'RECURSOS', 'HUMANOS', 'NEGOCIOS', 'INTEGRAL', 'INTELIGENTE', 'CONSULTIVA', 'RESOLUTIVA', 'ESPECIALIZADA', 'ESPECIALIZADOS', 'PROJETOS', 'INVESTIMENTOS', 'CONTADORES',
-  // Palavras de OPERAÇÃO (import/export/comércio exterior) — genéricas, não distinguem a empresa
-  // (senão "MAC-LEN IMPORTACAO EXPORTACAO" e "HGX IMPORTACAO EXPORTACAO" viram o mesmo fornecedor).
-  'IMPORTACAO', 'IMPORTACOES', 'EXPORTACAO', 'EXPORTACOES', 'IMPORT', 'EXPORT', 'COMEX', 'ATACADO', 'VAREJO', 'ATACADISTA',
-  // Formas jurídicas e o sufixo fiscal "CF. NF. Nº" — NUNCA distinguem uma empresa da outra
-  // (senão "…LTDA" ou "…CF NF" fundem tudo por encadeamento).
-  'LTDA', 'EIRELI', 'EPP', 'MEI', 'CF', 'RPS',
-  'DO', 'DA', 'DE', 'DOS', 'DAS', 'E', 'EM'])
+// Palavras genéricas de razão social / rubrica: não distinguem uma empresa de outra, então são
+// ignoradas na comparação (senão "...DE FORCA E LUZ" casaria empresas distintas). Fonte ÚNICA
+// em `src/lib/genericas.js`, compartilhada com aberturaArrasto.js — antes eram duas listas que
+// divergiram e a tela fundia fornecedores diferentes por rubrica comum.
 // Memoizador por string: as funções de nome (normNome/nucleoNome/tokensNome/descritoresNome)
 // são puras e chamadas MUITAS vezes (o agrupamento é O(n²)); em contas grandes (ex.: clientes
 // da Metroform, ~1300 nomes) recalcular o normalize+regex a cada comparação travava a tela.
@@ -861,7 +846,12 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // INCLUI A DATA: cada linha "Saldo anterior" é INDIVIDUAL. Sem a data, duas linhas de mesmo
   // valor + mesmo nome (ex.: dois "CLARA SOLUTIONS LTDA" de R$ 22.530) caíam na MESMA chave e
   // editar a NF de uma mexia na outra. Com a data, cada uma tem sua própria chave.
-  const chaveAberturaAj = l => `${conta.conta}·${(l.data && l.data !== 'abertura') ? String(l.data) : ''}·${Math.round(((Number(l.debito) || 0) - (Number(l.credito) || 0)) * 100)}·${chaveNome(l._origEntidade || l.leitura?.entidade || '')}`
+  // Chave SEM a identidade da linha (compat com ajustes salvos antes do _srcRaz).
+  const chaveAberturaAjBase = l => `${conta.conta}·${(l.data && l.data !== 'abertura') ? String(l.data) : ''}·${Math.round(((Number(l.debito) || 0) - (Number(l.credito) || 0)) * 100)}·${chaveNome(l._origEntidade || l.leitura?.entidade || '')}`
+  // Chave POR LINHA: inclui a identidade estável (_srcRaz) — assim duas linhas idênticas (mesmo
+  // valor/data/nome, ex.: 4 títulos DINGLI de 8.152,78) têm chaves DIFERENTES e a NF de uma NÃO
+  // mexe nas outras. Sem _srcRaz (linha antiga), cai na chave base.
+  const chaveAberturaAj = l => l?._srcRaz ? `${chaveAberturaAjBase(l)}·${l._srcRaz}` : chaveAberturaAjBase(l)
 
   // Cadastro permanente de nomes do cliente (confiáveis + isolados + apelidos) — cargas_cadastro
   // tipo 'conciliacao_nomes', um por cliente (vale para todos os meses).
@@ -892,7 +882,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   }
   // Chave estável de uma linha (para "separar" determinístico): razão pelo id, abertura pela
   // chave de abertura, acerto pelo uuid.
-  const sepKey = l => l?._abertura ? 'ab:' + chaveAberturaAj(l) : l?.acerto ? 'ac:' + String(l.id).replace(/^ac_/, '') : 'rz:' + (l?.id ?? '')
+  const sepKey = l => l?._abertura ? 'ab:' + chaveAberturaAjBase(l) : l?.acerto ? 'ac:' + String(l.id).replace(/^ac_/, '') : 'rz:' + (l?.id ?? '')
 
   // ===== Parcelamento (nota × parcelas) — MANUAL, só cliente/fornecedor por enquanto =====
   // Grupo a que uma linha pertence NESTA conta (por sepKey). null se nenhum.
@@ -1264,7 +1254,10 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         // salvos antes desta mudança sem reintroduzir a colisão que mexia na linha-gêmea.
         const kNovo = `${conta.conta}·${dtAb}·${valCents}·${kNome}`
         const kAntigo = `${conta.conta}·${valCents}·${kNome}`
-        const ov = aberAjMap[kNovo] || ((abUndatedCount[kAntigo] || 0) <= 1 ? aberAjMap[kAntigo] : undefined)
+        // POR LINHA (com _srcRaz) primeiro — cada título tem sua própria NF; depois cai nas chaves
+        // antigas (compat com ajustes salvos antes do _srcRaz).
+        const kPorLinha = l._srcRaz ? `${kNovo}·${l._srcRaz}` : null
+        const ov = (kPorLinha && aberAjMap[kPorLinha]) || aberAjMap[kNovo] || ((abUndatedCount[kAntigo] || 0) <= 1 ? aberAjMap[kAntigo] : undefined)
         if (ov) {
           // IGNORA override de nome GENÉRICO (ex.: "VALOR REF. TRANSF. CARTÃO", "Saldo anterior ·
           // X", "Reclassificação ·"): esses forçavam o título para um rótulo que embolava vários
@@ -2004,7 +1997,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       const novo = { ...(aberturaAj[key] || {}) }
       if (aj.entidade) novo.entidade = String(aj.entidade).trim()
       if (aj.nf != null && aj.nf !== '') novo.nf = String(aj.nf).trim()
-      if (aj.historico) novo.historico = String(aj.historico).trim()
+      delete novo.historico // NUNCA muda o histórico (regra do usuário)
       const map = { ...aberturaAj, [key]: novo }
       setAberturaAj(map)
       // Renomear o NOME de um saldo inicial vale como APELIDO do fornecedor: passa a valer
@@ -2020,9 +2013,14 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       await salvarNomes(nomesConf, nomesIsolados, aliasNovo, map)
       ajustouLeitura = true
     } else if (aj && acao?.id && !ehAb && (aj.nf || aj.entidade || aj.historico)) {
+      // MERGE com o ajuste existente (não zera o outro campo) e NUNCA grava histórico:
+      // alterar a NF mantém o nome, identificar o nome mantém a NF, e o histórico fica intacto.
+      const { data: exAj } = await supabase.from('ajuste_leitura').select('nf, entidade').eq('razao_id', acao.id).maybeSingle()
       await supabase.from('ajuste_leitura').upsert({
         competencia_id: id, razao_id: acao.id,
-        nf: aj.nf || null, entidade: aj.entidade || null, historico: aj.historico || null, usuario,
+        nf: (aj.nf != null && aj.nf !== '') ? String(aj.nf).trim() : (exAj?.nf ?? null),
+        entidade: (aj.entidade != null && aj.entidade !== '') ? String(aj.entidade).trim() : (exAj?.entidade ?? null),
+        historico: null, usuario,
       }, { onConflict: 'razao_id' })
       // Renomear CARREGA o desvínculo: se o nome antigo estava desvinculado (não unir com
       // parecidos), o novo herda — mantém separados dois fornecedores parecidos ao renomear.

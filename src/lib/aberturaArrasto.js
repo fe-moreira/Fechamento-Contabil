@@ -2,6 +2,7 @@ import { supabase } from './supabase'
 import { extrairNfHistorico } from './lerNota'
 import { lerTudo } from './lerTudo'
 import { descartarBaixadasManuais } from './arrastoManual'
+import { GENERICAS } from './genericas'
 
 // Arrasto da COMPOSIÇÃO de saldo: computa os títulos/lançamentos ainda EM ABERTO de uma
 // conta (cliente/fornecedor) ao FIM de uma competência, para virarem a composição de
@@ -13,20 +14,6 @@ import { descartarBaixadasManuais } from './arrastoManual'
 const RUIDO = /\b(VENDA|VENDAS|COMPRA|COMPRAS|PAGTO|PAGAMENTO|RECEBIMENTO|RECEBTO|REF|REFERENTE|NOTA|FISCAL|DUPLICATA|DUPL|BOLETO|TITULO|TÍTULO|VLR|VALOR|PARCELA|PARC|CONF|S\/|A|DE|DA|DO|DOS|DAS|E|NO|NA|EM)\b/ig
 const tiraSufixo = e => e.replace(/\s+(S[./]?\s?A\.?|LTDA\.?|EIRELI|EPP|ME)\b.*$/i, '').replace(/\s+/g, ' ').trim()
 
-const GENERICAS = new Set(['COMPANHIA', 'CIA', 'DISTRIBUIDORA', 'DISTRIBUIDOR', 'ENERGIA', 'ENERGIAS', 'ELETRICA', 'ELETRICAS', 'FORCA', 'LUZ', 'COMERCIO', 'COMERCIAL', 'INDUSTRIA', 'INDUSTRIAL', 'SERVICO', 'SERVICOS', 'BRASIL', 'NACIONAL', 'GRUPO', 'HOLDING', 'PARTICIPACOES', 'EMPREENDIMENTOS', 'TRANSPORTE', 'TRANSPORTES', 'LOGISTICA', 'SOLUCOES', 'TECNOLOGIA', 'SISTEMAS', 'ASSOCIACAO', 'INSTITUTO', 'FUNDACAO', 'BANCO', 'SUPERMERCADO', 'SUPERMERCADOS', 'ALIMENTOS',
-  'SERV', 'PROPAGANDA', 'CUMULATIVO', 'ACUM', 'PREST', 'PRESTACAO', 'CONTABIL', 'CONTABEIS', 'CONTABILIDADE', 'CONTABILISTAS', 'ASSESSORIA', 'ASSESSORIAS', 'CONSULTORIA', 'CONSULTORIAS', 'EMPRESARIAL', 'EMPRESARIAIS', 'GESTAO', 'TRIBUTARIA', 'ADMINISTRATIVA', 'ADMINISTRATIVOS', 'PERICIA', 'AUDITORIA', 'AUDITORES', 'ESCRITORIO', 'FINANCEIRA', 'RECURSOS', 'HUMANOS', 'NEGOCIOS', 'ESPECIALIZADA', 'PROJETOS', 'INVESTIMENTOS', 'CONTADORES',
-  // TIPOS DE TRANSAÇÃO do Domínio (aparecem no histórico ANTES do nome, sobretudo em pagamentos:
-  // "PAGAMENTO VALE TRANSPORTE FLASH…", "COMPRA DE MERCADORIA PARA REVENDA ALMA TEXTIL"). Não são
-  // fornecedor — tratados como genéricos para o casamento usar só o nome distintivo (FLASH, ALMA…),
-  // fazendo título e pagamento agruparem juntos e a guarda barrar fornecedores diferentes.
-  'MATERIA', 'MATERIAS', 'PRIMA', 'PRIMAS', 'INDUSTRIALIZACAO', 'MERCADORIA', 'MERCADORIAS', 'REVENDA',
-  'VENDA', 'VENDAS', 'COMPRA', 'COMPRAS', 'VALE', 'VALES', 'REFEICAO', 'ALIMENTACAO', 'BENEFICIO', 'BENEFICIOS',
-  'FLEXIVEL', 'BONIFICACAO', 'DOACAO', 'BRINDE', 'BRINDES', 'COMISSAO', 'COMISSOES', 'EQUIPE', 'FRETE', 'FRETES',
-  'CARRETO', 'CARRETOS', 'MATERIAIS', 'MANUFATURADOS', 'MAO', 'OBRA', 'TERCEIRIZADA', 'TERCEIRIZADAS', 'CONSUMO',
-  'DESPESA', 'DESPESAS', 'OUTRAS', 'OUTROS', 'ADIANTAMENTO', 'ADTO', 'PREMIACAO', 'PRODUTIVIDADE', 'MANUTENCAO',
-  'IMPORTACAO', 'IMPORTACOES', 'EXPORTACAO', 'EXPORTACOES', 'IMPORT', 'EXPORT', 'COMEX', 'ATACADO', 'VAREJO', 'ATACADISTA',
-  'LTDA', 'EIRELI', 'EPP', 'MEI', 'CF', 'RPS',
-  'DO', 'DA', 'DE', 'DOS', 'DAS', 'E', 'EM'])
 const normNome = s => String(s || '').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim()
 export function tokensNome(nome) {
   const todos = normNome(nome).split(' ').filter(Boolean)
@@ -170,6 +157,9 @@ export async function itensAbertosConta(compId, contaCod, contaNome, classifRaw,
   // Vira "saldo anterior" para o mês seguinte, preservando NF/entidade p/ casar as baixas.
   return abertos.map((l, i) => ({
     id: `arr-${compId}-${i}`,
+    // Identidade ESTÁVEL da linha (a razão-origem mais profunda). Duas linhas idênticas
+    // (mesmo valor/data/nome) têm _srcRaz DIFERENTE — é o que permite alterar a NF de UMA só.
+    _srcRaz: l._srcRaz || (l.id != null ? String(l.id) : `arr-${compId}-${i}`),
     data: l.data || 'abertura',
     contrapartida: '',
     // Histórico = só o FORNECEDOR (a data e a coluna NF já dizem que é do mês anterior; o texto

@@ -231,6 +231,14 @@ export default function Status() {
   // julho quando você está fechando junho) não pode virar pendência aqui — o mês posterior não
   // afeta o fechamento do anterior. (Fechar julho é que exige junho pra trás justificado.)
   const mesAtualStatus = Number(String(competencia || '').split('/')[0]) || 12
+
+  // Justificativas já registradas NESTE módulo (Status), indexadas pelo TEXTO do item — para
+  // marcar como "tratado" os gates cujo item NÃO some sozinho ao justificar (ex.: Distribuição
+  // de lucros/IRRF, que é um aviso: o sócio excedeu o limite e o contador aceita/justifica).
+  // Sem isso, justificar gravava a auditoria mas o item continuava vermelho ("já justifiquei e
+  // não some o erro"). observacoes já traz as Justificativas (qualquer módulo), ordem desc.
+  const statusJust = new Map()
+  for (const o of (dados.observacoes || [])) { if (o.modulo === 'Status' && !statusJust.has(o.item)) statusJust.set(o.item, o) }
   const gates = [
     {
       key: 'cargainicial',
@@ -317,10 +325,15 @@ export default function Status() {
       descricao: dados.dist?.temConfig
         ? 'Sócios que ultrapassaram o limite mensal (retenção de IRRF).'
         : 'Configure limite, alíquota e sócios em Base de Informações.',
-      itens: (dados.dist?.socios || []).filter(s => s.excede).map(s => ({
-        item: `${s.nome} · recebeu ${money(s.total)}`,
-        detalhe: `Acima do limite (${money(dados.dist.limite)}). IRRF estimado ${money(s.irrf)} — ${dados.dist.aliquota}% do total recebido no mês.`,
-      })),
+      itens: (dados.dist?.socios || []).filter(s => s.excede).map(s => {
+        const item = `${s.nome} · recebeu ${money(s.total)}`
+        const j = statusJust.get(item) // já justificado neste mês → sai da contagem (fica verde)
+        return {
+          item,
+          detalhe: `Acima do limite (${money(dados.dist.limite)}). IRRF estimado ${money(s.irrf)} — ${dados.dist.aliquota}% do total recebido no mês.`,
+          tratado: !!j, justDetalhe: j?.detalhe || '',
+        }
+      }),
     },
     {
       key: 'integracoes',

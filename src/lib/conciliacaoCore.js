@@ -9,9 +9,10 @@
 //      correções anteriores precisam ser limpas (o link é a ação mais recente e vence).
 //
 // Regras replicadas fielmente de Conciliacao.jsx (bump ~905-953, ehResolvida ~1178,
-// vincularLote ~1755, chaveNome ~685). tokensNome/mesmoCliente são cópia dos de
-// aberturaArrasto.js — reimplementados aqui para manter este módulo 100% puro (importar
-// aberturaArrasto arrastaria `./supabase`, que instancia um client e quebra fora do browser).
+// vincularLote ~1755, chaveNome ~685). tokensNome/mesmoCliente são reimplementados aqui para
+// manter este módulo 100% puro (importar aberturaArrasto arrastaria `./supabase`, que instancia
+// um client e quebra fora do browser); o vocabulário GENERICAS vem da fonte única `./genericas`.
+import { GENERICAS } from './genericas'
 
 // --- normalização de nomes (cópia fiel de baixaTxt/chaveNome de Conciliacao.jsx) -----------
 const baixaTxt = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
@@ -19,11 +20,9 @@ const baixaTxt = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[�
 // NÃO remove pontuação; o comentário de lá diz "sem pontuação", mas o código não a remove.)
 export const chaveNome = s => baixaTxt(s).replace(/\s+/g, ' ').trim()
 
-// --- tokensNome / mesmoCliente (cópia fiel de aberturaArrasto.js) --------------------------
-const GENERICAS = new Set(['COMPANHIA', 'CIA', 'DISTRIBUIDORA', 'DISTRIBUIDOR', 'ENERGIA', 'ENERGIAS', 'ELETRICA', 'ELETRICAS', 'FORCA', 'LUZ', 'COMERCIO', 'COMERCIAL', 'INDUSTRIA', 'INDUSTRIAL', 'SERVICO', 'SERVICOS', 'BRASIL', 'NACIONAL', 'GRUPO', 'HOLDING', 'PARTICIPACOES', 'EMPREENDIMENTOS', 'TRANSPORTE', 'TRANSPORTES', 'LOGISTICA', 'SOLUCOES', 'TECNOLOGIA', 'SISTEMAS', 'ASSOCIACAO', 'INSTITUTO', 'FUNDACAO', 'BANCO', 'SUPERMERCADO', 'SUPERMERCADOS', 'ALIMENTOS',
-  'SERV', 'PROPAGANDA', 'CUMULATIVO', 'ACUM', 'PREST', 'PRESTACAO', 'CONTABIL', 'CONTABEIS', 'CONTABILIDADE', 'CONTABILISTAS', 'ASSESSORIA', 'ASSESSORIAS', 'CONSULTORIA', 'CONSULTORIAS', 'EMPRESARIAL', 'EMPRESARIAIS', 'GESTAO', 'TRIBUTARIA', 'ADMINISTRATIVA', 'ADMINISTRATIVOS', 'PERICIA', 'AUDITORIA', 'AUDITORES', 'ESCRITORIO', 'FINANCEIRA', 'RECURSOS', 'HUMANOS', 'NEGOCIOS', 'ESPECIALIZADA', 'PROJETOS', 'INVESTIMENTOS', 'CONTADORES',
-  'LTDA', 'EIRELI', 'EPP', 'MEI', 'CF', 'RPS',
-  'DO', 'DA', 'DE', 'DOS', 'DAS', 'E', 'EM'])
+// --- tokensNome / mesmoCliente (mesma regra da tela) ---------------------------------------
+// GENERICAS vem da FONTE ÚNICA `./genericas` (Set puro, sem supabase — pode importar aqui sem
+// quebrar a pureza deste módulo). Antes era uma cópia local que divergiu das outras.
 const normNome = s => String(s || '').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim()
 export function tokensNome(nome) {
   const todos = normNome(nome).split(' ').filter(Boolean)

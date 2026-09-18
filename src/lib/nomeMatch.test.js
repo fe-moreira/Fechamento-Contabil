@@ -27,4 +27,14 @@ describe('matcher de nome — ignora tipo de transação (título × pagamento j
     // mas duas variações do MESMO HGX continuam juntas:
     expect(mesmo('HGX IMPORTACAO EXPORTACAO LTDA', 'HGX IMPORTACAO E EXPORTACAO')).toBe(true)
   })
+  it('RUBRICA de despesa não funde fornecedores diferentes (histórico "PAGAMENTO <RUBRICA> <FORNECEDOR>")', () => {
+    // Sem separador, a leitura mantém a rubrica no nome. Fornecedores DIFERENTES que só
+    // compartilham a rubrica ("OUTRAS DESPESAS DE CONSUMO") NÃO podem virar o mesmo bloco.
+    expect(mesmo('OUTRAS DESPESAS DE CONSUMO SUPRICORP SUPRIMENTOS', 'OUTRAS DESPESAS DE CONSUMO BIANCA CARNEIRO MENDES')).toBe(false)
+    expect(mesmo('OUTRAS DESPESAS DE CONSUMO OXIMAR COMERCIO DE MATERIAIS E EQUIPAMENTOS', 'OUTRAS DESPESAS DE CONSUMO DEOMAR DE OLIVEIRA')).toBe(false)
+    expect(mesmo('OUTRAS DESPESAS DE CONSUMO CAMP-GASERVICE FERRAMENTAS E EQUIPAMENTOS DE SOLDAS', 'OUTRAS DESPESAS DE CONSUMO BIANCA CARNEIRO MENDES')).toBe(false)
+    // mas o MESMO fornecedor nas duas formas (com e sem rubrica) continua junto:
+    expect(mesmo('OUTRAS DESPESAS DE CONSUMO SUPRICORP SUPRIMENTOS', 'SUPRICORP SUPRIMENTOS LTDA')).toBe(true)
+    expect(mesmo('IMPRESSOS E MATERIAIS DE ESCRITORIO SUPRICORP SUPRIMENTOS LTDA', 'COPA E COZINHA SUPRICORP SUPRIMENTOS LTDA')).toBe(true)
+  })
 })

@@ -560,7 +560,7 @@ export async function composicaoAbertura(empresaId, compId, contaCod, classifRaw
       // Tudo isso compõe o saldo inicial (entendido como o último dia antes da abertura).
       const dt = dataCelulaISO(campoPor(r, /data/))
       out.push({
-        id: `abertura-${i++}`, data: dt || 'abertura', contrapartida: '',
+        id: `abertura-${i}`, _srcRaz: `ci-${i++}`, data: dt || 'abertura', contrapartida: '',
         historico: (String(cliente || '').replace(/[\s·\-]+$/, '').trim()) || 'Saldo anterior',
         debito: valor > 0 ? valor : 0, credito: valor < 0 ? -valor : 0, abertura: true,
         leitura: { nf, entidade: cliente, ident: !!cliente, conf: (cliente && nf) ? 'alta' : cliente ? 'media' : 'baixa', abertura: true },
