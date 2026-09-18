@@ -153,6 +153,31 @@ const tokensNome = _memo1(nome => {
   const naoGen = todos.filter(t => !GENERICAS.has(t))
   return naoGen.length ? naoGen : todos
 })
+// Nome do fornecedor/cliente que vem DEPOIS de um trecho no histórico. Ex.: trecho "OBTIDOS"
+// em "VALOR REF. RCTO. DESCONTOS OBTIDOS LPS COMPANY LTDA CF. NF. N 184870" → "LPS COMPANY LTDA".
+// Corta o sufixo de nota (CF/NF/NOTA/RPS/N nnn) e números soltos. Devolve '' se não achar/curto.
+function nomeAposTrecho(historico, trecho) {
+  const h = String(historico || '')
+  if (!trecho) return ''
+  const re = new RegExp(String(trecho).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
+  const m = re.exec(h)
+  if (!m) return ''
+  let resto = h.slice(m.index + m[0].length)
+  resto = resto.split(/\s+(?:CF|NF|NOTA|RPS)\b/i)[0]         // corta no marcador de documento
+  resto = resto.replace(/\bN[ºo°.]*\s*\d[\d.\/-]*/gi, ' ')   // "N 184870"
+  resto = resto.replace(/\b\d[\d.\/-]*\b/g, ' ')             // números soltos
+  resto = resto.replace(/\s+/g, ' ').replace(/^[\s.,\-\/]+|[\s.,\-\/]+$/g, '').trim()
+  return resto.length >= 3 ? resto : ''
+}
+// Modo de uma regra de identificação a partir do exemplo (histórico + nome digitado):
+//  'apos' → o nome está DEPOIS do trecho (o trecho é um prefixo; cada linha tem seu fornecedor).
+//  'fixo' → o trecho identifica ESTE fornecedor (ex.: gateway "…DELL" → sempre DELL).
+function modoRegraIdent(historico, trecho, nome) {
+  const H = normNome(historico), P = normNome(trecho), N = normNome(nome)
+  if (!P || !N) return 'fixo'
+  const iP = H.indexOf(P)
+  return (iP >= 0 && H.indexOf(N, iP + P.length) >= 0) ? 'apos' : 'fixo'
+}
 // Dois nomes são o mesmo cliente se um conjunto de tokens é subconjunto do outro,
 // ou a interseção cobre a maioria do menor e há um token forte (>=4 letras) em comum.
 function mesmoCliente(a, b) {
@@ -1158,7 +1183,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     // sozinhas — geram PROPOSTAS para o usuário confirmar (ver propIdent, mais abaixo). Aprendidas,
     // valem nos próximos meses (viram proposta a cada abertura, até você confirmar).
     const regrasIdentPad = (Array.isArray(regraRow?.dados) ? regraRow.dados : [])
-      .map(r => ({ pad: normNome(r.padrao || ''), nome: String(r.nome || '').trim() }))
+      .map(r => ({ pad: normNome(r.padrao || ''), padOrig: String(r.padrao || ''), nome: String(r.nome || '').trim(), modo: r.modo === 'apos' ? 'apos' : 'fixo' }))
       .filter(r => r.pad.length >= 3 && r.nome)
     // NOME OFICIAL PELA NF (Fiscal): o acumulador do Fiscal traz o fornecedor/cliente da nota
     // bem definido. Monta índice NF → nome (entradas=fornecedores, saídas/serviços=clientes)
@@ -1341,7 +1366,12 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         if (l.leitura?.ident && String(l.leitura.entidade || '').trim()) continue // já identificado
         const hu = normNome(l.historico || '')
         const rg = regrasIdentPad.find(r => hu.includes(r.pad))
-        if (rg) itens.push({ l, nome: rg.nome })
+        if (rg) {
+          // 'apos': o trecho é um PREFIXO — cada linha tem seu próprio fornecedor (o nome depois
+          // do trecho). Se não achar nome depois, não propõe. 'fixo': todos são o mesmo nome.
+          const nome = rg.modo === 'apos' ? nomeAposTrecho(l.historico || '', rg.padOrig) : rg.nome
+          if (nome) itens.push({ l, nome })
+        }
       }
       if (itens.length) { setPropIdent({ itens }); setSelPropIdent(new Set(itens.map((_, i) => i))) }
       else setPropIdent(null)
@@ -2012,8 +2042,9 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         .order('created_at', { ascending: false }).limit(1).maybeSingle()
       const lista = Array.isArray(rr?.dados) ? rr.dados.slice() : []
       const pad = String(payload.regra.padrao).trim(), nm = String(payload.regra.nome).trim()
+      const modo = payload.regra.modo === 'apos' ? 'apos' : 'fixo'
       const j = lista.findIndex(r => String(r.padrao || '').trim().toUpperCase() === pad.toUpperCase())
-      if (j >= 0) lista[j] = { padrao: pad, nome: nm }; else lista.push({ padrao: pad, nome: nm })
+      if (j >= 0) lista[j] = { padrao: pad, nome: nm, modo }; else lista.push({ padrao: pad, nome: nm, modo })
       await supabase.from('cargas_cadastro').delete().eq('cliente_id', empresaId).eq('tipo', 'depara').eq('obs', 'identifica_entidade')
       await supabase.from('cargas_cadastro').insert({ cliente_id: empresaId, tipo: 'depara', obs: 'identifica_entidade', vigencia: competencia || '00/0000', dados: lista, usuario })
     }
@@ -4511,10 +4542,11 @@ function ModalLancamento({ lanc, conta, lab, plano, natCredito, residuo = 0, onC
     try {
       if (tipo === 'Justificativa') { await onRegistrar('Justificativa', { detalhe: txt.trim() }); return }
       if (tipo === 'Nome') {
+        const modo = modoRegraIdent(lanc.historico || '', padraoTexto, ajuste.entidade)
         await onRegistrar('Correção', {
-          detalhe: `Identificação de ${lab}` + (padraoTexto.trim() ? ` — regra "contém ${padraoTexto.trim()}"` : ''),
+          detalhe: `Identificação de ${lab}` + (padraoTexto.trim() ? ` — regra "${modo === 'apos' ? 'após' : 'contém'} ${padraoTexto.trim()}"` : ''),
           ajuste: { entidade: ajuste.entidade.trim(), nf: ajuste.nf.trim(), historico: ajuste.historico.trim() },
-          regra: (padraoTexto.trim() && ajuste.entidade.trim()) ? { padrao: padraoTexto.trim(), nome: ajuste.entidade.trim() } : null,
+          regra: (padraoTexto.trim() && ajuste.entidade.trim()) ? { padrao: padraoTexto.trim(), nome: ajuste.entidade.trim(), modo } : null,
         })
         return
       }
@@ -4577,8 +4609,14 @@ function ModalLancamento({ lanc, conta, lab, plano, natCredito, residuo = 0, onC
           <>
             <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 10 }}><i className="ti ti-user-check" style={{ color: theme.accent, marginRight: 6 }} /><b style={{ color: theme.text }}>Identificar {lab}</b> — informa o <b>nome</b> desta linha. <b>Não</b> cria lançamento e <b>não</b> mexe no débito/crédito. Com o <b>trecho</b> abaixo, o sistema <b>identifica sozinho os parecidos</b> (todo lançamento cujo histórico contém esse trecho) — agora e nos próximos meses.</p>
             <div style={{ marginBottom: 12 }}><label>Nome do {lab}</label><input className="input" value={ajuste.entidade} onChange={setAj('entidade')} autoFocus placeholder={`Nome do ${lab}`} /></div>
-            <div><label>Regra — identificar todo histórico que <b>contém</b>:</label><input className="input" value={padraoTexto} onChange={e => setPadraoTexto(e.target.value)} placeholder="Ex.: DELL, OPENAI, MERCADOLIVRE…" /></div>
-            <p style={{ color: theme.sub, fontSize: 11.5, margin: '6px 2px 0' }}>Deixe o trecho <b>específico</b> o suficiente (evite palavras curtas/genéricas). Para <b>só esta linha</b>, apague o trecho.</p>
+            <div><label>Regra — trecho do histórico que identifica:</label><input className="input" value={padraoTexto} onChange={e => setPadraoTexto(e.target.value)} placeholder="Ex.: DELL, OPENAI, OBTIDOS…" /></div>
+            {padraoTexto.trim() && ajuste.entidade.trim() && (() => {
+              const modo = modoRegraIdent(lanc.historico || '', padraoTexto, ajuste.entidade)
+              return <p style={{ fontSize: 11.5, margin: '6px 2px 0', color: theme.accent }}>{modo === 'apos'
+                ? <>✓ O nome vem <b>depois de "{padraoTexto.trim()}"</b> — vou ler o {lab} <b>de cada linha parecida</b> (cada uma traz o seu, não repito este nome).</>
+                : <>Toda linha cujo histórico <b>contém "{padraoTexto.trim()}"</b> vira <b>{ajuste.entidade.trim()}</b>.</>}</p>
+            })()}
+            <p style={{ color: theme.sub, fontSize: 11.5, margin: '6px 2px 0' }}>Se o fornecedor <b>vem depois</b> de um texto fixo (ex.: “DESCONTOS <b>OBTIDOS</b> …”), ponha esse texto no trecho — o sistema lê o nome que vem depois em cada linha. Para <b>só esta linha</b>, apague o trecho.</p>
           </>
         ) : (
           <>
