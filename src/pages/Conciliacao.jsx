@@ -808,6 +808,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const [selPropNF, setSelPropNF] = useState(new Set()) // índices marcados na revisão de propostas de NF
   const [propIdent, setPropIdent] = useState(null)     // { itens:[{l, nome}] } — propostas de identificação por regra aprendida
   const [selPropIdent, setSelPropIdent] = useState(new Set()) // índices marcados na revisão de identificação
+  const [identDispensados, setIdentDispensados] = useState(new Set()) // linhas cuja sugestão o usuário DISPENSOU (não propor de novo)
   const [verCorr, setVerCorr] = useState(null) // lançamento já tratado (ver o que foi feito / desfazer)
   const [plano, setPlano] = useState([])   // [{ cod, nome }] para os seletores de conta
   const [partidas, setPartidas] = useState({}) // chave (data|histórico) -> lançamentos da partida (p/ contrapartida)
@@ -1170,7 +1171,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     contaKeyRef.current = _ck
     setCarregando(true); setProcessando(true)
     const contasRz = await contasDoRazao()
-    const [rz, { data: aj }, { data: acs }, abertura, { data: cn }, { data: compInteg }, { data: regraRow }] = await Promise.all([
+    const [rz, { data: aj }, { data: acs }, abertura, { data: cn }, { data: compInteg }, { data: regraRow }, { data: dispRow }] = await Promise.all([
       lerRazaoContas(compId, contasRz),
       supabase.from('ajuste_leitura').select('razao_id, nf, entidade, historico').eq('competencia_id', compId),
       supabase.from('lancamentos').select('id, data, conta_debito, conta_credito, valor, historico, razao_id, origem, documento').eq('competencia_id', compId),
@@ -1178,7 +1179,10 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'conciliacao_nomes').order('created_at', { ascending: false }).limit(1).maybeSingle(),
       supabase.from('competencias').select('integracoes').eq('id', compId).maybeSingle(),
       supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'depara').eq('obs', 'identifica_entidade').order('created_at', { ascending: false }).limit(1).maybeSingle(),
+      supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'depara').eq('obs', 'ident_dispensados').order('created_at', { ascending: false }).limit(1).maybeSingle(),
     ])
+    const dispSet = new Set(Array.isArray(dispRow?.dados) ? dispRow.dados : [])
+    setIdentDispensados(dispSet)
     // Regras de IDENTIFICAÇÃO aprendidas (de/para "histórico contém <trecho> → nome"): NÃO aplicam
     // sozinhas — geram PROPOSTAS para o usuário confirmar (ver propIdent, mais abaixo). Aprendidas,
     // valem nos próximos meses (viram proposta a cada abertura, até você confirmar).
@@ -1361,9 +1365,11 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     // PROPOSTAS de identificação (regras aprendidas): as linhas AINDA sem nome cujo histórico
     // CONTÉM o trecho de uma regra viram SUGESTÃO — o usuário revisa e confirma (não aplica sozinho).
     if (regrasIdentPad.length && ehPorEntidade(conta.nome)) {
+      const idDisp = l => l._abertura ? 'ab:' + chaveAberturaAj(l) : (l.acerto ? 'ac:' + String(l.id).replace(/^ac_/, '') : 'rz:' + String(l.id))
       const itens = []
       for (const l of lancComUid) {
         if (l.leitura?.ident && String(l.leitura.entidade || '').trim()) continue // já identificado
+        if (dispSet.has(idDisp(l))) continue // você já disse "não" para esta linha
         const hu = normNome(l.historico || '')
         const rg = regrasIdentPad.find(r => hu.includes(r.pad))
         if (rg) {
@@ -2110,9 +2116,28 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   }
   // Aplica as identificações SELECIONADAS: grava o NOME em cada linha proposta (razão via
   // ajuste_leitura; saldo anterior via aberturaAj), preservando NF/histórico já existentes.
+  // Chave ESTÁVEL de uma linha para "dispensar" a sugestão (não propor de novo).
+  const idDispensa = l => l._abertura ? 'ab:' + chaveAberturaAj(l) : (l.acerto ? 'ac:' + String(l.id).replace(/^ac_/, '') : 'rz:' + String(l.id))
+  async function salvarDispensados(set) {
+    await supabase.from('cargas_cadastro').delete().eq('cliente_id', empresaId).eq('tipo', 'depara').eq('obs', 'ident_dispensados')
+    await supabase.from('cargas_cadastro').insert({ cliente_id: empresaId, tipo: 'depara', obs: 'ident_dispensados', vigencia: competencia || '00/0000', dados: [...set], usuario })
+  }
+  // "Agora não" (ou linhas desmarcadas na confirmação): NÃO propor essas de novo.
+  async function dispensarIdent(itens, fechar = true) {
+    const lista = itens || []
+    if (lista.length) {
+      const novo = new Set(identDispensados)
+      for (const x of lista) novo.add(idDispensa(x.l))
+      setIdentDispensados(novo)
+      await salvarDispensados(novo)
+    }
+    if (fechar) { setPropIdent(null); setSelPropIdent(new Set()) }
+  }
   async function aplicarPropostasIdent(indices) {
     if (bloqueadoFechado()) return
     const escolhidos = (propIdent?.itens || []).filter((_, i) => indices.has(i))
+    // Desmarcados = você disse "não" → não propor de novo.
+    await dispensarIdent((propIdent?.itens || []).filter((_, i) => !indices.has(i)), false)
     if (!escolhidos.length) { setPropIdent(null); return }
     const id = await getCompetenciaId()
     const razaoItens = escolhidos.filter(x => x.l.id != null && !x.l._abertura && !x.l.acerto)
@@ -3524,11 +3549,11 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         const todos = itens.length > 0 && itens.every((_, i) => selPropIdent.has(i))
         const toggle = i => setSelPropIdent(prev => { const s = new Set(prev); s.has(i) ? s.delete(i) : s.add(i); return s })
         return (
-          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 90, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }} onClick={() => setPropIdent(null)}>
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 90, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }} onClick={() => dispensarIdent(itens)}>
             <div onClick={e => e.stopPropagation()} style={{ background: theme.card, border: `1px solid ${theme.accent}`, borderRadius: 14, width: 'min(880px, 96vw)', maxHeight: '86vh', display: 'flex', flexDirection: 'column', boxShadow: '0 10px 40px rgba(0,0,0,0.5)' }}>
               <div style={{ padding: '14px 18px', borderBottom: `1px solid ${theme.border}` }}>
                 <div style={{ fontSize: 15, fontWeight: 700, color: theme.text, display: 'flex', alignItems: 'center', gap: 8 }}><i className="ti ti-user-check" style={{ color: theme.accent }} /> Identificar {lab} pelas regras</div>
-                <div style={{ fontSize: 12.5, color: theme.sub, marginTop: 4 }}>Encontrei <b style={{ color: theme.text }}>{itens.length}</b> lançamento(s) em <b>“(não identificado)”</b> que batem com as regras cadastradas. Revise e aprove os que estiverem certos — <b>só aplica o que você marcar</b>.</div>
+                <div style={{ fontSize: 12.5, color: theme.sub, marginTop: 4 }}>Encontrei <b style={{ color: theme.text }}>{itens.length}</b> lançamento(s) em <b>“(não identificado)”</b> que batem com as regras cadastradas. Revise e aprove os que estiverem certos — <b>só aplica o que você marcar</b>. O que você <b>não</b> marcar (ou dispensar) <b>não aparece de novo</b>.</div>
               </div>
               <div style={{ overflow: 'auto', padding: '4px 0' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
@@ -3551,7 +3576,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
                 </table>
               </div>
               <div style={{ padding: '12px 18px', borderTop: `1px solid ${theme.border}`, display: 'flex', gap: 10, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-                <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={() => setPropIdent(null)}><i className="ti ti-x" /> Agora não</button>
+                <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={() => dispensarIdent(itens)}><i className="ti ti-x" /> Não, não sugerir de novo</button>
                 <button className="btn" disabled={selPropIdent.size === 0} style={{ fontSize: 12.5, background: selPropIdent.size ? theme.accent : undefined, borderColor: selPropIdent.size ? theme.accent : undefined, opacity: selPropIdent.size ? 1 : 0.5, cursor: selPropIdent.size ? 'pointer' : 'not-allowed' }} onClick={() => aplicarPropostasIdent(selPropIdent)}><i className="ti ti-checks" /> Confirmar selecionados ({selPropIdent.size})</button>
               </div>
             </div>
