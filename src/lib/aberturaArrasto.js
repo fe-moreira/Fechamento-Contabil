@@ -65,10 +65,10 @@ function lerHistorico(h) {
 
 export function lerHistoricoLanc(h) { return lerHistorico(h) }
 export function aplicarAjuste(l, aj) {
-  let historico = l.historico
+  const historico = l.historico // NUNCA muda o histórico (regra do usuário): o texto do
+  // lançamento se mantém; ajustes só trazem NF/entidade. `aj.historico` está descontinuado.
   let leitura = lerHistorico(historico)
   if (aj) {
-    if (aj.historico) { historico = aj.historico; leitura = lerHistorico(historico) }
     if (aj.nf) leitura = { ...leitura, nf: String(aj.nf).trim() }
     if (aj.entidade) leitura = { ...leitura, entidade: String(aj.entidade).trim(), ident: true }
     const ent = (leitura.entidade || '')
@@ -162,9 +162,13 @@ export async function itensAbertosConta(compId, contaCod, contaNome, classifRaw,
     _srcRaz: l._srcRaz || (l.id != null ? String(l.id) : `arr-${compId}-${i}`),
     data: l.data || 'abertura',
     contrapartida: '',
-    // Histórico = só o FORNECEDOR (a data e a coluna NF já dizem que é do mês anterior; o texto
-    // "Saldo anterior" era redundante). Fallback para quando não há nome identificado.
-    historico: (String(l.leitura?.entidade || '').replace(/[\s·\-]+$/, '').trim()) || 'Saldo anterior',
+    // Histórico ORIGINAL do lançamento — NUNCA reescrever ao arrastar (regra do usuário: o saldo
+    // que se arrasta mantém o MESMO histórico do mês anterior, para cliente, fornecedor e todas
+    // as contas; só o número da NF pode entrar). Antes trocávamos pelo nome do fornecedor.
+    // Fallback só quando a linha realmente não tem histórico de origem.
+    historico: (l.historico != null && String(l.historico).trim() !== '')
+      ? l.historico
+      : ((String(l.leitura?.entidade || '').replace(/[\s·\-]+$/, '').trim()) || 'Saldo anterior'),
     debito: Number(l.debito) || 0,
     credito: Number(l.credito) || 0,
     abertura: true,
