@@ -1140,14 +1140,20 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     contaKeyRef.current = _ck
     setCarregando(true); setProcessando(true)
     const contasRz = await contasDoRazao()
-    const [rz, { data: aj }, { data: acs }, abertura, { data: cn }, { data: compInteg }] = await Promise.all([
+    const [rz, { data: aj }, { data: acs }, abertura, { data: cn }, { data: compInteg }, { data: regraRow }] = await Promise.all([
       lerRazaoContas(compId, contasRz),
       supabase.from('ajuste_leitura').select('razao_id, nf, entidade, historico').eq('competencia_id', compId),
       supabase.from('lancamentos').select('id, data, conta_debito, conta_credito, valor, historico, razao_id, origem, documento').eq('competencia_id', compId),
       composicaoAbertura(empresaId, compId, conta.conta, conta.classifRaw, conta.nome),
       supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'conciliacao_nomes').order('created_at', { ascending: false }).limit(1).maybeSingle(),
       supabase.from('competencias').select('integracoes').eq('id', compId).maybeSingle(),
+      supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'depara').eq('obs', 'identifica_entidade').order('created_at', { ascending: false }).limit(1).maybeSingle(),
     ])
+    // Regras de IDENTIFICAÇÃO (de/para por trecho do histórico → nome do fornecedor/cliente):
+    // "ensina um, identifica os parecidos". Aplicadas nas linhas AINDA sem nome (ver proc).
+    const regrasIdent = (Array.isArray(regraRow?.dados) ? regraRow.dados : [])
+      .map(r => ({ pad: normNome(r.padrao || ''), nome: String(r.nome || '').trim() }))
+      .filter(r => r.pad.length >= 3 && r.nome)
     // NOME OFICIAL PELA NF (Fiscal): o acumulador do Fiscal traz o fornecedor/cliente da nota
     // bem definido. Monta índice NF → nome (entradas=fornecedores, saídas/serviços=clientes)
     // para identificar as linhas cujo histórico não deu nome. Padrão do sistema p/ todos.
@@ -1249,6 +1255,14 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       if (!manualAbert && !leitura.ajustado && leitura.entidade) {
         const rec = nomeDoFiscal(leitura.entidade)
         if (rec && rec !== leitura.entidade) leitura = { ...leitura, entidade: rec, ident: true }
+      }
+      // Regra de IDENTIFICAÇÃO do usuário: a linha AINDA sem nome cujo histórico CONTÉM o padrão
+      // cadastrado vira o fornecedor/cliente da regra (o "identifica os parecidos"). Igual à regra
+      // de NF, mas para o nome. Ajuste manual (ajustado) é soberano — não é sobrescrito.
+      if (!leitura.ident && !leitura.ajustado && regrasIdent.length) {
+        const hu = normNome(hist || l.historico || '')
+        const rg = regrasIdent.find(r => hu.includes(r.pad))
+        if (rg) leitura = { ...leitura, entidade: rg.nome, ident: true, porRegra: true }
       }
       // Apelido normal (só MESMO cliente) + vínculo MANUAL forçado (mesmo entre nomes diferentes),
       // com a CORREÇÃO manual da própria linha SOBERANA sobre o forçado (linha corrigida sai da
@@ -1971,6 +1985,20 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       const antigo = String(acao?._origEntidade || acao?.leitura?.entidade || '').trim()
       const novoNome = String(aj.entidade).trim()
       if (antigo && novoNome && chaveNome(antigo) !== chaveNome(novoNome)) { setUltimaCorrecao({ old: antigo, neu: novoNome }); setSugDismiss(new Set()) }
+    }
+    // REGRA de identificação (de/para "histórico contém <trecho> → nome"): aprende para identificar
+    // os PARECIDOS agora e nos próximos meses. Guarda por cliente em cargas_cadastro (tipo='depara',
+    // obs='identifica_entidade') — scope por obs para NÃO tocar as cargas de "não contabiliza".
+    if (payload.regra?.padrao && payload.regra?.nome) {
+      const { data: rr } = await supabase.from('cargas_cadastro').select('dados')
+        .eq('cliente_id', empresaId).eq('tipo', 'depara').eq('obs', 'identifica_entidade')
+        .order('created_at', { ascending: false }).limit(1).maybeSingle()
+      const lista = Array.isArray(rr?.dados) ? rr.dados.slice() : []
+      const pad = String(payload.regra.padrao).trim(), nm = String(payload.regra.nome).trim()
+      const j = lista.findIndex(r => String(r.padrao || '').trim().toUpperCase() === pad.toUpperCase())
+      if (j >= 0) lista[j] = { padrao: pad, nome: nm }; else lista.push({ padrao: pad, nome: nm })
+      await supabase.from('cargas_cadastro').delete().eq('cliente_id', empresaId).eq('tipo', 'depara').eq('obs', 'identifica_entidade')
+      await supabase.from('cargas_cadastro').insert({ cliente_id: empresaId, tipo: 'depara', obs: 'identifica_entidade', vigencia: competencia || '00/0000', dados: lista, usuario })
     }
     setMsg(ajustouLeitura ? 'Leitura ajustada — o sistema vai recruzar.' : virouLancamento ? `✓ Lançamento FEITO no mês de fechamento ${competencia} — enviado ao painel Contabilizar. (Um estorno de item de mês anterior entra sempre nesta competência, nunca na data do mês fechado.)` : `${tipo} registrada na auditoria.`)
     if (ehAb) setTratadosAb(prev => new Set(prev).add(chaveAbertura(acao))) // abertura: marca pela chave
@@ -4308,6 +4336,12 @@ function ModalLancamento({ lanc, conta, lab, plano, natCredito, residuo = 0, onC
   const [ajuste, setAjuste] = useState({ entidade: lanc.leitura.entidade || '', nf: lanc.leitura.nf || '', historico: lanc.historico || '' })
   const set = k => e => setForm(f => ({ ...f, [k]: e.target.value }))
   const setAj = k => e => setAjuste(a => ({ ...a, [k]: e.target.value }))
+  // REGRA de identificação: "todo lançamento cujo histórico CONTÉM <trecho> é este {lab}".
+  // Prefixa o trecho com a palavra mais distintiva do histórico (>=4 letras) — o usuário ajusta.
+  const [padraoTexto, setPadraoTexto] = useState(() => {
+    const toks = String(lanc.historico || '').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Z0-9 ]/g, ' ').split(/\s+/).filter(w => w.length >= 4)
+    return toks.slice().sort((a, b) => b.length - a.length)[0] || ''
+  })
 
   // Reclassificar para DESPESA (classif 4) → pergunta dedutível/indedutível (LALUR). A conta
   // de destino é o lado da partida que NÃO é a conta conciliada. Sem NF, sugere indedutível.
@@ -4357,7 +4391,7 @@ function ModalLancamento({ lanc, conta, lab, plano, natCredito, residuo = 0, onC
 
   const ajusteMudou = ajuste.entidade.trim() !== (lanc.leitura.entidade || '') || ajuste.nf.trim() !== (lanc.leitura.nf || '') || ajuste.historico.trim() !== (lanc.historico || '')
   const partidaOk = form.conta_debito && form.conta_credito && Number(form.valor) > 0
-  const podeRegistrar = tipo === 'Justificativa' ? txt.trim() : (ajusteMudou || partidaOk || txt.trim())
+  const podeRegistrar = tipo === 'Justificativa' ? txt.trim() : tipo === 'Nome' ? ajuste.entidade.trim() : (ajusteMudou || partidaOk || txt.trim())
 
   // Trava anti-duplo-clique: enquanto grava, o botão fica desabilitado e uma 2ª chamada é
   // ignorada. Sem isso, clicar várias vezes (ou clicar de novo achando que travou) inseria o
@@ -4368,6 +4402,14 @@ function ModalLancamento({ lanc, conta, lab, plano, natCredito, residuo = 0, onC
     setSalvando(true)
     try {
       if (tipo === 'Justificativa') { await onRegistrar('Justificativa', { detalhe: txt.trim() }); return }
+      if (tipo === 'Nome') {
+        await onRegistrar('Correção', {
+          detalhe: `Identificação de ${lab}` + (padraoTexto.trim() ? ` — regra "contém ${padraoTexto.trim()}"` : ''),
+          ajuste: { entidade: ajuste.entidade.trim(), nf: ajuste.nf.trim(), historico: ajuste.historico.trim() },
+          regra: (padraoTexto.trim() && ajuste.entidade.trim()) ? { padrao: padraoTexto.trim(), nome: ajuste.entidade.trim() } : null,
+        })
+        return
+      }
       // Ajuste de leitura puro (mudou NF/nome/histórico, sem partida): resolve-se aqui na
       // Conciliação e NÃO vira sugestão de lançamento — só entra no relatório de correções.
       // Por isso o detalhe começa sempre com "Ajuste de leitura" (marcador estável).
@@ -4386,7 +4428,7 @@ function ModalLancamento({ lanc, conta, lab, plano, natCredito, residuo = 0, onC
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 60 }}>
       <div onClick={e => e.stopPropagation()} style={{ width: 'min(560px,96vw)', maxHeight: '90vh', overflow: 'auto', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 16, padding: 24 }}>
-        <h2 style={{ fontSize: 17, marginBottom: 4 }}>{tipo || 'Tratar lançamento'}</h2>
+        <h2 style={{ fontSize: 17, marginBottom: 4 }}>{tipo === 'Nome' ? `Identificar ${lab}` : tipo === 'NF' ? 'Alterar nota fiscal' : tipo || 'Tratar lançamento'}</h2>
         <div style={{ background: theme.input, borderRadius: 10, padding: '10px 12px', margin: '8px 0 14px', fontSize: 12.5 }}>
           <span style={{ color: theme.sub }}>{fmtDataBR(lanc.data) || '—'} · NF {lanc.leitura.nf || '—'} · {valor}</span>
           <div style={{ color: theme.sub, fontFamily: 'monospace', fontSize: 11, marginTop: 4 }}>{lanc.historico}</div>
@@ -4409,6 +4451,7 @@ function ModalLancamento({ lanc, conta, lab, plano, natCredito, residuo = 0, onC
               <button className="btn" style={{ flex: 1 }} onClick={() => setTipo('Correção')}><i className="ti ti-pencil-bolt" /> Corrigir</button>
             </div>
             <button className="btn btn-ghost" style={{ width: '100%', marginTop: 10, fontSize: 13 }} onClick={() => setTipo('NF')}><i className="ti ti-receipt" /> Alterar nota fiscal (só a NF — não mexe no lançamento)</button>
+            <button className="btn btn-ghost" style={{ width: '100%', marginTop: 10, fontSize: 13 }} onClick={() => setTipo('Nome')}><i className="ti ti-user-check" /> Identificar {lab} (só o nome — não mexe no lançamento)</button>
             <button className="btn btn-ghost" style={{ width: '100%', marginTop: 10, fontSize: 13 }} onClick={estornarLanc}><i className="ti ti-arrow-back-up" /> Estornar este lançamento (partida inversa)</button>
           </>
         ) : tipo === 'Justificativa' ? (
@@ -4421,6 +4464,13 @@ function ModalLancamento({ lanc, conta, lab, plano, natCredito, residuo = 0, onC
             <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 10 }}><i className="ti ti-receipt" style={{ color: theme.accent, marginRight: 6 }} /><b style={{ color: theme.text }}>Alterar nota fiscal</b> — só informa/corrige o <b>número da NF</b> desta linha. <b>Não</b> cria lançamento e <b>não</b> mexe no débito/crédito. Fica salvo e é reaplicado (ajuste de leitura).</p>
             <div style={{ maxWidth: 260 }}><label>Número da NF</label><input className="input" value={ajuste.nf} onChange={setAj('nf')} autoFocus placeholder="Nº da nota fiscal" /></div>
             <div style={{ marginTop: 12 }}><label>Observação na auditoria (opcional)</label><input className="input" value={txt} onChange={e => setTxt(e.target.value)} placeholder="Ex.: NF não veio no razão — informada à mão" /></div>
+          </>
+        ) : tipo === 'Nome' ? (
+          <>
+            <p style={{ color: theme.sub, fontSize: 12.5, marginBottom: 10 }}><i className="ti ti-user-check" style={{ color: theme.accent, marginRight: 6 }} /><b style={{ color: theme.text }}>Identificar {lab}</b> — informa o <b>nome</b> desta linha. <b>Não</b> cria lançamento e <b>não</b> mexe no débito/crédito. Com o <b>trecho</b> abaixo, o sistema <b>identifica sozinho os parecidos</b> (todo lançamento cujo histórico contém esse trecho) — agora e nos próximos meses.</p>
+            <div style={{ marginBottom: 12 }}><label>Nome do {lab}</label><input className="input" value={ajuste.entidade} onChange={setAj('entidade')} autoFocus placeholder={`Nome do ${lab}`} /></div>
+            <div><label>Regra — identificar todo histórico que <b>contém</b>:</label><input className="input" value={padraoTexto} onChange={e => setPadraoTexto(e.target.value)} placeholder="Ex.: DELL, OPENAI, MERCADOLIVRE…" /></div>
+            <p style={{ color: theme.sub, fontSize: 11.5, margin: '6px 2px 0' }}>Deixe o trecho <b>específico</b> o suficiente (evite palavras curtas/genéricas). Para <b>só esta linha</b>, apague o trecho.</p>
           </>
         ) : (
           <>
