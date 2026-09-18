@@ -24,6 +24,7 @@ const GENERICAS = new Set(['COMPANHIA', 'CIA', 'DISTRIBUIDORA', 'DISTRIBUIDOR', 
   'FLEXIVEL', 'BONIFICACAO', 'DOACAO', 'BRINDE', 'BRINDES', 'COMISSAO', 'COMISSOES', 'EQUIPE', 'FRETE', 'FRETES',
   'CARRETO', 'CARRETOS', 'MATERIAIS', 'MANUFATURADOS', 'MAO', 'OBRA', 'TERCEIRIZADA', 'TERCEIRIZADAS', 'CONSUMO',
   'DESPESA', 'DESPESAS', 'OUTRAS', 'OUTROS', 'ADIANTAMENTO', 'ADTO', 'PREMIACAO', 'PRODUTIVIDADE', 'MANUTENCAO',
+  'IMPORTACAO', 'IMPORTACOES', 'EXPORTACAO', 'EXPORTACOES', 'IMPORT', 'EXPORT', 'COMEX', 'ATACADO', 'VAREJO', 'ATACADISTA',
   'LTDA', 'EIRELI', 'EPP', 'MEI', 'CF', 'RPS',
   'DO', 'DA', 'DE', 'DOS', 'DAS', 'E', 'EM'])
 const normNome = s => String(s || '').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim()

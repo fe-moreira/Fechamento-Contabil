@@ -22,4 +22,9 @@ describe('matcher de nome — ignora tipo de transação (título × pagamento j
     expect(mesmo('MATERIA PRIMA - INDUSTRIALIZACAO PARA VENDA ESCORAMAX',
       'MATERIA PRIMA - INDUSTRIALIZACAO PARA VENDA MEGA PLATE COMERCIO DE FERRO E ACO')).toBe(false)
   })
+  it('MAC-LEN e HGX são diferentes (só compartilham IMPORTACAO/EXPORTACAO, que são genéricos)', () => {
+    expect(mesmo('MAC-LEN COMERCIAL IMPORTACAO E EXPORTACAO', 'HGX IMPORTACAO EXPORTACAO LTDA')).toBe(false)
+    // mas duas variações do MESMO HGX continuam juntas:
+    expect(mesmo('HGX IMPORTACAO EXPORTACAO LTDA', 'HGX IMPORTACAO E EXPORTACAO')).toBe(true)
+  })
 })

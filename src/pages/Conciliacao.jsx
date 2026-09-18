@@ -101,6 +101,9 @@ const GENERICAS = new Set(['COMPANHIA', 'CIA', 'DISTRIBUIDORA', 'DISTRIBUIDOR', 
   // Termos de ESCRITÓRIO CONTÁBIL (não distinguem uma firma da outra) e do prefixo fiscal
   // "SERV. PREST. PROPAGANDA CUMULATIVO ACUM." — senão fundiam dezenas de contabilidades diferentes.
   'SERV', 'PROPAGANDA', 'CUMULATIVO', 'CONTABIL', 'CONTABEIS', 'CONTABILIDADE', 'CONTABILIDADES', 'CONTABILISTAS', 'ASSESSORIA', 'ASSESSORIAS', 'CONSULTORIA', 'CONSULTORIAS', 'EMPRESARIAL', 'EMPRESARIAIS', 'GESTAO', 'TRIBUTARIA', 'TRIBUTARIOS', 'TRIBUTARIO', 'TRIBUTARIOS', 'ADMINISTRATIVA', 'ADMINISTRATIVOS', 'ADMINISTRATIVO', 'PERICIA', 'AUDITORIA', 'AUDITORES', 'ESCRITORIO', 'ORGANIZACAO', 'ORGANIZACOES', 'FINANCEIRA', 'FINANCEIRO', 'FINANCEIRAS', 'RECURSOS', 'HUMANOS', 'NEGOCIOS', 'INTEGRAL', 'INTELIGENTE', 'CONSULTIVA', 'RESOLUTIVA', 'ESPECIALIZADA', 'ESPECIALIZADOS', 'PROJETOS', 'INVESTIMENTOS', 'CONTADORES',
+  // Palavras de OPERAÇÃO (import/export/comércio exterior) — genéricas, não distinguem a empresa
+  // (senão "MAC-LEN IMPORTACAO EXPORTACAO" e "HGX IMPORTACAO EXPORTACAO" viram o mesmo fornecedor).
+  'IMPORTACAO', 'IMPORTACOES', 'EXPORTACAO', 'EXPORTACOES', 'IMPORT', 'EXPORT', 'COMEX', 'ATACADO', 'VAREJO', 'ATACADISTA',
   // Formas jurídicas e o sufixo fiscal "CF. NF. Nº" — NUNCA distinguem uma empresa da outra
   // (senão "…LTDA" ou "…CF NF" fundem tudo por encadeamento).
   'LTDA', 'EIRELI', 'EPP', 'MEI', 'CF', 'RPS',
@@ -2568,7 +2571,10 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       if (l._abertura) { const key = chaveAberturaAj(l); aberAjNovo[key] = { ...(aberAjNovo[key] || {}), entidade: alvo } }
     }
     for (const l of acertoLinhas) sep.delete(sepKey(l))
-    iso.delete(kAlvo)
+    // Regra do usuário: vincular cria um QUADRANTE NOVO só com o que foi selecionado — não pode
+    // re-fundir com outro bloco parecido (ex.: os HGX que você separou do MAC-LEN não voltam pra
+    // ele). Isola o nome-alvo para o bloco ficar SÓ com as linhas renomeadas (mesmo nome exato).
+    iso.add(kAlvo)
     // Acerto (lançamento gerado): guarda o nome por uuid.
     const acMap = { ...acertoNomes }
     for (const l of acertoLinhas) { const rid = String(l.id).replace(/^ac_/, ''); if (rid) acMap[rid] = alvo }
