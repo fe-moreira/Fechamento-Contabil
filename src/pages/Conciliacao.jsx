@@ -2065,23 +2065,9 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         setTratadosAb(prev => { const s = new Set(prev); s.delete(chaveAntiga); s.add(chaveNova); return s })
       }
     }
-    // APRENDER A NF POR EXEMPLO: se você informou o NÚMERO da NF de um lançamento, a gente descobre
-    // o padrão (onde o número está no histórico) e PROPÕE a mesma NF para os outros lançamentos da
-    // conta que estão SEM NF — numa lista para você revisar e aprovar (não grava sozinho).
-    if (ajustouLeitura && ehEntidadeConta && nfKey(aj?.nf) && nfKey(aj.nf) !== nfKey(acao?.leitura?.nf)) {
-      const matcher = inferirNFmatcher(acao?.historico, aj.nf)
-      if (matcher) {
-        const alvoAtual = acao
-        const itens = []
-        for (const l of lanc) {
-          if (l === alvoAtual) continue
-          if (nfKey(l.leitura?.nf)) continue        // já tem NF identificada → não mexe
-          const nfProp = matcher(l.historico)
-          if (nfProp && nfKey(nfProp)) itens.push({ l, nf: String(nfProp).trim() })
-        }
-        if (itens.length) { setPropNF({ itens }); setSelPropNF(new Set(itens.map((_, i) => i))) }
-      }
-    }
+    // REGRA DO USUÁRIO: alterar a NF muda SÓ o lançamento selecionado — nunca "arrasta"/propõe a
+    // mesma NF para outros lançamentos (mesmo idênticos). Por isso NÃO há mais proposta de NF por
+    // exemplo aqui: cada NF é da sua própria linha (razão via razao_id; saldo anterior por item).
     setAcao(null)
     carregarTratados()
     if (virouLancamento) { onMudou && onMudou(); carregarLanc() } // atualiza saldo e mostra o acerto na composição
