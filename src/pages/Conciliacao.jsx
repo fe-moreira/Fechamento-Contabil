@@ -759,6 +759,9 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // conta (troca de conta abre no topo normalmente).
   const scrollRef = useRef(null)
   const contaKeyRef = useRef('')
+  // Nomes (chaveNome) que estão em blocos UNIDOS ainda NÃO confirmados — a baixa é bloqueada
+  // até confirmar o nome (preenchido no render, lido nas funções de baixa).
+  const blocosNaoConfRef = useRef(new Set())
   useEffect(() => {
     if (!carregando && scrollRef.current != null) {
       const a = scrollRef.current; scrollRef.current = null
@@ -778,6 +781,8 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const [acao, setAcao] = useState(null)   // lançamento clicado (justificar/corrigir)
   const [propNF, setPropNF] = useState(null)     // { itens:[{l, nf}] } — propostas de NF por padrão aprendido
   const [selPropNF, setSelPropNF] = useState(new Set()) // índices marcados na revisão de propostas de NF
+  const [propIdent, setPropIdent] = useState(null)     // { itens:[{l, nome}] } — propostas de identificação por regra aprendida
+  const [selPropIdent, setSelPropIdent] = useState(new Set()) // índices marcados na revisão de identificação
   const [verCorr, setVerCorr] = useState(null) // lançamento já tratado (ver o que foi feito / desfazer)
   const [plano, setPlano] = useState([])   // [{ cod, nome }] para os seletores de conta
   const [partidas, setPartidas] = useState({}) // chave (data|histórico) -> lançamentos da partida (p/ contrapartida)
@@ -1149,9 +1154,10 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       supabase.from('competencias').select('integracoes').eq('id', compId).maybeSingle(),
       supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'depara').eq('obs', 'identifica_entidade').order('created_at', { ascending: false }).limit(1).maybeSingle(),
     ])
-    // Regras de IDENTIFICAÇÃO (de/para por trecho do histórico → nome do fornecedor/cliente):
-    // "ensina um, identifica os parecidos". Aplicadas nas linhas AINDA sem nome (ver proc).
-    const regrasIdent = (Array.isArray(regraRow?.dados) ? regraRow.dados : [])
+    // Regras de IDENTIFICAÇÃO aprendidas (de/para "histórico contém <trecho> → nome"): NÃO aplicam
+    // sozinhas — geram PROPOSTAS para o usuário confirmar (ver propIdent, mais abaixo). Aprendidas,
+    // valem nos próximos meses (viram proposta a cada abertura, até você confirmar).
+    const regrasIdentPad = (Array.isArray(regraRow?.dados) ? regraRow.dados : [])
       .map(r => ({ pad: normNome(r.padrao || ''), nome: String(r.nome || '').trim() }))
       .filter(r => r.pad.length >= 3 && r.nome)
     // NOME OFICIAL PELA NF (Fiscal): o acumulador do Fiscal traz o fornecedor/cliente da nota
@@ -1256,14 +1262,6 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         const rec = nomeDoFiscal(leitura.entidade)
         if (rec && rec !== leitura.entidade) leitura = { ...leitura, entidade: rec, ident: true }
       }
-      // Regra de IDENTIFICAÇÃO do usuário: a linha AINDA sem nome cujo histórico CONTÉM o padrão
-      // cadastrado vira o fornecedor/cliente da regra (o "identifica os parecidos"). Igual à regra
-      // de NF, mas para o nome. Ajuste manual (ajustado) é soberano — não é sobrescrito.
-      if (!leitura.ident && !leitura.ajustado && regrasIdent.length) {
-        const hu = normNome(hist || l.historico || '')
-        const rg = regrasIdent.find(r => hu.includes(r.pad))
-        if (rg) leitura = { ...leitura, entidade: rg.nome, ident: true, porRegra: true }
-      }
       // Apelido normal (só MESMO cliente) + vínculo MANUAL forçado (mesmo entre nomes diferentes),
       // com a CORREÇÃO manual da própria linha SOBERANA sobre o forçado (linha corrigida sai da
       // união). Lógica única e provada em conciliacaoCore.resolverEntidade (testes: bug #2 + G).
@@ -1333,7 +1331,21 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     // por linha, então NUNCA pode agrupar por valor+nome como o sepKey faz — senão marcar uma
     // nota marca outra de mesmo valor (ex.: duas aberturas de R$ 7.385,96, NF 3232 e 3255).
     const _todas = [...aberturaTodos.map(a => bump({ ...a, _abertura: true })), ...rzProc, ...acertoLancs]
-    setLanc(_todas.map((l, i) => ({ ...l, _uid: `u${i}` })))
+    const lancComUid = _todas.map((l, i) => ({ ...l, _uid: `u${i}` }))
+    setLanc(lancComUid)
+    // PROPOSTAS de identificação (regras aprendidas): as linhas AINDA sem nome cujo histórico
+    // CONTÉM o trecho de uma regra viram SUGESTÃO — o usuário revisa e confirma (não aplica sozinho).
+    if (regrasIdentPad.length && ehPorEntidade(conta.nome)) {
+      const itens = []
+      for (const l of lancComUid) {
+        if (l.leitura?.ident && String(l.leitura.entidade || '').trim()) continue // já identificado
+        const hu = normNome(l.historico || '')
+        const rg = regrasIdentPad.find(r => hu.includes(r.pad))
+        if (rg) itens.push({ l, nome: rg.nome })
+      }
+      if (itens.length) { setPropIdent({ itens }); setSelPropIdent(new Set(itens.map((_, i) => i))) }
+      else setPropIdent(null)
+    } else setPropIdent(null)
     setCarregando(false); setProcessando(false)
   }
   useEffect(() => { carregarLanc() }, [compId, conta.conta]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -1552,6 +1564,11 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const ehResolvida = g => !g.unk && Math.abs(g.total) < 0.005 && g.lancs.length > 0 && !g.lancs.some(reaberto) && semPendente(g)
   const resolvidasEnt = listaTodas.filter(ehResolvida)
   const lista = listaTodas.filter(g => !ehResolvida(g))
+  // Blocos com nomes UNIDOS ainda NÃO confirmados: a baixa fica travada até "Confirmar nome".
+  blocosNaoConfRef.current = new Set(
+    listaTodas.filter(g => g.unido && !g.variacoes.some(v => unificadosConf.has(chaveNome(v))))
+      .flatMap(g => g.variacoes.map(v => chaveNome(v)))
+  )
 
   // Sugestões de nome (propagação) DESLIGADAS a pedido do time: corrigir um nome NÃO "arruma
   // tudo" nem sai mexendo em outros grupos — cada correção é INDIVIDUAL, só no que foi tocado.
@@ -2074,6 +2091,46 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     setMsg(`${escolhidos.length} NF(s) preenchida(s) pelo mesmo padrão. Confira a composição — agora casam por número.`)
     carregarLanc()
   }
+  // Aplica as identificações SELECIONADAS: grava o NOME em cada linha proposta (razão via
+  // ajuste_leitura; saldo anterior via aberturaAj), preservando NF/histórico já existentes.
+  async function aplicarPropostasIdent(indices) {
+    if (bloqueadoFechado()) return
+    const escolhidos = (propIdent?.itens || []).filter((_, i) => indices.has(i))
+    if (!escolhidos.length) { setPropIdent(null); return }
+    const id = await getCompetenciaId()
+    const razaoItens = escolhidos.filter(x => x.l.id != null && !x.l._abertura && !x.l.acerto)
+    const ids = razaoItens.map(x => x.l.id)
+    const existentes = {}
+    if (ids.length) {
+      const { data } = await supabase.from('ajuste_leitura').select('razao_id, nf, historico').in('razao_id', ids)
+      for (const a of (data || [])) existentes[a.razao_id] = a
+    }
+    if (razaoItens.length) {
+      const rows = razaoItens.map(x => ({
+        competencia_id: id, razao_id: x.l.id, entidade: String(x.nome).trim(),
+        nf: existentes[x.l.id]?.nf ?? null, historico: existentes[x.l.id]?.historico ?? null, usuario,
+      }))
+      const { error } = await supabase.from('ajuste_leitura').upsert(rows, { onConflict: 'razao_id' })
+      if (error) { setMsg('Não consegui gravar os nomes: ' + error.message); return }
+    }
+    const abItens = escolhidos.filter(x => x.l._abertura)
+    if (abItens.length) {
+      let map = { ...aberturaAj }
+      for (const x of abItens) { const key = chaveAberturaAj(x.l); map = { ...map, [key]: { ...(map[key] || {}), entidade: String(x.nome).trim() } } }
+      setAberturaAj(map)
+      await salvarNomes(nomesConf, nomesIsolados, nomesAlias, map, acertoNomes)
+    }
+    const acItens = escolhidos.filter(x => x.l.acerto)
+    if (acItens.length) {
+      const acMap = { ...acertoNomes }
+      for (const x of acItens) { const rid = String(x.l.id).replace(/^ac_/, ''); if (rid) acMap[rid] = String(x.nome).trim() }
+      setAcertoNomes(acMap)
+      await salvarNomes(nomesConf, nomesIsolados, nomesAlias, aberturaAj, acMap)
+    }
+    setPropIdent(null); setSelPropIdent(new Set())
+    setMsg(`${escolhidos.length} lançamento(s) identificado(s) pela regra. Confira a composição.`)
+    carregarLanc()
+  }
 
   // Confirma EM LOTE uma entidade (cliente/fornecedor) cuja composição já está ZERADA:
   // registra uma justificativa por linha (com usuário e data) e marca as linhas como
@@ -2150,9 +2207,20 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     if (todos) ks.forEach(k => s.delete(k)); else ks.forEach(k => s.add(k))
     return s
   })
+  // Bloqueia a baixa quando o bloco tem nomes UNIDOS ainda NÃO confirmados: primeiro é preciso
+  // confirmar o nome (botão "Confirmar nome" no bloco). Vale para fornecedores E clientes.
+  function precisaConfirmarNome(alvo) {
+    const naoConf = blocosNaoConfRef.current
+    if (!naoConf || !naoConf.size) return false
+    return (alvo || []).some(l => naoConf.has(chaveNome(l.leitura?.entidade || '')))
+  }
+  function avisaConfirmarNome() {
+    window.alert(`Antes de baixar, confirme o nome do ${String(lab || 'fornecedor').toLowerCase()}.\n\nEste bloco tem nomes UNIDOS ainda não confirmados. Clique em "Confirmar nome" no bloco (para dizer qual é o nome oficial) e depois baixe.`)
+  }
   async function conectarSelecionados() {
     const alvo = lanc.filter(l => selLin.has(selKeyU(l)))
     if (alvo.length < 2) { window.alert('Não dá para baixar: selecione ao menos 2 lançamentos (a nota e o pagamento).'); return }
+    if (precisaConfirmarNome(alvo)) { avisaConfirmarNome(); return }
     const net = alvo.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
     // Baixa SÓ quando ZERA. Se sobra diferença, não baixa (o botão já fica desabilitado).
     if (Math.abs(net) >= 0.005) { window.alert(`Não dá para baixar: o líquido NÃO ZERA — ainda sobra ${money(Math.abs(net))} ${net < 0 ? 'C' : 'D'}. Ajuste a seleção para o total dar zero.`); return }
@@ -2276,6 +2344,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // Aplica a diferença como desconto/juros: gera o lançamento de acerto que ZERA a conta e
   // conecta tudo (par + acerto) para Conciliados.
   async function aplicarConexaoDif(alvo, net, kind, contaDif) {
+    if (precisaConfirmarNome(alvo)) { avisaConfirmarNome(); return }
     if (!contaDif) { setMsg('Escolha a conta do desconto/juros.'); return }
     const eSint = erroContaSintetica(plano, net > 0 ? contaDif : conta.conta, net > 0 ? conta.conta : contaDif)
     if (eSint) { setMsg(eSint); return }
@@ -3428,6 +3497,45 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
               <div style={{ padding: '12px 18px', borderTop: `1px solid ${theme.border}`, display: 'flex', gap: 10, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
                 <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={() => setPropNF(null)}><i className="ti ti-x" /> Cancelar</button>
                 <button className="btn" disabled={selPropNF.size === 0} style={{ fontSize: 12.5, background: selPropNF.size ? theme.accent : undefined, borderColor: selPropNF.size ? theme.accent : undefined, opacity: selPropNF.size ? 1 : 0.5, cursor: selPropNF.size ? 'pointer' : 'not-allowed' }} onClick={() => aplicarPropostasNF(selPropNF)}><i className="ti ti-checks" /> Aprovar selecionados ({selPropNF.size})</button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+      {propIdent && (() => {
+        const itens = propIdent.itens || []
+        const todos = itens.length > 0 && itens.every((_, i) => selPropIdent.has(i))
+        const toggle = i => setSelPropIdent(prev => { const s = new Set(prev); s.has(i) ? s.delete(i) : s.add(i); return s })
+        return (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 90, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }} onClick={() => setPropIdent(null)}>
+            <div onClick={e => e.stopPropagation()} style={{ background: theme.card, border: `1px solid ${theme.accent}`, borderRadius: 14, width: 'min(880px, 96vw)', maxHeight: '86vh', display: 'flex', flexDirection: 'column', boxShadow: '0 10px 40px rgba(0,0,0,0.5)' }}>
+              <div style={{ padding: '14px 18px', borderBottom: `1px solid ${theme.border}` }}>
+                <div style={{ fontSize: 15, fontWeight: 700, color: theme.text, display: 'flex', alignItems: 'center', gap: 8 }}><i className="ti ti-user-check" style={{ color: theme.accent }} /> Identificar {lab} pelas regras</div>
+                <div style={{ fontSize: 12.5, color: theme.sub, marginTop: 4 }}>Encontrei <b style={{ color: theme.text }}>{itens.length}</b> lançamento(s) em <b>“(não identificado)”</b> que batem com as regras cadastradas. Revise e aprove os que estiverem certos — <b>só aplica o que você marcar</b>.</div>
+              </div>
+              <div style={{ overflow: 'auto', padding: '4px 0' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+                  <thead>
+                    <tr style={{ position: 'sticky', top: 0, background: theme.input }}>
+                      <th style={{ ...th, width: 34, textAlign: 'center' }}><input type="checkbox" checked={todos} onChange={() => setSelPropIdent(todos ? new Set() : new Set(itens.map((_, i) => i)))} style={{ cursor: 'pointer', width: 15, height: 15 }} /></th>
+                      <th style={th}>Data</th><th style={th}>Histórico</th><th style={{ ...th, textAlign: 'right' }}>{lab === 'cliente' ? 'Cliente' : 'Fornecedor'}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {itens.map((x, i) => (
+                      <tr key={i} onClick={() => toggle(i)} style={{ borderTop: `1px solid ${theme.border}`, cursor: 'pointer', background: selPropIdent.has(i) ? 'rgba(74,124,255,0.06)' : 'transparent' }}>
+                        <td style={{ ...td, textAlign: 'center' }} onClick={e => e.stopPropagation()}><input type="checkbox" checked={selPropIdent.has(i)} onChange={() => toggle(i)} style={{ cursor: 'pointer', width: 15, height: 15 }} /></td>
+                        <td style={{ ...td, color: theme.sub, whiteSpace: 'nowrap' }}>{fmtDataBR(x.l.data) || '—'}</td>
+                        <td style={{ ...td, color: theme.sub, fontFamily: 'monospace', fontSize: 11, maxWidth: 480 }}>{x.l.historico}</td>
+                        <td style={{ ...tdR, fontWeight: 700, color: theme.accent }}>{x.nome}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ padding: '12px 18px', borderTop: `1px solid ${theme.border}`, display: 'flex', gap: 10, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={() => setPropIdent(null)}><i className="ti ti-x" /> Agora não</button>
+                <button className="btn" disabled={selPropIdent.size === 0} style={{ fontSize: 12.5, background: selPropIdent.size ? theme.accent : undefined, borderColor: selPropIdent.size ? theme.accent : undefined, opacity: selPropIdent.size ? 1 : 0.5, cursor: selPropIdent.size ? 'pointer' : 'not-allowed' }} onClick={() => aplicarPropostasIdent(selPropIdent)}><i className="ti ti-checks" /> Confirmar selecionados ({selPropIdent.size})</button>
               </div>
             </div>
           </div>
