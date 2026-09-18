@@ -105,19 +105,24 @@ const GENERICAS = new Set(['COMPANHIA', 'CIA', 'DISTRIBUIDORA', 'DISTRIBUIDOR', 
   // (senão "…LTDA" ou "…CF NF" fundem tudo por encadeamento).
   'LTDA', 'EIRELI', 'EPP', 'MEI', 'CF', 'RPS',
   'DO', 'DA', 'DE', 'DOS', 'DAS', 'E', 'EM'])
-const normNome = s => String(s || '').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim()
+// Memoizador por string: as funções de nome (normNome/nucleoNome/tokensNome/descritoresNome)
+// são puras e chamadas MUITAS vezes (o agrupamento é O(n²)); em contas grandes (ex.: clientes
+// da Metroform, ~1300 nomes) recalcular o normalize+regex a cada comparação travava a tela.
+// Cachear por string transforma isso em lookup. Limite de tamanho evita crescer sem parar.
+const _memo1 = fn => { const c = new Map(); return x => { const k = String(x ?? ''); const h = c.get(k); if (h !== undefined) return h; const v = fn(k); if (c.size < 60000) c.set(k, v); return v } }
+const normNome = _memo1(s => String(s || '').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim())
 // NÚCLEO do nome (p/ AUTO-UNIR idênticos): tira CNPJ/CPF/código no INÍCIO e o sufixo jurídico
 // (LTDA/EIRELI/EPP/ME/MEI/SA) no FIM. Assim "DVP CONSULTORIA EMPRESARIAL" ≡ "…LTDA" e
 // "61.111.913 TIAGO SANTOS COSTA" ≡ "TIAGO SANTOS COSTA" caem no MESMO bloco sozinhos.
 const SUFIXO_JUR = /\b(?:LTDA|EIRELI|EPP|MEI|ME|S\s?A)\b/g
-const nucleoNome = nome => normNome(nome).replace(/^(?:\d[\d ]*)/, '').replace(SUFIXO_JUR, ' ').replace(/\s+/g, ' ').trim()
+const nucleoNome = _memo1(nome => normNome(nome).replace(/^(?:\d[\d ]*)/, '').replace(SUFIXO_JUR, ' ').replace(/\s+/g, ' ').trim())
 // Palavras de LIGAÇÃO e SUFIXO jurídico — não descrevem a atividade, ignoradas ao comparar
 // descritores. (O sufixo já sai do núcleo; aqui é só para não contarem como "descritor".)
 const CONECTORES_DESC = new Set(['DO', 'DA', 'DE', 'DOS', 'DAS', 'E', 'EM', 'LTDA', 'EIRELI', 'EPP', 'MEI', 'ME', 'SA'])
 // "Descritores" de um nome = as palavras GENÉRICAS de atividade (CONTABILIDADE, SERVICOS,
 // ADMINISTRATIVOS, COMERCIO…), fora ligações e sufixo jurídico. Servem para diferenciar
 // fornecedores da MESMA família de nome (mesmo token distintivo) mas ramos distintos.
-const descritoresNome = nome => new Set(normNome(nome).split(' ').filter(w => w.length >= 3 && GENERICAS.has(w) && !CONECTORES_DESC.has(w)))
+const descritoresNome = _memo1(nome => new Set(normNome(nome).split(' ').filter(w => w.length >= 3 && GENERICAS.has(w) && !CONECTORES_DESC.has(w))))
 // Dois nomes CONFLITAM quando CADA lado tem um descritor que o outro não tem — ex.:
 // "ATTENTIVE CONTABILIDADE" (CONTABILIDADE) × "ATTENTIVE SERVICOS ADMINISTRATIVOS"
 // (ADMINISTRATIVOS): mesma "família" ATTENTIVE, mas ramos diferentes → fornecedores DIFERENTES.
@@ -141,13 +146,13 @@ const mesmoFornecedor = (nomeA, tkA, nomeB, tkB) => {
 // usa os tokens NÃO genéricos mesmo CURTOS (iniciais como "C K", "A S", "RC") — que
 // distinguem melhor do que cair em TODOS (com as palavras genéricas juntas, que encadeiam
 // empresas diferentes). Só se nem isso sobrar é que usa todos.
-function tokensNome(nome) {
+const tokensNome = _memo1(nome => {
   const todos = normNome(nome).split(' ').filter(Boolean)
   const dist = todos.filter(t => t.length >= 3 && !GENERICAS.has(t))
   if (dist.length) return dist
   const naoGen = todos.filter(t => !GENERICAS.has(t))
   return naoGen.length ? naoGen : todos
-}
+})
 // Dois nomes são o mesmo cliente se um conjunto de tokens é subconjunto do outro,
 // ou a interseção cobre a maioria do menor e há um token forte (>=4 letras) em comum.
 function mesmoCliente(a, b) {
@@ -285,10 +290,25 @@ function agruparPorCliente(lancs) {
   }
   const idents = nomes.filter(k => k !== '(não identificado)')
   const tk = Object.fromEntries(idents.map(k => [k, tokensNome(k)]))
+  // Mesma otimização do agrupamento em aberto: indexa por token distintivo/núcleo e só compara
+  // com os candidatos que compartilham algo (mesmoFornecedor exige) — evita o O(n²) em contas
+  // grandes. Candidatos em ordem de criação para casar no MESMO cluster que a busca linear.
   const clusters = []
+  const idxTok = new Map(), idxNuc = new Map()
+  const indexar = (ci, k) => {
+    for (const t of tk[k]) { let s = idxTok.get(t); if (!s) { s = new Set(); idxTok.set(t, s) } s.add(ci) }
+    const nuc = nucleoNome(k); if (nuc.length >= 3 && !idxNuc.has(nuc)) idxNuc.set(nuc, ci)
+  }
   for (const k of idents) {
-    const alvo = clusters.find(cl => cl.some(m => mesmoFornecedor(k, tk[k], m, tk[m])))
-    if (alvo) alvo.push(k); else clusters.push([k])
+    const cand = new Set()
+    for (const t of tk[k]) { const s = idxTok.get(t); if (s) for (const ci of s) cand.add(ci) }
+    const nuc = nucleoNome(k); if (nuc.length >= 3) { const ci = idxNuc.get(nuc); if (ci != null) cand.add(ci) }
+    let alvoIdx = -1
+    for (const ci of [...cand].sort((a, b) => a - b)) {
+      if (clusters[ci].some(m => mesmoFornecedor(k, tk[k], m, tk[m]))) { alvoIdx = ci; break }
+    }
+    if (alvoIdx >= 0) { clusters[alvoIdx].push(k); indexar(alvoIdx, k) }
+    else { const ci = clusters.length; clusters.push([k]); indexar(ci, k) }
   }
   if (grupos['(não identificado)']) clusters.push(['(não identificado)'])
   return clusters.map(membros => {
@@ -1465,12 +1485,33 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const ehSep = k => sepKeys.has(k)
   const idents = nomes.filter(k => nomeExib[k] !== '(não identificado)')
   const tk = Object.fromEntries(idents.map(k => [k, tokensNome(nomeExib[k])]))
+  // Agrupa por nome. Em vez de comparar cada nome com TODOS os clusters (O(n²) — travava as
+  // contas grandes, tipo os ~1300 clientes da Metroform), indexa os clusters por token distintivo
+  // e por núcleo: só compara com os candidatos que compartilham um token/núcleo (mesmoFornecedor
+  // exige isso). O resultado é idêntico — a busca é que fica muito mais barata. Os candidatos são
+  // visitados em ordem de criação (índice crescente) para casar no MESMO cluster que a busca linear.
   const clusters = []
+  const idxTok = new Map()   // token distintivo → Set de índices de cluster (não isolados)
+  const idxNuc = new Map()   // núcleo → índice do 1º cluster com aquele núcleo
+  const indexar = (ci, k) => {
+    for (const t of tk[k]) { let s = idxTok.get(t); if (!s) { s = new Set(); idxTok.set(t, s) } s.add(ci) }
+    const nuc = nucleoNome(nomeExib[k]); if (nuc.length >= 3 && !idxNuc.has(nuc)) idxNuc.set(nuc, ci)
+  }
   for (const k of idents) {
     // Nome ISOLADO (desvinculou) ou linha SEPARADA: nunca une — fica no seu próprio grupo.
     const isoladoK = ehSep(k) || nomesIsolados.has(chaveNome(nomeExib[k]))
-    const alvo = isoladoK ? null : clusters.find(cl => !cl.isolado && cl.membros.some(m => mesmoFornecedor(nomeExib[k], tk[k], nomeExib[m], tk[m])))
-    if (alvo) alvo.membros.push(k); else clusters.push({ membros: [k], isolado: isoladoK })
+    let alvoIdx = -1
+    if (!isoladoK) {
+      const nomeK = nomeExib[k], tkK = tk[k]
+      const cand = new Set()
+      for (const t of tkK) { const s = idxTok.get(t); if (s) for (const ci of s) cand.add(ci) }
+      const nuc = nucleoNome(nomeK); if (nuc.length >= 3) { const ci = idxNuc.get(nuc); if (ci != null) cand.add(ci) }
+      for (const ci of [...cand].sort((a, b) => a - b)) {
+        if (clusters[ci].membros.some(m => mesmoFornecedor(nomeK, tkK, nomeExib[m], tk[m]))) { alvoIdx = ci; break }
+      }
+    }
+    if (alvoIdx >= 0) { clusters[alvoIdx].membros.push(k); indexar(alvoIdx, k) }
+    else { const ci = clusters.length; clusters.push({ membros: [k], isolado: isoladoK }); if (!isoladoK) indexar(ci, k) }
   }
   const listaTodas = clusters.map(cl => {
     const membros = cl.membros.slice().sort((a, b) => b.length - a.length)
@@ -1622,16 +1663,41 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // vira DOIS blocos que "não fecham", quando na verdade o par (mesma NF) zerou junto. Assim eles
   // aparecem no MESMO bloco (com os dois nomes), tenha o usuário confirmado o nome ou não. Respeita
   // os nomes ISOLADOS (desvinculados de propósito não juntam).
+  // Indexado por token/núcleo do nome REPRESENTATIVO (evita o O(n²) nas contas grandes). O
+  // representativo pode crescer (nome mais longo entra) → adiciona os tokens novos ao índice;
+  // entradas antigas viram só candidatos extras, que a checagem rejeita — sem mudar o resultado.
   const baixClusters = []
+  const idxTokB = new Map(), idxNucB = new Map()
+  const idxAddB = (ci, tkArr, nome) => {
+    for (const t of tkArr) { let s = idxTokB.get(t); if (!s) { s = new Set(); idxTokB.set(t, s) } s.add(ci) }
+    const nuc = nucleoNome(nome); if (nuc.length >= 3) { let s = idxNucB.get(nuc); if (!s) { s = new Set(); idxNucB.set(nuc, s) } s.add(ci) }
+  }
   for (const l of [...baixados]) {
     if (Math.abs(ov(l)) < 0.005) continue
     const nm = l.leitura?.entidade || '(sem nome)'
     const semNome = nm === '(sem nome)'
     const tk = tokensNome(nm)
     const iso = !semNome && nomesIsolados.has(chaveNome(nm))
-    const alvo = (semNome || iso) ? null : baixClusters.find(c => !c.iso && !c.semNome && mesmoFornecedor(c.nome, c.tk, nm, tk))
-    if (alvo) { alvo.lancs.push(l); if (nm.length > alvo.nome.length) { alvo.nome = nm; alvo.tk = tk }; if (!alvo.nomes.includes(nm)) alvo.nomes.push(nm) }
-    else baixClusters.push({ nome: nm, tk, iso, semNome, lancs: [l], nomes: [nm] })
+    let alvoIdx = -1
+    if (!(semNome || iso)) {
+      const cand = new Set()
+      for (const t of tk) { const s = idxTokB.get(t); if (s) for (const ci of s) cand.add(ci) }
+      const nuc = nucleoNome(nm); if (nuc.length >= 3) { const s = idxNucB.get(nuc); if (s) for (const ci of s) cand.add(ci) }
+      for (const ci of [...cand].sort((a, b) => a - b)) {
+        const c = baixClusters[ci]
+        if (!c.iso && !c.semNome && mesmoFornecedor(c.nome, c.tk, nm, tk)) { alvoIdx = ci; break }
+      }
+    }
+    if (alvoIdx >= 0) {
+      const alvo = baixClusters[alvoIdx]
+      alvo.lancs.push(l)
+      if (nm.length > alvo.nome.length) { alvo.nome = nm; alvo.tk = tk; idxAddB(alvoIdx, tk, nm) }
+      if (!alvo.nomes.includes(nm)) alvo.nomes.push(nm)
+    } else {
+      const ci = baixClusters.length
+      baixClusters.push({ nome: nm, tk, iso, semNome, lancs: [l], nomes: [nm] })
+      if (!(semNome || iso)) idxAddB(ci, tk, nm)
+    }
   }
   const baixadosGrupos = baixClusters.map(c => ({ nome: c.nome, lancs: c.lancs, nomes: c.nomes }))
   const baixadosVis = termoBusca ? baixadosGrupos.filter(casaBusca) : baixadosGrupos
