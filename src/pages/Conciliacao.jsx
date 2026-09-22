@@ -1600,6 +1600,18 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     const contras = (contraDe(l) || []).map(c => planoMap[c] || '').join(' ')
     return /cartao\s+de\s+credito/.test(semAcento(`${l.historico || ''} ${contras}`))
   }
+  // REGRA DO USUÁRIO: "não deixar baixar/conciliar com diferença". Numa conta de ENTIDADE, uma
+  // conexão manual ("Juntar") só CONCILIA se o bloco do fornecedor REALMENTE ZERAR. Se você juntou
+  // títulos que não se anulam (sobra em aberto), NADA daquele bloco baixa: as linhas continuam EM
+  // ABERTO, no MESMO bloco (agrupadas pelo nome), mostrando a diferença — em vez de irem para os
+  // Conciliados como "não fecha". Agrupa os candidatos por fornecedor e só HONRA os que somam zero.
+  // (Contas NÃO-entidade mantêm o comportamento antigo — a régua vale para cliente/fornecedor.)
+  const manualCand = ehEntidadeConta ? lanc.filter(l => ehConexaoManual(l) && Math.abs(ov(l)) >= 0.005) : []
+  const manualHonrado = new Set()
+  for (const b of agruparPorCliente(manualCand)) {
+    const net = b.lancs.reduce((s, l) => s + ov(l), 0)
+    if (Math.abs(net) < 0.005) for (const l of b.lancs) manualHonrado.add(l)
+  }
   // Agrupa só o que está EM ABERTO (não baixado) por nome; incerto cai em "(não identificado)".
   const grupos = {}, nomes = [], nomeExib = {}, sepKeys = new Set()
   for (const l of lanc) {
@@ -1607,7 +1619,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     // direto; em contas de ENTIDADE ele ENTRA no agrupamento para reverificar se o grupo do nome
     // REALMENTE zerou (link vira união forçada e zera junto; saldo inicial sem par NÃO zera →
     // volta pro em aberto). Ver conciliacaoCore.classificarGrupos (bug #1) e testes A/F.
-    if (ehCongelado(l) || baixados.has(l) || ehConexaoManual(l) || (foiConfirmado(l) && !ehEntidadeConta) || autoConc.has(l)) continue
+    if (ehCongelado(l) || baixados.has(l) || (ehEntidadeConta ? manualHonrado.has(l) : ehConexaoManual(l)) || (foiConfirmado(l) && !ehEntidadeConta) || autoConc.has(l)) continue
     if (Math.abs(ov(l)) < 0.005) continue
     const ent = l.leitura.ident && l.leitura.entidade ? l.leitura.entidade
       : ehCartaoCredito(l) ? 'Cartão de crédito' : '(não identificado)'
@@ -1703,7 +1715,9 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const confirmadosLancs = ehEntidade ? [] : lanc.filter(l => foiConfirmado(l) && Math.abs(ov(l)) >= 0.005)
   // Pares de conexão/vínculo manual: saem SEMPRE (em qualquer tipo de conta) para os Conciliados,
   // independentemente do grupo do nome zerar — foram baixados explicitamente pelo usuário.
-  const conexaoManualLancs = lanc.filter(l => ehConexaoManual(l) && Math.abs(ov(l)) >= 0.005)
+  // Só entram nos Conciliados os manuais HONRADOS (bloco zerou). Numa conta de entidade, um bloco
+  // juntado que sobra em aberto NÃO baixa — fica no em aberto (via `lista`), sem diferença escondida.
+  const conexaoManualLancs = lanc.filter(l => ehConexaoManual(l) && Math.abs(ov(l)) >= 0.005 && (!ehEntidadeConta || manualHonrado.has(l)))
   const autoConcLancs = lanc.filter(l => autoConc.has(l) && Math.abs(ov(l)) >= 0.005)
   // Linhas CONGELADAS (já conciliadas antes) que voltariam a aparecer: mantêm-se nos Conciliados.
   const congeladosLancs = lanc.filter(l => ehCongelado(l) && Math.abs(ov(l)) >= 0.005)
