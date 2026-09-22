@@ -775,6 +775,9 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // Nomes (chaveNome) que estão em blocos UNIDOS ainda NÃO confirmados — a baixa é bloqueada
   // até confirmar o nome (preenchido no render, lido nas funções de baixa).
   const blocosNaoConfRef = useRef(new Set())
+  // Ids (estáveis) de tudo que está conciliado AGORA — preenchido no render; o efeito abaixo
+  // grava os NOVOS no "congelado" (aditivo).
+  const congelaveisRef = useRef([])
   useEffect(() => {
     if (!carregando && scrollRef.current != null) {
       const a = scrollRef.current; scrollRef.current = null
@@ -834,6 +837,10 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const [acertoNomes, setAcertoNomes] = useState({}) // nome de fornecedor por lançamento de acerto: {uuid: nome}
   const [baixasReabertas, setBaixasReabertas] = useState(new Set()) // baixas por NF que o usuário PUXOU de volta p/ em aberto: {`conta·nfKey`} — não baixa de novo no automático
   const [conciliadosReabertos, setConciliadosReabertos] = useState(new Set()) // grupos que ZERARAM por NOME e o usuário reabriu: {chaveReabrir} — NÃO conciliam sozinhos de novo (compõem o saldo até baixa manual)
+  // CONGELADOS: linhas que JÁ FORAM conciliadas/baixadas (manual OU automático) — carimbadas por
+  // identidade estável (razao_id/_srcRaz/AB·). REGRA DO USUÁRIO: uma vez conciliado, NUNCA reabre
+  // sozinho, nem quando o sistema muda (matcher, leitura, releitura). Só o "Reabrir" tira daqui.
+  const [congelados, setCongelados] = useState(new Set())
   const [unificadosConf, setUnificadosConf] = useState(new Set()) // nomes cuja UNIFICAÇÃO o usuário confirmou (chaveNome) — esconde os chips "Unificado de" e mantém aprendido
   const [sugestoesRejeitadas, setSugestoesRejeitadas] = useState(new Set()) // sugestões de vínculo que o usuário NÃO aprovou: {chaveSug} — não sugere de novo
   const [modoPorNome, setModoPorNome] = useState({}) // por conta: força "conciliar por nome" ligado/desligado {conta: true|false} — sobrepõe a detecção pelo nome
@@ -879,6 +886,39 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     // vigencia é NOT NULL — usa a competência atual (o registro é único por cliente, lido sempre o mais recente).
     const { error } = await supabase.from('cargas_cadastro').insert({ cliente_id: empresaId, tipo: 'conciliacao_nomes', vigencia: competencia || '00/0000', dados: { confiaveis: [...conf], isolados: [...iso], aliases: aliases || {}, aberturaAjustes: aberAj || {}, acertoNomes: acNomes || {}, baixasReabertas: [...baixasReab], sugestoesRejeitadas: [...sugRej], modoPorNome: modoPN || {}, separados: [...(sep || [])], aliasesForcados: aliasF || {}, conciliadosReabertos: [...(concReab || [])], unificadosConfirmados: [...(unifConf || [])], parcelamentos: Array.isArray(parcel) ? parcel : [] }, usuario })
     if (error) { setMsg('Não consegui salvar: ' + error.message); return error }
+  }
+  // Lê a lista congelada gravada da conta (uma linha de auditoria: item "CONGELADOS·<conta>",
+  // detalhe = JSON dos ids). READ-MODIFY-WRITE (o banco é a fonte da verdade) — assim um estado
+  // React defasado NUNCA apaga ids já gravados. `mut(setDeIds)` devolve a nova lista a gravar.
+  async function reescreverCongelados(mut) {
+    const id = await getCompetenciaId(); if (!id) return null
+    const item = `CONGELADOS·${conta.conta}`
+    const { data } = await supabase.from('auditoria').select('detalhe').eq('competencia_id', id)
+      .eq('modulo', 'Conciliação').eq('item', item).maybeSingle()
+    let atuais = []; try { atuais = JSON.parse(data?.detalhe || '[]') } catch { atuais = [] }
+    const nova = mut(new Set(atuais))
+    if (!nova || nova.length === atuais.length && nova.every(x => atuais.includes(x))) return atuais
+    await supabase.from('auditoria').delete().eq('competencia_id', id).eq('modulo', 'Conciliação').eq('item', item)
+    if (nova.length) {
+      const { error } = await supabase.from('auditoria').insert({
+        competencia_id: id, modulo: 'Conciliação', tipo: 'Congelado', item, detalhe: JSON.stringify(nova), usuario,
+      })
+      if (error) { console.warn('congelar:', error.message); return null }
+    }
+    return nova
+  }
+  // ADICIONA (união) os ids novos ao congelado da conta — nunca remove.
+  async function congelarNovos(ids) {
+    const nova = await reescreverCongelados(atual => { for (const x of ids) atual.add(x); return [...atual] })
+    if (nova) setCongelados(new Set(nova))
+  }
+  // DESCONGELA (tira do congelado) as linhas que o usuário mandou REABRIR — é a única forma de
+  // uma conciliação sair.
+  async function descongelar(lancs) {
+    if (!lancs?.length) return
+    const rem = new Set(lancs.map(idCongelar))
+    const nova = await reescreverCongelados(atual => [...atual].filter(x => !rem.has(x)))
+    if (nova) setCongelados(new Set(nova))
   }
   // Chave estável de uma linha (para "separar" determinístico): razão pelo id, abertura pela
   // chave de abertura, acerto pelo uuid.
@@ -1024,10 +1064,16 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     // não têm razao_id — são tratadas por uma chave estável no campo `item` (prefixo "AB·").
     // CONFIRMADAS em lote (detalhe "Confirmado em lote…") SAEM do em aberto → Conciliados;
     // justificativas individuais continuam na composição (não escondem título aberto).
-    const { data } = await supabase.from('auditoria').select('razao_id, item, detalhe')
+    const { data } = await supabase.from('auditoria').select('razao_id, item, detalhe, tipo')
       .eq('competencia_id', compId).eq('modulo', 'Conciliação')
     const rz = new Set(), ab = new Set(), conf = new Set(), conx = new Set()
+    const cong = new Set()
     for (const a of (data || [])) {
+      // Linha CONGELADA (uma por conta): item "CONGELADOS·<conta>", detalhe = JSON dos ids estáveis.
+      if (a.tipo === 'Congelado' && String(a.item || '').startsWith('CONGELADOS·')) {
+        if (String(a.item) === `CONGELADOS·${conta.conta}`) { try { for (const x of JSON.parse(a.detalhe || '[]')) cong.add(x) } catch { /* ignora JSON inválido */ } }
+        continue
+      }
       const abItem = String(a.item || '').startsWith('AB·') ? a.item : null
       const chave = a.razao_id || abItem
       if (!chave) continue
@@ -1047,7 +1093,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       // do mesmo nome sigam abertas — o grupo do nome não precisa zerar inteiro. Ver caso ATTENTIVE.
       if (/conex[aã]o manual|v[ií]nculo manual/.test(det)) { conx.add(chave); if (a.item && !abItem) conx.add(a.item); if (abNI) conx.add(abNI) }
     }
-    setTratados(rz); setTratadosAb(ab); setConfirmados(conf); setConexoesManuais(conx)
+    setTratados(rz); setTratadosAb(ab); setConfirmados(conf); setConexoesManuais(conx); setCongelados(cong)
   }
   // Chave estável de uma linha de abertura (saldo inicial) e testes de "já tratada"/"confirmada".
   // Inclui a DATA do título para NÃO confundir dois títulos iguais em valor/entidade e SEM NF
@@ -1118,7 +1164,21 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // abertura pela chave AB· (valor+nome+data); acerto pelo uuid do acerto.
   const chaveReabrir = l => l._abertura ? chaveAbertura(l) : (l.acerto ? 'ac:' + String(l.id).replace(/^ac_/, '') : 'rz:' + l.id)
   const reaberto = l => conciliadosReabertos.has(chaveReabrir(l))
-  useEffect(() => { carregarTratados() }, [compId]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Identidade ESTÁVEL para CONGELAR uma conciliação: razão pelo uuid, abertura pelo _srcRaz
+  // (não muda com leitura/nome/matcher) e, sem ele, pela chave AB·; acerto pelo uuid. É o carimbo
+  // de "já conciliado" — imune a mudanças de sistema. Ver `congelados`.
+  const idCongelar = l => l?._abertura ? ('abs:' + (l._srcRaz != null ? String(l._srcRaz) : chaveAbertura(l))) : (l?.acerto ? 'ac:' + String(l.id).replace(/^ac_/, '') : 'rz:' + (l?.id ?? ''))
+  const ehCongelado = l => !reaberto(l) && congelados.has(idCongelar(l))
+  useEffect(() => { carregarTratados() }, [compId, conta.conta]) // eslint-disable-line react-hooks/exhaustive-deps
+  // CONGELA (grava) as conciliações NOVAS assim que a conta termina de carregar: uma vez conciliado
+  // — manual OU automático — não reabre sozinho, nem quando o sistema muda. Aditivo: só grava ids
+  // que ainda não estão no congelado; NUNCA remove aqui (só o "Reabrir" tira). Guarda por conta.
+  useEffect(() => {
+    if (!compId || carregando || processando || periodoFechado) return
+    const novos = (congelaveisRef.current || []).filter(x => x && !congelados.has(x))
+    if (!novos.length) return
+    congelarNovos(novos)
+  }, [compId, conta.conta, lanc, carregando, processando, periodoFechado]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Contas cujo razão compõe esta linha: a própria conta e — quando ela é SINTÉTICA — todas
   // as analíticas descendentes (o movimento fica nas filhas, não na conta-mãe; sem isso, a
@@ -1526,7 +1586,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     // direto; em contas de ENTIDADE ele ENTRA no agrupamento para reverificar se o grupo do nome
     // REALMENTE zerou (link vira união forçada e zera junto; saldo inicial sem par NÃO zera →
     // volta pro em aberto). Ver conciliacaoCore.classificarGrupos (bug #1) e testes A/F.
-    if (baixados.has(l) || ehConexaoManual(l) || (foiConfirmado(l) && !ehEntidadeConta) || autoConc.has(l)) continue
+    if (ehCongelado(l) || baixados.has(l) || ehConexaoManual(l) || (foiConfirmado(l) && !ehEntidadeConta) || autoConc.has(l)) continue
     if (Math.abs(ov(l)) < 0.005) continue
     const ent = l.leitura.ident && l.leitura.entidade ? l.leitura.entidade
       : ehCartaoCredito(l) ? 'Cartão de crédito' : '(não identificado)'
@@ -1611,7 +1671,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // Em aberto = o que compõe o saldo. Nas contas normais também tira o que foi CONFIRMADO em
   // lote (conexão manual que zerou) — assim, igual a clientes/fornecedores, some o que zerou e
   // fica só o que compõe o saldo.
-  const emAbertoTodos = ehEntidade ? lista.flatMap(g => g.lancs) : lanc.filter(l => Math.abs(ov(l)) >= 0.005 && !autoConc.has(l) && !foiConfirmado(l) && !ehConexaoManual(l))
+  const emAbertoTodos = ehEntidade ? lista.flatMap(g => g.lancs) : lanc.filter(l => Math.abs(ov(l)) >= 0.005 && !autoConc.has(l) && !foiConfirmado(l) && !ehConexaoManual(l) && !ehCongelado(l))
   // Conciliados (saíram do em aberto): confirmados em lote + entidades que zeraram e foram
   // tratadas + pares de correção que se anularam com a origem. Ficam numa seção colapsável.
   // Em contas de ENTIDADE o confirmado é reavaliado pelo agrupamento (resolvida = grupo zerou);
@@ -1621,13 +1681,21 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // independentemente do grupo do nome zerar — foram baixados explicitamente pelo usuário.
   const conexaoManualLancs = lanc.filter(l => ehConexaoManual(l) && Math.abs(ov(l)) >= 0.005)
   const autoConcLancs = lanc.filter(l => autoConc.has(l) && Math.abs(ov(l)) >= 0.005)
-  const conferidosLancs = [...new Set([...confirmadosLancs, ...conexaoManualLancs, ...resolvidasEnt.flatMap(g => g.lancs).filter(l => Math.abs(ov(l)) >= 0.005), ...autoConcLancs])]
+  // Linhas CONGELADAS (já conciliadas antes) que voltariam a aparecer: mantêm-se nos Conciliados.
+  const congeladosLancs = lanc.filter(l => ehCongelado(l) && Math.abs(ov(l)) >= 0.005)
+  const conferidosLancs = [...new Set([...confirmadosLancs, ...conexaoManualLancs, ...resolvidasEnt.flatMap(g => g.lancs).filter(l => Math.abs(ov(l)) >= 0.005), ...autoConcLancs, ...congeladosLancs])]
   const zerados = [...new Set([...baixados, ...conferidosLancs])] // sem repetir (uma linha pode ser baixada E confirmada)
+  // CONGELAR (persistência): carimba a identidade estável de TUDO que está conciliado agora, para
+  // NUNCA reabrir sozinho depois (regra do usuário). Só entidade/composição — contas de saldo não
+  // têm par a congelar. Guarda os ids num ref; um efeito grava os NOVOS (aditivo, nunca remove).
+  congelaveisRef.current = ehEntidade
+    ? zerados.filter(l => Math.abs(ov(l)) >= 0.005).map(idCongelar).filter(Boolean)
+    : []
 
   // AMARRAÇÃO sobre a composição EM ABERTO que é REALMENTE exibida/exportada (emAbertoEff = base +
   // setVolta, a MESMA lógica do relatório): se o que fica em aberto não soma o saldo, algo foi
   // conciliado sem zerar. `dif` = líquido dos conciliados que NÃO fecham (a "sobra" escondida).
-  const exemptosAmarr = new Set([...conexaoManualLancs, ...autoConcLancs, ...confirmadosLancs])
+  const exemptosAmarr = new Set([...conexaoManualLancs, ...autoConcLancs, ...confirmadosLancs, ...congeladosLancs])
   const baixadosAmarr = new Set(baixados)
   const setVoltaAmarr = new Set()
   for (const b of agruparPorCliente(zerados)) {
@@ -2813,6 +2881,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       setConciliadosReabertos(s)
       await salvarNomes(nomesConf, nomesIsolados, nomesAlias, aberturaAj, acertoNomes, baixasReabertas, sugestoesRejeitadas, modoPorNome, separados, aliasesForcados, s)
     }
+    await descongelar(lancs) // tira do congelado — foi o usuário que pediu para reabrir
     setMsg(`${lancs.length} lançamento(s) reaberto(s) — voltaram para o em aberto.`)
     carregarTratados(); carregarLanc(); onMudou && onMudou()
   }
@@ -2827,6 +2896,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     for (const l of lancs) { const nf = nfKey(l.leitura?.nf); if (nf) s.add(`${conta.conta}·${nf}`) }
     setBaixasReabertas(s)
     await salvarNomes(nomesConf, nomesIsolados, nomesAlias, aberturaAj, acertoNomes, s)
+    await descongelar(lancs) // tira do congelado — foi o usuário que pediu para reabrir
     setMsg(`${lancs.length} lançamento(s) reaberto(s) — voltaram para o em aberto para vincular à mão.`)
     carregarLanc(); onMudou && onMudou()
   }
