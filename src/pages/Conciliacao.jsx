@@ -1600,17 +1600,25 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     const contras = (contraDe(l) || []).map(c => planoMap[c] || '').join(' ')
     return /cartao\s+de\s+credito/.test(semAcento(`${l.historico || ''} ${contras}`))
   }
-  // REGRA DO USUÁRIO: "não deixar baixar/conciliar com diferença". Numa conta de ENTIDADE, uma
-  // conexão manual ("Juntar") só CONCILIA se o bloco do fornecedor REALMENTE ZERAR. Se você juntou
-  // títulos que não se anulam (sobra em aberto), NADA daquele bloco baixa: as linhas continuam EM
-  // ABERTO, no MESMO bloco (agrupadas pelo nome), mostrando a diferença — em vez de irem para os
-  // Conciliados como "não fecha". Agrupa os candidatos por fornecedor e só HONRA os que somam zero.
-  // (Contas NÃO-entidade mantêm o comportamento antigo — a régua vale para cliente/fornecedor.)
+  // REGRA DO USUÁRIO: "não deixar baixar/conciliar com diferença", MAS a baixa PARCIAL vale (posso
+  // baixar o par NF 28 mesmo com a NF 29 em aberto no mesmo bloco). Numa conta de ENTIDADE, uma
+  // conexão manual só CONCILIA a PARTE que realmente ZERA — casa débito × crédito de VALOR igual
+  // dentro do bloco do fornecedor: os pares que se anulam ficam conciliados; a SOBRA sem par volta
+  // pro em aberto (nada baixa com diferença). Se o bloco INTEIRO já zera (inclui desconto/juros de
+  // valores diferentes), honra tudo. Contas NÃO-entidade mantêm o comportamento antigo.
   const manualCand = ehEntidadeConta ? lanc.filter(l => ehConexaoManual(l) && Math.abs(ov(l)) >= 0.005) : []
   const manualHonrado = new Set()
   for (const b of agruparPorCliente(manualCand)) {
     const net = b.lancs.reduce((s, l) => s + ov(l), 0)
-    if (Math.abs(net) < 0.005) for (const l of b.lancs) manualHonrado.add(l)
+    if (Math.abs(net) < 0.005) { for (const l of b.lancs) manualHonrado.add(l); continue }
+    // Bloco não zera no total → casa pares D×C de VALOR igual; o que casar é honrado, a sobra fica.
+    const credPorValor = new Map()   // centavos -> fila de créditos daquele valor
+    for (const l of b.lancs) if (ov(l) < -0.005) { const k = Math.round(Math.abs(ov(l)) * 100); (credPorValor.get(k) || credPorValor.set(k, []).get(k)).push(l) }
+    for (const l of b.lancs) {
+      if (ov(l) <= 0.005) continue
+      const fila = credPorValor.get(Math.round(ov(l) * 100))
+      if (fila && fila.length) { manualHonrado.add(l); manualHonrado.add(fila.shift()) }
+    }
   }
   // Agrupa só o que está EM ABERTO (não baixado) por nome; incerto cai em "(não identificado)".
   const grupos = {}, nomes = [], nomeExib = {}, sepKeys = new Set()
