@@ -2351,7 +2351,10 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   async function conectarSelecionados() {
     const alvo = lanc.filter(l => selLin.has(selKeyU(l)))
     if (alvo.length < 2) { window.alert('Não dá para baixar: selecione ao menos 2 lançamentos (a nota e o pagamento).'); return }
-    if (precisaConfirmarNome(alvo)) { avisaConfirmarNome(); return }
+    // NÃO exige "Confirmar nome" antes de baixar: a baixa só ZERA o par (não mexe no nome/fornecedor),
+    // então um bloco com nomes unidos ("GUSTAVO LERNER HARTMANN" × "GUSTAVO HARTMANN") pode baixar
+    // direto. Antes isso disparava um alert de "confirme o nome" — que, se o navegador suprime os
+    // diálogos, fazia o clique em Baixar "não acontecer nada".
     const net = alvo.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
     // Baixa SÓ quando ZERA. Se sobra diferença, não baixa (o botão já fica desabilitado).
     if (Math.abs(net) >= 0.005) { window.alert(`Não dá para baixar: o líquido NÃO ZERA — ainda sobra ${money(Math.abs(net))} ${net < 0 ? 'C' : 'D'}. Ajuste a seleção para o total dar zero.`); return }
@@ -2374,7 +2377,9 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       window.alert(`Não dá para baixar juntos: são ${l}s DIFERENTES (${nomesSel.join(' × ')}).\n\nO valor até zera, mas cada um é de um ${l}. Se são o MESMO, clique primeiro em "Juntar ${l}" (deixa no mesmo bloco) e depois baixe. Se são diferentes de verdade, baixe cada um com o seu par.`)
       return
     }
-    if (!window.confirm(`Baixar ${alvo.length} lançamento(s)? Eles zeram entre si e vão para Conciliados.`)) return
+    // Sem window.confirm: o botão já garante que o líquido ZERA e que é o MESMO bloco. Pedir
+    // confirmação num diálogo do navegador estava fazendo a baixa "não acontecer nada" quando o
+    // navegador suprime diálogos. Baixa direto e avisa por mensagem na tela (setMsg em baixarConexao).
     await baixarConexao(alvo, undefined, '')
   }
   // Ao CONECTAR, dá o mesmo nome às linhas do vínculo — mas SÓ NAS LINHAS SELECIONADAS. NÃO cria
