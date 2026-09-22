@@ -1943,38 +1943,11 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // ausente (ex.: histórico traz o nº do documento no lugar da nota). Cliente + valor batem,
   // mas a NF não → NÃO baixa no automático (regra do usuário); vira SUGESTÃO para aprovar.
   // Cada linha entra em no máximo um par; ignora acertos e o que já é confirmável em lote.
+  // REMOVIDO a pedido do usuário: o sistema NÃO sugere mais vínculos de NF (pares título↔pagamento
+  // do mesmo cliente/valor com NF diferente). A conciliação por NF continua só no idêntico
+  // (automático) e o resto é vínculo MANUAL (selecionar + baixar). Mantido como lista vazia para
+  // não renderizar as sugestões nem o banner. `sugestoesRejeitadas` fica só por compatibilidade.
   const sugeridosVinculo = []
-  if (ehEntidade) {
-    // Por CLIENTE (cada card): pares título↔pagamento do mesmo cliente com MESMO valor e NF
-    // diferente. Fica DENTRO do card, no contexto, para revisar e aprovar ali. Pula os que já
-    // zeram como um todo (confirmáveis em lote).
-    for (const g of lista) {
-      if (podeConfirmarEnt(g)) continue
-      // Exclui linhas JÁ tratadas/conciliadas (ex.: par que você acabou de APROVAR) — senão a
-      // sugestão era recalculada com os mesmos lançamentos e "voltava", parecendo que aprovar
-      // não fazia nada. Uma vez aprovado, o par sai de aberto e a sugestão some.
-      const linhas = g.lancs.filter(l => l.id != null && !l.acerto && l.leitura?.ident && String(l.leitura.entidade || '').trim() && !jaTratada(l) && !foiConfirmado(l))
-      const debs = linhas.filter(l => Number(l.debito) > 0.005)
-      const creds = linhas.filter(l => Number(l.credito) > 0.005)
-      const usados = new Set()
-      for (const d of debs) {
-        if (usados.has(d)) continue
-        const vd = Math.round((Number(d.debito) || 0) * 100)
-        for (const c of creds) {
-          if (usados.has(c)) continue
-          if (Math.round((Number(c.credito) || 0) * 100) !== vd) continue
-          const nfd = nfKey(d.leitura?.nf), nfc = nfKey(c.leitura?.nf)
-          if (nfd && nfc && nfd === nfc) continue // mesma NF já baixaria no automático
-          // Chave ESTÁVEL da sugestão (sobrevive à reimportação): conta · cliente · valor · NFs.
-          const chaveSug = `${conta.conta}·${chaveNome(g.nome)}·${vd}·${nfd || '-'}·${nfc || '-'}`
-          if (sugestoesRejeitadas.has(chaveSug)) continue // o usuário já disse "não aprovar" — nem sugere
-          sugeridosVinculo.push({ a: d, b: c, cliente: g.nome, valor: Number(d.debito) || 0, chave: chaveSug })
-          usados.add(d); usados.add(c)
-          break
-        }
-      }
-    }
-  }
   // Filtro por situação — mesma definição de cada faixa de aviso. Só filtra a lista
   // (não confirma nada); a única situação que também baixa em lote é "confirmaveis".
   const sitPred = {
