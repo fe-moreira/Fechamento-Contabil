@@ -2343,7 +2343,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     const blocosDiferentes = nomesSel.length > 1 && !nomesSel.every(n => mesmoFornecedor(nomesSel[0], tokensNome(nomesSel[0]), n, tokensNome(n)))
     if (blocosDiferentes) {
       const l = String(lab || 'fornecedor').toLowerCase()
-      window.alert(`Não dá para baixar juntos: são ${l}s DIFERENTES (${nomesSel.join(' × ')}).\n\nO valor até zera, mas cada um é de um ${l}. Se são o MESMO, clique primeiro em "Mesmo ${l}" (deixa no mesmo bloco) e depois baixe. Se são diferentes de verdade, baixe cada um com o seu par.`)
+      window.alert(`Não dá para baixar juntos: são ${l}s DIFERENTES (${nomesSel.join(' × ')}).\n\nO valor até zera, mas cada um é de um ${l}. Se são o MESMO, clique primeiro em "Juntar ${l}" (deixa no mesmo bloco) e depois baixe. Se são diferentes de verdade, baixe cada um com o seu par.`)
       return
     }
     if (!window.confirm(`Baixar ${alvo.length} lançamento(s)? Eles zeram entre si e vão para Conciliados.`)) return
@@ -2652,21 +2652,32 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       const id = await getCompetenciaId()
       if (id) await supabase.from('ajuste_leitura').upsert(razaoIds.map(rid => ({ competencia_id: id, razao_id: rid, entidade: alvo, usuario })), { onConflict: 'razao_id' })
     }
-    // Régua do usuário: "tudo o que eu linko E que ZERA, você tem que baixar." Se o conjunto
-    // vinculado SOMA ZERO, além de unir o nome, CONCILIA (grava "Confirmado em lote") — os dois
-    // saem do em aberto e vão para "Conciliados". Vale para qualquer origem: saldo anterior
-    // (abertura, sem id), estorno/reclassificação (acerto) ou lançamento do razão. A abertura é
-    // chaveada pelo nome FINAL (alvo), para o "Confirmado" bater na releitura.
-    // Só (re)baixa o que AINDA NÃO está tratado. Assim, quando o Vincular é usado sobre linhas JÁ
-    // BAIXADAS (juntar dois blocos de conciliados/automático do mesmo fornecedor), ele apenas
-    // renomeia/junta o nome — não insere baixa de novo nem "reabre" nada.
-    const pendentes = comNome.filter(l => !jaTratada(l))
+    // Régua do usuário: "tudo o que eu junto E que ZERA, tem que baixar JUNTO, no mesmo bloco."
+    // Se o conjunto SOMA ZERO, além de unir o nome, CONCILIA todas as linhas sob o nome ALVO.
+    // IMPORTANTE (correção): quando as linhas já estavam BAIXADAS em blocos separados (nomes
+    // diferentes, ex.: título arrastado com apelido "sujo" × pagamento), a baixa antiga de cada
+    // uma estava sob o nome ANTIGO — então elas não caíam no mesmo bloco. Aqui a gente LIMPA a
+    // baixa antiga das selecionadas e RE-BAIXA todas sob o nome alvo, para ficarem no MESMO
+    // quadrante e zerarem. Abertura é chaveada pelo nome FINAL (alvo) na releitura.
     const net = comNome.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
     let baixou = false
-    if (pendentes.length >= 1 && comNome.length >= 2 && Math.abs(net) < 0.005) {
+    if (comNome.length >= 2 && Math.abs(net) < 0.005) {
       const cid = await getCompetenciaId()
       if (cid) {
-        const rows = pendentes.map(l => ({
+        // 1) limpa a baixa/confirmação ANTIGA de cada selecionada (estava sob o nome antigo).
+        for (const l of comNome) {
+          if (l._abertura) {
+            const cents = Math.round(((Number(l.debito) || 0) - (Number(l.credito) || 0)) * 100)
+            const nf = nfAb(l), dt = dataAb(l)
+            // conta·data·NF·valor com o NOME curinga (a baixa pode ter gravado outro nome embutido).
+            await supabase.from('auditoria').delete().eq('competencia_id', cid).eq('modulo', 'Conciliação').like('item', `AB·${conta.conta}·${dt}·${nf}·%·${cents}`)
+          } else {
+            const rid = l.acerto ? String(l.id).replace(/^ac_/, '') : l.id
+            await supabase.from('auditoria').delete().eq('competencia_id', cid).eq('modulo', 'Conciliação').eq('razao_id', rid)
+          }
+        }
+        // 2) re-baixa TODAS sob o nome alvo → mesmo bloco, zerando.
+        const rows = comNome.map(l => ({
           competencia_id: cid, modulo: 'Conciliação',
           item: l._abertura ? chaveAbertura(l, alvo) : `${conta.conta} · ${l.data || ''} · NF ${l.leitura?.nf || '—'}`,
           tipo: 'Justificativa',
@@ -2674,7 +2685,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
           razao_id: l._abertura ? null : (l.acerto ? String(l.id).replace(/^ac_/, '') : l.id), usuario,
         }))
         const { error } = await supabase.from('auditoria').insert(rows)
-        if (!error) { marcarTratadas(pendentes); baixou = true }
+        if (!error) { marcarTratadas(comNome); baixou = true }
       }
     }
     setSelLin(new Set()); setLoteForn(null)
@@ -3502,7 +3513,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
               <i className="ti ti-user-edit" /> Corrigir {lab}
             </button>
             <button className="btn btn-ghost" disabled={vincaveis.length < 2} title={vincaveis.length < 2 ? `Marque 2+ linhas (com nome) para dizer que são o mesmo ${lab}.` : `É o MESMO ${lab}: deixa os selecionados no mesmo bloco (mesmo nome). NÃO baixa nada — a baixa é só o que zera. O nome oficial aparece para você confirmar. Vale para todos os meses.`} style={{ fontSize: 12.5, color: theme.accent, borderColor: theme.accent, opacity: vincaveis.length >= 2 ? 1 : 0.5, cursor: vincaveis.length >= 2 ? 'pointer' : 'not-allowed' }} onClick={() => vincaveis.length >= 2 && setLoteForn({ lines: vincaveis, vincular: true })}>
-              <i className="ti ti-user-check" /> Mesmo {lab}
+              <i className="ti ti-user-check" /> Juntar {lab}
             </button>
             <button className="btn btn-ghost" disabled={!desvincaveis.length} title={!desvincaveis.length ? 'Selecione um título ou o saldo anterior (com nome).' : `NÃO é o mesmo ${lab}: mantém estes nomes separados (não une com os parecidos) — vale para todos os meses.`} style={{ fontSize: 12.5, color: theme.yellow, borderColor: theme.yellow, opacity: desvincaveis.length ? 1 : 0.5, cursor: desvincaveis.length ? 'pointer' : 'not-allowed' }} onClick={() => desvincaveis.length && desvincularLote(desvincaveis)}>
               <i className="ti ti-arrows-split" /> Não é o mesmo {lab}
@@ -3550,7 +3561,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
             <button className="btn" style={{ fontSize: 12.5, background: theme.yellow, borderColor: theme.yellow, color: '#1a1a1a' }} title="Reabrir as marcadas — voltam para o em aberto (de qualquer bloco)." onClick={() => { const c = selConf.slice(), n = selNF.slice(); limpar(); if (c.length) reabrirConferidos(c); if (n.length) reabrirBaixaNF(n) }}><i className="ti ti-rotate-2" /> Reabrir ({todas.length})</button>
             <span aria-hidden style={{ width: 1, alignSelf: 'stretch', background: theme.border, margin: '2px 4px' }} />
             <button className="btn btn-ghost" disabled={!comNome.length} title={comNome.length ? 'Arrumar o nome do fornecedor destas linhas JÁ BAIXADAS — SEM reabrir. Junta blocos separados do mesmo fornecedor.' : 'Marque linhas com nome (título/pagamento/saldo anterior).'} style={{ fontSize: 12.5, opacity: comNome.length ? 1 : 0.5, cursor: comNome.length ? 'pointer' : 'not-allowed' }} onClick={() => { if (!comNome.length) return; const ls = comNome.slice(); limpar(); setLoteForn({ lines: ls }) }}><i className="ti ti-user-edit" /> Corrigir fornecedor</button>
-            <button className="btn btn-ghost" disabled={comNome.length < 2} title={comNome.length >= 2 ? 'Juntar estas linhas JÁ BAIXADAS num fornecedor só (mesmo nome) — SEM reabrir. Para unir dois blocos do mesmo fornecedor escritos diferente.' : 'Marque 2+ linhas (com nome) para juntar num fornecedor só.'} style={{ fontSize: 12.5, color: theme.accent, borderColor: theme.accent, opacity: comNome.length >= 2 ? 1 : 0.5, cursor: comNome.length >= 2 ? 'pointer' : 'not-allowed' }} onClick={() => { if (comNome.length < 2) return; const ls = comNome.slice(); limpar(); setLoteForn({ lines: ls, vincular: true }) }}><i className="ti ti-users" /> Vincular fornecedor</button>
+            <button className="btn btn-ghost" disabled={comNome.length < 2} title={comNome.length >= 2 ? 'Juntar estas linhas JÁ BAIXADAS num fornecedor só (mesmo nome) — SEM reabrir. Para unir dois blocos do mesmo fornecedor escritos diferente.' : 'Marque 2+ linhas (com nome) para juntar num fornecedor só.'} style={{ fontSize: 12.5, color: theme.accent, borderColor: theme.accent, opacity: comNome.length >= 2 ? 1 : 0.5, cursor: comNome.length >= 2 ? 'pointer' : 'not-allowed' }} onClick={() => { if (comNome.length < 2) return; const ls = comNome.slice(); limpar(); setLoteForn({ lines: ls, vincular: true }) }}><i className="ti ti-users" /> Juntar {lab}</button>
             <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={limpar}><i className="ti ti-x" /> Limpar</button>
           </div>
         )
