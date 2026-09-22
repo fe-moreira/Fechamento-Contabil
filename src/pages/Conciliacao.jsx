@@ -2642,9 +2642,10 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     const sep = new Set(separados)
     for (const l of razaoLinhas) {
       const k = chaveNome(l.leitura?.entidade || '')
-      // Só tira este nome do "isolado" para a PRÓPRIA linha poder ir ao grupo alvo — sem criar
-      // apelido global que arrastaria outras linhas do mesmo nome que você NÃO selecionou.
-      if (k && k !== kAlvo) iso.delete(k)
+      // ÚLTIMA ORDEM VENCE (regra do usuário): mesmo que você tenha marcado "Não é o mesmo" antes,
+      // ao mandar JUNTAR agora, tira TODOS os nomes selecionados do "isolado" — inclusive o alvo —
+      // para o "é o mesmo" de agora ganhar do "não era" de antes.
+      if (k) iso.delete(k)
       // Desfaz o desvínculo determinístico desta linha, para ela poder voltar ao grupo.
       sep.delete(sepKey(l))
       // Saldo inicial: fixa o nome no próprio item (garante o mesmo grupo).
@@ -2666,15 +2667,28 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       const id = await getCompetenciaId()
       if (id) await supabase.from('ajuste_leitura').upsert(razaoIds.map(rid => ({ competencia_id: id, razao_id: rid, entidade: alvo, usuario })), { onConflict: 'razao_id' })
     }
-    // Se o conjunto juntado SOMA ZERO e ainda há linha em aberto, concilia (grava "Confirmado em
-    // lote") — só as PENDENTES (não mexe na baixa das já baixadas, para não bagunçar outros blocos).
-    const pendentes = comNome.filter(l => !jaTratada(l))
+    // Se o conjunto juntado SOMA ZERO, concilia TODAS sob o nome alvo → mesmo bloco. Inclui as que
+    // JÁ estavam baixadas em blocos separados: reabre a baixa antiga DE FORMA PRECISA (pela chave
+    // EXATA da linha — nome atual; NUNCA por curinga, que atingia gêmeas e baixava fora do bloco) e
+    // re-baixa sob o nome alvo. Assim título e pagamento caem no MESMO quadrante e zeram.
     const net = comNome.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
     let baixou = false
-    if (pendentes.length >= 1 && comNome.length >= 2 && Math.abs(net) < 0.005) {
+    if (comNome.length >= 2 && Math.abs(net) < 0.005) {
       const cid = await getCompetenciaId()
       if (cid) {
-        const rows = pendentes.map(l => ({
+        // 1) reabre PRECISO a baixa antiga das que já estavam baixadas (chave exata, sem curinga).
+        for (const l of comNome) {
+          if (!jaTratada(l)) continue
+          if (l._abertura) {
+            const chaves = [...new Set([chaveAbertura(l), chaveAbBaixaForn(l)].filter(Boolean))]
+            if (chaves.length) await supabase.from('auditoria').delete().eq('competencia_id', cid).eq('modulo', 'Conciliação').in('item', chaves)
+          } else {
+            const rid = l.acerto ? String(l.id).replace(/^ac_/, '') : l.id
+            await supabase.from('auditoria').delete().eq('competencia_id', cid).eq('modulo', 'Conciliação').eq('razao_id', rid)
+          }
+        }
+        // 2) re-baixa TODAS sob o nome ALVO (abertura pela chave com o nome final).
+        const rows = comNome.map(l => ({
           competencia_id: cid, modulo: 'Conciliação',
           item: l._abertura ? chaveAbertura(l, alvo) : `${conta.conta} · ${l.data || ''} · NF ${l.leitura?.nf || '—'}`,
           tipo: 'Justificativa',
@@ -2682,7 +2696,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
           razao_id: l._abertura ? null : (l.acerto ? String(l.id).replace(/^ac_/, '') : l.id), usuario,
         }))
         const { error } = await supabase.from('auditoria').insert(rows)
-        if (!error) { marcarTratadas(pendentes); baixou = true }
+        if (!error) { marcarTratadas(comNome); baixou = true }
       }
     }
     setSelLin(new Set()); setLoteForn(null)
