@@ -2604,6 +2604,16 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       delete aliases[k]; iso.add(k); sep.add(sepKey(l)) // separação determinística por linha
       if (l._abertura) { const key = chaveAberturaAj(l); aberAj[key] = { ...(aberAj[key] || {}), entidade: proprio } }
       else if (l.id && id) ajustes.push({ competencia_id: id, razao_id: l.id, entidade: proprio, usuario })
+      // ÚLTIMA ORDEM VENCE (inverso do Juntar): se a linha estava BAIXADA junto com outra (par),
+      // desvincular DESFAZ a baixa DE FORMA PRECISA (chave exata) — ela volta separada pro em aberto.
+      if (jaTratada(l) && id) {
+        if (l._abertura) {
+          const chaves = [...new Set([chaveAbertura(l), chaveAbBaixaForn(l)].filter(Boolean))]
+          if (chaves.length) await supabase.from('auditoria').delete().eq('competencia_id', id).eq('modulo', 'Conciliação').in('item', chaves)
+        } else if (l.id) {
+          await supabase.from('auditoria').delete().eq('competencia_id', id).eq('modulo', 'Conciliação').eq('razao_id', l.id)
+        }
+      }
     }
     setNomesIsolados(iso); setNomesAlias(aliases); setAberturaAj(aberAj); setSeparados(sep)
     await salvarNomes(nomesConf, iso, aliases, aberAj, acertoNomes, baixasReabertas, sugestoesRejeitadas, modoPorNome, sep)
