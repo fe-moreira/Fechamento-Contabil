@@ -4493,7 +4493,7 @@ function ModalLoteForn({ lines, lab, vincular, onClose, onAplicar }) {
       <div onClick={e => e.stopPropagation()} style={{ width: 'min(480px,96vw)', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 14, padding: 20 }}>
         {vincular ? (
           <>
-            <h3 style={{ fontSize: 15, margin: '0 0 8px' }}><i className="ti ti-arrows-join" style={{ color: theme.accent, marginRight: 6 }} />Vincular num {lab} só</h3>
+            <h3 style={{ fontSize: 15, margin: '0 0 8px' }}><i className="ti ti-arrows-join" style={{ color: theme.accent, marginRight: 6 }} />Juntar num {lab} só</h3>
             <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 12px' }}>Junta os <b style={{ color: theme.text }}>{total}</b> lançamento(s) selecionado(s){nomesDistintos > 1 ? ` (${nomesDistintos} nomes diferentes)` : ''} num {lab} só — <b>mesmo que estivessem separados antes</b>. Escolha o nome que fica (por padrão, o mais completo). Vale para todos os meses.</p>
           </>
         ) : (
@@ -4511,7 +4511,7 @@ function ModalLoteForn({ lines, lab, vincular, onClose, onAplicar }) {
         )}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: vincular ? 4 : 0 }}>
           <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
-          <button className="btn" disabled={!nome.trim() || !total || busy} onClick={async () => { setBusy(true); await onAplicar(lines, nome, aprender) }}><i className={`ti ${vincular ? 'ti-arrows-join' : 'ti-check'}`} /> {vincular ? 'Vincular' : 'Aplicar'}</button>
+          <button className="btn" disabled={!nome.trim() || !total || busy} onClick={async () => { setBusy(true); await onAplicar(lines, nome, aprender) }}><i className={`ti ${vincular ? 'ti-arrows-join' : 'ti-check'}`} /> {vincular ? 'Juntar' : 'Aplicar'}</button>
         </div>
       </div>
     </div>
