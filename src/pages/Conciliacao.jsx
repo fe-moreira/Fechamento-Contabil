@@ -1703,7 +1703,13 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const listaTodas = clusters.map(cl => {
     const membros = cl.membros.slice().sort((a, b) => b.length - a.length)
     const lancs = ordenarPorData(cl.membros.flatMap(m => grupos[m])) // data mais antiga → mais nova
-    return { nome: nomeExib[membros[0]], variacoes: membros.map(m => nomeExib[m]), lancs, total: lancs.reduce((s, l) => s + ov(l), 0), unido: membros.length > 1, unk: false }
+    // "unido" = precisa CONFIRMAR? Só quando as variações são grafias REALMENTE diferentes (núcleos
+    // de nome distintos). Se o núcleo é o MESMO — ex.: "52.071.716 ANNE GABRIELE FREITAS DE PAULA"
+    // e "ANNE GABRIELE FREITAS DE PAULA" (só muda o CNPJ na frente) — é o MESMO nome: não pede
+    // confirmação, cai no bloco direto (regra do usuário: nesse nível de igualdade não confirma; se
+    // estiver errado ele desvincula na revisão). O nome do mês anterior já é o padrão corrigido.
+    const nucs = new Set(membros.map(m => nucleoNome(nomeExib[m])).filter(n => n && n.length >= 3))
+    return { nome: nomeExib[membros[0]], variacoes: membros.map(m => nomeExib[m]), lancs, total: lancs.reduce((s, l) => s + ov(l), 0), unido: membros.length > 1 && nucs.size > 1, unk: false }
   })
   if (grupos['(não identificado)']) {
     const lancs = ordenarPorData(grupos['(não identificado)']) // data mais antiga → mais nova
@@ -1734,9 +1740,32 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       .flatMap(g => g.variacoes.map(v => chaveNome(v)))
   )
 
-  // Sugestões de nome (propagação) DESLIGADAS a pedido do time: corrigir um nome NÃO "arruma
-  // tudo" nem sai mexendo em outros grupos — cada correção é INDIVIDUAL, só no que foi tocado.
-  const sugestoesNome = []
+  // SUGESTÃO "mesma escrita" (regra do usuário): quando você arruma/renomeia um fornecedor, o
+  // sistema LÊ os OUTROS lançamentos e sugere os que têm a MESMA ESCRITA no HISTÓRICO — para você
+  // APROVAR e trazê-los pro MESMO bloco. NÃO mexe no histórico: aprovar só grava o nome na leitura
+  // da linha (ajuste_leitura/aberturaAj/acerto), igual ao "Juntar". Só SUGERE (nunca automático) e
+  // só o que combina de verdade: TODOS os tokens distintivos do nome corrigido têm que aparecer no
+  // histórico da linha (evita puxar outro "GABRIEL" diferente). Some com "Não" (por bloco) ou "X".
+  let sugestoesNome = []
+  if (ehEntidadeConta && ultimaCorrecao?.neu) {
+    const kNeu = chaveNome(ultimaCorrecao.neu)
+    const tkNeu = tokensNome(ultimaCorrecao.neu).filter(t => t.length >= 3)
+    if (tkNeu.length) {
+      const porAtual = new Map()   // nome atual do bloco -> linhas cujo HISTÓRICO tem a mesma escrita
+      for (const g of lista) {
+        if (chaveNome(g.nome) === kNeu || sugDismiss.has(chaveNome(g.nome))) continue
+        for (const l of g.lancs) {
+          if (jaTratada(l) || foiConfirmado(l)) continue
+          const hu = normNome(l.historico || '')
+          if (tkNeu.every(t => hu.includes(t))) {
+            if (!porAtual.has(g.nome)) porAtual.set(g.nome, [])
+            porAtual.get(g.nome).push(l)
+          }
+        }
+      }
+      sugestoesNome = [...porAtual.entries()].map(([atual, lancs]) => ({ atual, sugerido: ultimaCorrecao.neu, lancs, tipo: 'padrao' }))
+    }
+  }
 
   // Para os relatórios: o que está em aberto (compõe o saldo) e o que zerou (baixa/confirmação/resolvida).
   const ehEntidade = ehEntidadeConta
@@ -3267,8 +3296,8 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         <div style={{ padding: '10px 14px', marginBottom: 12, background: 'rgba(74,124,255,0.10)', border: `1px solid ${theme.accent}`, borderRadius: 12 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 8 }}>
             <i className="ti ti-wand" style={{ color: theme.accent, fontSize: 18 }} />
-            <span style={{ color: theme.text, fontSize: 13, flex: 1, minWidth: 200 }}>Você corrigiu <b>{ultimaCorrecao.neu}</b>. Achei <b>{sugestoesNome.length}</b> nome(s) com o <b>mesmo padrão</b> — confira e aprove:</span>
-            <button className="btn" style={{ fontSize: 12.5, background: theme.accent, borderColor: theme.accent }} onClick={() => aprovarSugestoesNome(sugestoesNome, true)}><i className="ti ti-checks" /> Aprovar todos ({sugestoesNome.length})</button>
+            <span style={{ color: theme.text, fontSize: 13, flex: 1, minWidth: 200 }}>Você arrumou <b>{ultimaCorrecao.neu}</b>. Achei <b>{sugestoesNome.reduce((s, x) => s + x.lancs.length, 0)}</b> lançamento(s) com a <b>mesma escrita</b> no histórico — aprove para trazer pro <b>mesmo bloco</b> (o histórico não muda):</span>
+            <button className="btn" style={{ fontSize: 12.5, background: theme.accent, borderColor: theme.accent }} onClick={() => aprovarSugestoesNome(sugestoesNome, true)}><i className="ti ti-checks" /> Aprovar todos ({sugestoesNome.reduce((s, x) => s + x.lancs.length, 0)})</button>
             <button className="btn btn-ghost" style={{ fontSize: 12.5, color: theme.sub }} onClick={() => setUltimaCorrecao(null)} title="Fechar — não corrigir agora"><i className="ti ti-x" /></button>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -3278,7 +3307,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
                   <span style={{ color: theme.sub, textDecoration: 'line-through' }}>{s.atual}</span>
                   <i className="ti ti-arrow-right" style={{ margin: '0 7px', color: theme.accent }} />
                   <b>{s.sugerido}</b>
-                  <span style={{ marginLeft: 8, fontSize: 10.5, fontWeight: 700, color: theme.sub, background: theme.input, borderRadius: 20, padding: '1px 7px', textTransform: 'uppercase', letterSpacing: .3 }}>{s.tipo === 'cliente' ? `mesmo ${lab}` : 'mesmo padrão'}</span>
+                  <span style={{ marginLeft: 8, fontSize: 10.5, fontWeight: 700, color: theme.sub, background: theme.input, borderRadius: 20, padding: '1px 7px', textTransform: 'uppercase', letterSpacing: .3 }}>{s.tipo === 'cliente' ? `mesmo ${lab}` : s.tipo === 'padrao' ? `mesma escrita · ${s.lancs.length}` : 'mesmo padrão'}</span>
                 </span>
                 <button className="btn" style={{ fontSize: 12, padding: '4px 12px', background: theme.green, borderColor: theme.green }} onClick={() => aprovarSugestoesNome([s], false)}><i className="ti ti-check" /> Aprovar</button>
                 <button className="btn btn-ghost" style={{ fontSize: 12, padding: '4px 12px', color: theme.sub }} onClick={() => setSugDismiss(prev => new Set(prev).add(chaveNome(s.atual)))} title="Não é o mesmo — descartar esta sugestão"><i className="ti ti-x" /> Não</button>
