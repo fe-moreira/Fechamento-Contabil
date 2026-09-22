@@ -1434,12 +1434,20 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
         if (!rg) continue
         if (rg.modo === 'apos') {
           // 'apos': o trecho é um PREFIXO — cada linha tem SEU fornecedor (o nome depois do trecho).
-          // Propõe mesmo se a linha JÁ tem nome, quando o nome-após é DIFERENTE do atual — assim
-          // corrige em lote os que caíram agrupados errado (ex.: bloco "ISAAC RUBINSTEIN" com GUSTAVO
-          // HARTMANN, DSG, F&F… no mesmo lote). Se já bate, não propõe. Como cada nome sai da própria
-          // linha, é seguro sugerir correção (não é um nome fixo empurrado em todos).
+          // Propõe corrigir em lote os que caíram agrupados ERRADO (ex.: várias linhas viradas
+          // "ISAAC RUBINSTEIN" por apelido antigo, mas o histórico é GUSTAVO/YURI/DOCUSIGN…).
           const nome = nomeAposTrecho(l.historico || '', rg.padOrig)
-          if (nome && (!jaIdent || chaveNome(nome) !== chaveNome(l.leitura.entidade))) itens.push({ l, nome })
+          if (!nome) continue
+          if (jaIdent) {
+            const ent = l.leitura.entidade
+            // NÃO propõe o que já está no FORNECEDOR CERTO (mesmo com "sujeira" na string) nem o que
+            // você já resolveu à MÃO (juntou/confirmou/corrigiu) — "se eu já juntei, não tem o que
+            // corrigir". Só propõe quando o nome-após é um fornecedor DIFERENTE do atual.
+            if (chaveNome(nome) === chaveNome(ent)) continue
+            if (mesmoCliente(tokensNome(nome), tokensNome(ent))) continue
+            if (jaTratada(l) || foiConfirmado(l)) continue
+          }
+          itens.push({ l, nome })
         } else if (!jaIdent) {
           // 'fixo': aplica o nome fixo — só nas linhas AINDA sem nome (não mexe em quem já tem).
           if (rg.nome) itens.push({ l, nome: rg.nome })
