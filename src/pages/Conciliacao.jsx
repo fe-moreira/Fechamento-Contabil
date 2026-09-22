@@ -152,6 +152,9 @@ function nomeAposTrecho(historico, trecho) {
   if (!m) return ''
   let resto = h.slice(m.index + m[0].length)
   resto = resto.split(/\s+(?:CF|NF|NOTA|RPS)\b/i)[0]         // corta no marcador de documento
+  // Corta a CLASSIFICAÇÃO que vem depois do nome com travessão (" - SALÁRIOS E ENCARGOS",
+  // " - CONTABILIDADE", " - INFRAESTRUTURA…"): o fornecedor é o 1º pedaço. Aceita qualquer traço.
+  resto = resto.split(/\s[-–—−]\s/)[0]
   resto = resto.replace(/\bN[ºo°.]*\s*\d[\d.\/-]*/gi, ' ')   // "N 184870"
   resto = resto.replace(/\b\d[\d.\/-]*\b/g, ' ')             // números soltos
   resto = resto.replace(/\s+/g, ' ').replace(/^[\s.,\-\/]+|[\s.,\-\/]+$/g, '').trim()
@@ -1424,15 +1427,22 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       const idDisp = l => l._abertura ? 'ab:' + chaveAberturaAj(l) : (l.acerto ? 'ac:' + String(l.id).replace(/^ac_/, '') : 'rz:' + String(l.id))
       const itens = []
       for (const l of lancComUid) {
-        if (l.leitura?.ident && String(l.leitura.entidade || '').trim()) continue // já identificado
         if (dispSet.has(idDisp(l))) continue // você já disse "não" para esta linha
+        const jaIdent = l.leitura?.ident && String(l.leitura.entidade || '').trim()
         const hu = normNome(l.historico || '')
         const rg = regrasIdentPad.find(r => hu.includes(r.pad))
-        if (rg) {
-          // 'apos': o trecho é um PREFIXO — cada linha tem seu próprio fornecedor (o nome depois
-          // do trecho). Se não achar nome depois, não propõe. 'fixo': todos são o mesmo nome.
-          const nome = rg.modo === 'apos' ? nomeAposTrecho(l.historico || '', rg.padOrig) : rg.nome
-          if (nome) itens.push({ l, nome })
+        if (!rg) continue
+        if (rg.modo === 'apos') {
+          // 'apos': o trecho é um PREFIXO — cada linha tem SEU fornecedor (o nome depois do trecho).
+          // Propõe mesmo se a linha JÁ tem nome, quando o nome-após é DIFERENTE do atual — assim
+          // corrige em lote os que caíram agrupados errado (ex.: bloco "ISAAC RUBINSTEIN" com GUSTAVO
+          // HARTMANN, DSG, F&F… no mesmo lote). Se já bate, não propõe. Como cada nome sai da própria
+          // linha, é seguro sugerir correção (não é um nome fixo empurrado em todos).
+          const nome = nomeAposTrecho(l.historico || '', rg.padOrig)
+          if (nome && (!jaIdent || chaveNome(nome) !== chaveNome(l.leitura.entidade))) itens.push({ l, nome })
+        } else if (!jaIdent) {
+          // 'fixo': aplica o nome fixo — só nas linhas AINDA sem nome (não mexe em quem já tem).
+          if (rg.nome) itens.push({ l, nome: rg.nome })
         }
       }
       if (itens.length) { setPropIdent({ itens }); setSelPropIdent(new Set(itens.map((_, i) => i))) }
@@ -3635,7 +3645,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
             <div onClick={e => e.stopPropagation()} style={{ background: theme.card, border: `1px solid ${theme.accent}`, borderRadius: 14, width: 'min(880px, 96vw)', maxHeight: '86vh', display: 'flex', flexDirection: 'column', boxShadow: '0 10px 40px rgba(0,0,0,0.5)' }}>
               <div style={{ padding: '14px 18px', borderBottom: `1px solid ${theme.border}` }}>
                 <div style={{ fontSize: 15, fontWeight: 700, color: theme.text, display: 'flex', alignItems: 'center', gap: 8 }}><i className="ti ti-user-check" style={{ color: theme.accent }} /> Identificar {lab} pelas regras</div>
-                <div style={{ fontSize: 12.5, color: theme.sub, marginTop: 4 }}>Encontrei <b style={{ color: theme.text }}>{itens.length}</b> lançamento(s) em <b>“(não identificado)”</b> que batem com as regras cadastradas. Revise e aprove os que estiverem certos — <b>só aplica o que você marcar</b>. O que você <b>não</b> marcar (ou dispensar) <b>não aparece de novo</b>.</div>
+                <div style={{ fontSize: 12.5, color: theme.sub, marginTop: 4 }}>Encontrei <b style={{ color: theme.text }}>{itens.length}</b> lançamento(s) que batem com as regras cadastradas — os <b>sem nome</b> e também os que <b>caíram com o nome errado no lote</b> (a regra “após …” lê o {lab} de <b>cada</b> linha). A coluna mostra <b>o que vai ficar</b>. Revise e aprove — <b>só aplica o que você marcar</b>. O que você <b>não</b> marcar (ou dispensar) <b>não aparece de novo</b>.</div>
               </div>
               <div style={{ overflow: 'auto', padding: '4px 0' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
