@@ -10,7 +10,7 @@ import { montarBalancete, parsePlano, composicaoAbertura, difConciliacao, applyM
 import { abrePdfTimbrado } from '../lib/pdf'
 import { gerarExcelTimbrado } from '../lib/excel'
 import { listarComentariosConta, adicionarComentario, excluirComentario } from '../lib/comentarios'
-import { resolverEntidade, aplicarLink, ehNomeGenerico } from '../lib/conciliacaoCore'
+import { resolverEntidade, aplicarLink, ehNomeGenerico, mesmaEntidadeForcavel } from '../lib/conciliacaoCore'
 import { aberturaComp, excluirSaldoInicialTudo } from '../lib/cargaInicial'
 import { extrairNfHistorico } from '../lib/lerNota'
 import { GENERICAS } from '../lib/genericas'
@@ -875,7 +875,13 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     setNomesConf(new Set((d.confiaveis || []).map(chaveNome)))
     setNomesIsolados(new Set((d.isolados || []).map(chaveNome)))
     setNomesAlias(d.aliases && typeof d.aliases === 'object' ? d.aliases : {})
-    setAliasesForcados(d.aliasesForcados && typeof d.aliasesForcados === 'object' ? d.aliasesForcados : {})
+    // PODA os vínculos forçados POLUÍDOS na carga (mesma trava da leitura): fornecedores sem nome
+    // próximo (aprendizado errado em lote) são descartados do estado — some da tela E, no próximo
+    // salvamento, some do cadastro (auto-limpeza). Mantém só os forçados de MESMA entidade.
+    const afRaw = d.aliasesForcados && typeof d.aliasesForcados === 'object' ? d.aliasesForcados : {}
+    const afLimpo = {}
+    for (const [de, para] of Object.entries(afRaw)) if (mesmaEntidadeForcavel(de, para)) afLimpo[de] = para
+    setAliasesForcados(afLimpo)
     setAberturaAj(d.aberturaAjustes && typeof d.aberturaAjustes === 'object' ? d.aberturaAjustes : {})
     setAcertoNomes(d.acertoNomes && typeof d.acertoNomes === 'object' ? d.acertoNomes : {})
     setBaixasReabertas(new Set(Array.isArray(d.baixasReabertas) ? d.baixasReabertas : []))
