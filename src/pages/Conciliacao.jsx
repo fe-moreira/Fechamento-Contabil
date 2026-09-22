@@ -1578,6 +1578,28 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // Linha REABERTA pelo usuário não volta a baixar por NENHUM automático (nem por NF): tira do
   // conjunto de baixados. Assim o "Reabrir" cola mesmo quando a linha também casava por NF.
   for (const l of lanc) if (reaberto(l)) baixados.delete(l)
+  // AUTO-BAIXA POR BLOCO (regra do usuário): "considere o BLOCO ao validar o fornecedor — se a NF
+  // e o valor são iguais e estão no MESMO bloco, pode baixar". `baixadosPorNF` exige que o NOME de
+  // CADA linha case por si (mesmoCliente), o que falha quando o pagamento vem com histórico ruidoso.
+  // Aqui usamos a MESMA regra que forma os blocos (agruparPorCliente = mesmoFornecedor, inclui
+  // núcleo/união): dentro de cada bloco, casa a MESMA NF e baixa o par que ZERA. Assim título e
+  // pagamento do mesmo fornecedor/nota conciliam sozinhos mesmo com o nome escrito diferente.
+  // Respeita as NFs reabertas à mão (não baixa de novo) e só vale em conta de entidade.
+  if (ehEntidadeConta) {
+    const cand = lanc.filter(l => !baixados.has(l) && !reaberto(l) && Math.abs(ov(l)) >= 0.005
+      && (l.leitura?.ident || l._abertura || l.acerto)
+      && nfKey(l.leitura?.nf) && !nfsReabertas.has(nfKey(l.leitura?.nf)))
+    for (const bloco of agruparPorCliente(cand)) {
+      if (bloco.cliente === '(não identificado)') continue
+      const porNFb = {}
+      for (const l of bloco.lancs) { const k = nfKey(l.leitura?.nf); (porNFb[k] = porNFb[k] || []).push(l) }
+      for (const k in porNFb) {
+        const grp = porNFb[k]
+        const temD = grp.some(l => Number(l.debito) > 0.005), temC = grp.some(l => Number(l.credito) > 0.005)
+        if (temD && temC && Math.abs(grp.reduce((s, l) => s + ov(l), 0)) < 0.005) for (const l of grp) baixados.add(l)
+      }
+    }
+  }
 
   // Correção que se ANULA com a origem: o lançamento de acerto (estorno/reclassificação)
   // aponta para a linha original que corrige (razaoRef → id). Quando os dois se anulam
@@ -1725,7 +1747,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // independentemente do grupo do nome zerar — foram baixados explicitamente pelo usuário.
   // Só entram nos Conciliados os manuais HONRADOS (bloco zerou). Numa conta de entidade, um bloco
   // juntado que sobra em aberto NÃO baixa — fica no em aberto (via `lista`), sem diferença escondida.
-  const conexaoManualLancs = lanc.filter(l => ehConexaoManual(l) && Math.abs(ov(l)) >= 0.005 && (!ehEntidadeConta || manualHonrado.has(l)))
+  const conexaoManualLancs = lanc.filter(l => ehConexaoManual(l) && !baixados.has(l) && Math.abs(ov(l)) >= 0.005 && (!ehEntidadeConta || manualHonrado.has(l)))
   const autoConcLancs = lanc.filter(l => autoConc.has(l) && Math.abs(ov(l)) >= 0.005)
   // Linhas CONGELADAS (já conciliadas antes) que voltariam a aparecer: mantêm-se nos Conciliados.
   const congeladosLancs = lanc.filter(l => ehCongelado(l) && Math.abs(ov(l)) >= 0.005)
