@@ -24,22 +24,49 @@ describe('A) LARISSA — saldo inicial sozinho, confirmado, sem par → EM ABERT
   })
 })
 
-describe('B) LINK CARLA + EMPIRE — nomes diferentes unidos → grupo zera → CONCILIADOS', () => {
+describe('B) LINK EMPIRE (mesma entidade, grafias diferentes) → grupo zera → CONCILIADOS', () => {
   it('aplicarLink força o canônico e resolverEntidade junta os dois num grupo só', () => {
-    const carla = L({ id: 'B1', debito: 4500, entidade: 'CARLA' })
-    const empire = L({ id: 'B2', credito: 4500, entidade: 'EMPIRE' })
-    const { aliasForcado } = aplicarLink([carla, empire], ['B1', 'B2'], {})
-    // canônico = mais longo entre os identificados = "EMPIRE"
-    expect(aliasForcado).toEqual({ carla: 'EMPIRE' })
+    // Mesma entidade escrita diferente (compartilham o token distintivo EMPIRE) → PODE juntar.
+    const titulo = L({ id: 'B1', debito: 4500, entidade: 'EMPIRE COMERCIO' })
+    const pagamento = L({ id: 'B2', credito: 4500, entidade: 'EMPIRE' })
+    const { aliasForcado } = aplicarLink([titulo, pagamento], ['B1', 'B2'], {})
+    // canônico = mais longo entre os identificados = "EMPIRE COMERCIO"
+    expect(aliasForcado).toEqual({ empire: 'EMPIRE COMERCIO' })
 
     const estado = { aliasNormal: {}, aliasForcado }
-    const lancs = [resolver(carla, estado), resolver(empire, estado)]
-    expect(lancs.map(l => l.leitura.entidade)).toEqual(['EMPIRE', 'EMPIRE'])
+    const lancs = [resolver(titulo, estado), resolver(pagamento, estado)]
+    expect(lancs.map(l => l.leitura.entidade)).toEqual(['EMPIRE COMERCIO', 'EMPIRE COMERCIO'])
 
     const { emAberto, conciliados } = classificarGrupos(lancs, { ov: ovDC, jaTratada: () => true })
     expect(nomes(emAberto)).toEqual([])
-    expect(nomes(conciliados)).toEqual(['EMPIRE'])
-    expect(grupoDe(conciliados, 'EMPIRE').total).toBeCloseTo(0, 3)
+    expect(nomes(conciliados)).toEqual(['EMPIRE COMERCIO'])
+    expect(grupoDe(conciliados, 'EMPIRE COMERCIO').total).toBeCloseTo(0, 3)
+  })
+})
+
+describe('B2) TRAVA anti-poluição do forçado — fornecedores DIFERENTES não se juntam (WGTECH)', () => {
+  it('aplicarLink NÃO aprende junção entre CNPJs diferentes', () => {
+    // Colaboradores diferentes, cada um com seu CNPJ, baixados juntos (NF genérica "7"): o link
+    // NÃO pode aprender "um vira o outro" — senão dezenas de nomes caem num só (bug do YASMIN).
+    const nathalia = L({ id: 'X1', debito: 3800, entidade: '42.684.260 NATHALIA MIRANDA DOMINGUES' })
+    const samuel = L({ id: 'X2', credito: 3800, entidade: '33.665.599 SAMUEL GUSTAVO TAVARES PEREIRA' })
+    const { aliasForcado } = aplicarLink([nathalia, samuel], ['X1', 'X2'], {})
+    expect(aliasForcado).toEqual({})   // nada aprendido — CNPJs diferentes
+  })
+  it('resolverEntidade IGNORA um forçado poluído já gravado quando os CNPJs são diferentes', () => {
+    const aliasForcado = {
+      '42.684.260 nathalia miranda domingues': '33.665.599 SAMUEL GUSTAVO TAVARES PEREIRA', // CNPJ diferente
+    }
+    expect(resolverEntidade('42.684.260 NATHALIA MIRANDA DOMINGUES', { aliasForcado }))
+      .toBe('42.684.260 NATHALIA MIRANDA DOMINGUES')   // mantém o nome real
+  })
+  it('mas a MESMA entidade (mesmo CNPJ, ou sem CNPJ) continua unindo', () => {
+    // Sem CNPJ na leitura, alvo com CNPJ → une (é a grafia com CNPJ do mesmo nome).
+    expect(resolverEntidade('DIAMANY DE CARVALHO LUPI', { aliasForcado: { 'diamany de carvalho lupi': '66.019.156 DIAMANY DE CARVALHO LUPI' } }))
+      .toBe('66.019.156 DIAMANY DE CARVALHO LUPI')
+    // Mesmo CNPJ dos dois lados → une.
+    expect(resolverEntidade('12.345.678 LOJA A', { aliasForcado: { '12.345.678 loja a': '12.345.678 LOJA MATRIZ' } }))
+      .toBe('12.345.678 LOJA MATRIZ')
   })
 })
 
@@ -65,11 +92,12 @@ describe('C) GF4 — corrigir e reagrupar → CONCILIADOS', () => {
 
 describe('D) VICTOR / L&M — correção manual soberana sobre o vínculo forçado', () => {
   it('linha corrigida p/ VICTOR NÃO é puxada para L&M pelo aliasForcado', () => {
-    const aliasForcado = { victor: 'L&M' }               // a união mandaria VICTOR → L&M
+    // Alvo compartilha o nome (VICTOR) — vínculo forçado plausível (mesma entidade).
+    const aliasForcado = { victor: 'VICTOR L&M' }        // a união mandaria VICTOR → VICTOR L&M
     // Corrigida à mão (corrigido=true): o vínculo forçado não aplica.
     expect(resolverEntidade('VICTOR', { corrigido: true, aliasNormal: {}, aliasForcado })).toBe('VICTOR')
-    // Contraprova: sem a correção, o vínculo forçado a levaria para L&M.
-    expect(resolverEntidade('VICTOR', { corrigido: false, aliasNormal: {}, aliasForcado })).toBe('L&M')
+    // Contraprova: sem a correção, o vínculo forçado a levaria para VICTOR L&M.
+    expect(resolverEntidade('VICTOR', { corrigido: false, aliasNormal: {}, aliasForcado })).toBe('VICTOR L&M')
   })
 })
 
@@ -109,17 +137,18 @@ describe('F) REGRESSÃO — agrupamento por nome (zera × não zera)', () => {
 
 describe('G) correção-DEPOIS-link (o caso que quebrou antes)', () => {
   it('o link limpa a correção anterior e passa a agrupar/zerar a linha', () => {
-    // Linha corrigida à mão para "X" (curto). Outra linha do mesmo par com nome longo.
-    const corrigida = L({ id: 'g1', debito: 4500, entidade: 'X', ajustado: true })
+    // Linha corrigida à mão para "MEGA" (curto). Outra linha do mesmo par com nome longo (mesma
+    // entidade — compartilham MEGA).
+    const corrigida = L({ id: 'g1', debito: 4500, entidade: 'MEGA', ajustado: true })
     const outra = L({ id: 'g2', credito: 4500, entidade: 'MEGA CORP CANONICAL' })
 
-    // ANTES do link, a correção é soberana: mesmo com um vínculo qualquer, "X" fica "X".
-    expect(resolverEntidade('X', { corrigido: true, aliasForcado: { x: 'MEGA CORP CANONICAL' } })).toBe('X')
+    // ANTES do link, a correção é soberana: mesmo com um vínculo qualquer, "MEGA" fica "MEGA".
+    expect(resolverEntidade('MEGA', { corrigido: true, aliasForcado: { mega: 'MEGA CORP CANONICAL' } })).toBe('MEGA')
 
     // O usuário LINKA as duas. O link é a ação mais recente → manda LIMPAR a correção de g1.
     const { aliasForcado, correcoesLimpas, canonical } = aplicarLink([corrigida, outra], ['g1', 'g2'], {})
     expect(canonical).toBe('MEGA CORP CANONICAL')          // mais longo
-    expect(aliasForcado).toEqual({ x: 'MEGA CORP CANONICAL' })
+    expect(aliasForcado).toEqual({ mega: 'MEGA CORP CANONICAL' })
     expect(correcoesLimpas).toEqual(['g1'])                // <- limpar a correção de g1
 
     // Com a correção LIMPA (ajustado=false), o vínculo forçado do link finalmente aplica.
@@ -199,12 +228,12 @@ describe('J) LINK do SALDO ANTERIOR (sem id) — abertura entra no vínculo e o 
     // Caso AMAZON/ATTENTIVE: "Saldo anterior" (abertura, SEM id) de um lado e a
     // reclassificação/pagamento (nome diferente) do outro, somando zero. O usuário linka os dois.
     const abertura = L({ abertura: true, credito: 7269.17, entidade: 'AMAZON AWS SERVICOS BRASIL LTDA' }) // id undefined
-    const reclass = L({ id: 'r1', acerto: true, debito: 7269.17, entidade: 'FORNECEDORES NACIONAIS' })
+    const reclass = L({ id: 'r1', acerto: true, debito: 7269.17, entidade: 'AMAZON WEB SERVICES' }) // mesma entidade, grafia diferente
 
     // aplicarLink NÃO pode filtrar por id — senão a abertura (sem id) ficaria de fora do vínculo.
     const { aliasForcado, correcoesLimpas, canonical } = aplicarLink([abertura, reclass], [], {})
     expect(canonical).toBe('AMAZON AWS SERVICOS BRASIL LTDA')                 // mais longo entre os selecionados
-    expect(aliasForcado).toEqual({ 'fornecedores nacionais': 'AMAZON AWS SERVICOS BRASIL LTDA' })
+    expect(aliasForcado).toEqual({ 'amazon web services': 'AMAZON AWS SERVICOS BRASIL LTDA' })
     expect(correcoesLimpas).toEqual([])                                       // nada corrigido; e NUNCA um undefined
 
     // Com o alias forçado do link, os dois caem no MESMO grupo e zeram → CONCILIADOS.

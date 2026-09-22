@@ -41,6 +41,18 @@ export function mesmoCliente(a, b) {
   return inter.length / menor >= 0.6 && inter.some(t => t.length >= 4)
 }
 
+// TRAVA anti-poluição do VÍNCULO FORÇADO ("Juntar"/"Confirmar nome") — regra do usuário: usa o
+// NOME. Só une dois nomes que compartilham um pedaço DISTINTIVO (nome "próximo"): "se no histórico
+// da linha não existe nada próximo daquele nome, não junta". Vale TENDO OU NÃO CNPJ (nem todo nome
+// tem). Assim "GUSTAVO HARTMANN" ↔ "55.377.918 GUSTAVO LERNER HARTMANN" une (compartilham GUSTAVO/
+// HARTMANN), mas "NATHALIA MIRANDA DOMINGUES" ↔ "SAMUEL GUSTAVO TAVARES" e "CIRIO FERNANDES ..." ↔
+// "FLAVIA APARECIDA ..." NÃO (não têm nada em comum) — o bug do WGTECH, onde dezenas de
+// colaboradores diferentes caíram num nome só. Neutraliza os forçados poluídos SEM apagar o dado.
+export function mesmaEntidadeForcavel(a, b) {
+  const ta = tokensNome(a), tb = tokensNome(b)
+  return ta.some(t => t.length >= 3 && tb.includes(t))
+}
+
 // --- nome GENÉRICO (não é fornecedor) ------------------------------------------------------
 // Texto de OPERAÇÃO/lançamento que aparece igual para MUITOS fornecedores diferentes — não deve
 // virar chave nem alvo de apelido: senão um link some com o texto genérico ("VALOR REF. TRANSF.
@@ -83,7 +95,10 @@ export function resolverEntidade(nomeLido, { corrigido = false, aliasNormal = {}
   // b) vínculo forçado (o usuário mandou juntar) — aplica mesmo entre nomes diferentes, MAS só
   //    entre nomes REAIS (nunca de/para um rótulo genérico).
   const alF = aliasForcado[chaveNome(nome)]
-  if (alF && alF !== nome && !ehNomeGenerico(alF)) nome = alF
+  // TRAVA: só aplica o forçado quando é PLAUSIVELMENTE a MESMA entidade (CNPJs iguais, ou token
+  // distintivo em comum). Um forçado poluído (fornecedores diferentes mapeados p/ um nome só) é
+  // IGNORADO — o nome lido fica de pé. Não apaga o dado; só deixa de fundir o que é diferente.
+  if (alF && alF !== nome && !ehNomeGenerico(alF) && mesmaEntidadeForcavel(nome, alF)) nome = alF
   return nome
 }
 
@@ -163,7 +178,7 @@ export function aplicarLink(lancs, ids, aliasForcado = {}, nomeAlvo = '') {
     // que um texto de pagamento genérico ("VALOR REF. TRANSF. CARTÃO", "A UTILIZAR"…) passa a
     // arrastar todos os fornecedores. A baixa do par continua (por id/chave na auditoria); só não
     // aprende um "nome → nome" que polui os próximos meses.
-    if (k && k !== kAlvo && !ehNomeGenerico(nome) && !ehNomeGenerico(alvo)) {
+    if (k && k !== kAlvo && !ehNomeGenerico(nome) && !ehNomeGenerico(alvo) && mesmaEntidadeForcavel(nome, alvo)) {
       novoAliasForcado[k] = alvo                       // força o vínculo para os próximos meses
       // link vence correção anterior — mas só há o que limpar em linha de RAZÃO (tem id).
       // Abertura (saldo anterior) não tem id nem ajuste_leitura, então nunca entra aqui.
