@@ -778,6 +778,9 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // Nomes (chaveNome) que estão em blocos UNIDOS ainda NÃO confirmados — a baixa é bloqueada
   // até confirmar o nome (preenchido no render, lido nas funções de baixa).
   const blocosNaoConfRef = useRef(new Set())
+  // Mapa _uid da linha → índice do BLOCO (quadrante) em que ela está no em aberto. Usado para
+  // PROIBIR baixar linhas de blocos DIFERENTES (regra do usuário: só baixa no mesmo bloco).
+  const blocoDeRef = useRef(new Map())
   // Ids (estáveis) de tudo que está conciliado AGORA — preenchido no render; o efeito abaixo
   // grava os NOVOS no "congelado" (aditivo).
   const congelaveisRef = useRef([])
@@ -1659,6 +1662,9 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     listaTodas.push({ nome: '(não identificado)', variacoes: [], lancs, total: lancs.reduce((s, l) => s + ov(l), 0), unido: false, unk: true })
   }
   listaTodas.sort((a, b) => (a.unk ? 1 : 0) - (b.unk ? 1 : 0) || a.nome.localeCompare(b.nome, 'pt-BR'))
+  // Preenche o mapa linha → bloco (quadrante) do em aberto, para a baixa manual proibir
+  // conciliar linhas de blocos DIFERENTES (cada `g` de listaTodas é um bloco distinto).
+  { const m = new Map(); listaTodas.forEach((g, gi) => g.lancs.forEach(l => { if (l?._uid != null) m.set(l._uid, gi) })); blocoDeRef.current = m }
   // Entidade RESOLVIDA: zerou e TODAS as linhas já foram tratadas (conferido/corrigido/baixa)
   // → sai do em aberto e vai para os Conciliados (o que zerou). É o caso "bateu e está certo".
   // Régua do usuário: "em aberto = só COMPOSIÇÃO (o que NÃO zera); tudo que zera vai pro relatório
@@ -2335,6 +2341,14 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     const net = alvo.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
     // Baixa SÓ quando ZERA. Se sobra diferença, não baixa (o botão já fica desabilitado).
     if (Math.abs(net) >= 0.005) { window.alert(`Não dá para baixar: o líquido NÃO ZERA — ainda sobra ${money(Math.abs(net))} ${net < 0 ? 'C' : 'D'}. Ajuste a seleção para o total dar zero.`); return }
+    // PROIBIDO baixar entre BLOCOS diferentes (regra do usuário). Usa o bloco REAL do em aberto
+    // (o quadrante em que a linha aparece), não só o nome — assim respeita desvínculos/separações.
+    const blocosSel = [...new Set(alvo.map(l => blocoDeRef.current.get(l._uid)).filter(b => b != null))]
+    if (blocosSel.length > 1) {
+      const l = String(lab || 'fornecedor').toLowerCase()
+      window.alert(`Não dá para baixar: os selecionados estão em BLOCOS DIFERENTES.\n\nA baixa só pode acontecer DENTRO de um bloco (o mesmo ${l}). Se são o MESMO, clique primeiro em "Juntar ${l}" para deixá-los no mesmo bloco e depois baixe.`)
+      return
+    }
     // MESMO BLOCO: só baixa quando os selecionados são o MESMO fornecedor/cliente (mesmo bloco). Se
     // estiverem em BLOCOS DIFERENTES, NÃO baixa — mesmo batendo NF/valor — porque o par ficaria
     // espalhado em blocos diferentes no relatório de zeramento. Avisa para dizer que é o MESMO
