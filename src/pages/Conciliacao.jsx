@@ -1867,6 +1867,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // entradas antigas viram só candidatos extras, que a checagem rejeita — sem mudar o resultado.
   const baixClusters = []
   const idxTokB = new Map(), idxNucB = new Map()
+  const isoPorNome = new Map()   // chaveNome EXATA -> índice do cluster isolado
   const idxAddB = (ci, tkArr, nome) => {
     for (const t of tkArr) { let s = idxTokB.get(t); if (!s) { s = new Set(); idxTokB.set(t, s) } s.add(ci) }
     const nuc = nucleoNome(nome); if (nuc.length >= 3) { let s = idxNucB.get(nuc); if (!s) { s = new Set(); idxNucB.set(nuc, s) } s.add(ci) }
@@ -1878,7 +1879,14 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     const tk = tokensNome(nm)
     const iso = !semNome && nomesIsolados.has(chaveNome(nm))
     let alvoIdx = -1
-    if (!(semNome || iso)) {
+    if (iso) {
+      // ISOLADO ("Não é o mesmo" / o alvo de um Juntar): NÃO funde com nomes PARECIDOS, mas AGRUPA
+      // as linhas do MESMO nome EXATO. Sem isto, um fornecedor isolado que baixou junto (título +
+      // recebimento + juros da mesma NF) aparecia QUEBRADO em N blocos "não fecha", cada linha
+      // sozinha — mesmo tendo zerado. Casa pela chave exata do nome.
+      const kn = chaveNome(nm)
+      if (isoPorNome.has(kn)) alvoIdx = isoPorNome.get(kn)
+    } else if (!semNome) {
       const cand = new Set()
       for (const t of tk) { const s = idxTokB.get(t); if (s) for (const ci of s) cand.add(ci) }
       const nuc = nucleoNome(nm); if (nuc.length >= 3) { const s = idxNucB.get(nuc); if (s) for (const ci of s) cand.add(ci) }
@@ -1890,12 +1898,13 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     if (alvoIdx >= 0) {
       const alvo = baixClusters[alvoIdx]
       alvo.lancs.push(l)
-      if (nm.length > alvo.nome.length) { alvo.nome = nm; alvo.tk = tk; idxAddB(alvoIdx, tk, nm) }
+      if (nm.length > alvo.nome.length) { alvo.nome = nm; alvo.tk = tk; if (!alvo.iso) idxAddB(alvoIdx, tk, nm) }
       if (!alvo.nomes.includes(nm)) alvo.nomes.push(nm)
     } else {
       const ci = baixClusters.length
       baixClusters.push({ nome: nm, tk, iso, semNome, lancs: [l], nomes: [nm] })
-      if (!(semNome || iso)) idxAddB(ci, tk, nm)
+      if (iso) isoPorNome.set(chaveNome(nm), ci)
+      else if (!semNome) idxAddB(ci, tk, nm)
     }
   }
   const baixadosGrupos = baixClusters.map(c => ({ nome: c.nome, lancs: c.lancs, nomes: c.nomes }))
