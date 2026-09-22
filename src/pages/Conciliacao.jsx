@@ -1933,7 +1933,11 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       }
     }
     const item = ehAb ? chaveAbertura(acao) : `${conta.conta} · ${acao?.data || ''} · NF ${acao?.leitura.nf || '—'}`
-    await supabase.from('auditoria').insert({ competencia_id: id, modulo: 'Conciliação', item, tipo, detalhe: payload.detalhe || null, razao_id: razaoIdLinha, usuario })
+    // IDENTIFICAÇÃO não grava linha de auditoria por razao_id — senão a linha viraria "tratada"
+    // (trava "já tratado"). O rastro fica no ajuste_leitura (com usuário) e na regra aprendida.
+    if (tipo !== 'Identificação') {
+      await supabase.from('auditoria').insert({ competencia_id: id, modulo: 'Conciliação', item, tipo, detalhe: payload.detalhe || null, razao_id: razaoIdLinha, usuario })
+    }
     let virouLancamento = false
     if (tipo === 'Correção' && payload.lancamento && (payload.lancamento.conta_debito || payload.lancamento.conta_credito)) {
       const L = payload.lancamento
@@ -2056,12 +2060,16 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       await supabase.from('cargas_cadastro').insert({ cliente_id: empresaId, tipo: 'depara', obs: 'identifica_entidade', vigencia: competencia || '00/0000', dados: lista, usuario })
     }
     setMsg(ajustouLeitura ? 'Leitura ajustada — o sistema vai recruzar.' : virouLancamento ? `✓ Lançamento FEITO no mês de fechamento ${competencia} — enviado ao painel Contabilizar. (Um estorno de item de mês anterior entra sempre nesta competência, nunca na data do mês fechado.)` : `${tipo} registrada na auditoria.`)
-    if (ehAb) setTratadosAb(prev => new Set(prev).add(chaveAbertura(acao))) // abertura: marca pela chave
-    else if (acao?.id) setTratados(prev => new Set(prev).add(acao.id)) // marca a linha como tratada na hora
+    // IDENTIFICAÇÃO não marca a linha como "tratada" (não trava): pode reidentificar quantas
+    // vezes quiser. As demais tratativas (correção/estorno/ajuste) seguem marcando normalmente.
+    if (tipo !== 'Identificação') {
+      if (ehAb) setTratadosAb(prev => new Set(prev).add(chaveAbertura(acao))) // abertura: marca pela chave
+      else if (acao?.id) setTratados(prev => new Set(prev).add(acao.id)) // marca a linha como tratada na hora
+    }
     // Ajustar a leitura (nome/NF) de uma linha de ABERTURA já conferida MUDA a chave estável.
     // Migra as conferências (auditoria + estado) da chave antiga para a nova — a linha CONTINUA
     // conferida mesmo depois de corrigir o nome/NF (não volta para "revisar").
-    if (ehAb && ajustouLeitura) {
+    if (ehAb && ajustouLeitura && tipo !== 'Identificação') {
       const lNovo = { ...acao, leitura: { ...(acao.leitura || {}),
         entidade: aj?.entidade ? String(aj.entidade).trim() : acao.leitura?.entidade,
         nf: (aj?.nf != null && aj?.nf !== '') ? String(aj.nf).trim() : acao.leitura?.nf } }
@@ -4558,7 +4566,9 @@ function ModalLancamento({ lanc, conta, lab, plano, natCredito, residuo = 0, onC
       if (tipo === 'Justificativa') { await onRegistrar('Justificativa', { detalhe: txt.trim() }); return }
       if (tipo === 'Nome') {
         const modo = modoRegraIdent(lanc.historico || '', padraoTexto, ajuste.entidade)
-        await onRegistrar('Correção', {
+        // IDENTIFICAÇÃO ≠ correção: só informa o NOME e aprende a regra. NÃO trava o lançamento
+        // ("já tratado") — dá para reidentificar quantas vezes quiser, igual ao "Alterar NF".
+        await onRegistrar('Identificação', {
           detalhe: `Identificação de ${lab}` + (padraoTexto.trim() ? ` — regra "${modo === 'apos' ? 'após' : 'contém'} ${padraoTexto.trim()}"` : ''),
           ajuste: { entidade: ajuste.entidade.trim(), nf: ajuste.nf.trim(), historico: ajuste.historico.trim() },
           regra: (padraoTexto.trim() && ajuste.entidade.trim()) ? { padrao: padraoTexto.trim(), nome: ajuste.entidade.trim(), modo } : null,
