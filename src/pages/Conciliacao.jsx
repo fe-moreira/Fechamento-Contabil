@@ -2223,8 +2223,9 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   async function aplicarPropostasIdent(indices) {
     if (bloqueadoFechado()) return
     const escolhidos = (propIdent?.itens || []).filter((_, i) => indices.has(i))
-    // Desmarcados = você disse "não" → não propor de novo.
-    await dispensarIdent((propIdent?.itens || []).filter((_, i) => !indices.has(i)), false)
+    // Só aplica o que você MARCOU. Os desmarcados NÃO são dispensados aqui — ficam onde estão e
+    // voltam a ser sugeridos depois (você confirma quando quiser). Para não ver mais, use o botão
+    // "Não, não sugerir de novo" (esse sim dispensa). Regra do usuário: "não confirmei → mantém".
     if (!escolhidos.length) { setPropIdent(null); return }
     const id = await getCompetenciaId()
     const razaoItens = escolhidos.filter(x => x.l.id != null && !x.l._abertura && !x.l.acerto)
@@ -3645,7 +3646,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
             <div onClick={e => e.stopPropagation()} style={{ background: theme.card, border: `1px solid ${theme.accent}`, borderRadius: 14, width: 'min(880px, 96vw)', maxHeight: '86vh', display: 'flex', flexDirection: 'column', boxShadow: '0 10px 40px rgba(0,0,0,0.5)' }}>
               <div style={{ padding: '14px 18px', borderBottom: `1px solid ${theme.border}` }}>
                 <div style={{ fontSize: 15, fontWeight: 700, color: theme.text, display: 'flex', alignItems: 'center', gap: 8 }}><i className="ti ti-user-check" style={{ color: theme.accent }} /> Identificar {lab} pelas regras</div>
-                <div style={{ fontSize: 12.5, color: theme.sub, marginTop: 4 }}>Encontrei <b style={{ color: theme.text }}>{itens.length}</b> lançamento(s) que batem com as regras cadastradas — os <b>sem nome</b> e também os que <b>caíram com o nome errado no lote</b> (a regra “após …” lê o {lab} de <b>cada</b> linha). A coluna mostra <b>o que vai ficar</b>. Revise e aprove — <b>só aplica o que você marcar</b>. O que você <b>não</b> marcar (ou dispensar) <b>não aparece de novo</b>.</div>
+                <div style={{ fontSize: 12.5, color: theme.sub, marginTop: 4 }}>Encontrei <b style={{ color: theme.text }}>{itens.length}</b> lançamento(s) que batem com as regras cadastradas — os <b>sem nome</b> e também os que <b>caíram com o nome errado no lote</b> (a regra “após …” lê o {lab} de <b>cada</b> linha). A coluna mostra <b>o que vai ficar</b>. Revise e aprove — <b>só aplica o que você marcar</b>. O que você <b>deixar sem marcar fica onde está</b> e volta a ser sugerido depois (você confirma quando quiser). Para não ver mais uma linha, use <b>“Não, não sugerir de novo”</b>.</div>
               </div>
               <div style={{ overflow: 'auto', padding: '4px 0' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
