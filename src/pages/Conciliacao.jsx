@@ -3949,7 +3949,7 @@ function ListaLancamentos({ lanc, carregando, contraDe, planoMap, tratados = new
                 <tr key={i} onClick={() => onTratar(l)} style={{ borderTop: `1px solid ${theme.border}`, cursor: 'pointer', opacity: (l.acerto || tratados.has(l.id)) ? 0.7 : 1, background: (l.acerto || tratados.has(l.id)) ? 'rgba(48,164,108,0.08)' : 'transparent' }} title={l.acerto ? `${tagAcertoLanc(l).titulo} — clique para ver ou desfazer` : tratados.has(l.id) ? 'Já tratado — clique para ver ou desfazer' : 'Justificar ou corrigir este lançamento'}>
                   {selectable && (
                     <td style={{ ...td, textAlign: 'center' }} onClick={e => e.stopPropagation()}>
-                      <input type="checkbox" title="Selecionar para baixar (baixa manual)" checked={selLin?.has(selKey(l))} onChange={() => onToggleSel(l)} style={{ cursor: 'pointer', width: 15, height: 15 }} />}
+                      <input type="checkbox" title="Selecionar para baixar (baixa manual)" checked={selLin?.has(selKey(l))} onChange={() => onToggleSel(l)} style={{ cursor: 'pointer', width: 15, height: 15 }} />
                     </td>
                   )}
                   <td style={{ ...td, color: theme.sub, fontSize: 11, whiteSpace: 'nowrap' }}>{fmtDataBR(l.data) || '—'}</td>
