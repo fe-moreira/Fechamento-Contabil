@@ -2450,18 +2450,11 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     const net = alvo.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
     // Baixa SÓ quando ZERA. Se sobra diferença, não baixa (o botão já fica desabilitado).
     if (Math.abs(net) >= 0.005) { window.alert(`Não dá para baixar: o líquido NÃO ZERA — ainda sobra ${money(Math.abs(net))} ${net < 0 ? 'C' : 'D'}. Ajuste a seleção para o total dar zero.`); return }
-    // PROIBIDO baixar entre BLOCOS diferentes (regra do usuário). Usa o bloco REAL do em aberto
-    // (o quadrante em que a linha aparece), não só o nome — assim respeita desvínculos/separações.
-    const blocosSel = [...new Set(alvo.map(l => blocoDeRef.current.get(l._uid)).filter(b => b != null))]
-    if (blocosSel.length > 1) {
-      const l = String(lab || 'fornecedor').toLowerCase()
-      window.alert(`Não dá para baixar: os selecionados estão em BLOCOS DIFERENTES.\n\nA baixa só pode acontecer DENTRO de um bloco (o mesmo ${l}). Se são o MESMO, clique primeiro em "Juntar ${l}" para deixá-los no mesmo bloco e depois baixe.`)
-      return
-    }
-    // MESMO BLOCO: só baixa quando os selecionados são o MESMO fornecedor/cliente (mesmo bloco). Se
-    // estiverem em BLOCOS DIFERENTES, NÃO baixa — mesmo batendo NF/valor — porque o par ficaria
-    // espalhado em blocos diferentes no relatório de zeramento. Avisa para dizer que é o MESMO
-    // fornecedor primeiro (o botão "Mesmo fornecedor" junta os selecionados num nome só) e só então baixar.
+    // MANUAL: só exige MESMO FORNECEDOR + zerar (regra do usuário). NF pode ser diferente, e as
+    // linhas podem vir de CONTAS diferentes (título numa conta, pagamento noutra) — isso é NORMAL e
+    // NÃO trava. Antes havia uma trava pelo "quadrante" (blocoDeRef) que barrava por engano o mesmo
+    // fornecedor quando aparecia em sub-blocos diferentes (herdado/reaberto/contas distintas);
+    // removida. A checagem de fornecedor abaixo (blocosDiferentes) já impede juntar gente diferente.
     const nomesSel = [...new Set(alvo.map(l => String(l.leitura?.entidade || '').trim()).filter(Boolean))]
     const blocosDiferentes = nomesSel.length > 1 && !nomesSel.every(n => mesmoFornecedor(nomesSel[0], tokensNome(nomesSel[0]), n, tokensNome(n)))
     if (blocosDiferentes) {
@@ -2469,9 +2462,17 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       window.alert(`Não dá para baixar juntos: são ${l}s DIFERENTES (${nomesSel.join(' × ')}).\n\nO valor até zera, mas cada um é de um ${l}. Se são o MESMO, clique primeiro em "Juntar ${l}" (deixa no mesmo bloco) e depois baixe. Se são diferentes de verdade, baixe cada um com o seu par.`)
       return
     }
-    // Sem window.confirm: o botão já garante que o líquido ZERA e que é o MESMO bloco. Pedir
-    // confirmação num diálogo do navegador estava fazendo a baixa "não acontecer nada" quando o
-    // navegador suprime diálogos. Baixa direto e avisa por mensagem na tela (setMsg em baixarConexao).
+    // Sem window.confirm: o botão já garante que o líquido ZERA e que é o MESMO fornecedor. Baixa
+    // direto e avisa por mensagem na tela (setMsg em baixarConexao).
+    // Baixar à mão DESFAZ a marca de "reaberta" das NFs envolvidas: se você reabriu uma NF e agora
+    // está baixando de novo, a baixa cola (e o automático volta a valer para ela). Sem isso, a NF
+    // ficava presa como "reaberta" e não baixava.
+    const nfsAlvo = new Set(alvo.map(l => nfKey(l.leitura?.nf)).filter(Boolean).map(nf => `${conta.conta}·${nf}`))
+    if (nfsAlvo.size && [...baixasReabertas].some(k => nfsAlvo.has(k))) {
+      const nova = new Set([...baixasReabertas].filter(k => !nfsAlvo.has(k)))
+      setBaixasReabertas(nova)
+      await salvarNomes(nomesConf, nomesIsolados, nomesAlias, aberturaAj, acertoNomes, nova, sugestoesRejeitadas, modoPorNome, separados, aliasesForcados)
+    }
     await baixarConexao(alvo, undefined, '')
   }
   // Ao CONECTAR, dá o mesmo nome às linhas do vínculo — mas SÓ NAS LINHAS SELECIONADAS. NÃO cria
