@@ -2450,11 +2450,16 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     const net = alvo.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
     // Baixa SÓ quando ZERA. Se sobra diferença, não baixa (o botão já fica desabilitado).
     if (Math.abs(net) >= 0.005) { window.alert(`Não dá para baixar: o líquido NÃO ZERA — ainda sobra ${money(Math.abs(net))} ${net < 0 ? 'C' : 'D'}. Ajuste a seleção para o total dar zero.`); return }
-    // MANUAL: só exige MESMO FORNECEDOR + zerar (regra do usuário). NF pode ser diferente, e as
-    // linhas podem vir de CONTAS diferentes (título numa conta, pagamento noutra) — isso é NORMAL e
-    // NÃO trava. Antes havia uma trava pelo "quadrante" (blocoDeRef) que barrava por engano o mesmo
-    // fornecedor quando aparecia em sub-blocos diferentes (herdado/reaberto/contas distintas);
-    // removida. A checagem de fornecedor abaixo (blocosDiferentes) já impede juntar gente diferente.
+    // MANUAL (regra do usuário): só impede em DOIS casos — não zera (acima) ou não está no MESMO
+    // QUADRANTE (o bloco do fornecedor na tela). CONTA é outra coisa: os lançamentos podem cair em
+    // contas diferentes (custo, 204, banco) — isso NÃO trava, o quadrante é por FORNECEDOR, não por
+    // conta. Se está no mesmo quadrante e zera, baixa (mesmo com NF diferente).
+    const blocosSel = [...new Set(alvo.map(l => blocoDeRef.current.get(l._uid)).filter(b => b != null))]
+    if (blocosSel.length > 1) {
+      const l = String(lab || 'fornecedor').toLowerCase()
+      window.alert(`Não dá para baixar: os selecionados estão em QUADRANTES diferentes.\n\nA baixa só acontece DENTRO de um quadrante (o mesmo ${l}). Se são o MESMO, clique primeiro em "Juntar ${l}" para deixá-los no mesmo quadrante e depois baixe.`)
+      return
+    }
     const nomesSel = [...new Set(alvo.map(l => String(l.leitura?.entidade || '').trim()).filter(Boolean))]
     const blocosDiferentes = nomesSel.length > 1 && !nomesSel.every(n => mesmoFornecedor(nomesSel[0], tokensNome(nomesSel[0]), n, tokensNome(n)))
     if (blocosDiferentes) {
