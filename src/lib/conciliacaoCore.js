@@ -41,14 +41,27 @@ export function mesmoCliente(a, b) {
   return inter.length / menor >= 0.6 && inter.some(t => t.length >= 4)
 }
 
-// TRAVA anti-poluição do VÍNCULO FORÇADO ("Juntar"/"Confirmar nome") — regra do usuário: usa o
-// NOME. Só une dois nomes que compartilham um pedaço DISTINTIVO (nome "próximo"): "se no histórico
-// da linha não existe nada próximo daquele nome, não junta". Vale TENDO OU NÃO CNPJ (nem todo nome
-// tem). Assim "GUSTAVO HARTMANN" ↔ "55.377.918 GUSTAVO LERNER HARTMANN" une (compartilham GUSTAVO/
-// HARTMANN), mas "NATHALIA MIRANDA DOMINGUES" ↔ "SAMUEL GUSTAVO TAVARES" e "CIRIO FERNANDES ..." ↔
-// "FLAVIA APARECIDA ..." NÃO (não têm nada em comum) — o bug do WGTECH, onde dezenas de
-// colaboradores diferentes caíram num nome só. Neutraliza os forçados poluídos SEM apagar o dado.
+// DOCUMENTO (CNPJ/CPF) embutido no nome, quando existe — a identidade MAIS FORTE do fornecedor.
+// CNPJ: devolve a RAIZ (8 dígitos, "49.708.052"); CPF: os 11 dígitos. Sem documento → ''.
+export function docId(nome) {
+  const s = String(nome || '')
+  const mCnpj = s.match(/\b\d{2}\.\d{3}\.\d{3}(?:\/\d{4}-?\d{2})?\b/)
+  if (mCnpj) return mCnpj[0].replace(/\D/g, '').slice(0, 8)
+  const mCpfMask = s.match(/\b\d{3}\.\d{3}\.\d{3}-\d{2}\b/)
+  if (mCpfMask) return mCpfMask[0].replace(/\D/g, '')
+  const mCpfBare = s.match(/(?<!\d)\d{11}(?!\d)/)
+  if (mCpfBare) return mCpfBare[0]
+  return ''
+}
+// TRAVA anti-poluição do VÍNCULO FORÇADO ("Juntar"/"Confirmar nome"). Regra do usuário:
+//  1) DOCUMENTO só AGREGA: CNPJ/CPF IGUAL → é o mesmo (junta, mesmo com nome diferente). Documento
+//     diferente NÃO separa sozinho (o pagamento vem sem CNPJ) — cai na regra do nome.
+//  2) NOME: só une se compartilham um pedaço DISTINTIVO (nome "próximo"). "GUSTAVO HARTMANN" ↔
+//     "55.377.918 GUSTAVO LERNER HARTMANN" une; "NATHALIA MIRANDA" ↔ "SAMUEL GUSTAVO" e "CIRIO ..."
+//     ↔ "FLAVIA ..." NÃO. Neutraliza os forçados poluídos (bug do WGTECH) SEM apagar o dado.
 export function mesmaEntidadeForcavel(a, b) {
+  const da = docId(a), db = docId(b)
+  if (da && db && da === db) return true
   const ta = tokensNome(a), tb = tokensNome(b)
   return ta.some(t => t.length >= 3 && tb.includes(t))
 }

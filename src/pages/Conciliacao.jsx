@@ -10,7 +10,7 @@ import { montarBalancete, parsePlano, composicaoAbertura, difConciliacao, applyM
 import { abrePdfTimbrado } from '../lib/pdf'
 import { gerarExcelTimbrado } from '../lib/excel'
 import { listarComentariosConta, adicionarComentario, excluirComentario } from '../lib/comentarios'
-import { resolverEntidade, aplicarLink, ehNomeGenerico, mesmaEntidadeForcavel } from '../lib/conciliacaoCore'
+import { resolverEntidade, aplicarLink, ehNomeGenerico, mesmaEntidadeForcavel, docId } from '../lib/conciliacaoCore'
 import { aberturaComp, excluirSaldoInicialTudo } from '../lib/cargaInicial'
 import { extrairNfHistorico } from '../lib/lerNota'
 import { GENERICAS } from '../lib/genericas'
@@ -126,6 +126,12 @@ const descritoresConflitam = (nomeA, nomeB) => {
 // O caminho por token só une se os DESCRITORES não conflitarem (senão "ATTENTIVE CONTABILIDADE"
 // puxaria "ATTENTIVE SERVICOS ADMINISTRATIVOS" só pela palavra ATTENTIVE em comum).
 const mesmoFornecedor = (nomeA, tkA, nomeB, tkB) => {
+  // DOCUMENTO (CNPJ/CPF) só AGREGA, nunca separa (regra do usuário): no histórico do Domínio o
+  // TÍTULO traz o CNPJ, mas o PAGAMENTO vem SEM CNPJ no nome — então documento igual = MESMO
+  // fornecedor (junta, mesmo com o nome escrito diferente); documento diferente/ausente NÃO separa,
+  // cai na regra do NOME abaixo (o pagamento sem CNPJ junta com o título pelo nome).
+  const da = docId(nomeA), db = docId(nomeB)
+  if (da && db && da === db) return true
   if (mesmoCliente(tkA, tkB) && !descritoresConflitam(nomeA, nomeB)) return true
   const na = nucleoNome(nomeA)
   return !!na && na.length >= 3 && na === nucleoNome(nomeB)
@@ -2819,18 +2825,26 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     let nomeAtual = loteForn?.nomeAtual || ''
     if (!nomeAtual) { const cnt = {}; for (const l of (lines || [])) { const e = String(l.leitura?.entidade || '').trim(); if (e) cnt[e] = (cnt[e] || 0) + 1 }; nomeAtual = Object.keys(cnt).sort((a, b) => cnt[b] - cnt[a])[0] || '' }
     if (!nm) { setLoteForn(null); return }
-    // GUARD: não sobrescrever silenciosamente linhas que JÁ têm um nome PRÓPRIO identificado e
-    // DIFERENTE do alvo (e que não é o mesmo cliente). Evita varrer, por engano, fornecedores
-    // distintos (ex.: GODADDY, MICROSOFT) para dentro de outro nome (ex.: CLARA SOLUTIONS LTDA)
-    // numa seleção larga. Só pede confirmação — não bloqueia um merge deliberado.
-    const kNm = chaveNome(nm)
-    const conflitos = [...new Set((lines || [])
-      .filter(l => l.leitura?.ident && (l.leitura.conf === 'alta' || l.leitura.conf === 'media'))
-      .map(l => String(l.leitura?.entidade || '').trim())
-      .filter(e => e && chaveNome(e) !== kNm && !mesmoCliente(tokensNome(e), tokensNome(nm))))]
-    if (conflitos.length && !window.confirm(`Atenção: ${conflitos.length} nome(s) já identificado(s) e diferente(s) serão substituídos por "${nm}":\n\n${conflitos.slice(0, 8).join(', ')}${conflitos.length > 8 ? ' …' : ''}\n\nSão fornecedores distintos? Se sim, cancele e selecione só as linhas certas. Aplicar mesmo assim?`)) { setLoteForn(null); return }
-    const razaoLinhas = (lines || []).filter(l => !l.acerto) // razão + saldo anterior
-    const acertoLinhas = (lines || []).filter(l => l.acerto)  // lançamentos gerados (sem nome de origem)
+    // BLINDAGEM (regra do usuário): não varrer para dentro do alvo linhas que o HISTÓRICO
+    // identifica como OUTRO fornecedor. A leitura automática já sabe o nome real de cada linha, então
+    // um "Corrigir em lote" errado não pode juntar 15 pessoas num nome só (o bug do WGTECH). PULA a
+    // linha quando ela é um fornecedor IDENTIFICADO DIFERENTE — salvo se o nome-alvo APARECE no
+    // histórico dela (aí é correção de verdade). Sem nome / não identificado / mesmo fornecedor
+    // (mesmo CNPJ ou nome próximo) → aplica normalmente.
+    const tkNm = tokensNome(nm).filter(t => t.length >= 3)
+    const alvoNoHistorico = l => { const hu = normNome(l.historico || ''); return tkNm.length > 0 && tkNm.every(t => hu.includes(t)) }
+    const ehOutroForn = l => {
+      const e = String(l.leitura?.entidade || '').trim()
+      if (!e || !l.leitura?.ident) return false
+      if (mesmaEntidadeForcavel(e, nm)) return false
+      if (alvoNoHistorico(l)) return false
+      return true
+    }
+    const pulados = (lines || []).filter(ehOutroForn)
+    const aplicar = (lines || []).filter(l => !ehOutroForn(l))
+    if (!aplicar.length) { setLoteForn(null); setMsg(`Não apliquei "${nm}": as linhas são de OUTRO fornecedor (o histórico identifica outro nome). Se for o caso, corrija pela própria linha.`); return }
+    const razaoLinhas = aplicar.filter(l => !l.acerto) // razão + saldo anterior
+    const acertoLinhas = aplicar.filter(l => l.acerto)  // lançamentos gerados (sem nome de origem)
     // Renomeia por APELIDO: cada nome atual dos selecionados vira o nome correto — vale para
     // saldo inicial E razão, e em todos os meses. Precisão por linha (razão) via ajuste_leitura.
     const aliases = { ...nomesAlias }
@@ -2863,7 +2877,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     setNomesConf(conf); setNomesIsolados(iso); setNomesAlias(aliases); setAberturaAj(aberAjNovo); setAcertoNomes(acMap); setSelLin(new Set()); setLoteForn(null)
     // Guarda a correção (nome antigo → novo) para SUGERIR o mesmo padrão nos outros grupos.
     if (nomeAtual && chaveNome(nomeAtual) !== chaveNome(nm)) { setUltimaCorrecao({ old: nomeAtual, neu: nm }); setSugDismiss(new Set()) }
-    setMsg(`Nome "${nm}" aplicado a ${lines.length} lançamento(s)${aprender ? ' e aprendido' : ''}.`)
+    setMsg(`Nome "${nm}" aplicado a ${aplicar.length} lançamento(s)${aprender ? ' e aprendido' : ''}${pulados.length ? ` · ${pulados.length} pulado(s) (histórico é outro fornecedor)` : ''}.`)
     carregarLanc()
   }
 

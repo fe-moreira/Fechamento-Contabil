@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { resolverEntidade, classificarGrupos, aplicarLink, ovDC } from './conciliacaoCore.js'
+import { resolverEntidade, classificarGrupos, aplicarLink, ovDC, docId, mesmaEntidadeForcavel } from './conciliacaoCore.js'
 
 // Fábrica de lançamento com o modelo de dados descrito na tarefa.
 function L({ id, abertura = false, acerto = false, debito = 0, credito = 0, entidade = '', ident = !!entidade, nf = '', ajustado = false }) {
@@ -59,6 +59,20 @@ describe('B2) TRAVA anti-poluição do forçado — fornecedores DIFERENTES não
     }
     expect(resolverEntidade('42.684.260 NATHALIA MIRANDA DOMINGUES', { aliasForcado }))
       .toBe('42.684.260 NATHALIA MIRANDA DOMINGUES')   // mantém o nome real
+  })
+  it('docId extrai CNPJ (raiz 8 díg.) / CPF (11) do nome; vazio quando não tem', () => {
+    expect(docId('49.708.052 RENAN SARAGOSSA DO NASCIMENTO')).toBe('49708052')
+    expect(docId('JULIA GIFFRON RODRIGUES 70816230188')).toBe('70816230188')
+    expect(docId('RENAN SARAGOSSA DO NASCIMENTO')).toBe('')
+    expect(docId('VALOR REF. PAGAMENTO RENAN SARAGOSSA NF 39')).toBe('')
+  })
+  it('CNPJ só AGREGA: mesmo documento une (nome diferente); pagamento SEM CNPJ une pelo nome', () => {
+    // mesmo CNPJ, nome escrito diferente → une (agrega)
+    expect(mesmaEntidadeForcavel('49.708.052 RENAN S. NASCIMENTO', '49.708.052 RENAN SARAGOSSA DO NASCIMENTO')).toBe(true)
+    // título COM CNPJ + pagamento SEM CNPJ, mesmo nome → une pelo nome (o doc não separa)
+    expect(mesmaEntidadeForcavel('RENAN SARAGOSSA DO NASCIMENTO', '49.708.052 RENAN SARAGOSSA DO NASCIMENTO')).toBe(true)
+    // CNPJs diferentes E nomes diferentes → NÃO une (o bug do WGTECH)
+    expect(mesmaEntidadeForcavel('49.708.052 RENAN SARAGOSSA', '60.626.373 INARA CAVALLIERI DA SILVA')).toBe(false)
   })
   it('mas a MESMA entidade (mesmo CNPJ, ou sem CNPJ) continua unindo', () => {
     // Sem CNPJ na leitura, alvo com CNPJ → une (é a grafia com CNPJ do mesmo nome).
