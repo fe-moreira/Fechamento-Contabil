@@ -2523,6 +2523,15 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     if (bloqueadoFechado()) return false
     setProcessando(true) // indicador VISÍVEL já no clique
     const id = await getCompetenciaId()
+    // GRUPO da baixa: as linhas baixadas juntas ficam VINCULADAS por um `grp:` único (regra do
+    // usuário). Reabrir UMA reabre TODAS do grupo — nunca fica perna sem contrapartida.
+    const grpId = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : ('g' + Date.now() + Math.random().toString(36).slice(2))
+    // DEDUP: apaga a baixa ANTERIOR das MESMAS linhas antes de gravar (senão baixar de novo empilha
+    // duplicatas — foi o que deixou o RENAN com 5-10 registros e "não fecha" ao reabrir só parte).
+    const itemsAb = [...new Set(alvo.filter(l => l._abertura).map(l => chaveAbBaixaForn(l)).filter(Boolean))]
+    const ridsRz = [...new Set(alvo.filter(l => !l._abertura).map(l => l.acerto ? String(l.id).replace(/^ac_/, '') : l.id).filter(Boolean))]
+    if (itemsAb.length) await supabase.from('auditoria').delete().eq('competencia_id', id).eq('modulo', 'Conciliação').in('item', itemsAb)
+    if (ridsRz.length) await supabase.from('auditoria').delete().eq('competencia_id', id).eq('modulo', 'Conciliação').in('razao_id', ridsRz)
     // A baixa da ABERTURA é gravada pela chave SEM NOME (conta·data·NF·valor) — o nome é instável
     // (unificação do vínculo, CNPJ colado no pagamento), e chavear pelo nome fazia a perna do
     // "Saldo anterior" NÃO ser reconhecida como baixada e voltar pro em aberto (só o pagamento
@@ -2531,7 +2540,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       competencia_id: id, modulo: 'Conciliação',
       item: l._abertura ? chaveAbBaixaForn(l) : `${conta.conta} · ${l.data || ''} · NF ${l.leitura?.nf || '—'}`,
       tipo: 'Justificativa',
-      detalhe: `Confirmado em lote — conexão manual (nota + pagamento).`,
+      detalhe: `Confirmado em lote — conexão manual (nota + pagamento). grp:${grpId}`,
       // Acerto (estorno/lançamento) é identificado pelo uuid do próprio lançamento (sem "ac_").
       razao_id: l._abertura ? null : (l.acerto ? String(l.id).replace(/^ac_/, '') : l.id), usuario,
     }))
@@ -2946,11 +2955,33 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     await reabrirConferidos(alvo)
     setSelReabrir(new Set())
   }
+  // GRUPO da baixa (regra do usuário: "reabrir um reabre todos que estão ligados"): dadas as linhas
+  // que o usuário mandou reabrir, acha o(s) grupo(s) `grp:` a que pertencem e DELETA a baixa de TODAS
+  // as linhas desses grupos — nunca deixa perna sem contrapartida. Devolve as NFs do grupo (para
+  // marcar como reabertas e não re-baixar sozinho). Baixa sem grupo (confirmação individual antiga)
+  // não acha grupo → cai no fluxo linha-a-linha normal.
+  async function reabrirGrupoBaixa(lancs) {
+    const grps = new Set()
+    const items = [...new Set((lancs || []).filter(l => l._abertura).map(l => chaveAbBaixaForn(l)).filter(Boolean))]
+    const rids = [...new Set((lancs || []).filter(l => !l._abertura && l.id).map(l => l.acerto ? String(l.id).replace(/^ac_/, '') : l.id))]
+    const coletar = data => { for (const r of (data || [])) { const m = /\bgrp:([\w-]+)/.exec(r.detalhe || ''); if (m) grps.add(m[1]) } }
+    if (items.length) { const { data } = await supabase.from('auditoria').select('detalhe').eq('competencia_id', compId).eq('modulo', 'Conciliação').in('item', items); coletar(data) }
+    if (rids.length) { const { data } = await supabase.from('auditoria').select('detalhe').eq('competencia_id', compId).eq('modulo', 'Conciliação').in('razao_id', rids); coletar(data) }
+    const nfs = new Set()
+    for (const g of grps) {
+      const { data: sib } = await supabase.from('auditoria').select('item').eq('competencia_id', compId).eq('modulo', 'Conciliação').like('detalhe', `%grp:${g}%`)
+      for (const r of (sib || [])) { const m = /·(\d+)·[^·]*·-?\d+$/.exec(r.item || '') || /·\s*NF\s*(\d+)/i.exec(r.item || ''); if (m) nfs.add(m[1]) }
+      await supabase.from('auditoria').delete().eq('competencia_id', compId).eq('modulo', 'Conciliação').like('detalhe', `%grp:${g}%`)
+    }
+    return nfs
+  }
   async function reabrirConferidos(lancs) {
     if (bloqueadoFechado()) return
     if (!lancs?.length) return
     if (!window.confirm(`Reabrir ${lancs.length} lançamento(s)? Eles voltam para "em aberto" (sem a baixa) para você revisar/corrigir de novo. O fornecedor continua o mesmo — só sai se você Corrigir/Desvincular.`)) return
     setProcessando(true) // indicador VISÍVEL já no clique (os deletes demoram)
+    // GRUPO: reabrir UMA linha reabre TODAS as ligadas na mesma baixa (nunca fica perna sem par).
+    const grpNfs = await reabrirGrupoBaixa(lancs)
     // Deletes em PARALELO (antes era um a um — lento para 50+ linhas).
     await Promise.all(lancs.map(async l => {
       // Par de correção auto-conciliado (estorno ↔ origem): reabrir = DESFAZER a correção —
@@ -2993,12 +3024,16 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     // diferentes) voltam pro em aberto e NÃO conciliam sozinhos de novo. Ficam compondo o saldo
     // até você baixar à mão (que aí vira conexão manual). autoConc (estorno↔origem) já foi
     // desfeito acima, não precisa marcar. A marca some quando a linha some do razão.
+    // NFs do GRUPO reaberto: marca como "manter em aberto" para o automático NÃO re-baixar sozinho
+    // (você reabriu de propósito). Ao baixar de novo à mão, o conectarSelecionados limpa essa marca.
+    const nrb = new Set(baixasReabertas)
+    for (const nf of grpNfs) nrb.add(`${conta.conta}·${nf}`)
     const paraMarcar = lancs.filter(l => !autoConc.has(l))
-    if (paraMarcar.length) {
+    if (paraMarcar.length || nrb.size !== baixasReabertas.size) {
       const s = new Set(conciliadosReabertos)
       for (const l of paraMarcar) s.add(chaveReabrir(l))
-      setConciliadosReabertos(s)
-      await salvarNomes(nomesConf, nomesIsolados, nomesAlias, aberturaAj, acertoNomes, baixasReabertas, sugestoesRejeitadas, modoPorNome, separados, aliasesForcados, s)
+      setConciliadosReabertos(s); setBaixasReabertas(nrb)
+      await salvarNomes(nomesConf, nomesIsolados, nomesAlias, aberturaAj, acertoNomes, nrb, sugestoesRejeitadas, modoPorNome, separados, aliasesForcados, s)
     }
     await descongelar(lancs) // tira do congelado — foi o usuário que pediu para reabrir
     setMsg(`${lancs.length} lançamento(s) reaberto(s) — voltaram para o em aberto.`)
@@ -3011,8 +3046,12 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     if (!lancs?.length) return
     if (!window.confirm(`Reabrir ${lancs.length} lançamento(s) que o sistema baixou por NF? Voltam para "em aberto" para você vincular manualmente (não baixam mais sozinhos).`)) return
     setProcessando(true) // indicador VISÍVEL já no clique
+    // GRUPO: se essas linhas foram baixadas à mão em conjunto (têm `grp:`), reabre o GRUPO INTEIRO
+    // (deleta a baixa de todas as ligadas) — nunca deixa perna sem contrapartida.
+    const grpNfs = await reabrirGrupoBaixa(lancs)
     const s = new Set(baixasReabertas)
     for (const l of lancs) { const nf = nfKey(l.leitura?.nf); if (nf) s.add(`${conta.conta}·${nf}`) }
+    for (const nf of grpNfs) s.add(`${conta.conta}·${nf}`)
     setBaixasReabertas(s)
     await salvarNomes(nomesConf, nomesIsolados, nomesAlias, aberturaAj, acertoNomes, s)
     await descongelar(lancs) // tira do congelado — foi o usuário que pediu para reabrir
