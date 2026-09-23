@@ -2776,42 +2776,12 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       const id = await getCompetenciaId()
       if (id) await supabase.from('ajuste_leitura').upsert(razaoIds.map(rid => ({ competencia_id: id, razao_id: rid, entidade: alvo, usuario })), { onConflict: 'razao_id' })
     }
-    // Se o conjunto juntado SOMA ZERO, concilia TODAS sob o nome alvo → mesmo bloco. Inclui as que
-    // JÁ estavam baixadas em blocos separados: reabre a baixa antiga DE FORMA PRECISA (pela chave
-    // EXATA da linha — nome atual; NUNCA por curinga, que atingia gêmeas e baixava fora do bloco) e
-    // re-baixa sob o nome alvo. Assim título e pagamento caem no MESMO quadrante e zeram.
-    const net = comNome.reduce((s, l) => s + (Number(l.debito) || 0) - (Number(l.credito) || 0), 0)
-    let baixou = false
-    if (comNome.length >= 2 && Math.abs(net) < 0.005) {
-      const cid = await getCompetenciaId()
-      if (cid) {
-        // 1) reabre PRECISO a baixa antiga das que já estavam baixadas (chave exata, sem curinga).
-        for (const l of comNome) {
-          if (!jaTratada(l)) continue
-          if (l._abertura) {
-            const chaves = [...new Set([chaveAbertura(l), chaveAbBaixaForn(l)].filter(Boolean))]
-            if (chaves.length) await supabase.from('auditoria').delete().eq('competencia_id', cid).eq('modulo', 'Conciliação').in('item', chaves)
-          } else {
-            const rid = l.acerto ? String(l.id).replace(/^ac_/, '') : l.id
-            await supabase.from('auditoria').delete().eq('competencia_id', cid).eq('modulo', 'Conciliação').eq('razao_id', rid)
-          }
-        }
-        // 2) re-baixa TODAS sob o nome ALVO (abertura pela chave com o nome final).
-        const rows = comNome.map(l => ({
-          competencia_id: cid, modulo: 'Conciliação',
-          item: l._abertura ? chaveAbertura(l, alvo) : `${conta.conta} · ${l.data || ''} · NF ${l.leitura?.nf || '—'}`,
-          tipo: 'Justificativa',
-          detalhe: 'Confirmado em lote — vínculo manual (o par zera).',
-          razao_id: l._abertura ? null : (l.acerto ? String(l.id).replace(/^ac_/, '') : l.id), usuario,
-        }))
-        const { error } = await supabase.from('auditoria').insert(rows)
-        if (!error) { marcarTratadas(comNome); baixou = true }
-      }
-    }
+    // REGRA DO USUÁRIO: Juntar SÓ AGRUPA — NUNCA baixa. A baixa acontece só de dois jeitos: (1)
+    // AUTOMÁTICA, quando bate mesmo BLOCO + MESMA NF + valor zera; (2) MANUAL, quando você seleciona
+    // e clica em Baixar (aí pode zerar com NF diferente). Juntar disparando baixa por valor (NF
+    // diferente) deixava um bloco "não fecha" — não faz sentido. Então aqui só grava o vínculo.
     setSelLin(new Set()); setLoteForn(null)
-    setMsg(baixou
-      ? `${comNome.length} lançamento(s) vinculados em "${alvo}" e conciliados (zeraram) — foram para Conciliados.`
-      : `${comNome.length} lançamento(s) vinculados em "${alvo}".`)
+    setMsg(`${comNome.length} lançamento(s) juntados em "${alvo}" — no mesmo bloco. (A baixa é pelo automático com NF igual, ou selecionando e clicando em Baixar.)`)
     carregarLanc(); onMudou && onMudou()
   }
 
