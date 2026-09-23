@@ -888,7 +888,19 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     const afLimpo = {}
     for (const [de, para] of Object.entries(afRaw)) if (mesmaEntidadeForcavel(de, para)) afLimpo[de] = para
     setAliasesForcados(afLimpo)
-    setAberturaAj(d.aberturaAjustes && typeof d.aberturaAjustes === 'object' ? d.aberturaAjustes : {})
+    // PODA os ajustes de SALDO ANTERIOR (aberturaAjustes) POLUÍDOS: quando o nome gravado NÃO é a
+    // mesma entidade do nome ORIGINAL do item (merge errado em lote — ex.: MATHEUS/GABRIELA gravados
+    // como VINICIUS), descarta o override → o item volta a mostrar o fornecedor REAL do histórico.
+    // Preserva os de MESMA entidade e os de item genérico ("saldo anterior", que é identificação
+    // legítima). Itens já ZERADOS têm nome correto → não entram nessa poda (não são reabertos).
+    const abRaw = d.aberturaAjustes && typeof d.aberturaAjustes === 'object' ? d.aberturaAjustes : {}
+    const abLimpo = {}
+    for (const [key, val] of Object.entries(abRaw)) {
+      const ent = (val && typeof val === 'object') ? String(val.entidade || '').trim() : ''
+      const nomeOrig = String(key).split('·')[3] || ''
+      if (!ent || !nomeOrig || ehNomeGenerico(nomeOrig) || mesmaEntidadeForcavel(nomeOrig, ent)) abLimpo[key] = val
+    }
+    setAberturaAj(abLimpo)
     setAcertoNomes(d.acertoNomes && typeof d.acertoNomes === 'object' ? d.acertoNomes : {})
     setBaixasReabertas(new Set(Array.isArray(d.baixasReabertas) ? d.baixasReabertas : []))
     setConciliadosReabertos(new Set(Array.isArray(d.conciliadosReabertos) ? d.conciliadosReabertos : []))
