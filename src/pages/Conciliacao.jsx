@@ -1727,7 +1727,9 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     // confirmação, cai no bloco direto (regra do usuário: nesse nível de igualdade não confirma; se
     // estiver errado ele desvincula na revisão). O nome do mês anterior já é o padrão corrigido.
     const nucs = new Set(membros.map(m => nucleoNome(nomeExib[m])).filter(n => n && n.length >= 3))
-    return { nome: nomeExib[membros[0]], variacoes: membros.map(m => nomeExib[m]), lancs, total: lancs.reduce((s, l) => s + ov(l), 0), unido: membros.length > 1 && nucs.size > 1, unk: false }
+    // NÃO sugere "confirmar união" quando o nome do bloco é GENÉRICO (ex.: "VALOR REF. PGTO…",
+    // descrição de pagamento, não é fornecedor) — não faz sentido confirmar como um fornecedor só.
+    return { nome: nomeExib[membros[0]], variacoes: membros.map(m => nomeExib[m]), lancs, total: lancs.reduce((s, l) => s + ov(l), 0), unido: membros.length > 1 && nucs.size > 1 && !ehNomeGenerico(nomeExib[membros[0]]), unk: false }
   })
   if (grupos['(não identificado)']) {
     const lancs = ordenarPorData(grupos['(não identificado)']) // data mais antiga → mais nova
