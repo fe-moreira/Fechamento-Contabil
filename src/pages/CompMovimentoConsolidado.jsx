@@ -60,30 +60,36 @@ export default function CompMovimentoConsolidado() {
         // Guarda POR EMPRESA (o filtro alterna sem recarregar) + meta (união das contas) +
         // compByEmp (competência de cada mês, pra abrir o razão da empresa certa no clique).
         const matByEmp = {}, meta = {}, mesesSet = new Set(), compByEmp = {}
-        for (let i = 0; i < grupoIds.length; i++) {
-          const cid = grupoIds[i]
-          if (vivo) setProg(`Carregando ${i + 1}/${grupoIds.length}: ${nomeEmp[cid] || ''}…`)
+        // Lista todas as (empresa × competência) e monta os balancetes EM PARALELO. Antes era
+        // tudo em série (empresa a empresa, mês a mês), o que deixava a consolidação lenta com
+        // muitas empresas. O JS é single-thread → a gravação em meta/matByEmp (síncrona, sem
+        // await no meio) é atômica; o navegador limita ~6 conexões, então não estoura o Supabase.
+        const tarefas = []
+        for (const cid of grupoIds) {
           matByEmp[cid] = {}; compByEmp[cid] = {}
           const { data: comps } = await supabase.from('competencias').select('id, mes').eq('cliente_id', cid).eq('ano', ANO).order('mes', { ascending: true })
-          for (const c of (comps || [])) {
-            compByEmp[cid][c.mes] = c.id
-            const { linhas } = await montarBalancete(cid, c.id, 0, { comLancamentos: true })
-            if (!vivo) return
-            const res = (linhas || []).filter(l => ['3', '4', '5'].includes(String(l.classifRaw || l.classif || '')[0]))
-            if (!res.length) continue
-            mesesSet.add(c.mes)
-            for (const l of res) {
-              // UNIFICA só quando os TRÊS batem: conta (reduzido) + classificação (dígitos) + nome.
-              const reduzido = String(l.reduzido || '').trim()
-              const disp = String(l.classif || l.classifRaw || '')
-              const key = reduzido + SEP + soDig(disp) + SEP + normNome(l.nome)
-              if (!meta[key]) meta[key] = { key, reduzido, classif: disp, classifRaw: disp, nome: l.nome, grau: l.grau || disp.split('.').length, sintetica: !!l.sintetica, empresas: new Set() }
-              meta[key].empresas.add(cid)
-              ;(matByEmp[cid][key] ||= {})[c.mes] = (matByEmp[cid][key][c.mes] || 0) + num(l.saldo_final)
-            }
-          }
-          if (!vivo) return
+          for (const c of (comps || [])) { compByEmp[cid][c.mes] = c.id; tarefas.push({ cid, comp: c }) }
         }
+        if (!vivo) return
+        let feitas = 0
+        await Promise.all(tarefas.map(async ({ cid, comp: c }) => {
+          const { linhas } = await montarBalancete(cid, c.id, 0, { comLancamentos: true })
+          if (!vivo) return
+          if (vivo) setProg(`Consolidando ${++feitas}/${tarefas.length}…`)
+          const res = (linhas || []).filter(l => ['3', '4', '5'].includes(String(l.classifRaw || l.classif || '')[0]))
+          if (!res.length) return
+          mesesSet.add(c.mes)
+          for (const l of res) {
+            // UNIFICA só quando os TRÊS batem: conta (reduzido) + classificação (dígitos) + nome.
+            const reduzido = String(l.reduzido || '').trim()
+            const disp = String(l.classif || l.classifRaw || '')
+            const key = reduzido + SEP + soDig(disp) + SEP + normNome(l.nome)
+            if (!meta[key]) meta[key] = { key, reduzido, classif: disp, classifRaw: disp, nome: l.nome, grau: l.grau || disp.split('.').length, sintetica: !!l.sintetica, empresas: new Set() }
+            meta[key].empresas.add(cid)
+            ;(matByEmp[cid][key] ||= {})[c.mes] = (matByEmp[cid][key][c.mes] || 0) + num(l.saldo_final)
+          }
+        }))
+        if (!vivo) return
         const meses = [...mesesSet].sort((a, b) => a - b)
         const empresas = grupoIds.map(id => ({ id, nome: nomeEmp[id] || id }))
         if (vivo) setBase({ matByEmp, meta, meses, empresas, compByEmp, semGrupo })

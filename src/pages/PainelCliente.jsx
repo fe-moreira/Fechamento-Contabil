@@ -84,16 +84,19 @@ function agregarPeriodo(d, a, b, consolidando) {
 async function flowPorMesEmpresa(cid, ano) {
   const { data: comps } = await supabase.from('competencias').select('id, mes').eq('cliente_id', cid).eq('ano', ano).order('mes', { ascending: true })
   const pm = {}
-  for (const c of (comps || [])) {
+  // Os meses são independentes entre si → monta os balancetes EM PARALELO (o navegador já
+  // limita ~6 conexões por origem, então enche o "cano" sem estourar conexões do Supabase).
+  // Antes era em série (mês a mês), o que deixava a consolidação lenta com muitas empresas.
+  await Promise.all((comps || []).map(async c => {
     const { linhas } = await montarBalancete(cid, c.id, 0, { comLancamentos: true })
     const res = (linhas || []).filter(l => !l.sintetica && ['3', '4', '5'].includes(String(l.classifRaw || '')[0]))
-    if (!res.length) continue
+    if (!res.length) return
     let g3 = 0, g4 = 0, g5 = 0
     for (const l of res) { const sf = Number(l.saldo_final) || 0; const grp = String(l.classifRaw || '')[0]; if (grp === '3') g3 += sf; else if (grp === '4') g4 += sf; else g5 += sf }
     const receita = -g3, custo = g4, despesa = g5
     const dreN = apurarResultadoSimples(res)
     pm[c.mes] = { receita, custo, despesa, resultado: receita - custo - despesa, ebitda: dreN.ebitda, deprec: dreN.deprec }
-  }
+  }))
   return pm
 }
 
@@ -444,7 +447,11 @@ export default function PainelCliente() {
     ;(async () => {
       setConsolBusy(true)
       const novos = {}
-      for (const cid of faltam) { try { novos[cid] = await flowPorMesEmpresa(cid, anoFoco) } catch { novos[cid] = {} } }
+      // Empresas ligadas em PARALELO (antes era uma de cada vez). Cada fluxo já paraleliza
+      // seus meses; o navegador limita ~6 conexões, então o total fica controlado.
+      await Promise.all(faltam.map(async cid => {
+        try { novos[cid] = await flowPorMesEmpresa(cid, anoFoco) } catch { novos[cid] = {} }
+      }))
       if (vivo) setExtrasPorMes(prev => ({ ...prev, ...novos }))
       if (vivo) setConsolBusy(false)
     })()
