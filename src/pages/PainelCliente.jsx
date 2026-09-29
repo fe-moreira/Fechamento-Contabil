@@ -79,11 +79,104 @@ function agregarPeriodo(d, a, b, consolidando) {
   }
 }
 
-// ETAPA 2 — fluxo (resultado) de UMA empresa, por mês, no ano. Leve: só grupos 3/4/5 do balancete
-// vivo (não puxa balanço/índices). É a base da consolidação gerencial do resultado no Cockpit.
+// FOTO LEVE do balanço/índices de UM mês, a partir das linhas do balancete (grupos 1 e 2 dão o
+// balanço; 3/4/5 já vêm somados em `flowM`). SEM consultas extras (distribuição/top clientes) —
+// é a base comum do snapMes da mãe E da consolidação por soma das empresas ligadas. Devolve os
+// componentes crus (ac/pc/pnc) para o consolidado recalcular liquidez/endividamento do grupo.
+function fotoBalancoLeve(linhas, mesM, ano, flowM, cargaBase, codsImp) {
+  const gg = l => String(l.classifRaw || '')[0]
+  const analitM = (linhas || []).filter(l => !l.sintetica)
+  const ativoL = analitM.filter(l => gg(l) === '1')
+  const passivoL = analitM.filter(l => gg(l) === '2')
+  const totAtivo = ativoL.reduce((s, l) => s + num(l.saldo_final), 0)
+  const totPassivo = passivoL.reduce((s, l) => s + num(l.saldo_final), 0)
+  const somaFiltro = (arr, re) => arr.filter(l => re.test(l.nome || '')).reduce((s, l) => s + Math.abs(num(l.saldo_final)), 0)
+  const clientes = somaFiltro(ativoL, RE_RECEBER)
+  const fornecedores = somaFiltro(passivoL, RE_PAGAR)
+  const impTrib = cargaBase ? apurarImpostos(analitM, codsImp) : null
+  const impostos = impTrib ? impTrib.liquido : null
+  const sintDisp = (linhas || []).filter(l => l.sintetica && gg(l) === '1' && /dispon|caixa\s*e\s*equival|disponibilidad/i.test(l.nome || ''))
+    .sort((a, b) => String(a.classifRaw || '').length - String(b.classifRaw || '').length)[0]
+  let dispPrefix = sintDisp?.classifRaw
+  if (!dispPrefix && analitM.some(l => String(l.classifRaw || '').startsWith('111'))) dispPrefix = '111'
+  const ehDisp = l => dispPrefix ? String(l.classifRaw || '').startsWith(dispPrefix) : RE_DISP.test(l.nome || '')
+  const disponiveis = ativoL.filter(ehDisp).map(l => ({ nome: l.nome || l.reduzido, ini: num(l.saldo_inicial), fim: num(l.saldo_final) }))
+    .filter(l => Math.abs(l.ini) > 0.005 || Math.abs(l.fim) > 0.005).sort((a, b) => b.fim - a.fim)
+  const totDispIni = disponiveis.reduce((s, l) => s + l.ini, 0)
+  const totDispFim = disponiveis.reduce((s, l) => s + l.fim, 0)
+  const ultDia = (a, m) => new Date(a, m, 0).getDate()
+  const fmtDia = (a, m) => `${String(ultDia(a, m)).padStart(2, '0')}/${String(m).padStart(2, '0')}/${a}`
+  const mAntM = mesM === 1 ? 12 : mesM - 1, aAntM = mesM === 1 ? ano - 1 : ano
+  const norm = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+  const somaClassif = pref => analitM.filter(l => String(l.classif || '').startsWith(pref)).reduce((s, l) => s + num(l.saldo_final), 0)
+  const somaPrefixoRaw = pref => analitM.filter(l => String(l.classifRaw || '').startsWith(pref)).reduce((s, l) => s + num(l.saldo_final), 0)
+  const prefSintetica = (grupo, re, exc) => {
+    const s = (linhas || []).filter(l => l.sintetica && gg(l) === grupo && re.test(norm(l.nome || '')) && !(exc && exc.test(norm(l.nome || ''))))
+      .sort((a, b) => String(a.classifRaw || '').length - String(b.classifRaw || '').length)[0]
+    return s?.classifRaw || null
+  }
+  const NAOCIRC = /n[ao] circulante|nao-circulante|longo prazo/
+  const ac = prefSintetica('1', /circulante/, NAOCIRC) ? somaPrefixoRaw(prefSintetica('1', /circulante/, NAOCIRC)) : somaClassif('1.1')
+  const pc = prefSintetica('2', /circulante/, NAOCIRC) ? somaPrefixoRaw(prefSintetica('2', /circulante/, NAOCIRC)) : somaClassif('2.1')
+  const pnc = prefSintetica('2', NAOCIRC, null) ? somaPrefixoRaw(prefSintetica('2', NAOCIRC, null)) : somaClassif('2.2')
+  const fat = flowM.receita, cus = flowM.custo, des = flowM.despesa
+  const indices = {
+    margem: fat ? ((fat - cus - des) / fat) * 100 : null,
+    cargaTrib: cargaPct(impostos, fat, cargaBase),
+    liquidez: pc ? ac / Math.abs(pc) : null,
+    endividamento: totAtivo ? pct(Math.abs(pc) + Math.abs(pnc), Math.abs(totAtivo)) : null,
+    prazoReceb: fat ? Math.round((clientes / fat) * 30) : null,
+  }
+  return {
+    totAtivo, totPassivo, clientes, fornecedores, impostos,
+    impostosBruto: impTrib ? impTrib.bruto : null, impostosCredito: impTrib ? impTrib.credito : null,
+    disponiveis, totDispIni, totDispFim, geracaoCaixa: totDispFim - totDispIni,
+    dataIni: fmtDia(aAntM, mAntM), dataFim: fmtDia(ano, mesM),
+    ac, pc, pnc, indices,
+  }
+}
+
+// Consolida (SOMA) as fotos de balanço/índices de várias empresas num mês. SEM eliminações
+// intercompany (mútuos/receitas entre empresas) — isso vem depois; por ora é a soma direta, que
+// pode inflar ativo/passivo/liquidez. Recalcula liquidez/endividamento a partir dos componentes
+// somados (não dá pra somar razão de índice). Margem/carga/prazo o agregarPeriodo recompõe do fluxo.
+function somarFotos(snaps, flowMes) {
+  const val = snaps.filter(Boolean)
+  if (!val.length) return null
+  const s = campo => val.reduce((a, x) => a + (Number(x?.[campo]) || 0), 0)
+  const totAtivo = s('totAtivo'), pc = s('pc'), pnc = s('pnc')
+  const clientes = s('clientes')
+  const temImp = val.some(x => x.impostos != null)
+  const fat = flowMes ? flowMes.receita : 0
+  return {
+    totAtivo, totPassivo: s('totPassivo'), clientes, fornecedores: s('fornecedores'),
+    impostos: temImp ? s('impostos') : null,
+    impostosBruto: temImp ? s('impostosBruto') : null, impostosCredito: temImp ? s('impostosCredito') : null,
+    disponiveis: val.flatMap(x => x.disponiveis || []),
+    totDispIni: s('totDispIni'), totDispFim: s('totDispFim'), geracaoCaixa: s('totDispFim') - s('totDispIni'),
+    dataIni: val[0].dataIni, dataFim: val[0].dataFim,
+    ac: s('ac'), pc, pnc,
+    indices: {
+      liquidez: pc ? s('ac') / Math.abs(pc) : null,
+      endividamento: totAtivo ? pct(Math.abs(pc) + Math.abs(pnc), Math.abs(totAtivo)) : null,
+      prazoReceb: fat ? Math.round((clientes / fat) * 30) : null,
+    },
+    // dist/ata/topClientes ficam de fora do grupo (são por empresa) — os blocos escondem esses
+    // painéis quando consolidando.
+    dist: null, distTotal: 0, ata: { distribuido: 0, pago: 0, pagoMes: 0, saldo: 0 }, topClientes: [], totReceitaRazao: 0,
+  }
+}
+
+// ETAPA 2 — fluxo (resultado) + FOTO de balanço de UMA empresa, por mês, no ano. Reaproveita o
+// mesmo balancete que já lê para o fluxo (grupos 3/4/5) e monta a foto leve (grupos 1/2) sem
+// consulta extra — assim a consolidação do balanço não custa idas a mais ao banco.
 async function flowPorMesEmpresa(cid, ano) {
   const { data: comps } = await supabase.from('competencias').select('id, mes').eq('cliente_id', cid).eq('ano', ano).order('mes', { ascending: true })
-  const pm = {}
+  // Config de carga tributária DESTA empresa (cada uma tem a sua) — para a foto calcular impostos.
+  const cargaCfg = await carregarCargaTribCfg(cid)
+  const codsImp = codsCarga(cargaCfg)
+  const cargaBase = codsImp.size ? (cargaCfg?.base || 'bruto') : null
+  const pm = {}, snap = {}
   // Os meses são independentes entre si → monta os balancetes EM PARALELO (o navegador já
   // limita ~6 conexões por origem, então enche o "cano" sem estourar conexões do Supabase).
   // Antes era em série (mês a mês), o que deixava a consolidação lenta com muitas empresas.
@@ -95,23 +188,30 @@ async function flowPorMesEmpresa(cid, ano) {
     for (const l of res) { const sf = Number(l.saldo_final) || 0; const grp = String(l.classifRaw || '')[0]; if (grp === '3') g3 += sf; else if (grp === '4') g4 += sf; else g5 += sf }
     const receita = -g3, custo = g4, despesa = g5
     const dreN = apurarResultadoSimples(res)
-    pm[c.mes] = { receita, custo, despesa, resultado: receita - custo - despesa, ebitda: dreN.ebitda, deprec: dreN.deprec }
+    const flow = { receita, custo, despesa, resultado: receita - custo - despesa, ebitda: dreN.ebitda, deprec: dreN.deprec }
+    pm[c.mes] = flow
+    snap[c.mes] = fotoBalancoLeve(linhas, c.mes, ano, flow, cargaBase, codsImp)
   }))
-  return pm
+  return { porMes: pm, porMesSnap: snap, cargaBase }
 }
 
-// Soma o FLUXO por mês de várias empresas (a mãe + as ligadas) e reconstrói serie/serieCombo do
-// grupo. Só resultado (DRE) — balanço/índices consolidados vêm com as eliminações (Etapa 4).
-function consolidarFluxo(dRaw, extrasPorMes) {
-  const all = [dRaw.porMes || {}, ...extrasPorMes]
+// Soma o FLUXO (DRE) E o BALANÇO/índices por mês de várias empresas (a mãe + as ligadas) e
+// reconstrói serie/serieCombo do grupo. O balanço é somado SEM eliminações intercompany (mútuos/
+// contas/receitas entre as empresas) — isso vem na próxima etapa; por ora é a soma direta. `extras`
+// é a lista de { porMes, porMesSnap, cargaBase } das empresas ligadas (flowPorMesEmpresa).
+function consolidarFluxo(dRaw, extras) {
+  const allFlow = [dRaw.porMes || {}, ...extras.map(e => e?.porMes || {})]
+  const allSnap = [dRaw.porMesSnap || {}, ...extras.map(e => e?.porMesSnap || {})]
   const mesesSet = new Set()
-  all.forEach(pm => Object.keys(pm || {}).forEach(m => mesesSet.add(Number(m))))
+  allFlow.forEach(pm => Object.keys(pm || {}).forEach(m => mesesSet.add(Number(m))))
   const meses = [...mesesSet].sort((a, b) => a - b)
-  const porMes = {}
+  const porMes = {}, porMesSnap = {}
   for (const m of meses) {
     let receita = 0, custo = 0, despesa = 0, resultado = 0, ebitda = 0, deprec = 0
-    for (const pm of all) { const p = pm?.[m]; if (!p) continue; receita += p.receita; custo += p.custo; despesa += p.despesa; resultado += p.resultado; ebitda += p.ebitda; deprec += (p.deprec || 0) }
+    for (const pm of allFlow) { const p = pm?.[m]; if (!p) continue; receita += p.receita; custo += p.custo; despesa += p.despesa; resultado += p.resultado; ebitda += p.ebitda; deprec += (p.deprec || 0) }
     porMes[m] = { receita, custo, despesa, resultado, ebitda, deprec }
+    const foto = somarFotos(allSnap.map(ps => ps?.[m]), porMes[m])
+    if (foto) porMesSnap[m] = foto
   }
   const serie = meses.map(m => ({ mes: m, receita: porMes[m].receita, despesa: porMes[m].custo + porMes[m].despesa, resultado: porMes[m].resultado }))
   const serieCombo = meses.map(m => {
@@ -119,7 +219,9 @@ function consolidarFluxo(dRaw, extrasPorMes) {
     const ebit = ebitda + (p.deprec || 0) // EBIT = EBITDA − depreciação/amortização
     return { mes: m, rotulo: MESES[m - 1], receitaLiq, ebitda, ebit, lucroLiq, margemEbitda: receitaLiq ? ebitda / receitaLiq * 100 : 0, margemEbit: receitaLiq ? ebit / receitaLiq * 100 : 0, margemLiquida: receitaLiq ? lucroLiq / receitaLiq * 100 : 0 }
   })
-  return { ...dRaw, porMes, serie, serieCombo, meses, consolidando: true }
+  // cargaBase do grupo: da mãe, ou de alguma ligada que tenha config (para o bloco de impostos aparecer).
+  const cargaBase = dRaw.cargaBase || extras.find(e => e?.cargaBase)?.cargaBase || null
+  return { ...dRaw, porMes, porMesSnap, cargaBase, serie, serieCombo, meses, consolidando: true }
 }
 
 export default function PainelCliente() {
@@ -168,54 +270,12 @@ export default function PainelCliente() {
         // O bloco do mês da competência (abaixo) segue intacto, então um intervalo de 1 mês bate
         // 100% com o Cockpit de hoje.
         const snapMes = async (linhasM, compIdM, mesM, flowM) => {
+          // Base (balanço/índices/disponibilidades) = a MESMA foto leve usada na consolidação, para
+          // mãe e ligadas baterem 100%. Aqui a gente só acrescenta os extras do mês de FOCO
+          // (distribuição de lucros e principais clientes — consultas caras, por isso só no foco).
+          const foto = fotoBalancoLeve(linhasM, mesM, ano, flowM, cargaBase, codsImp)
           const gg = l => String(l.classifRaw || '')[0]
           const analitM = (linhasM || []).filter(l => !l.sintetica)
-          const ativoL = analitM.filter(l => gg(l) === '1')
-          const passivoL = analitM.filter(l => gg(l) === '2')
-          const totAtivo = ativoL.reduce((s, l) => s + num(l.saldo_final), 0)
-          const totPassivo = passivoL.reduce((s, l) => s + num(l.saldo_final), 0)
-          const somaFiltro = (arr, re) => arr.filter(l => re.test(l.nome || '')).reduce((s, l) => s + Math.abs(num(l.saldo_final)), 0)
-          const clientes = somaFiltro(ativoL, RE_RECEBER)
-          const fornecedores = somaFiltro(passivoL, RE_PAGAR)
-          // Carga tributária: movimento do período das contas escolhidas — LÍQUIDO (débito − crédito).
-          const impTrib = cargaBase ? apurarImpostos(analitM, codsImp) : null
-          const impostos = impTrib ? impTrib.liquido : null
-          const sintDisp = (linhasM || []).filter(l => l.sintetica && gg(l) === '1' && /dispon|caixa\s*e\s*equival|disponibilidad/i.test(l.nome || ''))
-            .sort((a, b) => String(a.classifRaw || '').length - String(b.classifRaw || '').length)[0]
-          let dispPrefix = sintDisp?.classifRaw
-          if (!dispPrefix && analitM.some(l => String(l.classifRaw || '').startsWith('111'))) dispPrefix = '111'
-          const ehDisp = l => dispPrefix ? String(l.classifRaw || '').startsWith(dispPrefix) : RE_DISP.test(l.nome || '')
-          const disponiveis = ativoL.filter(ehDisp).map(l => ({ nome: l.nome || l.reduzido, ini: num(l.saldo_inicial), fim: num(l.saldo_final) }))
-            .filter(l => Math.abs(l.ini) > 0.005 || Math.abs(l.fim) > 0.005).sort((a, b) => b.fim - a.fim)
-          const totDispIni = disponiveis.reduce((s, l) => s + l.ini, 0)
-          const totDispFim = disponiveis.reduce((s, l) => s + l.fim, 0)
-          const ultDia = (a, m) => new Date(a, m, 0).getDate()
-          const fmtDia = (a, m) => `${String(ultDia(a, m)).padStart(2, '0')}/${String(m).padStart(2, '0')}/${a}`
-          const mAntM = mesM === 1 ? 12 : mesM - 1, aAntM = mesM === 1 ? ano - 1 : ano
-          const norm = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
-          const somaClassif = pref => analitM.filter(l => String(l.classif || '').startsWith(pref)).reduce((s, l) => s + num(l.saldo_final), 0)
-          const somaPrefixoRaw = pref => analitM.filter(l => String(l.classifRaw || '').startsWith(pref)).reduce((s, l) => s + num(l.saldo_final), 0)
-          const prefSintetica = (grupo, re, exc) => {
-            const s = (linhasM || []).filter(l => l.sintetica && gg(l) === grupo && re.test(norm(l.nome || '')) && !(exc && exc.test(norm(l.nome || ''))))
-              .sort((a, b) => String(a.classifRaw || '').length - String(b.classifRaw || '').length)[0]
-            return s?.classifRaw || null
-          }
-          const NAOCIRC = /n[ao] circulante|nao-circulante|longo prazo/
-          const ac = prefSintetica('1', /circulante/, NAOCIRC) ? somaPrefixoRaw(prefSintetica('1', /circulante/, NAOCIRC)) : somaClassif('1.1')
-          const pc = prefSintetica('2', /circulante/, NAOCIRC) ? somaPrefixoRaw(prefSintetica('2', /circulante/, NAOCIRC)) : somaClassif('2.1')
-          const pnc = prefSintetica('2', NAOCIRC, null) ? somaPrefixoRaw(prefSintetica('2', NAOCIRC, null)) : somaClassif('2.2')
-          const fat = flowM.receita, cus = flowM.custo, des = flowM.despesa
-          const indices = {
-            margem: fat ? ((fat - cus - des) / fat) * 100 : null,
-            cargaTrib: cargaPct(impostos, fat, cargaBase),
-            liquidez: pc ? ac / Math.abs(pc) : null,
-            endividamento: totAtivo ? pct(Math.abs(pc) + Math.abs(pnc), Math.abs(totAtivo)) : null,
-            prazoReceb: fat ? Math.round((clientes / fat) * 30) : null,
-          }
-          // PERFORMANCE: distribuição de lucros e principais clientes são consultas caras (razão +
-          // distribuição) e só aparecem para o mês da competência / fim do período. Antes rodavam
-          // para TODOS os meses (deixava o Cockpit lento). Agora só no mês de foco; os demais meses
-          // trazem só a foto leve (balanço/índices, sem consulta extra).
           const ehFoco = mesM === mes
           const distM = ehFoco ? await apurarDistribuicao(empresaId, compIdM, ano, mesM) : null
           const distTotalM = (distM?.socios || []).reduce((s, x) => s + num(x.total), 0)
@@ -236,11 +296,8 @@ export default function PainelCliente() {
             topClientes = Object.entries(mapa).map(([nome, valor]) => ({ nome, valor })).sort((a, b) => b.valor - a.valor).slice(0, 6)
           }
           return {
-            totAtivo, totPassivo, clientes, fornecedores, impostos,
-            impostosBruto: impTrib ? impTrib.bruto : null, impostosCredito: impTrib ? impTrib.credito : null,
-            disponiveis, totDispIni, totDispFim, geracaoCaixa: totDispFim - totDispIni,
-            dataIni: fmtDia(aAntM, mAntM), dataFim: fmtDia(ano, mesM),
-            indices, dist: distM, distTotal: distTotalM, ata: distM?.ata || { distribuido: 0, pago: 0, pagoMes: 0, saldo: 0 },
+            ...foto,
+            dist: distM, distTotal: distTotalM, ata: distM?.ata || { distribuido: 0, pago: 0, pagoMes: 0, saldo: 0 },
             topClientes, totReceitaRazao,
           }
         }
@@ -470,7 +527,7 @@ export default function PainelCliente() {
   function exportarExcel() {
     if (!d) return
     const sub = consolidando
-      ? `Consolidado do resultado · ${grupo.filter(e => ativos.has(e.id)).map(e => e.nome).join(' · ')} · competência ${competencia}`
+      ? `Consolidado do grupo (soma, sem eliminações intercompany) · ${grupo.filter(e => ativos.has(e.id)).map(e => e.nome).join(' · ')} · competência ${competencia}`
       : `${empresaNome} · CNPJ ${fmtCnpj(empresaCnpj)} · competência ${competencia}`
     const secoes = []
 
@@ -489,18 +546,21 @@ export default function PainelCliente() {
       linhas: d.serie.map(x => [`${MESES[x.mes - 1]}/2026`, num(x.resultado)]),
       totais: ['Resultado do exercício (acumulado)', num(d.acumulado)],
     })
-    if (!consolidando) {
+    // Balanço/financeiro/índices: no consolidado são a SOMA do grupo (sem eliminações intercompany);
+    // distribuição de lucros e principais clientes seguem individuais (só quando NÃO consolidando).
     secoes.push({
-      titulo: 'Balanço patrimonial (saldo final da conciliação)',
+      titulo: consolidando ? 'Balanço patrimonial (soma do grupo — sem eliminações intercompany)' : 'Balanço patrimonial (saldo final da conciliação)',
       linhas: [
         ['Total do ativo', num(d.totAtivo)],
         ['Total do passivo + PL', num(d.totPassivo)],
         ['Clientes (a receber)', num(d.clientes)],
         ['Fornecedores (a pagar)', num(d.fornecedores)],
-        ['Distribuição de lucros (pago no mês)', num(d.ata.pagoMes || d.distTotal)],
-        ['Ata — distribuído', num(d.ata.distribuido)],
-        ['Ata — total pago', num(d.ata.pago)],
-        ['Ata — saldo a pagar', num(d.ata.saldo)],
+        ...(consolidando ? [] : [
+          ['Distribuição de lucros (pago no mês)', num(d.ata.pagoMes || d.distTotal)],
+          ['Ata — distribuído', num(d.ata.distribuido)],
+          ['Ata — total pago', num(d.ata.pago)],
+          ['Ata — saldo a pagar', num(d.ata.saldo)],
+        ]),
       ],
     })
     secoes.push({
@@ -518,12 +578,12 @@ export default function PainelCliente() {
           ]
         : [['Carga tributária — configurar contas na Base de Informações', '']],
     })
-    if (d.topClientes.length) secoes.push({
+    if (!consolidando && d.topClientes.length) secoes.push({
       titulo: 'Principais clientes do mês (nome no histórico das NFs de receita)',
       linhas: d.topClientes.map(c => [c.nome, num(c.valor)]),
     })
     secoes.push({
-      titulo: 'Índices financeiros',
+      titulo: consolidando ? 'Índices financeiros (grupo — soma sem eliminações)' : 'Índices financeiros',
       linhas: [
         ['Liquidez corrente', d.indices.liquidez == null ? '—' : d.indices.liquidez.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })],
         ['Margem líquida', fmtPct(d.indices.margem)],
@@ -532,7 +592,6 @@ export default function PainelCliente() {
         ['Prazo médio de recebimento', d.indices.prazoReceb == null ? '—' : `${d.indices.prazoReceb} dias`],
       ],
     })
-    }
 
     gerarExcelTimbrado({
       titulo: 'Cockpit Financeiro',
@@ -599,7 +658,7 @@ export default function PainelCliente() {
         <div style={{ background: 'rgba(74,124,255,0.08)', border: `1px solid ${theme.accent}`, borderRadius: 12, padding: '10px 14px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 10 }}>
           <i className="ti ti-building-community" style={{ color: theme.accent, fontSize: 18 }} />
           <span style={{ fontSize: 12.5, color: theme.text }}>
-            <b>Consolidado gerencial do resultado</b> — somando {grupo.filter(e => ativos.has(e.id)).map(e => e.nome).join(' · ')}. Cobre <b>DRE/fluxo</b> (receita, custo, despesa, EBITDA, margens). Balanço, índices e financeiro consolidados (com <b>eliminações intercompany</b>) vêm na próxima etapa.
+            <b>Consolidado gerencial</b> — somando {grupo.filter(e => ativos.has(e.id)).map(e => e.nome).join(' · ')}. Cobre <b>DRE/fluxo</b>, <b>balanço, financeiro e índices</b> (por soma direta). Ainda <b>sem eliminações intercompany</b> (mútuos, contas e receitas entre as empresas) — que vêm na próxima etapa; até lá o ativo/passivo e a liquidez do grupo podem vir inflados.
           </span>
         </div>
       )}
@@ -609,17 +668,14 @@ export default function PainelCliente() {
       {!carregando && d && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
           <BlocoResultado d={d} />
-          {consolidando ? (
-            <Secao titulo="Balanço, financeiro e índices" flag="individual por empresa">
-              <Aviso icon="ti-lock" texto="Estes blocos ainda não são consolidados. Somar balanços do grupo sem eliminar as operações entre as empresas (mútuos, contas e receitas intercompany) infla ativo/passivo e distorce a liquidez — por isso o consolidado do balanço vem na etapa de eliminações. Para ver o balanço/índices, deixe só a empresa mãe (Empresas → Só a mãe)." />
-            </Secao>
-          ) : (<>
-            <BlocoComparativo d={d} />
-            <BlocoBalanco d={d} />
-            <BlocoFinanceiro d={d} />
-            <BlocoImpostos d={d} />
-            <BlocoClientesIndices d={d} />
-          </>)}
+          {consolidando && (
+            <Aviso icon="ti-info-circle" texto="Balanço, financeiro e índices abaixo são a SOMA direta das empresas ligadas, ainda SEM eliminar as operações entre elas (intercompany). Ativo, passivo e liquidez podem estar inflados até a etapa de eliminações. Distribuição de lucros e principais clientes seguem individuais (por empresa)." />
+          )}
+          <BlocoComparativo d={d} />
+          <BlocoBalanco d={d} consolidando={consolidando} />
+          <BlocoFinanceiro d={d} />
+          <BlocoImpostos d={d} />
+          <BlocoClientesIndices d={d} consolidando={consolidando} />
         </div>
       )}
     </Wrapper>
@@ -870,9 +926,9 @@ function GraficoDesempenho({ s }) {
   )
 }
 
-function BlocoBalanco({ d }) {
+function BlocoBalanco({ d, consolidando }) {
   return (
-    <Secao titulo="Balanço patrimonial">
+    <Secao titulo="Balanço patrimonial" flag={consolidando ? 'somado — sem eliminações' : null}>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(210px,1fr))', gap: 12 }}>
         <Tile label="Total do ativo" valor={money(d.totAtivo)} />
         <Tile label="Total do passivo + PL" valor={money(d.totPassivo)} />
@@ -880,11 +936,12 @@ function BlocoBalanco({ d }) {
           cor={corResultado(d.acumulado)} sub="acumulado do Comparativo de Movimento" />
         <Tile label="Clientes (a receber)" valor={money(d.clientes)} cor={theme.green} />
         <Tile label="Fornecedores (a pagar)" valor={money(d.fornecedores)} cor={theme.red} />
-        <Tile label="Distribuição de lucros (mês)" valor={money(d.ata.pagoMes || d.distTotal)} sub="pago aos sócios no mês" />
-        <Tile label="Ata — saldo a pagar" valor={money(d.ata.saldo)} cor={d.ata.saldo > 0.005 ? theme.yellow : theme.green}
-          sub={`distribuído ${money(d.ata.distribuido)} · pago ${money(d.ata.pago)}`} />
+        {/* Distribuição de lucros é por empresa (não somada no grupo) — escondida ao consolidar. */}
+        {!consolidando && <Tile label="Distribuição de lucros (mês)" valor={money(d.ata.pagoMes || d.distTotal)} sub="pago aos sócios no mês" />}
+        {!consolidando && <Tile label="Ata — saldo a pagar" valor={money(d.ata.saldo)} cor={d.ata.saldo > 0.005 ? theme.yellow : theme.green}
+          sub={`distribuído ${money(d.ata.distribuido)} · pago ${money(d.ata.pago)}`} />}
       </div>
-      <p style={{ fontSize: 11, color: theme.sub, margin: '8px 2px 0' }}>Saldos da última coluna da conciliação (saldo final da competência).</p>
+      <p style={{ fontSize: 11, color: theme.sub, margin: '8px 2px 0' }}>{consolidando ? 'Soma dos saldos finais das empresas ligadas (sem eliminar operações entre elas).' : 'Saldos da última coluna da conciliação (saldo final da competência).'}</p>
     </Secao>
   )
 }
@@ -981,16 +1038,17 @@ function BlocoImpostos({ d }) {
   )
 }
 
-function BlocoClientesIndices({ d }) {
+function BlocoClientesIndices({ d, consolidando }) {
   const totalTop = d.topClientes.reduce((s, c) => s + c.valor, 0)
   const max = Math.max(1, ...d.topClientes.map(c => c.valor))
   const base = d.totReceitaRazao || totalTop
   const demais = Math.max(0, base - totalTop)
   const ix = d.indices
   return (
-    <Secao titulo="Principais clientes e índices">
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(300px,1fr))', gap: 12 }}>
-        {/* Principais clientes */}
+    <Secao titulo={consolidando ? 'Índices financeiros' : 'Principais clientes e índices'} flag={consolidando ? 'somado — sem eliminações' : null}>
+      <div style={{ display: 'grid', gridTemplateColumns: consolidando ? 'minmax(0,1fr)' : 'repeat(auto-fit,minmax(300px,1fr))', gap: 12 }}>
+        {/* Principais clientes — por empresa (não consolidado); escondido ao somar o grupo. */}
+        {!consolidando && (
         <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'hidden' }}>
           <p style={{ fontSize: 13.5, fontWeight: 600, padding: '13px 15px', margin: 0, borderBottom: `1px solid ${theme.border}` }}>Principais clientes do mês</p>
           {d.topClientes.length === 0 ? (
@@ -1021,6 +1079,7 @@ function BlocoClientesIndices({ d }) {
             </>
           )}
         </div>
+        )}
 
         {/* Índices financeiros */}
         <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'hidden' }}>
