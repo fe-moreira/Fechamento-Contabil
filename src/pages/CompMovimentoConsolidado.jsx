@@ -36,6 +36,7 @@ export default function CompMovimentoConsolidado() {
   const [mesesSel, setMesesSel] = useState(() => new Set()) // vazio = todos
   const [erro, setErro] = useState(null)
   const [detalhe, setDetalhe] = useState(null)    // { reduzido, classif, nome, mesLabel, contribs:[{compId,nomeEmp}] }
+  const [exportando, setExportando] = useState(false)
 
   useEffect(() => {
     setBase(null); setEmpresasSel(null); setErro(null); setDetalhe(null)
@@ -142,7 +143,6 @@ export default function CompMovimentoConsolidado() {
 
   // Exporta a MESMA tabela da tela para Excel (linhas visíveis, colunas por agrupamento, rodapé
   // Lucro/Prejuízo). Valores das colunas de moeda vão como NÚMERO (para o Excel somar/formatar).
-  const [exportando, setExportando] = useState(false)
   const exportarExcel = async () => {
     if (exportando) return
     setExportando(true)
