@@ -4,6 +4,7 @@ import { lerTudo } from '../lib/lerTudo'
 import { useAppData } from '../lib/appData'
 import { theme, money, moneyDC } from '../lib/theme'
 import { montarBalancete } from '../lib/balancete'
+import { gerarExcelTimbrado } from '../lib/excel'
 import InfoTela from '../components/InfoTela'
 
 const ANO = 2026
@@ -139,6 +140,43 @@ export default function CompMovimentoConsolidado() {
       : (compByEmp[cid]?.[mes] ? [{ compId: compByEmp[cid][mes], nomeEmp: nomeById[cid], mes }] : [])))
   const abrir = (c, mes, mesLabel) => setDetalhe({ reduzido: c.reduzido, classif: c.classif, nome: c.nome, mesLabel, contribs: contribuintes(c, mes) })
 
+  // Exporta a MESMA tabela da tela para Excel (linhas visíveis, colunas por agrupamento, rodapé
+  // Lucro/Prejuízo). Valores das colunas de moeda vão como NÚMERO (para o Excel somar/formatar).
+  const [exportando, setExportando] = useState(false)
+  const exportarExcel = async () => {
+    if (exportando) return
+    setExportando(true)
+    try {
+      const cols = [
+        { nome: 'Conta', largura: 12 },
+        { nome: 'Classificação', largura: 16 },
+        { nome: 'Nome da Conta', largura: 42, wrap: true },
+        ...colunas.map(col => ({ nome: col.label, alinhar: 'right', moeda: true, largura: 15 })),
+      ]
+      if (mostraTotal) cols.push({ nome: 'Total', alinhar: 'right', moeda: true, largura: 16 })
+      const vis = contas.filter(c => (nivel === 'tudo' ? true : (c.sintetica && c.grau <= nivel)) && temMov(c.key))
+      const linhas = vis.map(c => {
+        const grau = c.grau || 1
+        const row = [c.reduzido || '', c.classif || '', (c.sintetica ? `N${grau} ` : '') + (c.nome || '—')]
+        for (const col of colunas) { const v = valCol(c.key, col); row.push(v == null || Number(v) === 0 ? null : Number(v)) }
+        if (mostraTotal) { const t = totalConta(c.key); row.push(t === 0 ? null : Number(t)) }
+        return row
+      })
+      const totais = ['', '', 'Lucro / Prejuízo do período']
+      for (const col of colunas) totais.push(Number(lucroCol(col)))
+      if (mostraTotal) totais.push(Number(lucroTotal))
+      const empSel = empresas.filter(e => ativas.has(e.id)).length
+      await gerarExcelTimbrado({
+        titulo: 'Comparativo de Movimento — Consolidado',
+        sub: `${empresaNome || ''} · ${empSel} empresa(s) · ${ANO}`,
+        colunas: cols, linhas, totais,
+        arquivo: `comparativo-consolidado-${ANO}.xlsx`, aba: 'Consolidado',
+      })
+    } catch (e) {
+      console.error(e); alert('Não consegui gerar o Excel: ' + (e?.message || e))
+    } finally { setExportando(false) }
+  }
+
   return (
     <Wrap>
       {semGrupo && <div style={{ ...cardVazio, borderColor: theme.yellow, margin: '4px 0 14px' }}>
@@ -171,6 +209,13 @@ export default function CompMovimentoConsolidado() {
           <i className="ti ti-filter" /> Meses:
           <MultiMesSelect meses={meses} sel={mesesSel} onChange={setMesesSel} />
         </div>
+        {meses.length > 0 && (
+          <button className="btn" onClick={exportarExcel} disabled={exportando}
+            style={{ fontSize: 12, padding: '6px 12px', display: 'inline-flex', alignItems: 'center', gap: 6, opacity: exportando ? 0.6 : 1 }}
+            title="Exportar esta tabela para Excel">
+            <i className={exportando ? 'ti ti-loader-2 girando' : 'ti ti-file-spreadsheet'} /> {exportando ? 'Gerando…' : 'Exportar Excel'}
+          </button>
+        )}
       </div>
 
       {!meses.length ? (
