@@ -26,7 +26,10 @@ const RE_IMPOSTO = /impost|tribut|\bicms\b|\bpis\b|cofins|\birpj\b|\bcsll\b|\bis
 const RE_RECEBER = /client|duplicat.*receb|\ba\s*receber|receb.*client|cart[aã]o/i
 const RE_PAGAR = /fornec|\ba\s*pagar|duplicat.*pag|obrig.*pag/i
 const RE_DEPREC = /deprecia|amortiza|exaust/i
-const BANCO_RE = /\bBANCO\b|SANTANDER|ITA[UÚ]|BRADESCO|\bCAIXA\b|SICOOB|SICREDI|\bINTER\b|NUBANK|\bBTG\b|SAFRA|DAYCOVAL|VOTORANTIM|PAGSEGURO|MERCADO ?PAGO|\bC6\b|BANRISUL|\bBB\b/i
+// Bancos que aparecem na receita como RENDIMENTO de aplicação (não são clientes). NÃO inclui
+// adquirentes/marketplaces (PagSeguro, Mercado Pago): nesses, um crédito na conta de receita é
+// uma VENDA de verdade — então eles PODEM aparecer como principal cliente.
+const BANCO_RE = /\bBANCO\b|SANTANDER|ITA[UÚ]|BRADESCO|\bCAIXA\b|SICOOB|SICREDI|\bINTER\b|NUBANK|\bBTG\b|SAFRA|DAYCOVAL|VOTORANTIM|\bC6\b|BANRISUL|\bBB\b/i
 const LIXO_ENT = new Set(['VALOR', 'VALORES', 'RENDIMENTO', 'RENDIMENTOS', 'APLICACAO', 'APLICACOES', 'JUROS', 'SALDO', 'RESGATE', 'CDB', 'POUPANCA', 'TARIFA', 'TARIFAS', 'IOF', 'RECEITA', 'RECEITAS', 'FINANCEIRA', 'FINANCEIRAS', 'DIVERSOS', 'DIVERSAS', 'CLIENTE', 'CLIENTES', 'DEPOSITO', 'TRANSFERENCIA', 'TED', 'PIX', 'DOC'])
 const ehCliente = ent => { const n = String(ent || '').trim().toUpperCase(); return !!n && !BANCO_RE.test(n) && !LIXO_ENT.has(n) }
 const norm = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
