@@ -2041,27 +2041,36 @@ function ModalNaoContab({ titulo, sub, exemplo = '', inicial = [], onClose, onSa
 }
 function ModalCargaTributaria({ inicial, plano = [], onClose, onSalvar }) {
   const [contas, setContas] = useState(inicial?.contas?.length
-    ? inicial.contas.map(c => ({ cod: c.cod || '', nome: c.nome || '' }))
-    : [{ cod: '', nome: '' }])
+    ? inicial.contas.map(c => ({ cod: c.cod || '', nome: c.nome || '', papel: c.papel === 'credito' ? 'credito' : 'apurado' }))
+    : [{ cod: '', nome: '', papel: 'apurado' }])
   const [base, setBase] = useState(inicial?.base === 'liquido' ? 'liquido' : 'bruto')
   const setCod = (i, v) => setContas(l => l.map((x, j) => j === i ? { ...x, cod: v } : x))
-  const setPick = (i, p) => setContas(l => l.map((x, j) => j === i ? { cod: p.cod, nome: p.nome || '' } : x))
+  const setPick = (i, p) => setContas(l => l.map((x, j) => j === i ? { ...x, cod: p.cod, nome: p.nome || '' } : x))
+  const setPapel = (i, v) => setContas(l => l.map((x, j) => j === i ? { ...x, papel: v } : x))
   const rem = i => setContas(l => l.filter((_, j) => j !== i))
   const [picker, setPicker] = useState(false)
   const rBase = { display: 'flex', gap: 7, alignItems: 'center', fontWeight: 400, cursor: 'pointer', color: theme.text, fontSize: 13 }
   return (
-    <Modal titulo="Carga tributária" sub="Contas que compõem a carga + base do denominador" onClose={onClose} largura={620}>
+    <Modal titulo="Carga tributária" sub="Contas que compõem a carga + base do denominador" onClose={onClose} largura={660}>
       <p style={{ color: theme.sub, fontSize: 12.5, margin: '0 0 16px', lineHeight: 1.55 }}>
         Escolha as <b>contas de imposto</b> — as de <b>resultado/dedução</b>, cujo <b>movimento do período</b>
-        é a apuração. A carga = <b>soma do movimento dessas contas ÷ base</b>. Evite contas de <b>saldo do
-        passivo</b> (a recolher/provisão): elas misturam saldo acumulado com o período e distorcem o percentual.
+        é a apuração. Marque cada conta como <b>Apurado</b> (entra no imposto apurado) ou <b>Creditamento</b>
+        (abate — recupera/estorna imposto). A carga = <b>(apurado − creditamento) ÷ base</b>. Contas de IRPJ/CSLL
+        apuradas de forma <b>acumulada</b> podem ficar como <b>Apurado</b>: o estorno do mês anterior se cancela
+        sozinho (uso o movimento líquido de cada conta).
       </p>
-      <LinhaTitulo titulo="Contas de imposto" onAdd={() => setContas(l => [...l, { cod: '', nome: '' }])} />
+      <LinhaTitulo titulo="Contas de imposto" onAdd={() => setContas(l => [...l, { cod: '', nome: '', papel: 'apurado' }])} />
       {contas.map((c, i) => (
         <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 8, alignItems: 'flex-start' }}>
           <div style={{ flex: 1 }}>
             <CampoConta value={c.cod} onChange={v => setCod(i, v)} onPick={p => setPick(i, p)} plano={plano} placeholder="Conta de imposto (F4)" />
           </div>
+          <select className="input" value={c.papel || 'apurado'} onChange={e => setPapel(i, e.target.value)}
+            title="Apurado = entra no imposto apurado · Creditamento = abate (recupera/estorna)"
+            style={{ width: 'auto', fontSize: 12, padding: '8px 10px', flexShrink: 0 }}>
+            <option value="apurado">Apurado</option>
+            <option value="credito">Creditamento</option>
+          </select>
           <i className="ti ti-trash" onClick={() => rem(i)} style={{ color: theme.sub, cursor: 'pointer', marginTop: 10 }} />
         </div>
       ))}
@@ -2073,7 +2082,7 @@ function ModalCargaTributaria({ inicial, plano = [], onClose, onSalvar }) {
           onAdicionar={novas => {
             setContas(l => {
               const ja = new Set(l.map(c => String(c.cod || '').trim()).filter(Boolean))
-              const add = novas.filter(n => !ja.has(String(n.cod).trim())).map(n => ({ cod: n.cod, nome: n.nome }))
+              const add = novas.filter(n => !ja.has(String(n.cod).trim())).map(n => ({ cod: n.cod, nome: n.nome, papel: 'apurado' }))
               if (!add.length) return l
               const base0 = (l.length === 1 && !l[0].cod && !l[0].nome) ? [] : l
               return [...base0, ...add]
@@ -2089,7 +2098,7 @@ function ModalCargaTributaria({ inicial, plano = [], onClose, onSalvar }) {
         </div>
       </div>
       <Rodape onClose={onClose} onSalvar={() => onSalvar({
-        contas: contas.filter(c => String(c.cod || '').trim()).map(c => ({ cod: String(c.cod).trim(), nome: c.nome || '' })),
+        contas: contas.filter(c => String(c.cod || '').trim()).map(c => ({ cod: String(c.cod).trim(), nome: c.nome || '', papel: c.papel === 'credito' ? 'credito' : 'apurado' })),
         base,
       })} />
     </Modal>

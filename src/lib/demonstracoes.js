@@ -15,7 +15,7 @@ import { lerTudo } from './lerTudo'
 import { montarBalancete, apurarBalanco, prepararBalanco } from './balancete'
 import { montarDRE, apurarResultadoSimples } from './dre'
 import { extrairEntidade } from './financeiro'
-import { codsCarga, apurarImpostos, cargaPct } from './cargaTributaria'
+import { codsCarga, codsCargaCredito, apurarImpostos, cargaPct } from './cargaTributaria'
 
 const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
 const num = v => Number(v) || 0
@@ -119,8 +119,9 @@ function apurarCockpit(agg, perMonth, razaoReceita, primeiro, ultimo, serieMonth
   // Carga tributária CONFIGURÁVEL: MOVIMENTO do período das contas escolhidas (não o saldo do
   // passivo). Sem config, cargaBase = null → o relatório mostra "configurar" em vez de % errado.
   const codsImp = codsCarga(cargaCfg)
+  const creditoImp = codsCargaCredito(cargaCfg)
   const cargaBase = codsImp.size ? (cargaCfg?.base || 'bruto') : null
-  const impTrib = cargaBase ? apurarImpostos(analit, codsImp) : null
+  const impTrib = cargaBase ? apurarImpostos(analit, codsImp, creditoImp) : null
   const impostos = impTrib ? impTrib.liquido : null // LÍQUIDO (débito − crédito)
   const impostosBruto = impTrib ? impTrib.bruto : null
   const impostosCredito = impTrib ? impTrib.credito : null

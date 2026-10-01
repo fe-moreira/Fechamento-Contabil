@@ -7,7 +7,7 @@ import { apurarDistribuicao } from '../lib/distribuicao'
 import { montarBalancete } from '../lib/balancete'
 import { apurarResultadoSimples } from '../lib/dre'
 import { extrairEntidade } from '../lib/financeiro'
-import { carregarCargaTribCfg, codsCarga, apurarImpostos, cargaPct } from '../lib/cargaTributaria'
+import { carregarCargaTribCfg, codsCarga, codsCargaCredito, apurarImpostos, cargaPct } from '../lib/cargaTributaria'
 import { gerarExcelTimbrado } from '../lib/excel'
 import { theme, money } from '../lib/theme'
 import InfoTela from '../components/InfoTela'
@@ -87,7 +87,7 @@ function agregarPeriodo(d, a, b, consolidando) {
 // balanço; 3/4/5 já vêm somados em `flowM`). SEM consultas extras (distribuição/top clientes) —
 // é a base comum do snapMes da mãe E da consolidação por soma das empresas ligadas. Devolve os
 // componentes crus (ac/pc/pnc) para o consolidado recalcular liquidez/endividamento do grupo.
-function fotoBalancoLeve(linhas, mesM, ano, flowM, cargaBase, codsImp) {
+function fotoBalancoLeve(linhas, mesM, ano, flowM, cargaBase, codsImp, creditoImp) {
   const gg = l => String(l.classifRaw || '')[0]
   const analitM = (linhas || []).filter(l => !l.sintetica)
   const ativoL = analitM.filter(l => gg(l) === '1')
@@ -97,7 +97,7 @@ function fotoBalancoLeve(linhas, mesM, ano, flowM, cargaBase, codsImp) {
   const somaFiltro = (arr, re) => arr.filter(l => re.test(l.nome || '')).reduce((s, l) => s + Math.abs(num(l.saldo_final)), 0)
   const clientes = somaFiltro(ativoL, RE_RECEBER)
   const fornecedores = somaFiltro(passivoL, RE_PAGAR)
-  const impTrib = cargaBase ? apurarImpostos(analitM, codsImp) : null
+  const impTrib = cargaBase ? apurarImpostos(analitM, codsImp, creditoImp) : null
   const impostos = impTrib ? impTrib.liquido : null
   const sintDisp = (linhas || []).filter(l => l.sintetica && gg(l) === '1' && /dispon|caixa\s*e\s*equival|disponibilidad/i.test(l.nome || ''))
     .sort((a, b) => String(a.classifRaw || '').length - String(b.classifRaw || '').length)[0]
@@ -179,6 +179,7 @@ async function flowPorMesEmpresa(cid, ano) {
   // Config de carga tributária DESTA empresa (cada uma tem a sua) — para a foto calcular impostos.
   const cargaCfg = await carregarCargaTribCfg(cid)
   const codsImp = codsCarga(cargaCfg)
+  const creditoImp = codsCargaCredito(cargaCfg)
   const cargaBase = codsImp.size ? (cargaCfg?.base || 'bruto') : null
   const pm = {}, snap = {}
   // Os meses são independentes entre si → monta os balancetes EM PARALELO (o navegador já
@@ -194,7 +195,7 @@ async function flowPorMesEmpresa(cid, ano) {
     const dreN = apurarResultadoSimples(res)
     const flow = { receita, custo, despesa, resultado: receita - custo - despesa, ebitda: dreN.ebitda, deprec: dreN.deprec }
     pm[c.mes] = flow
-    snap[c.mes] = fotoBalancoLeve(linhas, c.mes, ano, flow, cargaBase, codsImp)
+    snap[c.mes] = fotoBalancoLeve(linhas, c.mes, ano, flow, cargaBase, codsImp, creditoImp)
   }))
   return { porMes: pm, porMesSnap: snap, cargaBase }
 }
@@ -256,6 +257,7 @@ export default function PainelCliente() {
         // passivo). Sem config, cargaBase = null → o Cockpit mostra "configurar".
         const cargaCfg = await carregarCargaTribCfg(empresaId)
         const codsImp = codsCarga(cargaCfg)
+        const creditoImp = codsCargaCredito(cargaCfg)
         const cargaBase = codsImp.size ? (cargaCfg?.base || 'bruto') : null
 
         // --- Receita / Custo / Despesa / Resultado — VIVO (com as correções) ---
@@ -277,7 +279,7 @@ export default function PainelCliente() {
           // Base (balanço/índices/disponibilidades) = a MESMA foto leve usada na consolidação, para
           // mãe e ligadas baterem 100%. Aqui a gente só acrescenta os extras do mês de FOCO
           // (distribuição de lucros e principais clientes — consultas caras, por isso só no foco).
-          const foto = fotoBalancoLeve(linhasM, mesM, ano, flowM, cargaBase, codsImp)
+          const foto = fotoBalancoLeve(linhasM, mesM, ano, flowM, cargaBase, codsImp, creditoImp)
           const gg = l => String(l.classifRaw || '')[0]
           const analitM = (linhasM || []).filter(l => !l.sintetica)
           const ehFoco = mesM === mes
@@ -370,7 +372,7 @@ export default function PainelCliente() {
         const clientes = somaFiltro(ativoLinhas, RE_RECEBER)
         const fornecedores = somaFiltro(passivoLinhas, RE_PAGAR)
         // Carga tributária: movimento do período das contas escolhidas — LÍQUIDO (débito − crédito).
-        const impTrib = cargaBase ? apurarImpostos(analit, codsImp) : null
+        const impTrib = cargaBase ? apurarImpostos(analit, codsImp, creditoImp) : null
         const impostos = impTrib ? impTrib.liquido : null
 
         // --- Disponibilidades: TODAS as analíticas da sintética "Disponível" (o totalizador

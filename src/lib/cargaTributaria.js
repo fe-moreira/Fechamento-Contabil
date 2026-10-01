@@ -38,26 +38,44 @@ export function codsCarga(cfg) {
   return new Set((cfg?.contas || []).map(c => String(c?.cod ?? '').trim()).filter(Boolean))
 }
 
+// Códigos das contas marcadas como CREDITAMENTO (papel === 'credito'). As demais são 'apurado'
+// (padrão — compatível com configs antigas que não têm o campo papel).
+export function codsCargaCredito(cfg) {
+  return new Set((cfg?.contas || []).filter(c => c?.papel === 'credito').map(c => String(c?.cod ?? '').trim()).filter(Boolean))
+}
+
 // Apura o imposto do período nas contas escolhidas (casando pelo código reduzido). Devolve:
-//  - bruto:   total de DÉBITO (imposto apurado)
-//  - credito: total de CRÉDITO (creditamento de crédito — recupera/estorna imposto)
+//  - bruto:   imposto APURADO — soma do MOVIMENTO LÍQUIDO (débito − crédito) das contas de APURAÇÃO
+//  - credito: CREDITAMENTO — soma do movimento (em módulo) das contas marcadas como CREDITAMENTO
 //  - liquido: bruto − credito (o que REALMENTE onera; é o numerador da carga)
-// O creditamento ABATE: por isso é débito − crédito, e NÃO a soma em módulo (que somava o crédito).
-export function apurarImpostos(analit, cods) {
+//
+// O usuário marca, na configuração, QUAIS contas vão para a linha "Apurado (bruto)" e quais vão
+// para "(−) Creditamento" (creditoCods). Sem marcação, toda conta é de apuração.
+//
+// Por que NET (débito − crédito) por conta na apuração, e não o débito bruto: contas de IRPJ/CSLL
+// apuradas de forma ACUMULADA (lucro real/presumido anual) debitam todo mês o NOVO acumulado e
+// CREDITAM (estornam) o acumulado do mês anterior. Esse crédito NÃO é creditamento — é estorno da
+// própria provisão. Fazendo o líquido por conta, o estorno se cancela dentro da própria conta e o
+// "Apurado" mostra só o imposto real do período (ex.: APPROVATA → R$ 37 mil só no Apurado, sem o
+// R$ 95 mil de "creditamento" que era estorno acumulado).
+export function apurarImpostos(analit, cods, creditoCods) {
   const out = { bruto: 0, credito: 0, liquido: 0 }
   if (!cods || !cods.size) return out
+  const credSet = creditoCods || new Set()
   const r2 = v => Math.round(v * 100) / 100
   for (const l of (analit || [])) {
-    if (!cods.has(String(l.reduzido ?? l.conta ?? '').trim())) continue
-    out.bruto += num(l.debito)
-    out.credito += num(l.credito)
+    const cod = String(l.reduzido ?? l.conta ?? '').trim()
+    if (!cods.has(cod)) continue
+    const net = num(l.debito) - num(l.credito) // movimento líquido DA CONTA no período
+    if (credSet.has(cod)) out.credito += Math.abs(net) // conta marcada como creditamento
+    else out.bruto += net                               // conta de apuração (estorno acumulado se cancela)
   }
   out.bruto = r2(out.bruto); out.credito = r2(out.credito); out.liquido = r2(out.bruto - out.credito)
   return out
 }
-// Numerador da carga = imposto LÍQUIDO (débito − crédito).
-export function somaImpostos(analit, cods) {
-  return apurarImpostos(analit, cods).liquido
+// Numerador da carga = imposto LÍQUIDO (apurado − creditamento).
+export function somaImpostos(analit, cods, creditoCods) {
+  return apurarImpostos(analit, cods, creditoCods).liquido
 }
 
 // Percentual da carga. `base` = 'bruto' | 'liquido' | null/'' (não configurado → null).
