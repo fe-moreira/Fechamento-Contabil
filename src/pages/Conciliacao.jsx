@@ -787,6 +787,10 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // Mapa _uid da linha → índice do BLOCO (quadrante) em que ela está no em aberto. Usado para
   // PROIBIR baixar linhas de blocos DIFERENTES (regra do usuário: só baixa no mesmo bloco).
   const blocoDeRef = useRef(new Map())
+  // Guarda o mapa { competencia: { baixasReabertas, conciliadosReabertos, separados } } de TODOS os
+  // meses — essas ações são POR MÊS (regra do usuário: mês novo = razão novo = bloco fresh; só o
+  // APRENDIZADO de nome/fornecedor é herdado). Salvar um mês não pode apagar o estado dos outros.
+  const porCompRef = useRef({})
   // Ids (estáveis) de tudo que está conciliado AGORA — preenchido no render; o efeito abaixo
   // grava os NOVOS no "congelado" (aditivo).
   const congelaveisRef = useRef([])
@@ -902,19 +906,35 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     }
     setAberturaAj(abLimpo)
     setAcertoNomes(d.acertoNomes && typeof d.acertoNomes === 'object' ? d.acertoNomes : {})
-    setBaixasReabertas(new Set(Array.isArray(d.baixasReabertas) ? d.baixasReabertas : []))
-    setConciliadosReabertos(new Set(Array.isArray(d.conciliadosReabertos) ? d.conciliadosReabertos : []))
+    // AÇÕES POR MÊS (reabertura, conciliados reabertos, separação de linha): fresh a cada mês. O que
+    // você reabriu/separou num mês NÃO vaza para o seguinte — mês novo reconcilia do zero (auto +
+    // manual), herdando só o aprendizado de nome. Guardadas em dados.porComp[competencia]. Dados
+    // antigos (listas globais) NÃO são herdadas (migração = começa fresh), o que destrava pares
+    // limpos (mesmo fornecedor + NF + valor zera) que uma reabertura global estava travando.
+    const porComp = d.porComp && typeof d.porComp === 'object' ? d.porComp : {}
+    porCompRef.current = porComp
+    const cur = porComp[competencia || '00/0000'] && typeof porComp[competencia || '00/0000'] === 'object' ? porComp[competencia || '00/0000'] : {}
+    setBaixasReabertas(new Set(Array.isArray(cur.baixasReabertas) ? cur.baixasReabertas : []))
+    setConciliadosReabertos(new Set(Array.isArray(cur.conciliadosReabertos) ? cur.conciliadosReabertos : []))
+    setSeparados(new Set(Array.isArray(cur.separados) ? cur.separados : []))
     setSugestoesRejeitadas(new Set(Array.isArray(d.sugestoesRejeitadas) ? d.sugestoesRejeitadas : []))
     setModoPorNome(d.modoPorNome && typeof d.modoPorNome === 'object' ? d.modoPorNome : {})
-    setSeparados(new Set(Array.isArray(d.separados) ? d.separados : []))
     setUnificadosConf(new Set((Array.isArray(d.unificadosConfirmados) ? d.unificadosConfirmados : []).map(chaveNome)))
     setParcelamentos(Array.isArray(d.parcelamentos) ? d.parcelamentos : [])
   }
-  useEffect(() => { if (empresaId) carregarNomes() }, [empresaId]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (empresaId) carregarNomes() }, [empresaId, competencia]) // eslint-disable-line react-hooks/exhaustive-deps
   async function salvarNomes(conf, iso, aliases = nomesAlias, aberAj = aberturaAj, acNomes = acertoNomes, baixasReab = baixasReabertas, sugRej = sugestoesRejeitadas, modoPN = modoPorNome, sep = separados, aliasF = aliasesForcados, concReab = conciliadosReabertos, unifConf = unificadosConf, parcel = parcelamentos) {
     await supabase.from('cargas_cadastro').delete().eq('cliente_id', empresaId).eq('tipo', 'conciliacao_nomes')
+    // AÇÕES POR MÊS (reabertura/conciliados reabertos/separação) vão em porComp[competencia] — salvar
+    // ESTE mês não mexe no estado dos OUTROS meses (fica congelado lá). O APRENDIZADO (apelidos,
+    // nomes, uniões/junções, parcelamentos) fica no nível global → herdado por todos os meses, e
+    // NUNCA é desfeito por trabalhar no mês atual.
+    const comp = competencia || '00/0000'
+    const porComp = { ...(porCompRef.current || {}) }
+    porComp[comp] = { baixasReabertas: [...baixasReab], conciliadosReabertos: [...(concReab || [])], separados: [...(sep || [])] }
+    porCompRef.current = porComp
     // vigencia é NOT NULL — usa a competência atual (o registro é único por cliente, lido sempre o mais recente).
-    const { error } = await supabase.from('cargas_cadastro').insert({ cliente_id: empresaId, tipo: 'conciliacao_nomes', vigencia: competencia || '00/0000', dados: { confiaveis: [...conf], isolados: [...iso], aliases: aliases || {}, aberturaAjustes: aberAj || {}, acertoNomes: acNomes || {}, baixasReabertas: [...baixasReab], sugestoesRejeitadas: [...sugRej], modoPorNome: modoPN || {}, separados: [...(sep || [])], aliasesForcados: aliasF || {}, conciliadosReabertos: [...(concReab || [])], unificadosConfirmados: [...(unifConf || [])], parcelamentos: Array.isArray(parcel) ? parcel : [] }, usuario })
+    const { error } = await supabase.from('cargas_cadastro').insert({ cliente_id: empresaId, tipo: 'conciliacao_nomes', vigencia: comp, dados: { confiaveis: [...conf], isolados: [...iso], aliases: aliases || {}, aberturaAjustes: aberAj || {}, acertoNomes: acNomes || {}, sugestoesRejeitadas: [...sugRej], modoPorNome: modoPN || {}, aliasesForcados: aliasF || {}, unificadosConfirmados: [...unifConf], parcelamentos: Array.isArray(parcel) ? parcel : [], porComp }, usuario })
     if (error) { setMsg('Não consegui salvar: ' + error.message); return error }
   }
   // Lê a lista congelada gravada da conta (uma linha de auditoria: item "CONGELADOS·<conta>",
