@@ -2362,14 +2362,16 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // conferidas — evita abrir uma a uma quando o nome está identificado e falta só a NF.
   // Monta a linha de auditoria de um lançamento — abertura (saldo inicial) vai sem razao_id,
   // identificada pela chave estável "AB·…" no campo item; razão vai pelo razao_id (uuid).
-  const linhaAuditoria = (l, id, nome) => ({
+  const linhaAuditoria = (l, id, nome, grp) => ({
     competencia_id: id, modulo: 'Conciliação',
     // Abertura (saldo anterior): chave com o FORNECEDOR (núcleo do nome) — distingue fornecedores
     // diferentes de mesmo valor/data/sem NF (FLASH × LALAMOVE). O núcleo é estável (ignora sufixo
     // LTDA/CNPJ, e o nome já vem limpo do prefixo de tipo pelo limparNomeEntidade).
     item: l._abertura ? chaveAbBaixaForn(l) : `${conta.conta} · ${l.data || ''} · NF ${l.leitura.nf || '—'}`,
     tipo: 'Justificativa',
-    detalhe: `Confirmado em lote — ${nome}: composição identificada e zerada no mês (título e baixa se compensam).`,
+    // grp: liga as linhas confirmadas JUNTAS (regra do usuário + arrasto por grupo): no mês seguinte
+    // a baixa só é "herdada" se o grupo fechar em zero — um grupo quebrado não derruba os outros.
+    detalhe: `Confirmado em lote — ${nome}: composição identificada e zerada no mês (título e baixa se compensam).${grp ? ' grp:' + grp : ''}`,
     razao_id: l._abertura ? null : (l.acerto ? String(l.id).replace(/^ac_/, '') : l.id), usuario,
   })
   const marcarTratadas = linhas => {
@@ -2387,7 +2389,9 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     if (!window.confirm(`Confirmar ${alvo.length} lançamento(s) de "${nome}" como conferidos? A composição já está zerada (título e baixa se compensam) — isso marca as linhas como revisadas com justificativa, sem abrir uma a uma.${avisoNF}`)) return
     setProcessando(true)
     const id = await getCompetenciaId()
-    const { error } = await supabase.from('auditoria').insert(alvo.map(l => linhaAuditoria(l, id, nome)))
+    // Um grupo por confirmação (toda a entidade baixa junta e já está zerada).
+    const grpId = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : ('g' + Date.now() + Math.random().toString(36).slice(2))
+    const { error } = await supabase.from('auditoria').insert(alvo.map(l => linhaAuditoria(l, id, nome, grpId)))
     if (error) { setProcessando(false); setMsg('Não consegui confirmar em lote: ' + error.message); return }
     marcarTratadas(alvo)
     setMsg(`${alvo.length} lançamento(s) de "${nome}" confirmado(s).`)
@@ -2568,13 +2572,16 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     if (!window.confirm(`Vincular ${pares.length} par(es) sugerido(s)? Cliente e valor batem — os lançamentos vão para Conciliados.`)) return
     const id = await getCompetenciaId()
     const alvo = pares.flatMap(p => [p.a, p.b])
-    const rows = alvo.map(l => ({
+    // Um grupo por PAR (cada par é uma baixa independente): no arrasto do mês seguinte a baixa só é
+    // herdada se o par fechar em zero — um par quebrado não derruba os outros.
+    const novoGrp = () => (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : ('g' + Date.now() + Math.random().toString(36).slice(2))
+    const rows = pares.flatMap(p => { const g = novoGrp(); return [p.a, p.b].map(l => ({
       competencia_id: id, modulo: 'Conciliação',
       item: l._abertura ? chaveAbertura(l) : `${conta.conta} · ${l.data || ''} · NF ${l.leitura?.nf || '—'}`,
       tipo: 'Justificativa',
-      detalhe: 'Vínculo aprovado — cliente e valor batem (NF diferente/ausente).',
+      detalhe: `Vínculo aprovado — cliente e valor batem (NF diferente/ausente). grp:${g}`,
       razao_id: l._abertura ? null : (l.acerto ? String(l.id).replace(/^ac_/, '') : l.id), usuario,
-    }))
+    })) })
     const { error } = await supabase.from('auditoria').insert(rows)
     if (error) { setMsg('Não consegui vincular: ' + error.message); return }
     marcarTratadas(alvo)
