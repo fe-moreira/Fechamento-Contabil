@@ -4,7 +4,7 @@ import { lerTudo } from '../lib/lerTudo'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { theme, money, moneyDC } from '../lib/theme'
-import { montarBalancete, normalizaCompetencia, applyMask, erroContaSintetica, dataNaCompetencia } from '../lib/balancete'
+import { montarBalancete, normalizaCompetencia, applyMask, erroContaSintetica, dataNaCompetencia, parsePlano } from '../lib/balancete'
 import { gerarExcelTimbrado } from '../lib/excel'
 import { aprenderDaCorrecao } from '../lib/sugestoesRazao'
 import CampoConta from '../components/CampoConta'
@@ -385,8 +385,13 @@ export default function CompMovimento() {
         // com muitos meses e contas grandes, ex.: 214 com 1000+ linhas, o Comparativo demorava
         // demais). O navegador limita ~6 conexões por origem, então a concorrência fica controlada.
         // competencias já vem ordenado → Promise.all preserva a ordem, então meta/matriz saem iguais.
+        // Lê o PLANO uma vez e passa para todos os meses (evita rebaixar ~150 kB por competência).
+        const { data: planoCarga } = await supabase.from('cargas_cadastro').select('dados')
+          .eq('cliente_id', empresaId).eq('tipo', 'plano').order('created_at', { ascending: false }).limit(1).maybeSingle()
+        if (!vivo) return
+        const planoParsed = parsePlano(planoCarga?.dados)
         const balancetes = await Promise.all((competencias || []).map(async c => {
-          const { linhas } = await montarBalancete(empresaId, c.id, 0, { comLancamentos: true })
+          const { linhas } = await montarBalancete(empresaId, c.id, 0, { comLancamentos: true, plano: planoParsed })
           const res = (linhas || []).filter(l => { const d = String(l.classifRaw || l.classif).trim()[0]; return d === '3' || d === '4' || d === '5' })
           return { c, res }
         }))
@@ -498,12 +503,15 @@ export default function CompMovimento() {
         }
 
         // Pré-carrega justificativas/correções já registradas na auditoria deste módulo,
-        // para o contador refletir o que já foi tratado em sessões anteriores.
+        // para o contador refletir o que já foi tratado em sessões anteriores. PAGINA (lerTudo):
+        // clientes com muita correção em lote passam de 1.000 linhas de auditoria 'Comparativo' —
+        // sem paginar, as justificativas além da 1.000ª não carregavam e as células voltavam a
+        // aparecer VERMELHAS (parecia que "não salvou").
         const compIds = compsComDados.map(c => c.id)
         if (compIds.length) {
-          const { data: audits } = await supabase
+          const audits = await lerTudo(() => supabase
             .from('auditoria').select('item, competencia_id, tipo, detalhe')
-            .in('competencia_id', compIds).eq('modulo', 'Comparativo')
+            .in('competencia_id', compIds).eq('modulo', 'Comparativo'))
           if (!vivo) return
           if (audits && audits.length) {
             const set = new Set(), textos = {}

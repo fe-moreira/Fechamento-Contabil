@@ -637,9 +637,12 @@ export async function excluirLinhaAbertura(empresaId, alvo, usuario) {
 // vivo (Relatórios, Cockpit, Book, Comparativo Completo, Comparativo de Movimento).
 // DESLIGAR só na Conciliação, que faz a própria sobreposição por conta (não contar em dobro).
 export async function montarBalancete(empresaId, compId, _depth = 0, opts = {}) {
-  const { data: planoCarga } = await supabase.from('cargas_cadastro').select('dados')
-    .eq('cliente_id', empresaId).eq('tipo', 'plano').order('created_at', { ascending: false }).limit(1).maybeSingle()
-  const plano = parsePlano(planoCarga?.dados)
+  // opts.plano (já parseado) evita reler o plano do banco a cada chamada — ganho grande quando
+  // o mesmo cliente é montado várias vezes seguidas (ex.: Comparativo, Cockpit, arrasto), onde o
+  // plano (~150 kB) era baixado uma vez por mês. Backward-compatible: sem opts.plano, lê como antes.
+  const plano = Array.isArray(opts.plano) ? opts.plano
+    : parsePlano((await supabase.from('cargas_cadastro').select('dados')
+        .eq('cliente_id', empresaId).eq('tipo', 'plano').order('created_at', { ascending: false }).limit(1).maybeSingle()).data?.dados)
   const mascara = (plano.find(p => p.mascara)?.mascara) || '9.9.9.999.9999'
   const cortes = cortesDaMascara(mascara)
   const temPlano = plano.length > 0
