@@ -381,16 +381,19 @@ export default function CompMovimento() {
         const meta = {}            // classifRaw → { reduzido, classif, classifRaw, nome, grau, sintetica }
         const m = {}               // classifRaw → { 'ano-mm': saldo_final }
 
-        for (const c of competencias) {
-          // Razão VIVO: o balancete importado + os lançamentos confirmados (correções da
-          // Conciliação, estornos, apropriações). Assim o ajuste feito em qualquer tela
-          // (ex.: estorno de rendimento em dobro na 759) aparece aqui no débito da conta.
+        // Monta o balancete VIVO de CADA competência EM PARALELO (antes era em série, mês a mês —
+        // com muitos meses e contas grandes, ex.: 214 com 1000+ linhas, o Comparativo demorava
+        // demais). O navegador limita ~6 conexões por origem, então a concorrência fica controlada.
+        // competencias já vem ordenado → Promise.all preserva a ordem, então meta/matriz saem iguais.
+        const balancetes = await Promise.all((competencias || []).map(async c => {
           const { linhas } = await montarBalancete(empresaId, c.id, 0, { comLancamentos: true })
-          if (!vivo) return
+          const res = (linhas || []).filter(l => { const d = String(l.classifRaw || l.classif).trim()[0]; return d === '3' || d === '4' || d === '5' })
+          return { c, res }
+        }))
+        if (!vivo) return
+        for (const { c, res } of balancetes) {
           // Comparativo trata só contas de resultado: Receita (3), Custos (4) e Despesas (5).
-          const res = linhas.filter(l => { const d = String(l.classifRaw || l.classif).trim()[0]; return d === '3' || d === '4' || d === '5' })
           if (!res.length) continue
-
           amArr.push({ ano: c.ano, mes: c.mes, id: c.id })
           if (c.ano === ANO) compsComDados.push({ id: c.id, mes: c.mes, status: c.status })
           for (const l of res) {
