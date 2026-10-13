@@ -1203,6 +1203,8 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // nem exigir confirmação para o grupo resolver/cruzar com o pagamento do mês. O usuário ainda pode
   // abrir e corrigir. Na competência de abertura (saldo inicial digitado da carga), NÃO se aplica.
   const aberturaHerdada = l => !!l?._abertura && !abertura.inicial
+  // Item HERDADO e JÁ IDENTIFICADO no mês anterior → congelado (espelho). Ver nota em leituraIncerta.
+  const herdadoTratado = l => aberturaHerdada(l) && !!l?.leitura?.ident && String(l?.leitura?.entidade || '').trim().length >= 3 && !ehNomeGenerico(l.leitura.entidade)
   const foiConfirmado = l => confirmados.has(chaveTrat(l)) || (l._abertura && confirmados.has(chaveAbBaixaForn(l))) || (l._abertura && abBaixaUnico(l) && confirmados.has(chaveAbBaixa(l))) || (l._abertura && legacyAbUnico(l) && confirmados.has(chaveAberturaLegacy(l))) || (!l._abertura && !l.acerto && itemUnico(l) && confirmados.has(itemConc(l))) // saiu do em aberto (conciliado)
   // VÍNCULO/CONEXÃO manual: o par explícito que o usuário linkou e mandou baixar (zera entre si).
   // SAI SEMPRE do em aberto — não depende do grupo do nome zerar inteiro (o resto do nome pode
@@ -1475,6 +1477,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       const itens = []
       for (const l of lancComUid) {
         if (dispSet.has(idDisp(l))) continue // você já disse "não" para esta linha
+        if (herdadoTratado(l)) continue // saldo anterior já identificado no mês passado — não re-sugere
         const jaIdent = l.leitura?.ident && String(l.leitura.entidade || '').trim()
         const hu = normNome(l.historico || '')
         const rg = regrasIdentPad.find(r => hu.includes(r.pad))
@@ -1749,7 +1752,7 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
     const nucs = new Set(membros.map(m => nucleoNome(nomeExib[m])).filter(n => n && n.length >= 3))
     // NÃO sugere "confirmar união" quando o nome do bloco é GENÉRICO (ex.: "VALOR REF. PGTO…",
     // descrição de pagamento, não é fornecedor) — não faz sentido confirmar como um fornecedor só.
-    return { nome: nomeExib[membros[0]], variacoes: membros.map(m => nomeExib[m]), lancs, total: lancs.reduce((s, l) => s + ov(l), 0), unido: membros.length > 1 && nucs.size > 1 && !ehNomeGenerico(nomeExib[membros[0]]), unk: false }
+    return { nome: nomeExib[membros[0]], variacoes: membros.map(m => nomeExib[m]), lancs, total: lancs.reduce((s, l) => s + ov(l), 0), unido: membros.length > 1 && nucs.size > 1 && !ehNomeGenerico(nomeExib[membros[0]]) && !lancs.some(herdadoTratado), unk: false }
   })
   if (grupos['(não identificado)']) {
     const lancs = ordenarPorData(grupos['(não identificado)']) // data mais antiga → mais nova
@@ -2046,8 +2049,14 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   ) : null
   const algoEmAberto = lista.length > 0 || conferidosGrupos.length > 0
 
+  // HERDADO TRATADO (regra do usuário): item de SALDO ANTERIOR (arrastado de um mês fechado) que já
+  // veio IDENTIFICADO do mês passado está CONGELADO — é o espelho do que foi finalizado em agosto.
+  // Não re-lê, não re-sugere nome/vínculo, não entra nos avisos (leitura incerta / NF não confere /
+  // nomes a confirmar). Só o que NÃO foi identificado no mês anterior (sem nome) e os lançamentos
+  // NOVOS do mês é que são lidos/sinalizados. (abertura.inicial = carga de abertura do 1º mês, essa
+  // ainda é tratável; herdada = veio de um fechamento anterior.)
   // Leitura incerta = ainda PENDENTE (não conferida/confirmada). O que já foi tratado sai da conta.
-  const leituraIncerta = l => Math.abs(ov(l)) >= 0.005 && l.leitura.conf !== 'alta' && !jaTratada(l) && !foiConfirmado(l) && !autoConc.has(l)
+  const leituraIncerta = l => Math.abs(ov(l)) >= 0.005 && l.leitura.conf !== 'alta' && !jaTratada(l) && !foiConfirmado(l) && !autoConc.has(l) && !herdadoTratado(l)
   const revs = lanc.filter(leituraIncerta).length
 
   // Anomalia de natureza: conta de cliente (Ativo) deve ficar devedora; fornecedor (Passivo) credora.
@@ -2065,7 +2074,9 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   const ladoBaixa = natCredito ? 'debito' : 'credito'
   const baixaSemTitulo = g => {
     const nfsTitulo = new Set(g.lancs.filter(l => Number(l[ladoOrigem]) > 0.005 && l.leitura.nf).map(l => nfKey(l.leitura.nf)))
-    return new Set(g.lancs.filter(l => Number(l[ladoBaixa]) > 0.005 && l.leitura.nf && !nfsTitulo.has(nfKey(l.leitura.nf))))
+    // Itens HERDADOS TRATADOS (espelho do mês anterior) não entram no aviso de "NF não confere" —
+    // o casamento já foi finalizado antes; só o que é novo/não tratado é sinalizado.
+    return new Set(g.lancs.filter(l => Number(l[ladoBaixa]) > 0.005 && l.leitura.nf && !nfsTitulo.has(nfKey(l.leitura.nf)) && !herdadoTratado(l)))
   }
   const totalSemTitulo = lista.reduce((n, g) => n + baixaSemTitulo(g).size, 0)
   // Linhas pendentes (não tratadas) de uma entidade e se ela pode ser confirmada em lote:
