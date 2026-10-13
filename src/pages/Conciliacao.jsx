@@ -791,6 +791,9 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // meses — essas ações são POR MÊS (regra do usuário: mês novo = razão novo = bloco fresh; só o
   // APRENDIZADO de nome/fornecedor é herdado). Salvar um mês não pode apagar o estado dos outros.
   const porCompRef = useRef({})
+  // Base LEGADA (aprendizado que estava global, por cliente) — serve de ponto de partida para meses
+  // que ainda não têm snapshot próprio em porComp (migração). Preservada ao salvar.
+  const legacyBaseRef = useRef({})
   // Ids (estáveis) de tudo que está conciliado AGORA — preenchido no render; o efeito abaixo
   // grava os NOVOS no "congelado" (aditivo).
   const congelaveisRef = useRef([])
@@ -882,22 +885,40 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   async function carregarNomes() {
     const { data } = await supabase.from('cargas_cadastro').select('dados').eq('cliente_id', empresaId).eq('tipo', 'conciliacao_nomes').order('created_at', { ascending: false }).limit(1).maybeSingle()
     const d = data?.dados && typeof data.dados === 'object' ? data.dados : {}
-    setNomesConf(new Set((d.confiaveis || []).map(chaveNome)))
-    setNomesIsolados(new Set((d.isolados || []).map(chaveNome)))
-    setNomesAlias(d.aliases && typeof d.aliases === 'object' ? d.aliases : {})
-    // PODA os vínculos forçados POLUÍDOS na carga (mesma trava da leitura): fornecedores sem nome
-    // próximo (aprendizado errado em lote) são descartados do estado — some da tela E, no próximo
-    // salvamento, some do cadastro (auto-limpeza). Mantém só os forçados de MESMA entidade.
-    const afRaw = d.aliasesForcados && typeof d.aliasesForcados === 'object' ? d.aliasesForcados : {}
+    // POR MÊS COM HERANÇA (regra do usuário): o APRENDIZADO (nomes, apelidos, uniões, ajustes de
+    // saldo anterior) é um retrato por competência. Um mês novo HERDA o retrato do mês anterior mais
+    // recente (ou a base legada global, na migração); o que você muda fica SÓ naquele mês — não volta
+    // pro passado — e segue para frente (o mês seguinte herda este). As AÇÕES do mês (reabertura/
+    // separação) são do próprio mês, sem herança. Tudo em dados.porComp[competencia].
+    const comp = competencia || '00/0000'
+    const vnum = v => { const m = /^(\d{1,2})\/(\d{4})$/.exec(String(v || '')); return m ? Number(m[2]) * 100 + Number(m[1]) : 0 }
+    const porComp = d.porComp && typeof d.porComp === 'object' ? d.porComp : {}
+    porCompRef.current = porComp
+    // Base legada = o aprendizado que estava no topo do dados (global). Guarda p/ meses sem snapshot.
+    const { porComp: _omit, ...legacy } = d
+    legacyBaseRef.current = legacy
+    const mine = porComp[comp] && typeof porComp[comp] === 'object' ? porComp[comp] : null
+    // Um snapshot "tem aprendizado" se carrega os campos de nome (distingue do formato antigo de
+    // porComp, que só guardava reabertura/separação — nesse caso o aprendizado vem da herança/legado).
+    const temApr = o => o && typeof o === 'object' && ('aliases' in o || 'confiaveis' in o || 'aberturaAjustes' in o || 'acertoNomes' in o || 'parcelamentos' in o || 'unificadosConfirmados' in o || 'isolados' in o)
+    // Aprendizado: o próprio mês, senão herda do mês anterior mais recente com snapshot, senão legado.
+    let learn = temApr(mine) ? mine : null
+    if (!learn) {
+      const prior = Object.keys(porComp).filter(k => vnum(k) < vnum(comp) && temApr(porComp[k]))
+        .sort((a, b) => vnum(b) - vnum(a))[0]
+      learn = prior ? porComp[prior] : legacy
+    }
+    setNomesConf(new Set((learn.confiaveis || []).map(chaveNome)))
+    setNomesIsolados(new Set((learn.isolados || []).map(chaveNome)))
+    setNomesAlias(learn.aliases && typeof learn.aliases === 'object' ? learn.aliases : {})
+    // PODA os vínculos forçados POLUÍDOS: fornecedores sem nome próximo (aprendizado errado em lote)
+    // são descartados. Mantém só os forçados de MESMA entidade.
+    const afRaw = learn.aliasesForcados && typeof learn.aliasesForcados === 'object' ? learn.aliasesForcados : {}
     const afLimpo = {}
     for (const [de, para] of Object.entries(afRaw)) if (mesmaEntidadeForcavel(de, para)) afLimpo[de] = para
     setAliasesForcados(afLimpo)
-    // PODA os ajustes de SALDO ANTERIOR (aberturaAjustes) POLUÍDOS: quando o nome gravado NÃO é a
-    // mesma entidade do nome ORIGINAL do item (merge errado em lote — ex.: MATHEUS/GABRIELA gravados
-    // como VINICIUS), descarta o override → o item volta a mostrar o fornecedor REAL do histórico.
-    // Preserva os de MESMA entidade e os de item genérico ("saldo anterior", que é identificação
-    // legítima). Itens já ZERADOS têm nome correto → não entram nessa poda (não são reabertos).
-    const abRaw = d.aberturaAjustes && typeof d.aberturaAjustes === 'object' ? d.aberturaAjustes : {}
+    // PODA os ajustes de SALDO ANTERIOR (aberturaAjustes) POLUÍDOS (merge errado em lote).
+    const abRaw = learn.aberturaAjustes && typeof learn.aberturaAjustes === 'object' ? learn.aberturaAjustes : {}
     const abLimpo = {}
     for (const [key, val] of Object.entries(abRaw)) {
       const ent = (val && typeof val === 'object') ? String(val.entidade || '').trim() : ''
@@ -905,36 +926,37 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
       if (!ent || !nomeOrig || ehNomeGenerico(nomeOrig) || mesmaEntidadeForcavel(nomeOrig, ent)) abLimpo[key] = val
     }
     setAberturaAj(abLimpo)
-    setAcertoNomes(d.acertoNomes && typeof d.acertoNomes === 'object' ? d.acertoNomes : {})
-    // AÇÕES POR MÊS (reabertura, conciliados reabertos, separação de linha): fresh a cada mês. O que
-    // você reabriu/separou num mês NÃO vaza para o seguinte — mês novo reconcilia do zero (auto +
-    // manual), herdando só o aprendizado de nome. Guardadas em dados.porComp[competencia]. Dados
-    // antigos (listas globais) NÃO são herdadas (migração = começa fresh), o que destrava pares
-    // limpos (mesmo fornecedor + NF + valor zera) que uma reabertura global estava travando.
-    const porComp = d.porComp && typeof d.porComp === 'object' ? d.porComp : {}
-    porCompRef.current = porComp
-    const cur = porComp[competencia || '00/0000'] && typeof porComp[competencia || '00/0000'] === 'object' ? porComp[competencia || '00/0000'] : {}
-    setBaixasReabertas(new Set(Array.isArray(cur.baixasReabertas) ? cur.baixasReabertas : []))
-    setConciliadosReabertos(new Set(Array.isArray(cur.conciliadosReabertos) ? cur.conciliadosReabertos : []))
-    setSeparados(new Set(Array.isArray(cur.separados) ? cur.separados : []))
-    setSugestoesRejeitadas(new Set(Array.isArray(d.sugestoesRejeitadas) ? d.sugestoesRejeitadas : []))
-    setModoPorNome(d.modoPorNome && typeof d.modoPorNome === 'object' ? d.modoPorNome : {})
-    setUnificadosConf(new Set((Array.isArray(d.unificadosConfirmados) ? d.unificadosConfirmados : []).map(chaveNome)))
-    setParcelamentos(Array.isArray(d.parcelamentos) ? d.parcelamentos : [])
+    setAcertoNomes(learn.acertoNomes && typeof learn.acertoNomes === 'object' ? learn.acertoNomes : {})
+    setSugestoesRejeitadas(new Set(Array.isArray(learn.sugestoesRejeitadas) ? learn.sugestoesRejeitadas : []))
+    setModoPorNome(learn.modoPorNome && typeof learn.modoPorNome === 'object' ? learn.modoPorNome : {})
+    setUnificadosConf(new Set((Array.isArray(learn.unificadosConfirmados) ? learn.unificadosConfirmados : []).map(chaveNome)))
+    setParcelamentos(Array.isArray(learn.parcelamentos) ? learn.parcelamentos : [])
+    // AÇÕES do próprio mês (reabertura/conciliados reabertos/separação) — SEM herança (fresh).
+    const perMo = mine || {}
+    setBaixasReabertas(new Set(Array.isArray(perMo.baixasReabertas) ? perMo.baixasReabertas : []))
+    setConciliadosReabertos(new Set(Array.isArray(perMo.conciliadosReabertos) ? perMo.conciliadosReabertos : []))
+    setSeparados(new Set(Array.isArray(perMo.separados) ? perMo.separados : []))
   }
   useEffect(() => { if (empresaId) carregarNomes() }, [empresaId, competencia]) // eslint-disable-line react-hooks/exhaustive-deps
   async function salvarNomes(conf, iso, aliases = nomesAlias, aberAj = aberturaAj, acNomes = acertoNomes, baixasReab = baixasReabertas, sugRej = sugestoesRejeitadas, modoPN = modoPorNome, sep = separados, aliasF = aliasesForcados, concReab = conciliadosReabertos, unifConf = unificadosConf, parcel = parcelamentos) {
     await supabase.from('cargas_cadastro').delete().eq('cliente_id', empresaId).eq('tipo', 'conciliacao_nomes')
-    // AÇÕES POR MÊS (reabertura/conciliados reabertos/separação) vão em porComp[competencia] — salvar
-    // ESTE mês não mexe no estado dos OUTROS meses (fica congelado lá). O APRENDIZADO (apelidos,
-    // nomes, uniões/junções, parcelamentos) fica no nível global → herdado por todos os meses, e
-    // NUNCA é desfeito por trabalhar no mês atual.
+    // POR MÊS COM HERANÇA: o snapshot do mês (aprendizado + ações) vai em porComp[competencia].
+    // Salvar ESTE mês não mexe nos OUTROS (ficam congelados). O aprendizado salvo aqui é herdado
+    // pelos meses SEGUINTES (que começam como cópia deste), mas NÃO volta para os anteriores.
     const comp = competencia || '00/0000'
     const porComp = { ...(porCompRef.current || {}) }
-    porComp[comp] = { baixasReabertas: [...baixasReab], conciliadosReabertos: [...(concReab || [])], separados: [...(sep || [])] }
+    porComp[comp] = {
+      // aprendizado (herdado p/ frente)
+      confiaveis: [...conf], isolados: [...iso], aliases: aliases || {}, aberturaAjustes: aberAj || {},
+      acertoNomes: acNomes || {}, sugestoesRejeitadas: [...sugRej], modoPorNome: modoPN || {},
+      aliasesForcados: aliasF || {}, unificadosConfirmados: [...unifConf], parcelamentos: Array.isArray(parcel) ? parcel : [],
+      // ações do mês (sem herança)
+      baixasReabertas: [...baixasReab], conciliadosReabertos: [...(concReab || [])], separados: [...(sep || [])],
+    }
     porCompRef.current = porComp
-    // vigencia é NOT NULL — usa a competência atual (o registro é único por cliente, lido sempre o mais recente).
-    const { error } = await supabase.from('cargas_cadastro').insert({ cliente_id: empresaId, tipo: 'conciliacao_nomes', vigencia: comp, dados: { confiaveis: [...conf], isolados: [...iso], aliases: aliases || {}, aberturaAjustes: aberAj || {}, acertoNomes: acNomes || {}, sugestoesRejeitadas: [...sugRej], modoPorNome: modoPN || {}, aliasesForcados: aliasF || {}, unificadosConfirmados: [...unifConf], parcelamentos: Array.isArray(parcel) ? parcel : [], porComp }, usuario })
+    // Preserva a base LEGADA no topo (ponto de partida p/ meses ainda sem snapshot) + o porComp.
+    // vigencia é NOT NULL — usa a competência atual (registro único por cliente, lido o mais recente).
+    const { error } = await supabase.from('cargas_cadastro').insert({ cliente_id: empresaId, tipo: 'conciliacao_nomes', vigencia: comp, dados: { ...(legacyBaseRef.current || {}), porComp }, usuario })
     if (error) { setMsg('Não consegui salvar: ' + error.message); return error }
   }
   // Lê a lista congelada gravada da conta (uma linha de auditoria: item "CONGELADOS·<conta>",
