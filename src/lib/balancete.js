@@ -547,6 +547,12 @@ export function limparNomeEntidade(nome) {
   const prefPgto = /^\s*(?:PAGAMENTOS?|PGTOS?|RECEBIMENTOS?|RECEB|BAIXAS?|LIQUIDA[CÇ][AÃ]O|QUITA[CÇ][AÃ]O)\b[\s.\-/:]*(?:(?:NFE?|NOTAS?(?:\s+FISCAIS?)?|DUPLICATAS?|DUPL?|DP|BOLETOS?|T[IÍ]TULOS?|DOC(?:UMENTOS?)?|PARCELAS?)\b[\s.\-/nº°:]*)*\d*[\s.\-/:]*/i
   do { prev = s; s = s.replace(prefPgto, '') } while (s !== prev && s)
   s = s.replace(/\s+\d{3,}\s*$/, '') // código no fim (ex.: "... SOLUCOES 003881")
+  // Forma jurídica no FIM (LTDA/S.A./EIRELI/EPP/ME/S.S.) — NÃO faz parte do núcleo do nome e às
+  // vezes vem num título (carga inicial) e noutro não (razão), o que SPLITAVA o MESMO cliente em
+  // dois blocos ("… SPE" × "… SPE LTDA"). Tira para o nome ficar consistente entre TODAS as origens
+  // (razão, saldo inicial, fiscal, apelido) — assim o mesmo cliente cai num bloco só. Não tira SPE
+  // (faz parte do nome). Se sobrar vazio, mantém o que tinha.
+  s = s.replace(/\s+(?:LTDA|S[\/.]?\s?A|EIRELI|EPP|ME|S\/S)\.?\b.*$/i, '').trim() || s
   return s.trim() || String(nome || '').trim()
 }
 
@@ -569,7 +575,7 @@ const FOTO_TIPO = 'depara'
 // VERSÃO da foto: entra no fpId para que uma mudança no CÓDIGO de leitura/arrasto (ex.: nova regra
 // de identificação de nome) INVALIDE todas as fotos automaticamente — senão a foto serviria a
 // leitura antiga mesmo após o deploy. BUMPAR a cada mudança que afete o conteúdo da composição.
-const FOTO_VERSION = 'v3-leitura-valorref-pipe-rcto'
+const FOTO_VERSION = 'v4-forma-juridica'
 const fotoObs = contaCod => `foto:${contaCod}`
 
 // Assinatura BARATA dos insumos de um mês para uma conta: contagem + data do último registro de
