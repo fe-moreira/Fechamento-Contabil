@@ -522,6 +522,12 @@ export function limparNomeEntidade(nome) {
   // nome do acumulador (um token, pode ter "/") logo após o traço.
   const opAcum = /^\s*(?:(?:RE)?VENDAS?|COMPRAS?|AQUISI[CÇ][AÃ]O|PRESTA[CÇ][AÃ]O|DEVOLU[CÇ][AÃ]O|RETORNO|REMESSA|TRANSFER[EÊ]NCIA|BONIFICA[CÇ][AÃ]O|FATURAMENTO)(?:\s+(?:DE|PARA|DO|DA|EM|A|AO))?\s+(?:MERCADORIAS?|PRODU[CÇ][AÃ]O|PRODUTOS?|SERVI[CÇ]OS?|COMERCIALIZA[CÇ][AÃ]O|INDUSTRIALIZA[CÇ][AÃ]O|CONSUMO|IMOBILIZADO)(?:\s*[-–—]\s*[A-Za-zÀ-ÿ0-9./]+)?\s+(?=[A-Za-zÀ-ÿ0-9])/i
   s = s.replace(opAcum, '')
+  // Naturezas de RECEITA / entrada de estoque que o Fiscal/Domínio cola NA FRENTE do nome do
+  // cliente (sobretudo no nome oficial por NF): "RECEITA DE VENDA DE PRODUTO <cliente>", "RECEITA
+  // DE SERVIÇOS - MONTAGEM/PROJETO <cliente>", "MATÉRIA-PRIMA - INDUSTRIALIZAÇÃO PARA VENDA
+  // <cliente>". O cliente é o que vem DEPOIS. O opAcum acima não pega essas (começam com "RECEITA"
+  // / "MATÉRIA"). Ex.: "RECEITA DE VENDA DE PRODUTO PL CPS 02 EMPREENDIMENTOS..." → "PL CPS 02 …".
+  s = s.replace(/^\s*(?:RECEITA\s+DE\s+(?:VENDAS?\s+DE\s+PRODUTOS?|SERVI[CÇ]OS?(?:\s*[-–—]\s*[A-Za-zÀ-ÿ]+)?)|MAT[EÉ]RIA[\s-]*PRIMA(?:\s*[-–—]\s*INDUSTRIALIZA[CÇ][AÃ]O\s+PARA\s+VENDA)?)\s*[-–—]?\s+(?=[A-Za-zÀ-ÿ0-9])/i, '')
   // Prefixo do fiscal integrado com ACUMULADOR: "SERV. PREST. PROPAGANDA – CUMULATIVO ACUM. 27 –
   // <CLIENTE>". O cliente vem DEPOIS do "ACUM. N –/—" (qualquer traço). Tira tudo até lá.
   s = s.replace(/^.*?\bACUM(?:ULADOR)?\.?\s*\d+[\s|\-–—−]+/i, '')
