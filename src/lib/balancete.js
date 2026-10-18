@@ -566,6 +566,10 @@ export function limparNomeEntidade(nome) {
 // A foto vai no tipo genérico 'depara' + obs 'foto:<conta>' (o CHECK da coluna `tipo` só aceita uma
 // lista fixa; 'depara' é o armazém livre, mesmo padrão da config de contas). vigencia = compId.
 const FOTO_TIPO = 'depara'
+// VERSÃO da foto: entra no fpId para que uma mudança no CÓDIGO de leitura/arrasto (ex.: nova regra
+// de identificação de nome) INVALIDE todas as fotos automaticamente — senão a foto serviria a
+// leitura antiga mesmo após o deploy. BUMPAR a cada mudança que afete o conteúdo da composição.
+const FOTO_VERSION = 'v3-leitura-valorref-pipe-rcto'
 const fotoObs = contaCod => `foto:${contaCod}`
 
 // Assinatura BARATA dos insumos de um mês para uma conta: contagem + data do último registro de
@@ -694,7 +698,7 @@ async function aberturaComFoto(empresaId, compId, contaCod, classifRaw, contaNom
   // cruzamento é automático (só entidade). Entra no fpId para que mudar o tipo da conta INVALIDE a
   // foto automaticamente (relê deste mês pra frente).
   const tipo = tipoDaConfig(ctx, ant, contaCod, classifRaw, contaNome)
-  const fpId = `${compId}|${contaCod}|${tipo}|${soDig(classifRaw) || ''}|${sig}≫${parent.fpId}`
+  const fpId = `${FOTO_VERSION}|${compId}|${contaCod}|${tipo}|${soDig(classifRaw) || ''}|${sig}≫${parent.fpId}`
   const foto = await lerFoto(empresaId, compId, contaCod)
   if (foto && foto.fpId === fpId && Array.isArray(foto.itens)) return { itens: foto.itens, fpId }
   // Algo mudou (ou não há foto): recomputa pela via de sempre e re-grava a foto.
