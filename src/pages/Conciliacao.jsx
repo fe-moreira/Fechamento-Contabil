@@ -3606,7 +3606,7 @@ function Detalhe({ conta, tipoCta, entidadeConf = null, reg, compId, empresaId, 
           let totalP = 0
           for (const x of membros) { const m = String(x.historico || '').match(/\b(\d{1,2})\s*\/\s*(\d{1,2})\b/); if (m) totalP = Math.max(totalP, Number(m[2]) || 0) }
           renderSeq.push({ kind: 'header', pg, valorNota, pago, falta: valorNota - pago, npag: membros.filter(x => Number(x[ladoBaixa]) > 0.005).length, totalP })
-          for (const x of membros) renderSeq.push({ kind: 'linha', l: x, parcel: true })
+          membros.forEach((x, mi) => renderSeq.push({ kind: 'linha', l: x, parcel: true, fimParcel: mi === membros.length - 1 }))
         }
         return (
           <div key={gi} data-fornec={chaveNome(g.nome)} style={{ background: theme.card, border: `1px solid ${borda}`, borderRadius: 12, overflow: 'hidden', marginBottom: 12 }}>
@@ -3708,7 +3708,7 @@ function Detalhe({ conta, tipoCta, entidadeConf = null, reg, compId, empresaId, 
                   const contras = contraDe(l)
                   return (
                     <tr key={i} onClick={() => abrirLinha(l)}
-                      style={{ borderTop: `1px solid ${theme.border}`, borderLeft: it.parcel ? '3px solid rgba(74,124,255,0.55)' : undefined, cursor: 'pointer', opacity: (l.acerto || tratado) ? 0.7 : 1, background: (l.acerto || tratado) ? 'rgba(48,164,108,0.08)' : semNF ? 'rgba(229,72,77,0.08)' : it.parcel ? 'rgba(74,124,255,0.03)' : 'transparent' }}
+                      style={{ borderTop: `1px solid ${theme.border}`, borderLeft: it.parcel ? '3px solid rgba(74,124,255,0.55)' : undefined, borderBottom: it.fimParcel ? '2px solid rgba(74,124,255,0.55)' : undefined, cursor: 'pointer', opacity: (l.acerto || tratado) ? 0.7 : 1, background: (l.acerto || tratado) ? 'rgba(48,164,108,0.08)' : semNF ? 'rgba(229,72,77,0.08)' : it.parcel ? 'rgba(74,124,255,0.03)' : 'transparent' }}
                       title={l.acerto ? `${tagAcertoLanc(l).titulo} — clique para ver ou desfazer` : herdada ? 'Veio validado do mês anterior — clique para corrigir se precisar' : jaTratada(l) ? 'Já conferido — clique para ver ou desfazer' : semNF ? 'Baixa com NF que não confere com o título — justifique ou corrija' : 'Justificar ou corrigir este lançamento'}>
                       <td style={{ ...td, textAlign: 'center' }} onClick={e => e.stopPropagation()}>
                         <input type="checkbox" title="Selecionar para baixar (baixa manual)" checked={selLin.has(selKeyU(l))} onChange={() => toggleSelLin(l)} style={{ cursor: 'pointer', width: 15, height: 15 }} />
