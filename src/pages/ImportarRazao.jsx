@@ -5,6 +5,7 @@ import { useAuth } from '../components/AuthProvider'
 import { gerarSugestoesDoRazao } from '../lib/sugestoesRazao'
 import { gerarSugestoesConciliacao } from '../lib/sugestoesConciliacao'
 import { checarArquivoEmpresa } from '../lib/validarArquivoEmpresa'
+import { parsePlano } from '../lib/balancete'
 import { carregarResolverCC, resolverCC } from '../lib/centroCusto'
 import DropZone from '../components/DropZone'
 import { theme } from '../lib/theme'
@@ -122,6 +123,32 @@ function autoMapear(headers) {
 // reconstruída ao complementar/excluir. Cada arquivo guarda o original (extrair) e um
 // JSON das linhas normalizadas (rebuild sem reprocessar a planilha).
 const rowsPathDe = (compId, id) => `razao/${compId}/${id}.json`
+
+// Contas (reduzido) do arquivo que NÃO existem no plano de contas do cliente. Compara por reduzido
+// e por classificação (crua e só-dígitos), igual ao casamento do balancete. Devolve [{conta, nome}].
+// Vazio = tudo no plano — ou SEM plano cadastrado (aí não dá para validar e deixa passar).
+async function contasForaDoPlano(empresaId, registros) {
+  const { data } = await supabase.from('cargas_cadastro').select('dados')
+    .eq('cliente_id', empresaId).eq('tipo', 'plano').order('created_at', { ascending: false }).limit(1).maybeSingle()
+  const plano = parsePlano(data?.dados)
+  if (!plano.length) return []
+  const soDig = s => String(s || '').replace(/\D/g, '')
+  const red = new Set(), cls = new Set(), redDig = new Set(), clsDig = new Set()
+  for (const p of plano) {
+    if (p.reduzido) { red.add(String(p.reduzido).trim()); redDig.add(soDig(p.reduzido)) }
+    if (p.classif) { cls.add(String(p.classif).trim()); clsDig.add(soDig(p.classif)) }
+  }
+  const noPlano = cod => { const c = String(cod).trim(); const d = soDig(c); return red.has(c) || cls.has(c) || (!!d && (redDig.has(d) || clsDig.has(d))) }
+  const nome = {}, vistos = new Set(), out = []
+  for (const r of (registros || [])) { const c = String(r?.conta || '').trim(); if (c && !nome[c] && r?.nome) nome[c] = r.nome }
+  for (const r of (registros || [])) {
+    const c = String(r?.conta || '').trim()
+    if (!c || vistos.has(c)) continue
+    vistos.add(c)
+    if (!noPlano(c)) out.push({ conta: c, nome: nome[c] || '' })
+  }
+  return out
+}
 
 export default function ImportarRazao() {
   const { empresas, empresaId, empresaNome, competencia, getCompetenciaId, recalcularPendencias } = useAppData()
@@ -365,6 +392,18 @@ export default function ImportarRazao() {
     try {
       const cid = cidArg || compId || await getCompetenciaId()
       if (!cid) { setErro('Selecione uma empresa no topo.'); setImportando(false); return }
+      // REGRA: o PLANO vem primeiro. Se o arquivo trouxer contas que NÃO estão no plano de contas,
+      // NÃO sobe o razão — aponta as contas novas para você atualizar o plano e reimportar o razão
+      // completo. (Sem o plano, cada conta nova entraria sem classificação e cairia no lugar errado.)
+      const foraPlano = await contasForaDoPlano(empresaId, pack.registros)
+      if (foraPlano.length) {
+        const lista = foraPlano.slice(0, 40).map(c => `• ${c.conta}${c.nome ? ' — ' + c.nome : ''}`).join('\n')
+        setErro(`Não subi o razão: ${foraPlano.length} conta(s) do arquivo NÃO estão no plano de contas.\n`
+          + `Atualize o PLANO primeiro (Base de Informações → Plano de contas) e reimporte o razão completo.\n\n`
+          + `Contas novas (fora do plano):\n${lista}${foraPlano.length > 40 ? `\n… e mais ${foraPlano.length - 40}.` : ''}`)
+        setImportando(false)
+        return
+      }
       const id = Math.random().toString(36).slice(2, 10)
       // Sobe o original (extrair) e o JSON das linhas (rebuild).
       let path = ''
@@ -466,7 +505,7 @@ export default function ImportarRazao() {
         {arquivo && <p style={{ fontSize: 12.5, color: theme.sub, marginTop: 10 }}><i className="ti ti-file-spreadsheet" /> {arquivo} — {linhas.length} linha(s) detectada(s)</p>}
       </div>
 
-      {erro && <p style={{ color: theme.red, fontSize: 13, marginBottom: 14 }}>{erro}</p>}
+      {erro && <p style={{ color: theme.red, fontSize: 13, marginBottom: 14, whiteSpace: 'pre-wrap' }}>{erro}</p>}
 
       {pend && (
         <div onClick={() => setPend(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 70 }}>
