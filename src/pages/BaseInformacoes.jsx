@@ -1071,6 +1071,21 @@ function ModalCarga({ carga, historico, empresaId, cliente, usuario, plano = [],
   const bancosCad = contasCad.filter(c => normK(c.tipo).includes('banco'))
   const resultCad = contasCad.filter(c => /result|liber/.test(normK(c.tipo)))
   const credito = cargaRecente ? `${(cargaRecente.usuario || '').split('@')[0] || '—'} · ${new Date(cargaRecente.created_at).toLocaleDateString('pt-BR')}` : ''
+  // Exporta o PLANO de contas da carga mais recente (como está cadastrado) em Excel — para
+  // conferir o que subiu (código, classificação, nome, tipo sintética/analítica).
+  async function exportarPlano() {
+    if (!contasCad.length) return
+    const linhas = contasCad.map(c => [c.codigo || '', c.classif || '', c.nome || '',
+      String(c.tipo || '').toUpperCase().slice(0, 1) === 'S' ? 'Sintética' : 'Analítica'])
+    await gerarExcelTimbrado({
+      titulo: 'Plano de contas',
+      sub: `Vigência ${cargaRecente?.vigencia || ''} · ${contasCad.length} conta(s)`,
+      colunas: [{ nome: 'Código', largura: 12 }, { nome: 'Classificação', largura: 22 }, { nome: 'Nome', largura: 54 }, { nome: 'Tipo', largura: 14 }],
+      linhas,
+      arquivo: `plano-de-contas-${String(cargaRecente?.vigencia || '').replace('/', '-')}.xlsx`,
+      aba: 'Plano de contas',
+    })
+  }
   const LinhaConta = ({ c }) => (
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '8px 0', borderTop: `1px solid ${theme.border}`, fontSize: 13 }}>
       <span style={{ color: theme.text, minWidth: 0 }}><span style={{ color: theme.sub }}>{c.codigo}</span>{c.codigo && c.nome ? ' · ' : ''}{c.nome}{c.tipo ? <span style={{ color: theme.sub, fontSize: 11, marginLeft: 6 }}>({String(c.tipo).toUpperCase().slice(0, 1) === 'S' ? 'sintética' : 'analítica'})</span> : ''}</span>
@@ -1104,7 +1119,12 @@ function ModalCarga({ carga, historico, empresaId, cliente, usuario, plano = [],
     <Modal titulo={carga.title} sub={carga.sub} onClose={onClose} largura={680}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 12 }}>
         <p style={{ color: theme.sub, fontSize: 12.5, margin: 0, flex: 1 }}>{modelo.dica || 'Importe a planilha ou cadastre manualmente.'} Cada carga cria uma <b style={{ color: theme.text }}>vigência</b> e preserva o histórico.</p>
-        <button className="btn btn-ghost" style={{ fontSize: 12.5, whiteSpace: 'nowrap' }} onClick={baixarModelo}><i className="ti ti-download" /> Baixar modelo</button>
+        <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+          {ehPlano && contasCad.length > 0 && (
+            <button className="btn btn-ghost" style={{ fontSize: 12.5, whiteSpace: 'nowrap' }} onClick={exportarPlano} title="Exportar em Excel o plano de contas que está cadastrado (carga mais recente)"><i className="ti ti-file-spreadsheet" /> Exportar</button>
+          )}
+          <button className="btn btn-ghost" style={{ fontSize: 12.5, whiteSpace: 'nowrap' }} onClick={baixarModelo}><i className="ti ti-download" /> Baixar modelo</button>
+        </div>
       </div>
 
       <div style={{ marginBottom: 12 }}>
