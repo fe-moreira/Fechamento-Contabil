@@ -845,6 +845,10 @@ export async function montarBalancete(empresaId, compId, _depth = 0, opts = {}) 
     folha.debito += deb; folha.credito += cre; folha.saldo_inicial += ini
     if (!folha.nome && (p?.nome || mv.nome)) folha.nome = p?.nome || mv.nome
     if (!folha.reduzido) folha.reduzido = p?.reduzido || cod
+    // Conta que veio no BALANCETE mas NÃO existe no plano (quando há plano): a classificação é
+    // "provisória" (derivada do próprio código), então fica SINALIZADA — não deve se passar por uma
+    // conta de verdade do Ativo/Passivo. O usuário vê o aviso e inclui a conta no plano.
+    if (temPlano && !p) folha.foraDoPlano = true
     // Ancestrais (sintéticas): pelas sintéticas REAIS do plano (prefixo), não pela máscara.
     agregar(classif, !!p, e => { e.debito += deb; e.credito += cre; e.saldo_inicial += ini })
   }
@@ -954,6 +958,7 @@ export async function montarBalancete(empresaId, compId, _depth = 0, opts = {}) 
     nome: e.nome,
     grau: grauDe(e.classif),
     sintetica: !e.folha,
+    foraDoPlano: !!e.foraDoPlano,
     saldo_inicial: e.saldo_inicial, debito: e.debito, credito: e.credito,
     saldo_final: e.saldo_inicial + e.debito - e.credito,
   })).filter(comMov).sort(ordena)

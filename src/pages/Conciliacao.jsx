@@ -495,6 +495,7 @@ export default function Conciliacao() {
   const [configContas, setConfigContas] = useState({ porComp: {} }) // tipo de cada conta (entidade/composicao/saldo), por mês com herança
   const [compFechado, setCompFechado] = useState(false) // o mês exibido está FECHADO? (trava o seletor de tipo)
   const [menuTipo, setMenuTipo] = useState(null) // conta cujo menu de tipo está aberto
+  const [contasForaPlano, setContasForaPlano] = useState([]) // contas do balancete que não estão no plano
 
   // Competência de abertura do cliente + se está fechada (para o atalho de excluir saldo inicial).
   useEffect(() => {
@@ -552,7 +553,13 @@ export default function Conciliacao() {
         lerConfigContas(empresaId).then(setConfigContas).catch(() => {})
         const { linhas } = await montarBalancete(empresaId, comp.id)
         // Conciliação trata só Ativo (1) e Passivo (2). Receita/Custos/Despesa vão no Comparativo.
-        const ap = linhas.filter(l => { const d = String(l.classifRaw || l.classif).trim()[0]; return d === '1' || d === '2' })
+        // A Conciliação SEGUE O PLANO: contas que vieram no balancete mas NÃO estão no plano têm
+        // classificação provisória (pelo próprio código) — não entram na lista de Ativo/Passivo
+        // (senão um custo fora do plano se disfarçaria de conta do Ativo). Ficam num AVISO para você
+        // incluí-las no plano. (Não agregam em nenhuma sintética, então não desequilibram nada.)
+        const fora = linhas.filter(l => l.foraDoPlano && !l.sintetica)
+        setContasForaPlano(fora.map(l => ({ conta: l.reduzido, nome: l.nome, saldo: l.saldo_final })))
+        const ap = linhas.filter(l => !l.foraDoPlano && (() => { const d = String(l.classifRaw || l.classif).trim()[0]; return d === '1' || d === '2' })())
         setBaseContas(ap.map(l => ({ ...l, conta: l.reduzido })))
         // Índice do plano (reduzido → nome/classif) p/ mostrar contas que só têm
         // lançamento manual/correção e não vieram no balancete importado.
@@ -722,6 +729,18 @@ export default function Conciliacao() {
         <span style={{ flex: 1 }} />
         {saldoIni.periodo && <button className="btn btn-ghost" style={{ fontSize: 12, padding: '5px 12px', color: saldoIni.fechada ? theme.sub : theme.red, borderColor: saldoIni.fechada ? theme.cb : 'rgba(229,72,77,0.4)' }} disabled={saldoIni.fechada} onClick={excluirSaldoIni} title={saldoIni.fechada ? `Abertura (${saldoIni.periodo}) fechada — reabra para mexer no saldo inicial` : 'Apagar TODO o saldo inicial para subir os arquivos de novo (Base de Informações)'}><i className={`ti ${saldoIni.fechada ? 'ti-lock' : 'ti-trash'}`} /> {saldoIni.fechada ? 'Saldo inicial travado' : 'Excluir saldo inicial'}</button>}
       </div>
+      {contasForaPlano.length > 0 && (
+        <div style={{ background: 'rgba(245,166,35,0.10)', border: `1px solid ${theme.yellow}`, borderRadius: 10, padding: '10px 14px', marginBottom: 10, fontSize: 12.5 }}>
+          <div style={{ color: theme.yellow, fontWeight: 700, marginBottom: 4 }}><i className="ti ti-alert-triangle" /> {contasForaPlano.length} conta(s) do balancete fora do plano</div>
+          <div style={{ color: theme.sub, marginBottom: 6 }}>Estas contas vieram no balancete mas <b>não estão no plano de contas</b> — por isso <b>não aparecem</b> na lista abaixo (a Conciliação segue o plano). Inclua-as no <b>Plano de contas</b> (Base de Informações) com a classificação certa.</div>
+          {contasForaPlano.map((c, i) => (
+            <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, padding: '2px 0', color: theme.text }}>
+              <span><span style={{ color: theme.sub }}>{c.conta}</span> · {c.nome || '—'}</span>
+              <span style={{ color: theme.sub, whiteSpace: 'nowrap' }}>{moneyDC(c.saldo)}</span>
+            </div>
+          ))}
+        </div>
+      )}
       <div style={{ background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 12, overflow: 'auto' }}>
         <table style={{ width: '100%', minWidth: 960, borderCollapse: 'collapse' }}>
           <thead>
