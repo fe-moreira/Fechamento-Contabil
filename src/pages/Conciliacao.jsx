@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { lerTudo } from '../lib/lerTudo'
@@ -7,6 +7,7 @@ import { useAuth } from '../components/AuthProvider'
 import { theme, money, moneyDC } from '../lib/theme'
 import InfoTela from '../components/InfoTela'
 import { montarBalancete, parsePlano, composicaoAbertura, difConciliacao, applyMask, erroContaSintetica, ehCompetenciaInicial, excluirLinhaAbertura, limparNomeEntidade, dataNaCompetencia, forcarReleituraFoto } from '../lib/balancete'
+import { lerConfigContas, configEfetiva, salvarConfigConta, ROTULO_TIPO } from '../lib/configContas'
 import { abrePdfTimbrado } from '../lib/pdf'
 import { gerarExcelTimbrado } from '../lib/excel'
 import { listarComentariosConta, adicionarComentario, excluirComentario } from '../lib/comentarios'
@@ -485,7 +486,6 @@ function tipoAuto(classifRaw) {
   const c = String(classifRaw || '').replace(/\D/g, '')
   return c.startsWith('111') ? 'saldo' : 'composicao'
 }
-const LABEL_TIPO = { saldo: 'Saldo', composicao: 'Composição' }
 
 export default function Conciliacao() {
   const { empresaId, empresaNome, competencia, getCompetenciaId } = useAppData()
@@ -501,6 +501,9 @@ export default function Conciliacao() {
   const [sel, setSel] = useState(null) // conta selecionada (detalhe)
   const [filtroFarol, setFiltroFarol] = useState('todos') // 'todos' | 'red' | 'yellow' | 'green'
   const [saldoIni, setSaldoIni] = useState({ periodo: '', fechada: false }) // trava do saldo inicial (abertura)
+  const [configContas, setConfigContas] = useState({ porComp: {} }) // tipo de cada conta (entidade/composicao/saldo), por mês com herança
+  const [compFechado, setCompFechado] = useState(false) // o mês exibido está FECHADO? (trava o seletor de tipo)
+  const [menuTipo, setMenuTipo] = useState(null) // conta cujo menu de tipo está aberto
 
   // Competência de abertura do cliente + se está fechada (para o atalho de excluir saldo inicial).
   useEffect(() => {
@@ -550,10 +553,12 @@ export default function Conciliacao() {
     if (!empresaId) { setCarregando(false); return }
     setCarregando(true)
     const [mes, ano] = competencia.split('/').map(Number)
-    supabase.from('competencias').select('id').eq('cliente_id', empresaId).eq('ano', ano).eq('mes', mes).maybeSingle()
+    supabase.from('competencias').select('id, status').eq('cliente_id', empresaId).eq('ano', ano).eq('mes', mes).maybeSingle()
       .then(async ({ data: comp }) => {
         if (!comp) { setCarregando(false); return }
         setCompId(comp.id)
+        setCompFechado(String(comp.status || '').toLowerCase() === 'fechado')
+        lerConfigContas(empresaId).then(setConfigContas).catch(() => {})
         const { linhas } = await montarBalancete(empresaId, comp.id)
         // Conciliação trata só Ativo (1) e Passivo (2). Receita/Custos/Despesa vão no Comparativo.
         const ap = linhas.filter(l => { const d = String(l.classifRaw || l.classif).trim()[0]; return d === '1' || d === '2' })
@@ -574,7 +579,33 @@ export default function Conciliacao() {
       })
   }, [empresaId, competencia])
 
-  const tipoEf = c => conf[c.conta]?.tipo || tipoAuto(c.classifRaw)
+  // Config EFETIVA do mês exibido (funde os meses <= competencia, com herança pra frente).
+  const cfgMerged = useMemo(() => configEfetiva(configContas, competencia), [configContas, competencia])
+  // Tipo EFETIVO (3 valores: entidade/composicao/saldo). Prioridade: config manual (nova) >
+  // override legado por mês (conciliacao_conta.tipo: saldo/composicao) > automático.
+  const tipoEf = c => {
+    const ov = cfgMerged[String(c.conta)]
+    if (ov === 'entidade' || ov === 'composicao' || ov === 'saldo') return ov
+    const old = conf[c.conta]?.tipo
+    if (old === 'saldo') return 'saldo'
+    if (old === 'composicao') return ehPorEntidade(c.nome) ? 'entidade' : 'composicao'
+    return tipoAuto(c.classifRaw) === 'saldo' ? 'saldo' : (ehPorEntidade(c.nome) ? 'entidade' : 'composicao')
+  }
+  // A conta tem config MANUAL (entidade/composicao/saldo)? → o detalhe usa esse tipo; senão o detalhe
+  // decide "por nome" como antes (automático/botão). null = sem config manual.
+  const entidadeConfDe = c => {
+    const ov = cfgMerged[String(c.conta)]
+    if (ov === 'entidade') return true
+    if (ov === 'composicao' || ov === 'saldo') return false
+    return null
+  }
+  // Define o tipo da conta (a partir deste mês): grava e recarrega a config. Bloqueado em mês fechado.
+  async function definirTipo(contaCod, tipo) {
+    setMenuTipo(null)
+    if (compFechado) { alert('Mês FECHADO — reabra o fechamento para mudar o tipo da conta.'); return }
+    try { const novo = await salvarConfigConta(empresaId, competencia, contaCod, tipo, user?.email); setConfigContas(novo) }
+    catch { alert('Não consegui salvar o tipo da conta. Tente de novo.') }
+  }
 
   // Régua única (todas as contas começam vermelhas):
   // - Verde:   documento suporte importado que bate com o saldo.
@@ -588,14 +619,6 @@ export default function Conciliacao() {
     if (docBate) return theme.green
     if (reg.conciliada && reg.justificativa) return theme.yellow
     return theme.red
-  }
-
-  async function trocaTipo(c) {
-    const novo = tipoEf(c) === 'saldo' ? 'composicao' : 'saldo'
-    const reg = conf[c.conta]
-    if (reg) await supabase.from('conciliacao_conta').update({ tipo: novo, usuario: user?.email }).eq('id', reg.id)
-    else await supabase.from('conciliacao_conta').insert({ competencia_id: compId, conta: c.conta, tipo: novo, usuario: user?.email })
-    carregarConf(compId)
   }
 
   // Contas que só têm LANÇAMENTO (manual/correção) e não vieram no balancete importado
@@ -646,7 +669,7 @@ export default function Conciliacao() {
   if (carregando) return <Wrapper><p style={{ color: theme.sub, fontSize: 13 }}>Carregando…</p></Wrapper>
   if (!compId || contas.length === 0) return <Wrapper><Aviso icon="ti-table-off" texto="Nenhum balancete nesta competência. Importe o razão primeiro." /></Wrapper>
 
-  if (sel) return <Detalhe conta={sel} tipoCta={tipoEf(sel)} reg={conf[sel.conta]} compId={compId} empresaId={empresaId} usuario={user?.email} competencia={competencia} ajuste={acertos[sel.conta] || null} getCompetenciaId={getCompetenciaId} onSalvarConf={recarregar} onMudou={recarregar} onVoltar={() => setSel(null)} />
+  if (sel) return <Detalhe conta={sel} tipoCta={tipoEf(sel) === 'saldo' ? 'saldo' : 'composicao'} entidadeConf={entidadeConfDe(sel)} reg={conf[sel.conta]} compId={compId} empresaId={empresaId} usuario={user?.email} competencia={competencia} ajuste={acertos[sel.conta] || null} getCompetenciaId={getCompetenciaId} onSalvarConf={recarregar} onMudou={recarregar} onVoltar={() => setSel(null)} />
 
   // A SINTÉTICA é a soma das ANALÍTICAS: as correções/estornos pendentes ficam nas
   // analíticas (acertos por conta), então acumulamos o ajuste nas sintéticas ancestrais
@@ -735,11 +758,18 @@ export default function Conciliacao() {
                     {c.nome || '—'}
                     {inv && <span title={`Conta do ${inv === 'credor' ? 'Ativo com saldo credor' : 'Passivo com saldo devedor'} (não é redutora) — verifique`} style={{ marginLeft: 8, background: 'rgba(229,72,77,0.18)', color: theme.red, fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 20, textTransform: 'uppercase', letterSpacing: .3 }}><i className="ti ti-alert-octagon" /> saldo {inv}</span>}
                   </td>
-                  <td style={{ ...td }}>{sint ? '' : (
-                    <span onClick={e => { e.stopPropagation(); trocaTipo(c) }} title="Clique para alternar Saldo / Composição"
-                      style={{ display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer', fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 20, background: t === 'saldo' ? 'rgba(245,166,35,0.15)' : 'rgba(74,124,255,0.14)', color: t === 'saldo' ? theme.yellow : theme.accent }}>
-                      {LABEL_TIPO[t]} <i className="ti ti-switch-horizontal" style={{ fontSize: 12 }} />
-                    </span>)}</td>
+                  <td style={{ ...td }}>{sint ? '' : (() => {
+                    const cor = t === 'saldo' ? theme.yellow : t === 'entidade' ? theme.accent : '#9B8AFB'
+                    const bg = t === 'saldo' ? 'rgba(245,166,35,0.15)' : t === 'entidade' ? 'rgba(74,124,255,0.14)' : 'rgba(155,138,251,0.16)'
+                    const manual = !!cfgMerged[String(c.conta)]
+                    return (
+                      <span onClick={e => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); setMenuTipo({ conta: c.conta, x: r.left, y: r.bottom }) }}
+                        title={`Tipo da conta: ${ROTULO_TIPO[t]}${manual ? ' (definido)' : ' (automático)'}. Clique para mudar — vale deste mês em diante.`}
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer', fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 20, background: bg, color: cor }}>
+                        {manual && <span style={{ width: 5, height: 5, borderRadius: 5, background: cor, flex: '0 0 auto' }} />}
+                        {ROTULO_TIPO[t]} <i className="ti ti-chevron-down" style={{ fontSize: 12 }} />
+                      </span>)
+                  })()}</td>
                   <td style={{ ...tdR, fontWeight: peso }}>{moneyDC(c.saldo_inicial)}</td>
                   <td style={{ ...tdR, fontWeight: peso }} title={Math.abs(ajDebOf(c)) > 0.005 ? `Balancete ${money(c.debito)} + correções pendentes ${money(ajDebOf(c))}` : undefined}>
                     {money((Number(c.debito) || 0) + ajDebOf(c))}
@@ -760,11 +790,45 @@ export default function Conciliacao() {
           </tbody>
         </table>
       </div>
+      {menuTipo && (() => {
+        const atual = cfgMerged[String(menuTipo.conta)] || null // 'entidade'|'composicao'|'saldo'|null(auto)
+        const opts = [
+          { v: 'auto', lab: 'Automático', desc: 'o sistema decide (banco→saldo, cliente/forn→por nome)', ic: 'ti-wand' },
+          { v: 'entidade', lab: 'Cliente/Fornecedor', desc: 'blocos por nome, baixa por NF+nome', ic: 'ti-users' },
+          { v: 'composicao', lab: 'Composição sem nome', desc: 'impostos: lista em aberto + baixa, sem blocos', ic: 'ti-list-details' },
+          { v: 'saldo', lab: 'Só saldo', desc: 'banco/estoque: sem baixa, arrasta só o saldo', ic: 'ti-wallet' },
+        ]
+        return (
+          <>
+            <div onClick={() => setMenuTipo(null)} style={{ position: 'fixed', inset: 0, zIndex: 300 }} />
+            <div style={{ position: 'fixed', left: Math.min(menuTipo.x, (typeof window !== 'undefined' ? window.innerWidth : 1200) - 300), top: menuTipo.y + 4, zIndex: 301, width: 290, background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 10, boxShadow: '0 12px 40px rgba(0,0,0,0.4)', overflow: 'hidden' }}>
+              <div style={{ padding: '8px 12px', fontSize: 11, color: theme.sub, borderBottom: `1px solid ${theme.border}` }}>
+                Tipo da conta <b>{menuTipo.conta}</b> — vale de <b>{competencia}</b> em diante{compFechado ? ' (mês FECHADO — bloqueado)' : ''}
+              </div>
+              {opts.map(o => {
+                const sel = (o.v === 'auto' && !atual) || o.v === atual
+                return (
+                  <div key={o.v} onClick={() => definirTipo(menuTipo.conta, o.v)}
+                    style={{ padding: '9px 12px', cursor: compFechado ? 'not-allowed' : 'pointer', display: 'flex', gap: 10, alignItems: 'flex-start', opacity: compFechado ? 0.5 : 1, background: sel ? 'rgba(74,124,255,0.10)' : 'transparent' }}
+                    onMouseEnter={e => { if (!compFechado && !sel) e.currentTarget.style.background = 'rgba(255,255,255,0.04)' }}
+                    onMouseLeave={e => { if (!sel) e.currentTarget.style.background = 'transparent' }}>
+                    <i className={`ti ${o.ic}`} style={{ fontSize: 15, color: sel ? theme.accent : theme.sub, marginTop: 1 }} />
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 12.5, fontWeight: 600, color: sel ? theme.accent : undefined }}>{o.lab} {sel && <i className="ti ti-check" style={{ fontSize: 12 }} />}</div>
+                      <div style={{ fontSize: 10.5, color: theme.sub, marginTop: 1 }}>{o.desc}</div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </>
+        )
+      })()}
     </Wrapper>
   )
 }
 
-function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia, ajuste = null, getCompetenciaId, onSalvarConf, onMudou, onVoltar }) {
+function Detalhe({ conta, tipoCta, entidadeConf = null, reg, compId, empresaId, usuario, competencia, ajuste = null, getCompetenciaId, onSalvarConf, onMudou, onVoltar }) {
   const [lanc, setLanc] = useState([])
   // Débito/crédito/SALDO ATUAL têm que incluir os lançamentos feitos NESTA conta (manuais e
   // gerados) — seja conta de SALDO ou de COMPOSIÇÃO. Somamos direto dos lançamentos carregados
@@ -1632,7 +1696,9 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
   // Modo "por nome": automático quando o nome indica cliente/fornecedor/adiantamento, OU forçado
   // pelo usuário nesta conta (modoPorNome). Contas amarradas por saldo (banco) não entram.
   const forcadoPN = modoPorNome[conta.conta]
-  const ehEntidadeConta = (forcadoPN != null ? forcadoPN : ehPorEntidade(conta.nome)) && tipoCta !== 'saldo'
+  // Precedência: config manual da conta (entidadeConf, definida na lista) > botão "Por nome" desta
+  // sessão (forcadoPN) > automático pelo nome. Conta de saldo nunca é "por nome".
+  const ehEntidadeConta = (entidadeConf != null ? entidadeConf : (forcadoPN != null ? forcadoPN : ehPorEntidade(conta.nome))) && tipoCta !== 'saldo'
   async function alternarPorNome() {
     const atual = forcadoPN != null ? forcadoPN : ehPorEntidade(conta.nome)
     const novo = { ...modoPorNome, [conta.conta]: !atual }

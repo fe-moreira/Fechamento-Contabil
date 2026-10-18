@@ -1,6 +1,7 @@
 import { supabase } from './supabase'
-import { itensAbertosConta, ehPorEntidade } from './aberturaArrasto'
+import { itensAbertosConta } from './aberturaArrasto'
 import { aberturaComp } from './cargaInicial'
+import { lerConfigContas, configEfetiva, tipoContaEf } from './configContas'
 
 const baixa = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
 
@@ -634,15 +635,36 @@ async function cargaInicialComposicao(empresaId, contaCod, classifRaw) {
   return out
 }
 
-export async function composicaoAbertura(empresaId, compId, contaCod, classifRaw, contaNome = '', _depth = 0) {
-  const r = await aberturaComFoto(empresaId, compId, contaCod, classifRaw, contaNome, _depth)
+// Contexto de CONFIG do tipo das contas (para o arrasto respeitar Cliente/Fornecedor ×
+// Composição sem nome × Só saldo, por mês com herança). Carregado uma vez no topo da recursão:
+// a config do cliente + o rótulo "MM/AAAA" de cada competência (para resolver a config efetiva
+// de cada mês da cadeia).
+async function carregarCtxConfig(empresaId) {
+  const [cfg, { data: comps }] = await Promise.all([
+    lerConfigContas(empresaId).catch(() => ({ porComp: {} })),
+    supabase.from('competencias').select('id, ano, mes').eq('cliente_id', empresaId),
+  ])
+  const labelDe = {}
+  for (const c of (comps || [])) labelDe[c.id] = `${String(c.mes).padStart(2, '0')}/${c.ano}`
+  return { cfg, labelDe }
+}
+// porItens para o arrasto de uma conta numa competência: Cliente/Fornecedor e Composição sem nome
+// itemizam (true); Só saldo arrasta uma linha (false). Sem config → regra automática (pelo nome).
+function porItensDaConfig(ctx, compId, contaCod, classifRaw, contaNome) {
+  const tipo = tipoContaEf(configEfetiva(ctx.cfg, ctx.labelDe[compId] || ''), contaCod, classifRaw, contaNome)
+  return { tipo, porItens: tipo === 'entidade' || tipo === 'composicao' }
+}
+
+export async function composicaoAbertura(empresaId, compId, contaCod, classifRaw, contaNome = '', _depth = 0, _ctx = null) {
+  const ctx = _ctx || await carregarCtxConfig(empresaId)
+  const r = await aberturaComFoto(empresaId, compId, contaCod, classifRaw, contaNome, _depth, ctx)
   return r.itens
 }
 
 // Devolve { itens, fpId }. O fpId identifica os insumos desta composição (assinatura do mês-base
 // + fpId do pai), encadeado por todos os meses: se QUALQUER mês da cadeia muda, o fpId muda e a
 // foto é refeita a partir dali para a frente (cascata).
-async function aberturaComFoto(empresaId, compId, contaCod, classifRaw, contaNome, _depth) {
+async function aberturaComFoto(empresaId, compId, contaCod, classifRaw, contaNome, _depth, ctx) {
   if (await ehCompetenciaInicial(empresaId, compId)) {
     const [itens, sig] = await Promise.all([
       cargaInicialComposicao(empresaId, contaCod, classifRaw),
@@ -656,15 +678,17 @@ async function aberturaComFoto(empresaId, compId, contaCod, classifRaw, contaNom
   if (!ant) return { itens: [], fpId: '∅ant' }
   // Pai (abertura do mês-base) + assinatura dos insumos do mês-base, em paralelo.
   const [parent, sig] = await Promise.all([
-    aberturaComFoto(empresaId, ant, contaCod, classifRaw, contaNome, _depth + 1),
+    aberturaComFoto(empresaId, ant, contaCod, classifRaw, contaNome, _depth + 1, ctx),
     assinaturaMes(ant, contaCod),
   ])
-  const classe = ehPorEntidade(contaNome) ? 'E' : 'S'
-  const fpId = `${compId}|${contaCod}|${classe}|${soDig(classifRaw) || ''}|${sig}≫${parent.fpId}`
+  // Tipo CONFIGURADO do mês-base (ant): decide itemizar (entidade/composicao) × só saldo. Entra no
+  // fpId para que mudar o tipo da conta INVALIDE a foto automaticamente (relê deste mês pra frente).
+  const { tipo, porItens } = porItensDaConfig(ctx, ant, contaCod, classifRaw, contaNome)
+  const fpId = `${compId}|${contaCod}|${tipo}|${soDig(classifRaw) || ''}|${sig}≫${parent.fpId}`
   const foto = await lerFoto(empresaId, compId, contaCod)
   if (foto && foto.fpId === fpId && Array.isArray(foto.itens)) return { itens: foto.itens, fpId }
   // Algo mudou (ou não há foto): recomputa pela via de sempre e re-grava a foto.
-  const itens = await itensAbertosConta(ant, contaCod, contaNome, classifRaw, parent.itens)
+  const itens = await itensAbertosConta(ant, contaCod, contaNome, classifRaw, parent.itens, porItens)
   await gravarFoto(empresaId, compId, contaCod, fpId, itens)
   return { itens, fpId }
 }

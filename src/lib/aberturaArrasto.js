@@ -112,8 +112,11 @@ function baixadosPorNF(lancs) {
 // - Contas de SALDO (ex.: seguro/despesa a apropriar): não há NF a casar; o saldo que resta
 //   (abertura anterior + movimento + acertos) arrasta como UMA linha de "saldo anterior" —
 //   é o saldo inicial do mês seguinte, para aparecer também no razão da Conciliação.
-export async function itensAbertosConta(compId, contaCod, contaNome, classifRaw, aberturaPrevia) {
-  const porEntidade = ehPorEntidade(contaNome)
+export async function itensAbertosConta(compId, contaCod, contaNome, classifRaw, aberturaPrevia, porItensOverride = null) {
+  // porItensOverride (quando informado) vem da CONFIG do tipo da conta: true = itemiza o em aberto
+  // (Cliente/Fornecedor OU Composição sem nome — ambas casam por NF); false = só saldo (banco/
+  // estoque). Sem override, cai na detecção pelo nome (comportamento antigo).
+  const porEntidade = porItensOverride != null ? porItensOverride : ehPorEntidade(contaNome)
   // PAGINA TUDO (corte de 1.000 do Supabase): a razão de uma conta pode passar de 1.000 linhas
   // (ex.: 214 fornecedores) — sem paginar, o arrasto lia SÓ as 1.000 primeiras e o "saldo
   // anterior" saía truncado/errado. lançamentos/ajustes/auditoria idem. Ver CLAUDE.md regra 7.
