@@ -1,5 +1,5 @@
 import { supabase } from './supabase'
-import { itensAbertosConta } from './aberturaArrasto'
+import { itensAbertosConta, ehPorEntidade } from './aberturaArrasto'
 import { aberturaComp } from './cargaInicial'
 
 const baixa = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
@@ -543,37 +543,130 @@ export function limparNomeEntidade(nome) {
   return s.trim() || String(nome || '').trim()
 }
 
+// ===== FOTO (cache) da composição de abertura ==============================
+// composicaoAbertura(M) = itensAbertosConta(M-1). Recomputar isso recorre por TODOS os meses
+// anteriores a CADA abertura de conta — caro e sujeito a variação. Guardamos uma FOTO por
+// (empresa, competência, conta) em cargas_cadastro (tipo 'conciliacao_foto') e só recomputamos
+// quando ALGO MUDA.
+//
+// GARANTIA (puramente ADITIVO): a foto é só um cache do RESULTADO do cálculo de hoje. Quando a
+// assinatura e o pai batem → devolve a foto (idêntica ao que o cálculo faria). Na menor dúvida →
+// recomputa pela via recursiva (que já é a correta) e re-grava. Nunca produz número diferente.
+// A gravação toca SOMENTE linhas de tipo 'conciliacao_foto' — nunca razão/lançamentos/ajustes/
+// auditoria/nomes. A 1ª abertura (sem foto) é idêntica ao comportamento antigo; a foto só PULA
+// trabalho quando os dados são iguais. Uma foto defasada é auto-sinalizável (a composição não
+// fecha com o saldo do balancete) e há o botão "Forçar releitura" (forcarReleituraFoto).
+const FOTO_TIPO = 'conciliacao_foto'
+
+// Assinatura BARATA dos insumos de um mês para uma conta: contagem + data do último registro de
+// cada fonte (razão da conta, ajustes, lançamentos, auditoria da conciliação). Uma leitura por
+// fonte (count no cabeçalho + 1ª linha = mais recente). Entrou/saiu/mudou → a assinatura muda.
+async function fotoTopo(q, campo) {
+  const { data, count } = await q
+  const t = (data && data[0] && data[0][campo]) || '∅'
+  return `${count ?? '?'}@${t}`
+}
+async function assinaturaMes(compId, contaCod) {
+  const [rz, aj, lc, au] = await Promise.all([
+    fotoTopo(supabase.from('razao').select('created_at', { count: 'exact' }).eq('competencia_id', compId).eq('conta', contaCod).order('created_at', { ascending: false }).limit(1), 'created_at'),
+    fotoTopo(supabase.from('ajuste_leitura').select('updated_at', { count: 'exact' }).eq('competencia_id', compId).order('updated_at', { ascending: false }).limit(1), 'updated_at'),
+    fotoTopo(supabase.from('lancamentos').select('created_at', { count: 'exact' }).eq('competencia_id', compId).order('created_at', { ascending: false }).limit(1), 'created_at'),
+    fotoTopo(supabase.from('auditoria').select('created_at', { count: 'exact' }).eq('competencia_id', compId).eq('modulo', 'Conciliação').order('created_at', { ascending: false }).limit(1), 'created_at'),
+  ])
+  return `rz:${rz}|aj:${aj}|lc:${lc}|au:${au}`
+}
+async function assinaturaCargaInicial(empresaId) {
+  const { data, count } = await supabase.from('cargas_cadastro').select('created_at', { count: 'exact' })
+    .eq('cliente_id', empresaId).eq('tipo', 'financeiro').order('created_at', { ascending: false }).limit(1)
+  const t = (data && data[0] && data[0].created_at) || '∅'
+  return `ci:${count ?? '?'}@${t}`
+}
+async function lerFoto(empresaId, compId, contaCod) {
+  const { data } = await supabase.from('cargas_cadastro').select('dados')
+    .eq('cliente_id', empresaId).eq('tipo', FOTO_TIPO).eq('vigencia', String(compId)).eq('obs', String(contaCod))
+    .order('created_at', { ascending: false }).limit(1)
+  return (data && data[0] && data[0].dados) || null
+}
+async function gravarFoto(empresaId, compId, contaCod, fpId, itens) {
+  try {
+    await supabase.from('cargas_cadastro').delete()
+      .eq('cliente_id', empresaId).eq('tipo', FOTO_TIPO).eq('vigencia', String(compId)).eq('obs', String(contaCod))
+    await supabase.from('cargas_cadastro').insert({
+      cliente_id: empresaId, tipo: FOTO_TIPO, vigencia: String(compId), obs: String(contaCod),
+      dados: { fpId, itens, ts: new Date().toISOString() },
+    })
+  } catch { /* cache best-effort: se falhar, recomputa na próxima abertura */ }
+}
+// Botão "Forçar releitura": descarta as fotos da conta em TODOS os meses, forçando a reconstrução
+// da cadeia inteira na próxima abertura (o fpId é determinístico, então apagar só um mês não
+// garantiria que os seguintes se refizessem). NÃO toca em baixas/junções/correções/nomes — só
+// reencaixa a leitura/composição.
+export async function forcarReleituraFoto(empresaId, _compId, contaCod) {
+  try {
+    await supabase.from('cargas_cadastro').delete()
+      .eq('cliente_id', empresaId).eq('tipo', FOTO_TIPO).eq('obs', String(contaCod))
+  } catch { /* ignora: pior caso, a foto segue válida e nada muda */ }
+}
+
+// Composição de abertura da competência INICIAL: vem da carga inicial (composições informadas).
+async function cargaInicialComposicao(empresaId, contaCod, classifRaw) {
+  const { composicoes } = await carregarCargaInicial(empresaId)
+  if (!composicoes.length) return []
+  const alvo = new Set([soDig(contaCod), soDig(classifRaw)].filter(Boolean))
+  const out = []
+  let i = 0
+  for (const r of composicoes) {
+    if (!alvo.has(soDig(codConta(r)))) continue
+    const valor = saldoSinalAb(campoPor(r, /valor|saldo/), campoPor(r, /^d\/?c$|natureza/))
+    if (Math.abs(valor) < 0.005) continue
+    const cliente = limparNomeEntidade(String(campoPor(r, /cliente|fornec|nome|descri|histor/) || '').trim())
+    const nf = String(campoPor(r, /\bnf\b|nota|document/) || '').trim()
+    // Data REAL do título (jan/fev/mar…), mesmo sem os meses anteriores fechados.
+    // Tudo isso compõe o saldo inicial (entendido como o último dia antes da abertura).
+    const dt = dataCelulaISO(campoPor(r, /data/))
+    out.push({
+      id: `abertura-${i}`, _srcRaz: `ci-${i++}`, data: dt || 'abertura', contrapartida: '',
+      historico: (String(cliente || '').replace(/[\s·\-]+$/, '').trim()) || 'Saldo anterior',
+      debito: valor > 0 ? valor : 0, credito: valor < 0 ? -valor : 0, abertura: true,
+      leitura: { nf, entidade: cliente, ident: !!cliente, conf: (cliente && nf) ? 'alta' : cliente ? 'media' : 'baixa', abertura: true },
+    })
+  }
+  return out
+}
+
 export async function composicaoAbertura(empresaId, compId, contaCod, classifRaw, contaNome = '', _depth = 0) {
+  const r = await aberturaComFoto(empresaId, compId, contaCod, classifRaw, contaNome, _depth)
+  return r.itens
+}
+
+// Devolve { itens, fpId }. O fpId identifica os insumos desta composição (assinatura do mês-base
+// + fpId do pai), encadeado por todos os meses: se QUALQUER mês da cadeia muda, o fpId muda e a
+// foto é refeita a partir dali para a frente (cascata).
+async function aberturaComFoto(empresaId, compId, contaCod, classifRaw, contaNome, _depth) {
   if (await ehCompetenciaInicial(empresaId, compId)) {
-    const { composicoes } = await carregarCargaInicial(empresaId)
-    if (!composicoes.length) return []
-    const alvo = new Set([soDig(contaCod), soDig(classifRaw)].filter(Boolean))
-    const out = []
-    let i = 0
-    for (const r of composicoes) {
-      if (!alvo.has(soDig(codConta(r)))) continue
-      const valor = saldoSinalAb(campoPor(r, /valor|saldo/), campoPor(r, /^d\/?c$|natureza/))
-      if (Math.abs(valor) < 0.005) continue
-      const cliente = limparNomeEntidade(String(campoPor(r, /cliente|fornec|nome|descri|histor/) || '').trim())
-      const nf = String(campoPor(r, /\bnf\b|nota|document/) || '').trim()
-      // Data REAL do título (jan/fev/mar…), mesmo sem os meses anteriores fechados.
-      // Tudo isso compõe o saldo inicial (entendido como o último dia antes da abertura).
-      const dt = dataCelulaISO(campoPor(r, /data/))
-      out.push({
-        id: `abertura-${i}`, _srcRaz: `ci-${i++}`, data: dt || 'abertura', contrapartida: '',
-        historico: (String(cliente || '').replace(/[\s·\-]+$/, '').trim()) || 'Saldo anterior',
-        debito: valor > 0 ? valor : 0, credito: valor < 0 ? -valor : 0, abertura: true,
-        leitura: { nf, entidade: cliente, ident: !!cliente, conf: (cliente && nf) ? 'alta' : cliente ? 'media' : 'baixa', abertura: true },
-      })
-    }
-    return out
+    const [itens, sig] = await Promise.all([
+      cargaInicialComposicao(empresaId, contaCod, classifRaw),
+      assinaturaCargaInicial(empresaId),
+    ])
+    return { itens, fpId: `CI(${compId}):${sig}` }
   }
   // Fora da competência inicial: arrasta o que ficou em aberto no mês anterior.
-  if (_depth > 24) return []
+  if (_depth > 24) return { itens: [], fpId: '∅depth' }
   const ant = await competenciaAnterior(empresaId, compId)
-  if (!ant) return []
-  const aberturaAnt = await composicaoAbertura(empresaId, ant, contaCod, classifRaw, contaNome, _depth + 1)
-  return await itensAbertosConta(ant, contaCod, contaNome, classifRaw, aberturaAnt)
+  if (!ant) return { itens: [], fpId: '∅ant' }
+  // Pai (abertura do mês-base) + assinatura dos insumos do mês-base, em paralelo.
+  const [parent, sig] = await Promise.all([
+    aberturaComFoto(empresaId, ant, contaCod, classifRaw, contaNome, _depth + 1),
+    assinaturaMes(ant, contaCod),
+  ])
+  const classe = ehPorEntidade(contaNome) ? 'E' : 'S'
+  const fpId = `${compId}|${contaCod}|${classe}|${soDig(classifRaw) || ''}|${sig}≫${parent.fpId}`
+  const foto = await lerFoto(empresaId, compId, contaCod)
+  if (foto && foto.fpId === fpId && Array.isArray(foto.itens)) return { itens: foto.itens, fpId }
+  // Algo mudou (ou não há foto): recomputa pela via de sempre e re-grava a foto.
+  const itens = await itensAbertosConta(ant, contaCod, contaNome, classifRaw, parent.itens)
+  await gravarFoto(empresaId, compId, contaCod, fpId, itens)
+  return { itens, fpId }
 }
 
 // Exclui UMA linha da composição (e o saldo gêmeo, se houver) da carga inicial que casa

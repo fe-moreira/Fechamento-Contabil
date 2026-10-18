@@ -6,7 +6,7 @@ import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { theme, money, moneyDC } from '../lib/theme'
 import InfoTela from '../components/InfoTela'
-import { montarBalancete, parsePlano, composicaoAbertura, difConciliacao, applyMask, erroContaSintetica, ehCompetenciaInicial, excluirLinhaAbertura, limparNomeEntidade, dataNaCompetencia } from '../lib/balancete'
+import { montarBalancete, parsePlano, composicaoAbertura, difConciliacao, applyMask, erroContaSintetica, ehCompetenciaInicial, excluirLinhaAbertura, limparNomeEntidade, dataNaCompetencia, forcarReleituraFoto } from '../lib/balancete'
 import { abrePdfTimbrado } from '../lib/pdf'
 import { gerarExcelTimbrado } from '../lib/excel'
 import { listarComentariosConta, adicionarComentario, excluirComentario } from '../lib/comentarios'
@@ -3214,6 +3214,11 @@ function Detalhe({ conta, tipoCta, reg, compId, empresaId, usuario, competencia,
               <i className={`ti ${ehEntidadeConta ? 'ti-users' : 'ti-users-plus'}`} /> Por nome: {ehEntidadeConta ? 'ligado' : 'desligado'}
             </button>
           )}
+          <button className="btn btn-ghost" style={{ fontSize: 12.5, padding: '6px 12px' }}
+            onClick={async () => { await forcarReleituraFoto(empresaId, compId, conta.conta); carregarLanc() }}
+            title="Reler a composição desta conta do zero (descarta a foto em cache e recalcula a cadeia). Use se desconfiar que a abertura ficou desatualizada. NÃO apaga baixas, junções nem correções — só reencaixa a leitura.">
+            <i className="ti ti-refresh" /> Forçar releitura
+          </button>
           <button className="btn" style={{ fontSize: 12.5, padding: '6px 12px' }} onClick={() => setNovoLanc(true)}
             title="Incluir um lançamento novo nesta conta (ex.: tarifa/ajuste que faltou no razão)">
             <i className="ti ti-file-plus" /> Novo lançamento
