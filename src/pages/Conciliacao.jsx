@@ -7,7 +7,7 @@ import { useAuth } from '../components/AuthProvider'
 import { theme, money, moneyDC } from '../lib/theme'
 import InfoTela from '../components/InfoTela'
 import { montarBalancete, parsePlano, composicaoAbertura, difConciliacao, applyMask, erroContaSintetica, ehCompetenciaInicial, excluirLinhaAbertura, limparNomeEntidade, dataNaCompetencia, forcarReleituraFoto } from '../lib/balancete'
-import { lerConfigContas, configEfetiva, salvarConfigConta, ROTULO_TIPO } from '../lib/configContas'
+import { lerConfigContas, configEfetiva, salvarConfigConta, tipoAutomatico, ROTULO_TIPO } from '../lib/configContas'
 import { abrePdfTimbrado } from '../lib/pdf'
 import { gerarExcelTimbrado } from '../lib/excel'
 import { listarComentariosConta, adicionarComentario, excluirComentario } from '../lib/comentarios'
@@ -478,15 +478,6 @@ function tipoPorClassif(c) {
   return ''
 }
 
-// Tipo de conta na conciliação:
-// - 'saldo'      → não tem composição; vale o saldo final, validado por documento (extrato).
-//                  Padrão para Disponível (caixa, bancos, aplicações) = classificação 1.1.1.
-// - 'composicao' → o saldo é formado pelos lançamentos (clientes, fornecedores, impostos a pagar…).
-function tipoAuto(classifRaw) {
-  const c = String(classifRaw || '').replace(/\D/g, '')
-  return c.startsWith('111') ? 'saldo' : 'composicao'
-}
-
 export default function Conciliacao() {
   const { empresaId, empresaNome, competencia, getCompetenciaId } = useAppData()
   const { user } = useAuth()
@@ -589,7 +580,7 @@ export default function Conciliacao() {
     const old = conf[c.conta]?.tipo
     if (old === 'saldo') return 'saldo'
     if (old === 'composicao') return ehPorEntidade(c.nome) ? 'entidade' : 'composicao'
-    return tipoAuto(c.classifRaw) === 'saldo' ? 'saldo' : (ehPorEntidade(c.nome) ? 'entidade' : 'composicao')
+    return tipoAutomatico(c.classifRaw, c.nome)
   }
   // A conta tem config MANUAL (entidade/composicao/saldo)? → o detalhe usa esse tipo; senão o detalhe
   // decide "por nome" como antes (automático/botão). null = sem config manual.
@@ -1699,6 +1690,9 @@ function Detalhe({ conta, tipoCta, entidadeConf = null, reg, compId, empresaId, 
   // Precedência: config manual da conta (entidadeConf, definida na lista) > botão "Por nome" desta
   // sessão (forcadoPN) > automático pelo nome. Conta de saldo nunca é "por nome".
   const ehEntidadeConta = (entidadeConf != null ? entidadeConf : (forcadoPN != null ? forcadoPN : ehPorEntidade(conta.nome))) && tipoCta !== 'saldo'
+  // Conta "Só saldo" (banco/estoque): mostra TUDO que está lançado no mês, SEM confrontar/baixar
+  // (sem seleção, sem "Baixar") — o saldo é o que vale; para o mês seguinte arrasta só o saldo.
+  const ehSaldoConta = tipoCta === 'saldo'
   async function alternarPorNome() {
     const atual = forcadoPN != null ? forcadoPN : ehPorEntidade(conta.nome)
     const novo = { ...modoPorNome, [conta.conta]: !atual }
@@ -3732,6 +3726,10 @@ function Detalhe({ conta, tipoCta, entidadeConf = null, reg, compId, empresaId, 
       </>
       )}
       </>
+      ) : ehSaldoConta ? (
+        // Só saldo: lista TUDO que está lançado no mês (sem seleção/baixa — não se confronta).
+        <ListaLancamentos lanc={lanc} carregando={carregando} contraDe={contraDe} planoMap={planoMap} tratados={tratados} onTratar={abrirLinha}
+          onExcluirAbertura={excluirAbertura} podeExcluirAbertura={abertura.inicial} aberturaFechada={abertura.fechada} />
       ) : (
         <>
         <ListaLancamentos lanc={emAbertoTodos} carregando={carregando} contraDe={contraDe} planoMap={planoMap} tratados={tratados} onTratar={abrirLinha}

@@ -45,11 +45,16 @@ export function configEfetiva(cfg, competencia) {
   return out
 }
 
-// Tipo AUTOMÁTICO (quando não há config manual): 1.1.1 → saldo; nome de cliente/fornecedor →
-// entidade; senão composicao. Mesma regra de hoje (tipoAuto + ehPorEntidade), agora num lugar só.
+// Tipo AUTOMÁTICO (quando não há config manual):
+//   - Só saldo: Disponível (1.1.1) OU nome de banco/caixa/aplicação/poupança/estoque/mercadoria
+//     (não se confronta — só o saldo importa; arrasta uma linha).
+//   - Cliente/Fornecedor: nome de cliente/fornecedor/adiantamento/duplicata/a pagar/a receber.
+//   - Composição: o resto (ex.: impostos) — itemiza o em aberto e leva a composição pra frente.
+const SALDO_RE = /\bbanc|caixa|aplica|poupan|estoqu|mercadoria|almoxarif/
 export function tipoAutomatico(classifRaw, nome) {
   const c = String(classifRaw || '').replace(/\D/g, '')
-  if (c.startsWith('111')) return 'saldo'
+  const n = String(nome || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+  if (c.startsWith('111') || SALDO_RE.test(n)) return 'saldo'
   if (ehPorEntidade(nome)) return 'entidade'
   return 'composicao'
 }
