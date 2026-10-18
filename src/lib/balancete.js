@@ -648,11 +648,11 @@ async function carregarCtxConfig(empresaId) {
   for (const c of (comps || [])) labelDe[c.id] = `${String(c.mes).padStart(2, '0')}/${c.ano}`
   return { cfg, labelDe }
 }
-// porItens para o arrasto de uma conta numa competência: Cliente/Fornecedor e Composição sem nome
-// itemizam (true); Só saldo arrasta uma linha (false). Sem config → regra automática (pelo nome).
-function porItensDaConfig(ctx, compId, contaCod, classifRaw, contaNome) {
-  const tipo = tipoContaEf(configEfetiva(ctx.cfg, ctx.labelDe[compId] || ''), contaCod, classifRaw, contaNome)
-  return { tipo, porItens: tipo === 'entidade' || tipo === 'composicao' }
+// Tipo EFETIVO (entidade/composicao/saldo) do arrasto de uma conta numa competência, pela config
+// vigente naquele mês (com herança). Cliente/Fornecedor e Composição itemizam; Só saldo arrasta
+// uma linha. O cruzamento automático por NF fica a cargo do itensAbertosConta (só em entidade).
+function tipoDaConfig(ctx, compId, contaCod, classifRaw, contaNome) {
+  return tipoContaEf(configEfetiva(ctx.cfg, ctx.labelDe[compId] || ''), contaCod, classifRaw, contaNome)
 }
 
 export async function composicaoAbertura(empresaId, compId, contaCod, classifRaw, contaNome = '', _depth = 0, _ctx = null) {
@@ -681,14 +681,15 @@ async function aberturaComFoto(empresaId, compId, contaCod, classifRaw, contaNom
     aberturaComFoto(empresaId, ant, contaCod, classifRaw, contaNome, _depth + 1, ctx),
     assinaturaMes(ant, contaCod),
   ])
-  // Tipo CONFIGURADO do mês-base (ant): decide itemizar (entidade/composicao) × só saldo. Entra no
-  // fpId para que mudar o tipo da conta INVALIDE a foto automaticamente (relê deste mês pra frente).
-  const { tipo, porItens } = porItensDaConfig(ctx, ant, contaCod, classifRaw, contaNome)
+  // Tipo CONFIGURADO do mês-base (ant): decide itemizar (entidade/composicao) × só saldo, e se o
+  // cruzamento é automático (só entidade). Entra no fpId para que mudar o tipo da conta INVALIDE a
+  // foto automaticamente (relê deste mês pra frente).
+  const tipo = tipoDaConfig(ctx, ant, contaCod, classifRaw, contaNome)
   const fpId = `${compId}|${contaCod}|${tipo}|${soDig(classifRaw) || ''}|${sig}≫${parent.fpId}`
   const foto = await lerFoto(empresaId, compId, contaCod)
   if (foto && foto.fpId === fpId && Array.isArray(foto.itens)) return { itens: foto.itens, fpId }
   // Algo mudou (ou não há foto): recomputa pela via de sempre e re-grava a foto.
-  const itens = await itensAbertosConta(ant, contaCod, contaNome, classifRaw, parent.itens, porItens)
+  const itens = await itensAbertosConta(ant, contaCod, contaNome, classifRaw, parent.itens, tipo)
   await gravarFoto(empresaId, compId, contaCod, fpId, itens)
   return { itens, fpId }
 }
