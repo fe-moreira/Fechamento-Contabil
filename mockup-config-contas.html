@@ -1,0 +1,203 @@
+<title>Comportamento das contas</title>
+<style>
+  /* Layout: coluna central; legenda 3-up; contas em lista agrupada (Ativo/Passivo) com seletor de tipo por linha. */
+  :root{
+    --bg:#eef1f6; --surface:#ffffff; --surface-2:#f6f8fc; --fg:#1b2a4a; --muted:#6b7794;
+    --line:#e3e8f1; --accent:#4a7cff;
+    --t1:#3b6fe0; --t1-bg:rgba(74,124,255,.12);     /* Cliente/Fornecedor */
+    --t2:#b9760a; --t2-bg:rgba(201,131,16,.14);      /* Composição sem nome */
+    --t3:#1f9d74; --t3-bg:rgba(31,157,116,.14);      /* Só saldo */
+    --shadow:0 1px 2px rgba(18,32,70,.05),0 8px 24px rgba(18,32,70,.06);
+  }
+  @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+    --bg:#0e1526; --surface:#151d31; --surface-2:#1a2338; --fg:#e7ecf6; --muted:#97a3bf;
+    --line:#26324c; --accent:#6b94ff;
+    --t1:#8fb0ff; --t1-bg:rgba(107,148,255,.16);
+    --t2:#e0a23f; --t2-bg:rgba(224,162,63,.16);
+    --t3:#53c79c; --t3-bg:rgba(83,199,156,.16);
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px rgba(0,0,0,.35);
+    color-scheme:dark;
+  }}
+  :root[data-theme="dark"]{
+    --bg:#0e1526; --surface:#151d31; --surface-2:#1a2338; --fg:#e7ecf6; --muted:#97a3bf;
+    --line:#26324c; --accent:#6b94ff;
+    --t1:#8fb0ff; --t1-bg:rgba(107,148,255,.16);
+    --t2:#e0a23f; --t2-bg:rgba(224,162,63,.16);
+    --t3:#53c79c; --t3-bg:rgba(83,199,156,.16);
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px rgba(0,0,0,.35);
+    color-scheme:dark;
+  }
+  *{box-sizing:border-box}
+  body{background:var(--bg);color:var(--fg);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:960px;margin:0 auto;padding-block:28px;padding-left:16px;padding-right:16px}
+  .eyebrow{font-size:11.5px;font-weight:600;letter-spacing:.6px;text-transform:uppercase;color:var(--muted);margin:0 0 6px}
+  h1{font-size:22px;line-height:1.2;margin:0 0 6px;text-wrap:balance;letter-spacing:-.2px}
+  .sub{font-size:13.5px;color:var(--muted);margin:0 0 20px;max-width:62ch;line-height:1.5}
+  .sub b{color:var(--fg);font-weight:600}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow)}
+
+  /* Legenda dos 3 tipos */
+  .legend{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px}
+  .leg{padding:13px 14px;border-radius:12px;border:1px solid var(--line);background:var(--surface)}
+  .leg .tt{display:flex;align-items:center;gap:8px;font-weight:650;font-size:13px}
+  .leg .ic{width:26px;height:26px;border-radius:7px;display:grid;place-items:center;flex:0 0 auto}
+  .leg p{margin:8px 0 0;font-size:12px;color:var(--muted);line-height:1.5}
+  .leg p b{color:var(--fg);font-weight:600}
+  .ic.c1{background:var(--t1-bg);color:var(--t1)} .ic.c2{background:var(--t2-bg);color:var(--t2)} .ic.c3{background:var(--t3-bg);color:var(--t3)}
+  svg{display:block}
+
+  /* Barra de busca / filtro */
+  .tools{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+  .search{position:relative;flex:1;min-width:200px}
+  .search input{width:100%;font:inherit;font-size:13px;padding:9px 12px 9px 34px;border-radius:10px;border:1px solid var(--line);background:var(--surface);color:var(--fg)}
+  .search svg{position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--muted)}
+  .chk{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted);cursor:pointer;user-select:none;padding:8px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
+  .chk input{accent-color:var(--accent);width:15px;height:15px}
+
+  /* Lista de contas */
+  .grp{padding:11px 16px;font-size:11.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);background:var(--surface-2);border-top:1px solid var(--line)}
+  .grp:first-child{border-top:none;border-radius:14px 14px 0 0}
+  .row{display:flex;align-items:center;gap:14px;padding:12px 16px;border-top:1px solid var(--line)}
+  .cod{font-variant-numeric:tabular-nums;font-size:12px;color:var(--muted);width:46px;flex:0 0 auto;text-align:right}
+  .meta{flex:1;min-width:0}
+  .nome{font-size:13.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .classif{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums;margin-top:1px}
+  .auto{font-size:10.5px;color:var(--muted);font-style:italic;margin-left:8px}
+
+  /* Seletor segmentado (3 tipos) */
+  .seg{display:inline-flex;border:1px solid var(--line);border-radius:10px;overflow:hidden;flex:0 0 auto;background:var(--surface)}
+  .seg button{font:inherit;font-size:12px;font-weight:600;padding:7px 12px;border:none;background:transparent;color:var(--muted);cursor:pointer;display:inline-flex;align-items:center;gap:6px;border-left:1px solid var(--line);white-space:nowrap}
+  .seg button:first-child{border-left:none}
+  .seg button .dot{width:7px;height:7px;border-radius:50%;background:currentColor;opacity:.55}
+  .seg button.on[data-t="1"]{background:var(--t1-bg);color:var(--t1)}
+  .seg button.on[data-t="2"]{background:var(--t2-bg);color:var(--t2)}
+  .seg button.on[data-t="3"]{background:var(--t3-bg);color:var(--t3)}
+  .seg button.on .dot{opacity:1}
+
+  .foot{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:16px}
+  .note{font-size:12px;color:var(--muted);line-height:1.5;max-width:60ch}
+  .note b{color:var(--fg);font-weight:600}
+  .btn{font:inherit;font-size:13px;font-weight:600;padding:10px 18px;border-radius:10px;border:none;background:var(--accent);color:#fff;cursor:pointer;flex:0 0 auto}
+
+  @media (max-width:640px){
+    .legend{grid-template-columns:1fr}
+    .row{flex-wrap:wrap}
+    .cod{width:auto}
+    .meta{flex:1 1 60%}
+    .seg{flex:1 1 100%;justify-content:space-between}
+    .seg button{flex:1;justify-content:center;padding:8px 6px}
+  }
+</style>
+
+<div class="wrap">
+  <p class="eyebrow">Base de Informações</p>
+  <h1>Comportamento das contas na conciliação</h1>
+  <p class="sub">Diz ao sistema <b>como tratar cada conta</b> ao conciliar e o que levar para o mês seguinte. Vale só para contas <b>patrimoniais</b> — Ativo (1) e Passivo (2). Contas de resultado não entram aqui.</p>
+
+  <!-- Legenda dos tipos -->
+  <div class="legend">
+    <div class="leg">
+      <div class="tt"><span class="ic c1"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="7" r="3"/><path d="M2 21v-1a5 5 0 0 1 5-5h4a5 5 0 0 1 5 5v1"/><path d="M17 7a3 3 0 0 1 0 6"/><path d="M22 21v-1a5 5 0 0 0-3-4.5"/></svg></span>Cliente / Fornecedor</div>
+      <p>Separa em <b>blocos por nome</b>, casa NF e <b>dá baixa</b>. Arrasta <b>todos os itens em aberto</b> (por título) para o mês seguinte.</p>
+    </div>
+    <div class="leg">
+      <div class="tt"><span class="ic c2"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3.5" y1="6" x2="3.5" y2="6"/><line x1="3.5" y1="12" x2="3.5" y2="12"/><line x1="3.5" y1="18" x2="3.5" y2="18"/></svg></span>Composição sem nome</div>
+      <p>Lista única, <b>sem bloco de nome</b>, mas <b>com baixa</b> (junta e baixa). Arrasta os <b>lançamentos em aberto</b> (os não baixados). Ex.: impostos a recolher.</p>
+    </div>
+    <div class="leg">
+      <div class="tt"><span class="ic c3"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M15 9.5a3 3 0 0 0-3-1.5c-1.7 0-3 .9-3 2.2 0 2.9 6 1.3 6 4.1 0 1.3-1.3 2.2-3 2.2a3 3 0 0 1-3-1.5"/><path d="M12 6.5v11"/></svg></span>Só saldo</div>
+      <p><b>Sem baixa.</b> No mês você vê os lançamentos; para o mês seguinte vai <b>só o saldo</b> (não arrasta item). Ex.: banco, estoque. Botão <b>“Ver lançamentos”</b> abre qualquer mês.</p>
+    </div>
+  </div>
+
+  <div class="tools">
+    <div class="search">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
+      <input type="text" placeholder="Buscar conta por código, classificação ou nome…" />
+    </div>
+    <label class="chk"><input type="checkbox" /> Só não configuradas</label>
+  </div>
+
+  <div class="card">
+    <div class="grp">Ativo (1)</div>
+
+    <div class="row">
+      <div class="cod">11</div>
+      <div class="meta"><div class="nome">Caixa e Bancos</div><div class="classif">1.1.1.001 · Disponibilidades</div></div>
+      <div class="seg"><button data-t="1"><span class="dot"></span>Cliente/Forn.</button><button data-t="2"><span class="dot"></span>Comp. s/ nome</button><button class="on" data-t="3"><span class="dot"></span>Só saldo</button></div>
+    </div>
+
+    <div class="row">
+      <div class="cod">26</div>
+      <div class="meta"><div class="nome">Clientes Nacionais</div><div class="classif">1.1.2.001.0001 · Clientes</div></div>
+      <div class="seg"><button class="on" data-t="1"><span class="dot"></span>Cliente/Forn.</button><button data-t="2"><span class="dot"></span>Comp. s/ nome</button><button data-t="3"><span class="dot"></span>Só saldo</button></div>
+    </div>
+
+    <div class="row">
+      <div class="cod">48</div>
+      <div class="meta"><div class="nome">Estoques — Almoxarifado</div><div class="classif">1.1.3.001 · Estoques</div></div>
+      <div class="seg"><button data-t="1"><span class="dot"></span>Cliente/Forn.</button><button data-t="2"><span class="dot"></span>Comp. s/ nome</button><button class="on" data-t="3"><span class="dot"></span>Só saldo</button></div>
+    </div>
+
+    <div class="row">
+      <div class="cod">55</div>
+      <div class="meta"><div class="nome">Adiantamentos a Fornecedores</div><div class="classif">1.1.2.005 · Adiantamentos</div></div>
+      <div class="seg"><button class="on" data-t="1"><span class="dot"></span>Cliente/Forn.</button><button data-t="2"><span class="dot"></span>Comp. s/ nome</button><button data-t="3"><span class="dot"></span>Só saldo</button></div>
+    </div>
+
+    <div class="row">
+      <div class="cod">60</div>
+      <div class="meta"><div class="nome">IRRF / Impostos a Recuperar <span class="auto">· hoje: automático (pelo nome)</span></div><div class="classif">1.1.2.010 · Tributos a recuperar</div></div>
+      <div class="seg"><button data-t="1"><span class="dot"></span>Cliente/Forn.</button><button class="on" data-t="2"><span class="dot"></span>Comp. s/ nome</button><button data-t="3"><span class="dot"></span>Só saldo</button></div>
+    </div>
+
+    <div class="grp">Passivo (2)</div>
+
+    <div class="row">
+      <div class="cod">204</div>
+      <div class="meta"><div class="nome">Fornecedores Nacionais</div><div class="classif">2.1.1.001 · Fornecedores</div></div>
+      <div class="seg"><button class="on" data-t="1"><span class="dot"></span>Cliente/Forn.</button><button data-t="2"><span class="dot"></span>Comp. s/ nome</button><button data-t="3"><span class="dot"></span>Só saldo</button></div>
+    </div>
+
+    <div class="row">
+      <div class="cod">210</div>
+      <div class="meta"><div class="nome">ICMS a Recolher</div><div class="classif">2.1.2.001 · Tributos a recolher</div></div>
+      <div class="seg"><button data-t="1"><span class="dot"></span>Cliente/Forn.</button><button class="on" data-t="2"><span class="dot"></span>Comp. s/ nome</button><button data-t="3"><span class="dot"></span>Só saldo</button></div>
+    </div>
+
+    <div class="row">
+      <div class="cod">212</div>
+      <div class="meta"><div class="nome">PIS / COFINS a Recolher</div><div class="classif">2.1.2.002 · Tributos a recolher</div></div>
+      <div class="seg"><button data-t="1"><span class="dot"></span>Cliente/Forn.</button><button class="on" data-t="2"><span class="dot"></span>Comp. s/ nome</button><button data-t="3"><span class="dot"></span>Só saldo</button></div>
+    </div>
+
+    <div class="row">
+      <div class="cod">220</div>
+      <div class="meta"><div class="nome">Salários a Pagar (folha)</div><div class="classif">2.1.3.001 · Obrigações trabalhistas</div></div>
+      <div class="seg"><button data-t="1"><span class="dot"></span>Cliente/Forn.</button><button class="on" data-t="2"><span class="dot"></span>Comp. s/ nome</button><button data-t="3"><span class="dot"></span>Só saldo</button></div>
+    </div>
+
+    <div class="row">
+      <div class="cod">240</div>
+      <div class="meta"><div class="nome">Empréstimos Bancários</div><div class="classif">2.2.1.001 · Empréstimos e financiamentos</div></div>
+      <div class="seg"><button data-t="1"><span class="dot"></span>Cliente/Forn.</button><button data-t="2"><span class="dot"></span>Comp. s/ nome</button><button class="on" data-t="3"><span class="dot"></span>Só saldo</button></div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <p class="note"><b>Conta não configurada</b> continua no <b>automático de hoje</b> (o sistema deduz pelo nome). Configure só o que quiser fixar — o resto segue funcionando igual.</p>
+    <button class="btn">Salvar configuração</button>
+  </div>
+</div>
+
+<script>
+  // Mockup interativo: clicar num tipo seleciona ele na linha.
+  document.querySelectorAll('.seg').forEach(function(seg){
+    seg.querySelectorAll('button').forEach(function(b){
+      b.addEventListener('click', function(){
+        seg.querySelectorAll('button').forEach(function(x){ x.classList.remove('on'); });
+        b.classList.add('on');
+      });
+    });
+  });
+</script>
