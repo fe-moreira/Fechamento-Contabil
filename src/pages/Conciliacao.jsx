@@ -953,6 +953,9 @@ function Detalhe({ conta, tipoCta, entidadeConf = null, reg, compId, empresaId, 
   // fornecedor/cliente, com saldo a pagar. Cada grupo: {id, conta, entidade(chaveNome), nf,
   // membros:[sepKey...], origem:'manual'}. É só agrupamento/visual — NÃO baixa.
   const [parcelamentos, setParcelamentos] = useState([])
+  // Auto-parcelamentos DESFEITOS pelo usuário (chave `conta·nfKey`): NFs que, mesmo aparecendo 2+
+  // vezes no mesmo bloco, NÃO devem reagrupar sozinhas (o usuário tirou). Herdado p/ frente.
+  const [parcelDesfeitos, setParcelDesfeitos] = useState(new Set())
   // Chave ESTÁVEL de um item de saldo inicial (não muda ao editar NF/nome/histórico): conta +
   // valor + nome ORIGINAL da carga. Usa _origEntidade quando já foi ajustado antes.
   // INCLUI A DATA: cada linha "Saldo anterior" é INDIVIDUAL. Sem a data, duas linhas de mesmo
@@ -1017,6 +1020,7 @@ function Detalhe({ conta, tipoCta, entidadeConf = null, reg, compId, empresaId, 
     setModoPorNome(learn.modoPorNome && typeof learn.modoPorNome === 'object' ? learn.modoPorNome : {})
     setUnificadosConf(new Set((Array.isArray(learn.unificadosConfirmados) ? learn.unificadosConfirmados : []).map(chaveNome)))
     setParcelamentos(Array.isArray(learn.parcelamentos) ? learn.parcelamentos : [])
+    setParcelDesfeitos(new Set(Array.isArray(learn.parcelamentosDesfeitos) ? learn.parcelamentosDesfeitos : []))
     // AÇÕES do próprio mês (reabertura/conciliados reabertos/separação) — SEM herança (fresh).
     const perMo = mine || {}
     setBaixasReabertas(new Set(Array.isArray(perMo.baixasReabertas) ? perMo.baixasReabertas : []))
@@ -1024,7 +1028,7 @@ function Detalhe({ conta, tipoCta, entidadeConf = null, reg, compId, empresaId, 
     setSeparados(new Set(Array.isArray(perMo.separados) ? perMo.separados : []))
   }
   useEffect(() => { if (empresaId) carregarNomes() }, [empresaId, competencia]) // eslint-disable-line react-hooks/exhaustive-deps
-  async function salvarNomes(conf, iso, aliases = nomesAlias, aberAj = aberturaAj, acNomes = acertoNomes, baixasReab = baixasReabertas, sugRej = sugestoesRejeitadas, modoPN = modoPorNome, sep = separados, aliasF = aliasesForcados, concReab = conciliadosReabertos, unifConf = unificadosConf, parcel = parcelamentos) {
+  async function salvarNomes(conf, iso, aliases = nomesAlias, aberAj = aberturaAj, acNomes = acertoNomes, baixasReab = baixasReabertas, sugRej = sugestoesRejeitadas, modoPN = modoPorNome, sep = separados, aliasF = aliasesForcados, concReab = conciliadosReabertos, unifConf = unificadosConf, parcel = parcelamentos, parcelDesf = parcelDesfeitos) {
     await supabase.from('cargas_cadastro').delete().eq('cliente_id', empresaId).eq('tipo', 'conciliacao_nomes')
     // POR MÊS COM HERANÇA: o snapshot do mês (aprendizado + ações) vai em porComp[competencia].
     // Salvar ESTE mês não mexe nos OUTROS (ficam congelados). O aprendizado salvo aqui é herdado
@@ -1035,7 +1039,7 @@ function Detalhe({ conta, tipoCta, entidadeConf = null, reg, compId, empresaId, 
       // aprendizado (herdado p/ frente)
       confiaveis: [...conf], isolados: [...iso], aliases: aliases || {}, aberturaAjustes: aberAj || {},
       acertoNomes: acNomes || {}, sugestoesRejeitadas: [...sugRej], modoPorNome: modoPN || {},
-      aliasesForcados: aliasF || {}, unificadosConfirmados: [...unifConf], parcelamentos: Array.isArray(parcel) ? parcel : [],
+      aliasesForcados: aliasF || {}, unificadosConfirmados: [...unifConf], parcelamentos: Array.isArray(parcel) ? parcel : [], parcelamentosDesfeitos: [...(parcelDesf || [])],
       // ações do mês (sem herança)
       baixasReabertas: [...baixasReab], conciliadosReabertos: [...(concReab || [])], separados: [...(sep || [])],
     }
@@ -1141,12 +1145,21 @@ function Detalhe({ conta, tipoCta, entidadeConf = null, reg, compId, empresaId, 
     carregarLanc()
   }
   // Tira do parcelamento — desfaz o grupo inteiro (as linhas voltam soltas). NÃO mexe em baixa.
+  // Grupo AUTOMÁTICO (id "auto:<nf>"): registra que aquela NF não deve reagrupar sozinha (desfeito,
+  // herdado p/ frente). Grupo MANUAL: remove o registro.
   async function tirarParcelamento(pid) {
     if (bloqueadoFechado()) return
     if (!window.confirm('Tirar este parcelamento? A nota e as parcelas voltam a aparecer soltas na composição. Não mexe em baixa nenhuma.')) return
-    const novo = parcelamentos.filter(p => p.id !== pid)
-    setParcelamentos(novo)
-    await salvarNomes(nomesConf, nomesIsolados, nomesAlias, aberturaAj, acertoNomes, baixasReabertas, sugestoesRejeitadas, modoPorNome, separados, aliasesForcados, conciliadosReabertos, unificadosConf, novo)
+    if (String(pid).startsWith('auto:')) {
+      const nf = String(pid).slice(5)
+      const novoDesf = new Set(parcelDesfeitos); novoDesf.add(`${conta.conta}·${nf}`)
+      setParcelDesfeitos(novoDesf)
+      await salvarNomes(nomesConf, nomesIsolados, nomesAlias, aberturaAj, acertoNomes, baixasReabertas, sugestoesRejeitadas, modoPorNome, separados, aliasesForcados, conciliadosReabertos, unificadosConf, parcelamentos, novoDesf)
+    } else {
+      const novo = parcelamentos.filter(p => p.id !== pid)
+      setParcelamentos(novo)
+      await salvarNomes(nomesConf, nomesIsolados, nomesAlias, aberturaAj, acertoNomes, baixasReabertas, sugestoesRejeitadas, modoPorNome, separados, aliasesForcados, conciliadosReabertos, unificadosConf, novo)
+    }
     setMsg('Parcelamento desfeito — linhas soltas de novo.')
     carregarLanc()
   }
@@ -3566,14 +3579,28 @@ function Detalhe({ conta, tipoCta, entidadeConf = null, reg, compId, empresaId, 
         // PARCELAMENTO: monta a sequência de render intercalando um CABEÇALHO (nota + saldo a
         // pagar) antes das linhas de cada grupo de parcelamento, e mantém as demais soltas.
         const valAbs = x => Math.abs((Number(x.debito) || 0) - (Number(x.credito) || 0))
+        // AUTO-PARCELAMENTO (regra do usuário: mesma NF + mesmo quadro): dentro deste bloco, uma
+        // MESMA NF com 2+ linhas em aberto vira um parcelamento SOZINHA — sem precisar marcar. Pula
+        // as NFs que o usuário já "tirou" (parcelDesfeitos). Soma-se aos manuais/herdados (que têm
+        // prioridade por linha). Não baixa nada — só a ligação visual.
+        const nfCount = {}
+        for (const x of grp) { const raw = x.leitura?.nf; if (ehCompetencia(raw)) continue; const k = nfKey(raw); if (k) nfCount[k] = (nfCount[k] || 0) + 1 }
+        const autoNf = k => !!k && nfCount[k] >= 2 && !parcelDesfeitos.has(`${conta.conta}·${k}`)
+        const parcelDeEf = l => {
+          const m = parcelDe(l); if (m) return m
+          const raw = l.leitura?.nf
+          if (ehCompetencia(raw)) return null
+          const k = nfKey(raw)
+          return autoNf(k) ? { id: `auto:${k}`, conta: conta.conta, nf: raw, entidade: l.leitura?.entidade || '', origem: 'auto' } : null
+        }
         const vistosPar = new Set()
         const renderSeq = []
         for (const l of grp) {
-          const pg = parcelDe(l)
+          const pg = parcelDeEf(l)
           if (!pg) { renderSeq.push({ kind: 'linha', l, parcel: false }); continue }
           if (vistosPar.has(pg.id)) continue
           vistosPar.add(pg.id)
-          const membros = grp.filter(x => parcelDe(x)?.id === pg.id)
+          const membros = grp.filter(x => parcelDeEf(x)?.id === pg.id)
           const valorNota = membros.filter(x => Number(x[ladoOrigem]) > 0.005).reduce((s, x) => s + valAbs(x), 0)
           const pago = membros.filter(x => Number(x[ladoBaixa]) > 0.005).reduce((s, x) => s + valAbs(x), 0)
           let totalP = 0
