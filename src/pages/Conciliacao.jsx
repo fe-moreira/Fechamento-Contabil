@@ -1052,8 +1052,23 @@ function Detalhe({ conta, tipoCta, entidadeConf = null, reg, compId, empresaId, 
   const sepKey = l => l?._abertura ? 'ab:' + chaveAberturaAjBase(l) : l?.acerto ? 'ac:' + String(l.id).replace(/^ac_/, '') : 'rz:' + (l?.id ?? '')
 
   // ===== Parcelamento (nota × parcelas) — MANUAL, só cliente/fornecedor por enquanto =====
-  // Grupo a que uma linha pertence NESTA conta (por sepKey). null se nenhum.
-  const parcelDe = l => parcelamentos.find(p => p.conta === conta.conta && Array.isArray(p.membros) && p.membros.includes(sepKey(l))) || null
+  // Grupo (parcelamento) a que uma linha pertence NESTA conta. Casa por:
+  //  1) sepKey — as linhas que o usuário marcou no próprio mês; e
+  //  2) AUTO ENTRE MESES (regra do usuário): MESMA NF + MESMO GRUPO (cliente/fornecedor). Como o
+  //     parcelamento é herdado mês a mês e guarda {nf, entidade}, a MESMA nota que cair no bloco do
+  //     mesmo cliente no mês seguinte já entra no parcelamento sozinha — sem refazer à mão. Se
+  //     estiver errado, o usuário "Tira do parcelamento" (desfaz dali pra frente). Não baixa nada.
+  const parcelDe = l => {
+    const k = sepKey(l)
+    const nfl = nfKey(l.leitura?.nf)
+    const entl = String(l.leitura?.entidade || '').trim()
+    const tkl = entl ? tokensNome(entl) : null
+    return parcelamentos.find(p => {
+      if (p.conta !== conta.conta) return false
+      if (Array.isArray(p.membros) && p.membros.includes(k)) return true
+      return !!(p.nf && nfl && nfKey(p.nf) === nfl && tkl && p.entidade && mesmoCliente(tkl, tokensNome(p.entidade)))
+    }) || null
+  }
   // Vincula as linhas SELECIONADAS num parcelamento. NÃO baixa (não depende de zerar). Agrupa PELO
   // NÚMERO da NF: cada nota vira um parcelamento — assim dá para marcar várias notas + suas parcelas
   // de uma vez e o sistema separa por número, sem fazer uma por uma. Sem número de NF, cai no modo
