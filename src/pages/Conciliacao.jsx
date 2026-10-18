@@ -2959,8 +2959,13 @@ function Detalhe({ conta, tipoCta, entidadeConf = null, reg, compId, empresaId, 
       if (alvoNoHistorico(l)) return false
       return true
     }
-    const pulados = (lines || []).filter(ehOutroForn)
-    const aplicar = (lines || []).filter(l => !ehOutroForn(l))
+    // A blindagem protege o "Corrigir em lote" da BARRA (multi-seleção) de varrer linhas de outro
+    // fornecedor. Mas quando o rename vem do LÁPIS de um bloco específico (loteForn.nomeAtual setado),
+    // é uma correção DELIBERADA daquele bloco — inclusive de um saldo anterior herdado/congelado:
+    // a regra é o que o usuário deixou à MÃO, então aplica sempre (não barra). Ver regra do usuário.
+    const deliberadoBloco = !!loteForn?.nomeAtual
+    const pulados = deliberadoBloco ? [] : (lines || []).filter(ehOutroForn)
+    const aplicar = deliberadoBloco ? (lines || []) : (lines || []).filter(l => !ehOutroForn(l))
     if (!aplicar.length) { setLoteForn(null); setMsg(`Não apliquei "${nm}": as linhas são de OUTRO fornecedor (o histórico identifica outro nome). Se for o caso, corrija pela própria linha.`); return }
     const razaoLinhas = aplicar.filter(l => !l.acerto) // razão + saldo anterior
     const acertoLinhas = aplicar.filter(l => l.acerto)  // lançamentos gerados (sem nome de origem)

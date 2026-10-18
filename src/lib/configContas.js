@@ -10,16 +10,18 @@ import { ehPorEntidade } from './aberturaArrasto'
 //
 // REGRA TEMPORAL (igual ao aprendizado de nomes): guardado POR COMPETÊNCIA com HERANÇA pra frente.
 // O que você define vale do mês atual em diante; meses anteriores (fechados) NÃO mudam. Guardado em
-// cargas_cadastro (tipo 'config_contas'), uma linha por salvamento (append, lê a mais recente) —
-// sem tabela nova.
-const TIPO = 'config_contas'
+// cargas_cadastro no tipo genérico 'depara' + obs 'config_contas' (o CHECK da coluna `tipo` só
+// aceita uma lista fixa; 'depara' é o armazém livre, já usado assim para de/para, inativação etc.),
+// uma linha por salvamento (append, lê a mais recente) — sem tabela nova nem alteração de schema.
+const TIPO = 'depara'
+const OBS = 'config_contas'
 const TIPOS = new Set(['entidade', 'composicao', 'saldo'])
 const VNUM = v => { const m = /^(\d{1,2})\/(\d{4})$/.exec(String(v || '')); return m ? Number(m[2]) * 100 + Number(m[1]) : 0 }
 
 // Lê o registro de config do cliente (a linha mais recente). Devolve { porComp }.
 export async function lerConfigContas(empresaId) {
   const { data } = await supabase.from('cargas_cadastro').select('dados')
-    .eq('cliente_id', empresaId).eq('tipo', TIPO).order('created_at', { ascending: false }).limit(1).maybeSingle()
+    .eq('cliente_id', empresaId).eq('tipo', TIPO).eq('obs', OBS).order('created_at', { ascending: false }).limit(1).maybeSingle()
   const d = data?.dados
   const porComp = (d && typeof d.porComp === 'object' && d.porComp) ? d.porComp : {}
   return { porComp }
@@ -50,13 +52,16 @@ export function configEfetiva(cfg, competencia) {
 //     (não se confronta — só o saldo importa; arrasta uma linha).
 //   - Cliente/Fornecedor: nome de cliente/fornecedor/adiantamento/duplicata/a pagar/a receber.
 //   - Composição: o resto (ex.: impostos) — itemiza o em aberto e leva a composição pra frente.
-const SALDO_RE = /\bbanc|caixa|aplica|poupan|estoqu|mercadoria|almoxarif/
+// Nomes de contas que são "Só saldo" por natureza: disponível, estoque e imobilizado/intangível/
+// investimento (grupos que não se confrontam — só o saldo importa).
+const SALDO_RE = /banc|caixa|aplica|poupan|estoqu|mercadoria|almoxarif|materia|insumo|produt|imobiliz|intangiv|investiment|veicul|maquin|equipament|imovel|edificac|terreno|instalac|ferrament|benfeitoria|deprecia|amortiz|moveis|utensil|software|marca|patente/
 export function tipoAutomatico(classifRaw, nome) {
   const c = String(classifRaw || '').replace(/\D/g, '')
   const n = String(nome || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
-  if (c.startsWith('111') || SALDO_RE.test(n)) return 'saldo'
-  if (ehPorEntidade(nome)) return 'entidade'
-  return 'composicao'
+  if (c.startsWith('111')) return 'saldo'            // Disponível (caixa/bancos/aplicações)
+  if (ehPorEntidade(nome)) return 'entidade'          // cliente/fornecedor/adiantamento → protege antes do nome
+  if (SALDO_RE.test(n)) return 'saldo'                // estoque, imobilizado, investimentos…
+  return 'composicao'                                 // o resto (ex.: impostos)
 }
 
 // Tipo EFETIVO de uma conta: config manual tem prioridade; senão automático. Devolve o 3-valor.
@@ -74,7 +79,7 @@ export async function salvarConfigConta(empresaId, competencia, conta, tipo, usu
   const porComp = { ...(atual.porComp || {}) }
   const comp = competencia || '00/0000'
   porComp[comp] = { ...(porComp[comp] || {}), [String(conta)]: TIPOS.has(tipo) ? tipo : 'auto' }
-  const { error } = await supabase.from('cargas_cadastro').insert({ cliente_id: empresaId, tipo: TIPO, vigencia: comp, dados: { porComp }, usuario })
+  const { error } = await supabase.from('cargas_cadastro').insert({ cliente_id: empresaId, tipo: TIPO, obs: OBS, vigencia: comp, dados: { porComp }, usuario })
   if (error) throw error
   return { porComp }
 }

@@ -557,7 +557,10 @@ export function limparNomeEntidade(nome) {
 // auditoria/nomes. A 1ª abertura (sem foto) é idêntica ao comportamento antigo; a foto só PULA
 // trabalho quando os dados são iguais. Uma foto defasada é auto-sinalizável (a composição não
 // fecha com o saldo do balancete) e há o botão "Forçar releitura" (forcarReleituraFoto).
-const FOTO_TIPO = 'conciliacao_foto'
+// A foto vai no tipo genérico 'depara' + obs 'foto:<conta>' (o CHECK da coluna `tipo` só aceita uma
+// lista fixa; 'depara' é o armazém livre, mesmo padrão da config de contas). vigencia = compId.
+const FOTO_TIPO = 'depara'
+const fotoObs = contaCod => `foto:${contaCod}`
 
 // Assinatura BARATA dos insumos de um mês para uma conta: contagem + data do último registro de
 // cada fonte (razão da conta, ajustes, lançamentos, auditoria da conciliação). Uma leitura por
@@ -584,16 +587,16 @@ async function assinaturaCargaInicial(empresaId) {
 }
 async function lerFoto(empresaId, compId, contaCod) {
   const { data } = await supabase.from('cargas_cadastro').select('dados')
-    .eq('cliente_id', empresaId).eq('tipo', FOTO_TIPO).eq('vigencia', String(compId)).eq('obs', String(contaCod))
+    .eq('cliente_id', empresaId).eq('tipo', FOTO_TIPO).eq('vigencia', String(compId)).eq('obs', fotoObs(contaCod))
     .order('created_at', { ascending: false }).limit(1)
   return (data && data[0] && data[0].dados) || null
 }
 async function gravarFoto(empresaId, compId, contaCod, fpId, itens) {
   try {
     await supabase.from('cargas_cadastro').delete()
-      .eq('cliente_id', empresaId).eq('tipo', FOTO_TIPO).eq('vigencia', String(compId)).eq('obs', String(contaCod))
+      .eq('cliente_id', empresaId).eq('tipo', FOTO_TIPO).eq('vigencia', String(compId)).eq('obs', fotoObs(contaCod))
     await supabase.from('cargas_cadastro').insert({
-      cliente_id: empresaId, tipo: FOTO_TIPO, vigencia: String(compId), obs: String(contaCod),
+      cliente_id: empresaId, tipo: FOTO_TIPO, vigencia: String(compId), obs: fotoObs(contaCod),
       dados: { fpId, itens, ts: new Date().toISOString() },
     })
   } catch { /* cache best-effort: se falhar, recomputa na próxima abertura */ }
@@ -605,7 +608,7 @@ async function gravarFoto(empresaId, compId, contaCod, fpId, itens) {
 export async function forcarReleituraFoto(empresaId, _compId, contaCod) {
   try {
     await supabase.from('cargas_cadastro').delete()
-      .eq('cliente_id', empresaId).eq('tipo', FOTO_TIPO).eq('obs', String(contaCod))
+      .eq('cliente_id', empresaId).eq('tipo', FOTO_TIPO).eq('obs', fotoObs(contaCod))
   } catch { /* ignora: pior caso, a foto segue válida e nada muda */ }
 }
 
