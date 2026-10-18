@@ -773,7 +773,7 @@ export default function Conciliacao() {
                     const bg = t === 'saldo' ? 'rgba(245,166,35,0.15)' : t === 'entidade' ? 'rgba(74,124,255,0.14)' : 'rgba(155,138,251,0.16)'
                     const manual = !!cfgMerged[String(c.conta)]
                     return (
-                      <span onClick={e => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); setMenuTipo({ conta: c.conta, x: r.left, y: r.bottom }) }}
+                      <span onClick={e => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); setMenuTipo({ conta: c.conta, x: r.left, y: r.bottom, top: r.top }) }}
                         title={`Tipo da conta: ${ROTULO_TIPO[t]}${manual ? ' (definido)' : ' (automático)'}. Clique para mudar — vale deste mês em diante.`}
                         style={{ display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer', fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 20, background: bg, color: cor }}>
                         {manual && <span style={{ width: 5, height: 5, borderRadius: 5, background: cor, flex: '0 0 auto' }} />}
@@ -811,7 +811,12 @@ export default function Conciliacao() {
         return (
           <>
             <div onClick={() => setMenuTipo(null)} style={{ position: 'fixed', inset: 0, zIndex: 300 }} />
-            <div style={{ position: 'fixed', left: Math.min(menuTipo.x, (typeof window !== 'undefined' ? window.innerWidth : 1200) - 300), top: menuTipo.y + 4, zIndex: 301, width: 290, background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 10, boxShadow: '0 12px 40px rgba(0,0,0,0.4)', overflow: 'hidden' }}>
+            <div style={{ position: 'fixed', left: Math.min(menuTipo.x, (typeof window !== 'undefined' ? window.innerWidth : 1200) - 300),
+              // Abre para BAIXO; se não couber (conta no fim da lista / perto da borda), abre para CIMA.
+              ...(((typeof window !== 'undefined' ? window.innerHeight : 800) - menuTipo.y < 260)
+                ? { bottom: (typeof window !== 'undefined' ? window.innerHeight : 800) - menuTipo.top + 4 }
+                : { top: menuTipo.y + 4 }),
+              zIndex: 301, width: 290, maxHeight: '70vh', overflowY: 'auto', background: theme.card, border: `0.5px solid ${theme.cb}`, borderRadius: 10, boxShadow: '0 12px 40px rgba(0,0,0,0.4)' }}>
               <div style={{ padding: '8px 12px', fontSize: 11, color: theme.sub, borderBottom: `1px solid ${theme.border}` }}>
                 Tipo da conta <b>{menuTipo.conta}</b> — vale de <b>{competencia}</b> em diante{compFechado ? ' (mês FECHADO — bloqueado)' : ''}
               </div>
