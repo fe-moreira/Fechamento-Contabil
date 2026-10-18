@@ -42,7 +42,7 @@ function lerHistorico(h) {
   const nf = extrairNfHistorico(s)
   const corpo = s.split(/\s(?:CF\b|NF\b|NOTA\s+FISCAL|RPS\b)/i)[0].trim()
   let entidade = '', ident = false
-  const mRec = corpo.match(/\b(?:RECEBIMENTO|RECEBTO|PAGAMENTO|PAGTO)\s+(?:A\s+|DE\s+|AO\s+)?(.+)$/i)
+  const mRec = corpo.match(/\b(?:RECEBIMENTO|RECEBTO|RCTO|PAGAMENTO|PAGTO)\.?\s+(?:A\s+|DE\s+|AO\s+)?(.+)$/i)
   // Fiscal integrado (SAÍDAS/serviços): cliente vem DEPOIS do "ACUM. N —" (qualquer traço).
   const mAcum = corpo.match(/\bACUM(?:ULADOR)?\.?\s*\d+[\s|\-–—−]+(.+)$/i)
   if (mRec) {
@@ -57,6 +57,15 @@ function lerHistorico(h) {
     // URBAN ESMERALDAS SPE LTDA"). O cliente é o que vem DEPOIS do último "|".
     const seg = corpo.split('|').map(x => x.trim()).filter(Boolean).pop() || ''
     if (seg.length >= 3) { entidade = tiraSufixo(seg); ident = true }
+  } else if (/^\s*VALOR\s+REF(?:ERENTE)?\b/i.test(corpo)) {
+    // "VALOR REF. <cliente>" (sem traço/pipe) — o cliente vem logo depois do "VALOR REF(ERENTE)?".
+    // Só NÃO identifica quando o que vem é uma OPERAÇÃO pura, sem nome (reclassificação, estorno,
+    // juros/multa/desconto, transferência). Prefixos de imposto/pagamento colados ("PGTO. ISS …",
+    // "ADIANTAMENTO DE CLIENTES …") são limpos depois pelo limparNomeEntidade.
+    const seg = corpo.replace(/^\s*VALOR\s+REF(?:ERENTE)?\.?\s*(?:A\s+)?/i, '').trim()
+    if (seg.length >= 3 && !/^(?:RECLASSIFICA|ESTORNO|JUROS|MULTA|DESCONTO|TRANSFER|APLICA|RESGATE|BAIXA|ENCERRAMENTO|APURA)/i.test(seg)) {
+      entidade = tiraSufixo(seg); ident = true
+    }
   }
   if (!entidade || entidade.length < 3) {
     entidade = s.replace(nfm ? nfm[0] : '', ' ').replace(/\b\d+\b/g, ' ').replace(RUIDO, ' ').replace(/[.\-/]+/g, ' ').replace(/\s+/g, ' ').trim()
