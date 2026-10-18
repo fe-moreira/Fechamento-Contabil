@@ -52,6 +52,11 @@ function lerHistorico(h) {
   } else if (/\s[-–—−]\s/.test(corpo)) {
     const segs = corpo.split(/\s[-–—−]\s/).map(x => x.trim()).filter(Boolean)
     entidade = tiraSufixo(segs[segs.length - 1]); ident = true
+  } else if (corpo.includes('|')) {
+    // Domínio às vezes separa a natureza do cliente com "|" (ex.: "VALOR REF.| INCORPORADORA MF
+    // URBAN ESMERALDAS SPE LTDA"). O cliente é o que vem DEPOIS do último "|".
+    const seg = corpo.split('|').map(x => x.trim()).filter(Boolean).pop() || ''
+    if (seg.length >= 3) { entidade = tiraSufixo(seg); ident = true }
   }
   if (!entidade || entidade.length < 3) {
     entidade = s.replace(nfm ? nfm[0] : '', ' ').replace(/\b\d+\b/g, ' ').replace(RUIDO, ' ').replace(/[.\-/]+/g, ' ').replace(/\s+/g, ' ').trim()
