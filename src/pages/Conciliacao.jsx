@@ -557,9 +557,16 @@ export default function Conciliacao() {
         // classificação provisória (pelo próprio código) — não entram na lista de Ativo/Passivo
         // (senão um custo fora do plano se disfarçaria de conta do Ativo). Ficam num AVISO para você
         // incluí-las no plano. (Não agregam em nenhuma sintética, então não desequilibram nada.)
-        const fora = linhas.filter(l => l.foraDoPlano && !l.sintetica)
-        setContasForaPlano(fora.map(l => ({ conta: l.reduzido, nome: l.nome, saldo: l.saldo_final })))
-        const ap = linhas.filter(l => !l.foraDoPlano && (() => { const d = String(l.classifRaw || l.classif).trim()[0]; return d === '1' || d === '2' })())
+        const ehPatrim = l => { const d = String(l.classifRaw || l.classif).trim()[0]; return d === '1' || d === '2' }
+        const folhas = linhas.filter(l => !l.sintetica)
+        const fora = folhas.filter(l => l.foraDoPlano)
+        // SEGURANÇA (nunca "sumir tudo"): só ESCONDE as contas fora do plano quando elas são uma
+        // MINORIA clara (< 40% das analíticas). Se MUITAS caírem fora, é problema de CASAMENTO do
+        // plano (plano desatualizado/diferente do balancete), não contas estranhas de verdade —
+        // nesse caso NÃO esconde nada (mostra tudo, como antes) para não ocultar o cliente inteiro.
+        const matchingRuim = folhas.length > 0 && fora.length > folhas.length * 0.4
+        setContasForaPlano(matchingRuim ? [] : fora.map(l => ({ conta: l.reduzido, nome: l.nome, saldo: l.saldo_final })))
+        const ap = linhas.filter(l => (matchingRuim || !l.foraDoPlano) && ehPatrim(l))
         setBaseContas(ap.map(l => ({ ...l, conta: l.reduzido })))
         // Índice do plano (reduzido → nome/classif) p/ mostrar contas que só têm
         // lançamento manual/correção e não vieram no balancete importado.
