@@ -258,13 +258,17 @@ function lerHistorico(h) {
   return { nf, entidade: entidade || '', ident, conf }
 }
 
+// Tira zeros à esquerda da NF para EXIBIR/COMPARAR (mantém a letra de parcela): "004011" → "4011".
+// A NF lida já vem sem zeros (extrairNfHistorico); isto cobre a NF digitada à mão e a herdada.
+const semZerosNf = n => String(n ?? '').replace(/^0+(?=\d)/, '')
+
 // Aplica um ajuste de leitura (correção manual de NF/nome/histórico) sobre o lançamento.
 function aplicarAjuste(l, aj) {
   let historico = l.historico
   let leitura = lerHistorico(historico)
   if (aj) {
     if (aj.historico) { historico = aj.historico; leitura = lerHistorico(historico) }
-    if (aj.nf) leitura = { ...leitura, nf: String(aj.nf).trim() }
+    if (aj.nf) leitura = { ...leitura, nf: semZerosNf(String(aj.nf).trim()) }
     if (aj.entidade) leitura = { ...leitura, entidade: String(aj.entidade).trim(), ident: true }
     const ent = (leitura.entidade || '')
     leitura = { ...leitura, ajustado: true, conf: (leitura.ident && ent.length >= 4 && leitura.nf) ? 'alta' : (leitura.ident && ent.length >= 4) ? 'media' : leitura.conf }
@@ -1511,7 +1515,11 @@ function Detalhe({ conta, tipoCta, entidadeConf = null, reg, compId, empresaId, 
     // nem a chave-base casa e a correção manual some. Indexa também por conta·data·valor (SEM o nome),
     // que é estável. Só aplica quando NÃO há conflito (duas entidades não-genéricas diferentes pro
     // mesmo valor); nesse caso deixa o fluxo normal decidir. Regra de ouro: o manual prevalece.
-    const aberAjByValor = {}, entConflito = new Set()
+    // Como a ordem das chaves no objeto é a ordem de GRAVAÇÃO, a última entrada de cada valor é a
+    // correção MAIS RECENTE. Regra de ouro: o manual mais recente prevalece. Então, no empate de
+    // nomes (mesmo valor, nomes diferentes de tentativas antigas), o ÚLTIMO vence — nunca "desiste".
+    // Só não deixa um nome GENÉRICO sobrescrever um nome real já registrado para o mesmo valor.
+    const aberAjByValor = {}
     for (const [k, v] of Object.entries(aberAjMap)) {
       const parts = String(k).split('·')
       if (parts.length < 4) continue // legacy sem data não entra (ambíguo demais)
@@ -1520,20 +1528,13 @@ function Detalhe({ conta, tipoCta, entidadeConf = null, reg, compId, empresaId, 
       const nf = v && typeof v === 'object' && v.nf != null ? String(v.nf).trim() : ''
       if (!ent && !nf) continue
       const cur = aberAjByValor[vk] || (aberAjByValor[vk] = {})
-      if (nf && !cur.nf) cur.nf = nf // NF: primeira não-vazia (serve pra correção SÓ de NF)
+      if (nf) cur.nf = nf // NF: a mais recente (serve pra correção SÓ de NF)
       if (ent) {
         const curEnt = String(cur.entidade || '').trim()
-        if (!curEnt) cur.entidade = ent
-        else if (chaveNome(curEnt) !== chaveNome(ent)) {
-          if (ehNomeGenerico(curEnt) && !ehNomeGenerico(ent)) cur.entidade = ent
-          else if (!ehNomeGenerico(curEnt) && ehNomeGenerico(ent)) { /* mantém não-genérico */ }
-          else entConflito.add(vk) // dois nomes não-genéricos p/ o mesmo valor → ambíguo
-        }
+        // último vence, EXCETO genérico tentando cobrir um nome real já posto.
+        if (!curEnt || !(ehNomeGenerico(ent) && !ehNomeGenerico(curEnt))) cur.entidade = ent
       }
     }
-    // Em conflito de NOME, não arrisca o nome por valor (deixa o fluxo normal decidir) — mas a NF,
-    // que não é ambígua, continua valendo.
-    for (const vk of entConflito) if (aberAjByValor[vk]) delete aberAjByValor[vk].entidade
     // Nome de fornecedor dado a um lançamento de acerto (por uuid) — "Corrigir fornecedor".
     const acNomesMap = (cn?.dados?.acertoNomes && typeof cn.dados.acertoNomes === 'object') ? cn.dados.acertoNomes : {}
     const bump = l => {
@@ -1566,7 +1567,7 @@ function Detalhe({ conta, tipoCta, entidadeConf = null, reg, compId, empresaId, 
           // fornecedores. Nesse caso mantém o nome LIDO de verdade e deixa o fluxo normal (fiscal/
           // apelido) agir. nf/histórico do override continuam valendo.
           const entOk = ov.entidade && !ehNomeGenerico(ov.entidade)
-          leitura = { ...leitura, entidade: entOk ? ov.entidade : leitura.entidade, nf: (ov.nf != null && ov.nf !== '') ? ov.nf : leitura.nf, ident: entOk ? true : leitura.ident }
+          leitura = { ...leitura, entidade: entOk ? ov.entidade : leitura.entidade, nf: (ov.nf != null && ov.nf !== '') ? semZerosNf(ov.nf) : leitura.nf, ident: entOk ? true : leitura.ident }
           if (ov.historico) hist = ov.historico
           if (entOk) manualAbert = true
         }
@@ -3743,7 +3744,7 @@ function Detalhe({ conta, tipoCta, entidadeConf = null, reg, compId, empresaId, 
                       <tr key={'ph' + i} style={{ borderTop: `1px solid ${theme.accent}`, background: 'rgba(74,124,255,0.08)' }}>
                         <td colSpan={8} style={{ padding: '7px 12px' }}>
                           <span style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', fontSize: 12 }}>
-                            <span style={{ fontWeight: 800, color: theme.accent, whiteSpace: 'nowrap' }}><i className="ti ti-receipt-2" /> NF {pg.nf || '—'} · Parcelamento</span>
+                            <span style={{ fontWeight: 800, color: theme.accent, whiteSpace: 'nowrap' }}><i className="ti ti-receipt-2" /> NF {semZerosNf(pg.nf) || '—'} · Parcelamento</span>
                             <span style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>nota {money(it.valorNota)}</span>
                             <span style={{ color: theme.green, whiteSpace: 'nowrap' }}>pago {money(it.pago)}</span>
                             <span style={{ fontWeight: 800, whiteSpace: 'nowrap', color: Math.abs(it.falta) < 0.005 ? theme.green : theme.red }}>{Math.abs(it.falta) < 0.005 ? '✓ quitado' : 'falta ' + money(Math.abs(it.falta))}</span>
