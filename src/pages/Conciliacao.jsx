@@ -1018,15 +1018,13 @@ function Detalhe({ conta, tipoCta, entidadeConf = null, reg, compId, empresaId, 
     const afLimpo = {}
     for (const [de, para] of Object.entries(afRaw)) if (mesmaEntidadeForcavel(de, para)) afLimpo[de] = para
     setAliasesForcados(afLimpo)
-    // PODA os ajustes de SALDO ANTERIOR (aberturaAjustes) POLUÍDOS (merge errado em lote).
+    // Ajustes de SALDO ANTERIOR (nome/NF corrigidos à mão): carrega ÍNTEGRO, SEM poda. REGRA DE
+    // OURO: o sistema NUNCA desfaz o que você corrigiu manualmente. Antes havia uma poda que
+    // descartava alguns ajustes "suspeitos"; como o salvamento regrava o estado, o ajuste podado
+    // sumia do banco ao salvar de novo (parecia "volta quando entro e saio da conta"). Conflitos de
+    // nome para o mesmo valor são resolvidos na EXIBIÇÃO (a correção mais recente vence, nunca apaga).
     const abRaw = learn.aberturaAjustes && typeof learn.aberturaAjustes === 'object' ? learn.aberturaAjustes : {}
-    const abLimpo = {}
-    for (const [key, val] of Object.entries(abRaw)) {
-      const ent = (val && typeof val === 'object') ? String(val.entidade || '').trim() : ''
-      const nomeOrig = String(key).split('·')[3] || ''
-      if (!ent || !nomeOrig || ehNomeGenerico(nomeOrig) || mesmaEntidadeForcavel(nomeOrig, ent)) abLimpo[key] = val
-    }
-    setAberturaAj(abLimpo)
+    setAberturaAj(abRaw)
     setAcertoNomes(learn.acertoNomes && typeof learn.acertoNomes === 'object' ? learn.acertoNomes : {})
     setSugestoesRejeitadas(new Set(Array.isArray(learn.sugestoesRejeitadas) ? learn.sugestoesRejeitadas : []))
     setModoPorNome(learn.modoPorNome && typeof learn.modoPorNome === 'object' ? learn.modoPorNome : {})
