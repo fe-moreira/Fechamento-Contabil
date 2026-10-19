@@ -1511,21 +1511,29 @@ function Detalhe({ conta, tipoCta, entidadeConf = null, reg, compId, empresaId, 
     // nem a chave-base casa e a correção manual some. Indexa também por conta·data·valor (SEM o nome),
     // que é estável. Só aplica quando NÃO há conflito (duas entidades não-genéricas diferentes pro
     // mesmo valor); nesse caso deixa o fluxo normal decidir. Regra de ouro: o manual prevalece.
-    const aberAjByValor = {}, valorConflito = new Set()
+    const aberAjByValor = {}, entConflito = new Set()
     for (const [k, v] of Object.entries(aberAjMap)) {
       const parts = String(k).split('·')
       if (parts.length < 4) continue // legacy sem data não entra (ambíguo demais)
       const vk = parts.slice(0, 3).join('·') // conta·data·valCents
       const ent = v && typeof v === 'object' ? String(v.entidade || '').trim() : ''
-      if (!ent) continue
-      const cur = aberAjByValor[vk]
-      if (!cur) { aberAjByValor[vk] = v; continue }
-      const curEnt = String(cur.entidade || '').trim()
-      if (chaveNome(curEnt) === chaveNome(ent)) continue
-      if (ehNomeGenerico(curEnt) && !ehNomeGenerico(ent)) aberAjByValor[vk] = v
-      else if (!ehNomeGenerico(curEnt) && ehNomeGenerico(ent)) { /* mantém o não-genérico */ }
-      else valorConflito.add(vk) // dois não-genéricos diferentes → ambíguo, não aplica por valor
+      const nf = v && typeof v === 'object' && v.nf != null ? String(v.nf).trim() : ''
+      if (!ent && !nf) continue
+      const cur = aberAjByValor[vk] || (aberAjByValor[vk] = {})
+      if (nf && !cur.nf) cur.nf = nf // NF: primeira não-vazia (serve pra correção SÓ de NF)
+      if (ent) {
+        const curEnt = String(cur.entidade || '').trim()
+        if (!curEnt) cur.entidade = ent
+        else if (chaveNome(curEnt) !== chaveNome(ent)) {
+          if (ehNomeGenerico(curEnt) && !ehNomeGenerico(ent)) cur.entidade = ent
+          else if (!ehNomeGenerico(curEnt) && ehNomeGenerico(ent)) { /* mantém não-genérico */ }
+          else entConflito.add(vk) // dois nomes não-genéricos p/ o mesmo valor → ambíguo
+        }
+      }
     }
+    // Em conflito de NOME, não arrisca o nome por valor (deixa o fluxo normal decidir) — mas a NF,
+    // que não é ambígua, continua valendo.
+    for (const vk of entConflito) if (aberAjByValor[vk]) delete aberAjByValor[vk].entidade
     // Nome de fornecedor dado a um lançamento de acerto (por uuid) — "Corrigir fornecedor".
     const acNomesMap = (cn?.dados?.acertoNomes && typeof cn.dados.acertoNomes === 'object') ? cn.dados.acertoNomes : {}
     const bump = l => {
@@ -1548,8 +1556,9 @@ function Detalhe({ conta, tipoCta, entidadeConf = null, reg, compId, empresaId, 
         // antigas (compat com ajustes salvos antes do _srcRaz).
         const kPorLinha = l._srcRaz ? `${kNovo}·${l._srcRaz}` : null
         const kValor = `${conta.conta}·${dtAb}·${valCents}` // conta·data·valor (sem o nome lido)
+        const ovValor = dtAb ? aberAjByValor[kValor] : undefined
         const ov = (kPorLinha && aberAjMap[kPorLinha]) || aberAjMap[kNovo] || aberAjBaseMap[kNovo]
-          || (dtAb && !valorConflito.has(kValor) ? aberAjByValor[kValor] : undefined)
+          || (ovValor && (ovValor.entidade || ovValor.nf) ? ovValor : undefined)
           || ((abUndatedCount[kAntigo] || 0) <= 1 ? aberAjMap[kAntigo] : undefined)
         if (ov) {
           // IGNORA override de nome GENÉRICO (ex.: "VALOR REF. TRANSF. CARTÃO", "Saldo anterior ·

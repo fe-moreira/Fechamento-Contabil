@@ -25,11 +25,16 @@ export function extrairNfHistorico(h) {
   // isso, "NF 003895" e "NF 3895" pareciam notas diferentes em comparações pela NF crua e na tela.
   // Mantém a LETRA da parcela (16557A). Se por acaso vier só zeros, devolve "0".
   const semZeros = n => String(n).replace(/^0+/, '') || '0'
-  const m = limpo.match(/\b(?:NF|NOTA(?:\s+FISCAL)?|N[ºo°])\.?\s*(?:N[ºo°.]*\s*)?(\d{1,9})([A-Za-z](?![A-Za-z]))?(\s*\/\s*\d{2,4})?/i)
+  // Formato SÉRIE-NÚMERO do Domínio colado no marcador: "NF. N 1-000725B" = série 1, nota 000725,
+  // parcela B → a nota é o número DEPOIS do traço (725B), NÃO a série (1). Sem isto, "NF 1-000725B"
+  // virava "NF 1" (a série) e nenhuma nota casava. m[2] = número da nota; m[3] = letra da parcela.
+  const m = limpo.match(/\b(?:NF|NOTA(?:\s+FISCAL)?|N[ºo°])\.?\s*(?:N[ºo°.]*\s*)?(\d{1,9})(?:-(\d{4,7}))?([A-Za-z](?![A-Za-z]))?(\s*\/\s*\d{2,4})?/i)
   if (m) {
     // "<1-12>/<ano>" logo após o marcador = COMPETÊNCIA (mês/ano de referência), não é nota.
-    if (m[3] && Number(m[1]) >= 1 && Number(m[1]) <= 12) return ''
-    return semZeros(m[1]) + (m[2] ? m[2].toUpperCase() : '')
+    // (só quando NÃO é série-número: "1-000725" não é competência).
+    if (!m[2] && m[4] && Number(m[1]) >= 1 && Number(m[1]) <= 12) return ''
+    const num = m[2] ? m[2] : m[1] // série-número → o número é a nota; senão o próprio número
+    return semZeros(num) + (m[3] ? m[3].toUpperCase() : '')
   }
   // Documento do Domínio "série-número[parcela]" no fim: "1-000584A" → 584 (tira zeros à esquerda).
   const doc = limpo.match(/\b\d{1,3}-(\d{4,7})[A-Za-z]?\b/)
