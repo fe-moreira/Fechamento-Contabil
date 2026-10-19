@@ -6,6 +6,7 @@ import { gerarSugestoesDoRazao } from '../lib/sugestoesRazao'
 import { gerarSugestoesConciliacao } from '../lib/sugestoesConciliacao'
 import { checarArquivoEmpresa } from '../lib/validarArquivoEmpresa'
 import { parsePlano } from '../lib/balancete'
+import { lerTudo } from '../lib/lerTudo'
 import { carregarResolverCC, resolverCC } from '../lib/centroCusto'
 import DropZone from '../components/DropZone'
 import { theme } from '../lib/theme'
@@ -148,6 +149,43 @@ async function contasForaDoPlano(empresaId, registros) {
     if (!noPlano(c)) out.push({ conta: c, nome: nome[c] || '' })
   }
   return out
+}
+
+// Assinatura de CONTEÚDO de uma linha do razão (estável entre importações): conta + data + valor
+// (deb/cred em centavos) + histórico. Duas linhas idênticas têm a MESMA assinatura (casadas por
+// ordem/contagem). Serve para re-amarrar a conciliação quando o razão é SUBSTITUÍDO (os ids mudam).
+const assinaturaRaz = r => `${r.conta}|${r.data || ''}|${Math.round((Number(r.debito) || 0) * 100)}|${Math.round((Number(r.credito) || 0) * 100)}|${String(r.historico || '').trim()}`
+
+// Ao SUBSTITUIR o razão, re-amarra a conciliação (baixas/correções/ajustes em auditoria,
+// ajuste_leitura e lancamentos) das linhas ANTIGAS para as linhas NOVAS de MESMO conteúdo —
+// assim o que você conciliou não se perde. Linha que mudou/sumiu não re-amarra (a baixa dela some,
+// o que é o certo). O aprendizado de NOME (conciliacao_nomes) já sobrevive por ser por cliente.
+async function religarConciliacao(cid, oldRaz) {
+  if (!oldRaz || !oldRaz.length) return { religados: 0, perdidos: 0 }
+  const newRaz = await lerTudo(() => supabase.from('razao').select('id, conta, data, historico, debito, credito').eq('competencia_id', cid))
+  const novoPorSig = new Map()
+  for (const r of newRaz) { const k = assinaturaRaz(r); const a = novoPorSig.get(k); if (a) a.push(r.id); else novoPorSig.set(k, [r.id]) }
+  // razao_ids ANTIGOS que têm conciliação (só esses precisam re-amarrar).
+  const usados = new Set()
+  for (const tb of ['auditoria', 'ajuste_leitura', 'lancamentos']) {
+    const rows = await lerTudo(() => supabase.from(tb).select('razao_id').eq('competencia_id', cid).not('razao_id', 'is', null))
+    for (const r of rows) if (r.razao_id) usados.add(r.razao_id)
+  }
+  // Casa antigo→novo pela assinatura; processa PRIMEIRO as linhas que têm conciliação (para elas
+  // ganharem o par novo antes de uma gêmea sem conciliação consumir a vaga).
+  const ordenado = [...oldRaz].sort((a, b) => (usados.has(b.id) ? 1 : 0) - (usados.has(a.id) ? 1 : 0))
+  const mapa = new Map()
+  for (const r of ordenado) { const fila = novoPorSig.get(assinaturaRaz(r)); if (fila && fila.length) mapa.set(r.id, fila.shift()) }
+  const pares = [...usados].map(oldId => [oldId, mapa.get(oldId)])
+  const aReligar = pares.filter(([, n]) => !!n)
+  const perdidos = pares.length - aReligar.length
+  // Re-aponta razao_id em lotes (cada par toca as 3 tabelas). Best-effort por par.
+  for (let i = 0; i < aReligar.length; i += 8) {
+    await Promise.all(aReligar.slice(i, i + 8).flatMap(([oldId, newId]) =>
+      ['auditoria', 'ajuste_leitura', 'lancamentos'].map(tb =>
+        supabase.from(tb).update({ razao_id: newId }).eq('competencia_id', cid).eq('razao_id', oldId).then(() => {}, () => {}))))
+  }
+  return { religados: aReligar.length, perdidos }
 }
 
 export default function ImportarRazao() {
@@ -417,7 +455,21 @@ export default function ImportarRazao() {
       const meta = { id, nome: pack.nome, path, linhas: pack.registros.length }
       const base = modo === 'complementar' ? arquivos.filter(a => a.id !== '__legado') : []
       const novoArquivos = [...base, meta]
+      // SUBSTITUIR preservando a conciliação: antes de trocar o razão, guardo a "impressão digital"
+      // de cada linha antiga. Depois de subir o razão novo, re-amarro baixas/correções/ajustes das
+      // linhas antigas para as novas IGUAIS. (Em complementar não troco nada, então não precisa.)
+      let oldRaz = null
+      if (modo === 'substituir') {
+        try { oldRaz = await lerTudo(() => supabase.from('razao').select('id, conta, data, historico, debito, credito').eq('competencia_id', cid)) }
+        catch { oldRaz = null }
+      }
       const { balancete, todos } = await rebuildRazao(cid, novoArquivos, { [id]: pack.registros })
+      let religados = 0
+      if (modo === 'substituir' && oldRaz) {
+        try { const r = await religarConciliacao(cid, oldRaz); religados = r.religados }
+        catch (e) { console.error('religar conciliação:', e) }
+      }
+      setMsg(religados ? `Razão substituído. ${religados} conciliação(ões) preservada(s) (baixas, correções e ajustes re-amarrados às linhas iguais).` : '')
       setArquivos(novoArquivos)
       const totDeb = todos.reduce((s, r) => s + r.debito, 0)
       const totCred = todos.reduce((s, r) => s + r.credito, 0)
