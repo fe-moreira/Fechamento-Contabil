@@ -1571,6 +1571,18 @@ function Detalhe({ conta, tipoCta, entidadeConf = null, reg, compId, empresaId, 
           if (ov.historico) hist = ov.historico
           if (entOk) manualAbert = true
         }
+      } else if (!l.acerto && !leitura.ajustado) {
+        // RAZÃO (não saldo anterior, sem ajuste de leitura próprio): HERDA a correção manual que
+        // você fez por conta·data·valor no contexto de SALDO ANTERIOR (mês seguinte). Assim o que
+        // você corrige num mês vale no outro — a correção manual prevalece nos dois contextos.
+        // Só PREENCHE o que falta: NF vazia e nome ainda não identificado (não sobrescreve leitura boa).
+        const valCents = Math.round(((Number(l.debito) || 0) - (Number(l.credito) || 0)) * 100)
+        const dtR = (l.data && l.data !== 'abertura') ? String(l.data) : ''
+        const ovR = dtR ? aberAjByValor[`${conta.conta}·${dtR}·${valCents}`] : undefined
+        if (ovR) {
+          if ((!leitura.nf || leitura.nf === '') && ovR.nf) leitura = { ...leitura, nf: semZerosNf(ovR.nf) }
+          if (!leitura.ident && ovR.entidade && !ehNomeGenerico(ovR.entidade)) { leitura = { ...leitura, entidade: ovR.entidade, ident: true }; manualAbert = true }
+        }
       }
       // Nome OFICIAL do Fiscal pela NF: é o nome da nota, então SOBREPÕE a leitura do histórico
       // (ex.: "COFINS MIRAGE ..." → nome correto do fiscal). Só não sobrepõe um ajuste manual
