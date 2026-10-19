@@ -21,16 +21,20 @@ export function extrairNfHistorico(h) {
   // LETRA de parcela opcional colada (16557A/B/C são notas DISTINTAS — a letra tem que ficar,
   // senão as parcelas colapsam numa só e o saldo/arrasto perde lançamentos). `nfKey` ignora a
   // letra p/ o casamento por NF; ela serve para diferenciar e exibir a parcela.
+  // Tira ZEROS À ESQUERDA do número da nota (nunca são significativos): "003895" → "3895". Sem
+  // isso, "NF 003895" e "NF 3895" pareciam notas diferentes em comparações pela NF crua e na tela.
+  // Mantém a LETRA da parcela (16557A). Se por acaso vier só zeros, devolve "0".
+  const semZeros = n => String(n).replace(/^0+/, '') || '0'
   const m = limpo.match(/\b(?:NF|NOTA(?:\s+FISCAL)?|N[ºo°])\.?\s*(?:N[ºo°.]*\s*)?(\d{1,9})([A-Za-z](?![A-Za-z]))?(\s*\/\s*\d{2,4})?/i)
   if (m) {
     // "<1-12>/<ano>" logo após o marcador = COMPETÊNCIA (mês/ano de referência), não é nota.
     if (m[3] && Number(m[1]) >= 1 && Number(m[1]) <= 12) return ''
-    return m[1] + (m[2] ? m[2].toUpperCase() : '')
+    return semZeros(m[1]) + (m[2] ? m[2].toUpperCase() : '')
   }
   // Documento do Domínio "série-número[parcela]" no fim: "1-000584A" → 584 (tira zeros à esquerda).
   const doc = limpo.match(/\b\d{1,3}-(\d{4,7})[A-Za-z]?\b/)
   if (doc) return String(Number(doc[1]))
   // Último recurso: um número "de nota" solto (>=3 dígitos), já sem CNPJ/CPF/ACUM e sem ANO.
   const solto = limpo.replace(/\b(?:19|20)\d{2}\b/g, ' ').match(/\b(\d{3,9})\b/)
-  return solto ? solto[1] : ''
+  return solto ? semZeros(solto[1]) : ''
 }

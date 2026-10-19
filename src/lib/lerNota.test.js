@@ -31,6 +31,11 @@ describe('extrairNfHistorico', () => {
     expect(extrairNfHistorico('VALOR REF. COMPRA DE MERCADORIA PARA REVENDA - ALMA TEXTIL CF. NF 16557B')).toBe('16557B')
     expect(extrairNfHistorico('COMPRA - ALMA TEXTIL CF. NF 16500c')).toBe('16500C') // normaliza p/ maiúscula
   })
+  it('tira ZEROS À ESQUERDA da NF ("NF 003895" → 3895; mantém a letra da parcela)', () => {
+    expect(extrairNfHistorico('VALOR REF. RECEBIMENTO FULANO NF 003895')).toBe('3895')
+    expect(extrairNfHistorico('VALOR REF. ADIANTAMENTO DE CLIENTES NF 003477 TOPLIFE')).toBe('3477')
+    expect(extrairNfHistorico('COMPRA - ALMA TEXTIL CF. NF 016557A')).toBe('16557A')
+  })
   it('não confunde palavra colada com letra de parcela ("NF 123COMERCIO" → 123)', () => {
     expect(extrairNfHistorico('VALOR REF. NF 123COMERCIO LTDA')).toBe('123')
     expect(extrairNfHistorico('RECEBIMENTO CLIENTE NF 12345 COMERCIO')).toBe('12345')
