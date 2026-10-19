@@ -675,6 +675,19 @@ function tipoDaConfig(ctx, compId, contaCod, classifRaw, contaNome) {
 }
 
 export async function composicaoAbertura(empresaId, compId, contaCod, classifRaw, contaNome = '', _depth = 0, _ctx = null) {
+  // PERÍODO FECHADO é imutável: nada pode mudar nele, então NÃO reprocessa a cadeia. Se a foto
+  // desta conta/competência já existe, serve direto — SEM revalidar a assinatura nem recorrer aos
+  // meses anteriores. Só reprocessa quando o período está ABERTO (ou se ainda não há foto). Para
+  // forçar a releitura de um mês fechado, use o botão "Forçar releitura".
+  if (_depth === 0) {
+    try {
+      const { data: comp } = await supabase.from('competencias').select('status').eq('id', compId).maybeSingle()
+      if (comp && String(comp.status || '').toLowerCase() === 'fechado') {
+        const foto = await lerFoto(empresaId, compId, contaCod)
+        if (foto && Array.isArray(foto.itens)) return foto.itens
+      }
+    } catch { /* se a checagem falhar, segue pelo caminho normal (recomputa) */ }
+  }
   const ctx = _ctx || await carregarCtxConfig(empresaId)
   const r = await aberturaComFoto(empresaId, compId, contaCod, classifRaw, contaNome, _depth, ctx)
   return r.itens
