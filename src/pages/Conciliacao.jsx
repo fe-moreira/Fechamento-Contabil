@@ -3788,7 +3788,7 @@ function Detalhe({ conta, tipoCta, entidadeConf = null, reg, compId, empresaId, 
                   const contras = contraDe(l)
                   return (
                     <tr key={i} onClick={() => abrirLinha(l)}
-                      style={{ borderTop: `1px solid ${theme.border}`, borderLeft: it.parcel ? '3px solid rgba(74,124,255,0.55)' : undefined, borderBottom: it.fimParcel ? '2px solid rgba(74,124,255,0.55)' : undefined, cursor: 'pointer', opacity: (l.acerto || tratado) ? 0.7 : 1, background: (l.acerto || tratado) ? 'rgba(48,164,108,0.08)' : semNF ? 'rgba(229,72,77,0.08)' : it.parcel ? 'rgba(74,124,255,0.03)' : 'transparent' }}
+                      style={{ borderTop: `1px solid ${theme.border}`, borderLeft: it.parcel ? '3px solid rgba(74,124,255,0.55)' : undefined, borderBottom: it.fimParcel ? '2px solid rgba(74,124,255,0.55)' : undefined, cursor: 'pointer', opacity: (l.acerto || tratado) ? 0.7 : 1, background: semNF ? 'rgba(229,72,77,0.08)' : it.parcel ? 'rgba(74,124,255,0.03)' : 'transparent' }}
                       title={l.acerto ? `${tagAcertoLanc(l).titulo} — clique para ver ou desfazer` : herdada ? 'Veio validado do mês anterior — clique para corrigir se precisar' : jaTratada(l) ? 'Já conferido — clique para ver ou desfazer' : semNF ? 'Baixa com NF que não confere com o título — justifique ou corrija' : 'Justificar ou corrigir este lançamento'}>
                       <td style={{ ...td, textAlign: 'center' }} onClick={e => e.stopPropagation()}>
                         <input type="checkbox" title="Selecionar para baixar (baixa manual)" checked={selLin.has(selKeyU(l))} onChange={() => toggleSelLin(l)} style={{ cursor: 'pointer', width: 15, height: 15 }} />
@@ -4235,7 +4235,7 @@ function ListaLancamentos({ lanc, carregando, contraDe, planoMap, tratados = new
             ) : filtr.map((l, i) => {
               const contras = contraDe(l)
               return (
-                <tr key={i} onClick={() => onTratar(l)} style={{ borderTop: `1px solid ${theme.border}`, cursor: 'pointer', opacity: (l.acerto || tratados.has(l.id)) ? 0.7 : 1, background: (l.acerto || tratados.has(l.id)) ? 'rgba(48,164,108,0.08)' : 'transparent' }} title={l.acerto ? `${tagAcertoLanc(l).titulo} — clique para ver ou desfazer` : tratados.has(l.id) ? 'Já tratado — clique para ver ou desfazer' : 'Justificar ou corrigir este lançamento'}>
+                <tr key={i} onClick={() => onTratar(l)} style={{ borderTop: `1px solid ${theme.border}`, cursor: 'pointer', opacity: (l.acerto || tratados.has(l.id)) ? 0.7 : 1, background: 'transparent' }} title={l.acerto ? `${tagAcertoLanc(l).titulo} — clique para ver ou desfazer` : tratados.has(l.id) ? 'Já tratado — clique para ver ou desfazer' : 'Justificar ou corrigir este lançamento'}>
                   {selectable && (
                     <td style={{ ...td, textAlign: 'center' }} onClick={e => e.stopPropagation()}>
                       <input type="checkbox" title="Selecionar para baixar (baixa manual)" checked={selLin?.has(selKey(l))} onChange={() => onToggleSel(l)} style={{ cursor: 'pointer', width: 15, height: 15 }} />
