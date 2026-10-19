@@ -1487,15 +1487,28 @@ function Detalhe({ conta, tipoCta, entidadeConf = null, reg, compId, empresaId, 
       }
       return melhor ? melhor.nome : null
     }
+    // APRENDIZADO POR COMPETÊNCIA (mesmo critério do carregarNomes): o que vale nesta tela é o
+    // snapshot do MÊS ATUAL (porComp[comp]) — com herança do mês anterior — e NÃO o legado do topo.
+    // BUG CORRIGIDO: antes esta tela lia cn.dados.* (topo/legado congelado), mas as correções manuais
+    // (nome, NF, apelidos, confiáveis, acerto) são gravadas em porComp[comp] pelo salvarNomes. Logo,
+    // tudo que você corrigia salvava mas NÃO aparecia aqui. Agora lê do snapshot certo da competência.
+    const _d = (cn?.dados && typeof cn.dados === 'object') ? cn.dados : {}
+    const _comp = competencia || '00/0000'
+    const _vnum = v => { const m = /^(\d{1,2})\/(\d{4})$/.exec(String(v || '')); return m ? Number(m[2]) * 100 + Number(m[1]) : 0 }
+    const _porComp = (_d.porComp && typeof _d.porComp === 'object') ? _d.porComp : {}
+    const { porComp: _omitPC, ..._legacyTopo } = _d
+    const _temApr = o => o && typeof o === 'object' && ('aliases' in o || 'confiaveis' in o || 'aberturaAjustes' in o || 'acertoNomes' in o || 'parcelamentos' in o || 'unificadosConfirmados' in o || 'isolados' in o)
+    let _learn = _temApr(_porComp[_comp]) ? _porComp[_comp] : null
+    if (!_learn) { const _p = Object.keys(_porComp).filter(k => _vnum(k) < _vnum(_comp) && _temApr(_porComp[k])).sort((a, b) => _vnum(b) - _vnum(a))[0]; _learn = _p ? _porComp[_p] : _legacyTopo }
     // APELIDOS: renomeia o nome lido pelo nome correto (vale p/ saldo inicial e razão).
-    const aliasMap = (cn?.dados?.aliases && typeof cn.dados.aliases === 'object') ? cn.dados.aliases : {}
+    const aliasMap = (_learn?.aliases && typeof _learn.aliases === 'object') ? _learn.aliases : {}
     // VÍNCULO MANUAL: apelidos que o usuário forçou (botão "Vincular") — aplicados SEM a trava
     // do "mesmo cliente", porque foi uma ordem explícita de juntar dois nomes num grupo só.
-    const aliasForcadoMap = (cn?.dados?.aliasesForcados && typeof cn.dados.aliasesForcados === 'object') ? cn.dados.aliasesForcados : {}
+    const aliasForcadoMap = (_learn?.aliasesForcados && typeof _learn.aliasesForcados === 'object') ? _learn.aliasesForcados : {}
     // Nomes CONFIÁVEIS do cliente → quem bate sobe para conf 'alta' (não pede revisão).
-    const confSet = new Set(((cn?.dados?.confiaveis) || []).map(chaveNome))
+    const confSet = new Set(((_learn?.confiaveis) || []).map(chaveNome))
     // Ajustes por item de saldo inicial (NF/nome/histórico) — não têm razao_id.
-    const aberAjMap = (cn?.dados?.aberturaAjustes && typeof cn.dados.aberturaAjustes === 'object') ? cn.dados.aberturaAjustes : {}
+    const aberAjMap = (_learn?.aberturaAjustes && typeof _learn.aberturaAjustes === 'object') ? _learn.aberturaAjustes : {}
     // RESGATE do nome manual do saldo anterior quando o _srcRaz mudou (ex.: o razão do mês ANTERIOR
     // foi reimportado → os ids da origem mudaram → a chave POR LINHA `…·srcRaz` não casa mais e o
     // nome que o usuário escreveu ficava órfão, voltando para "(não identificado)"). Indexa também
@@ -1536,7 +1549,7 @@ function Detalhe({ conta, tipoCta, entidadeConf = null, reg, compId, empresaId, 
       }
     }
     // Nome de fornecedor dado a um lançamento de acerto (por uuid) — "Corrigir fornecedor".
-    const acNomesMap = (cn?.dados?.acertoNomes && typeof cn.dados.acertoNomes === 'object') ? cn.dados.acertoNomes : {}
+    const acNomesMap = (_learn?.acertoNomes && typeof _learn.acertoNomes === 'object') ? _learn.acertoNomes : {}
     const bump = l => {
       if (!l?.leitura) return l
       let leitura = l.leitura, hist = l.historico
