@@ -188,6 +188,31 @@ async function religarConciliacao(cid, oldRaz) {
   return { religados: aReligar.length, perdidos }
 }
 
+// Ao SUBSTITUIR o razão: no Comparativo de Movimento, MANTÉM a justificativa das contas cujo valor
+// NÃO mudou e REABRE (apaga a justificativa → a célula volta a vermelho) só as contas cujo movimento
+// mudou — ou seja, "só reabre se tiver lançamento novo". oldRaz/novoRows = linhas antes/depois.
+const MESES_CMP = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
+async function reabrirComparativoAlterado(cid, oldRaz, novoRows) {
+  // Movimento por conta (centavos de débito−crédito) antes e depois.
+  const soma = rows => { const m = new Map(); for (const r of (rows || [])) { const c = String(r.conta); m.set(c, (m.get(c) || 0) + Math.round(((Number(r.debito) || 0) - (Number(r.credito) || 0)) * 100)) } return m }
+  const antes = soma(oldRaz), depois = soma(novoRows)
+  const contas = new Set([...antes.keys(), ...depois.keys()])
+  const alteradas = [...contas].filter(c => (antes.get(c) || 0) !== (depois.get(c) || 0))
+  if (!alteradas.length) return 0
+  const { data: comp } = await supabase.from('competencias').select('ano, mes').eq('id', cid).maybeSingle()
+  if (!comp) return 0
+  const periodo = `${MESES_CMP[(comp.mes || 1) - 1]}/${comp.ano}`
+  // Apaga a justificativa SÓ dessas contas, SÓ deste mês (item = `${conta} · ${Mes}/${ano}`).
+  let n = 0
+  for (let i = 0; i < alteradas.length; i += 50) {
+    const lote = alteradas.slice(i, i + 50).map(c => `${c} · ${periodo}`)
+    const { count } = await supabase.from('auditoria').delete({ count: 'exact' })
+      .eq('competencia_id', cid).eq('modulo', 'Comparativo').in('item', lote)
+    n += count || 0
+  }
+  return n
+}
+
 export default function ImportarRazao() {
   const { empresas, empresaId, empresaNome, competencia, getCompetenciaId, recalcularPendencias } = useAppData()
   const cliente = empresas?.find(e => e.id === empresaId)
@@ -464,12 +489,17 @@ export default function ImportarRazao() {
         catch { oldRaz = null }
       }
       const { balancete, todos } = await rebuildRazao(cid, novoArquivos, { [id]: pack.registros })
-      let religados = 0
+      let religados = 0, reabertasCmp = 0
       if (modo === 'substituir' && oldRaz) {
         try { const r = await religarConciliacao(cid, oldRaz); religados = r.religados }
         catch (e) { console.error('religar conciliação:', e) }
+        // Comparativo: mantém a justificativa das contas de valor igual; reabre só as que mudaram.
+        try { reabertasCmp = await reabrirComparativoAlterado(cid, oldRaz, todos) }
+        catch (e) { console.error('reabrir comparativo:', e) }
       }
-      setMsg(religados ? `Razão substituído. ${religados} conciliação(ões) preservada(s) (baixas, correções e ajustes re-amarrados às linhas iguais).` : '')
+      setMsg(modo === 'substituir'
+        ? `Razão substituído. ${religados} conciliação(ões) preservada(s); ${reabertasCmp} justificativa(s) do Comparativo reaberta(s) por mudança de valor (as de valor igual foram mantidas).`
+        : '')
       setArquivos(novoArquivos)
       const totDeb = todos.reduce((s, r) => s + r.debito, 0)
       const totCred = todos.reduce((s, r) => s + r.credito, 0)
