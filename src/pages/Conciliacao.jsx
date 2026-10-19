@@ -1582,6 +1582,14 @@ function Detalhe({ conta, tipoCta, entidadeConf = null, reg, compId, empresaId, 
           if (ov.historico) hist = ov.historico
           if (entOk) manualAbert = true
         }
+        // Saldo anterior cuja ORIGEM é um ACERTO (juros/reclassificação do mês passado — _srcRaz
+        // "ac_<uuid>"): a correção de NOME pode ter sido salva em acertoNomes[uuid] (contexto de
+        // acerto). Aqui, como saldo anterior, aplica esse nome também — senão a correção manual
+        // some. (Só se ainda não veio um nome manual do aberturaAj.)
+        if (!manualAbert && String(l._srcRaz || '').startsWith('ac_')) {
+          const nomeAc = acNomesMap[String(l._srcRaz).slice(3)]
+          if (nomeAc && !ehNomeGenerico(nomeAc)) { leitura = { ...leitura, entidade: nomeAc, ident: true }; manualAbert = true }
+        }
       } else if (!l.acerto && !leitura.ajustado) {
         // RAZÃO (não saldo anterior, sem ajuste de leitura próprio): HERDA a correção manual que
         // você fez por conta·data·valor no contexto de SALDO ANTERIOR (mês seguinte). Assim o que
