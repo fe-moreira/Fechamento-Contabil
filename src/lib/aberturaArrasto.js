@@ -45,7 +45,17 @@ function lerHistorico(h) {
   const mRec = corpo.match(/\b(?:RECEBIMENTO|RECEBTO|RCTO|PAGAMENTO|PAGTO)\.?\s+(?:A\s+|DE\s+|AO\s+)?(.+)$/i)
   // Fiscal integrado (SAÍDAS/serviços): cliente vem DEPOIS do "ACUM. N —" (qualquer traço).
   const mAcum = corpo.match(/\bACUM(?:ULADOR)?\.?\s*\d+[\s|\-–—−]+(.+)$/i)
-  if (mRec) {
+  // "VALOR REF. <TIPO DE CONTA> NF <num> <CLIENTE>": quando o texto ANTES da NF é só o TIPO DE
+  // CONTA (adiantamento de cliente/fornecedor, duplicatas, clientes/fornecedores), o CLIENTE real
+  // vem DEPOIS do número da nota. Sem isto, "ADIANTAMENTO DE CLIENTES" (o tipo) virava o nome e
+  // escondia o cliente (ex.: "… ADIANTAMENTO DE CLIENTES NF 003477 TOPLIFE TAQUARAL" → TOPLIFE …).
+  const corpoSoTipoConta = /^(?:VALOR\s+REF(?:ERENTE)?\.?\s*(?:A\s+)?)?(?:ADIANTAMENTOS?\s+(?:DE\s+|A\s+|AO\s+|AOS\s+)?(?:FORNECEDOR(?:ES)?|CLIENTE(?:S)?)|DUPLICATAS?(?:\s+A\s+(?:PAGAR|RECEBER))?|CLIENTE(?:S)?|FORNECEDOR(?:ES)?)\s*$/i.test(corpo)
+  const mPosNf = s.match(/\bNF\.?\s*(?:N[ºo°.]*\s*)?\d{1,9}[\s.\-–—]+(.+)$/i)
+  const posNfNome = mPosNf ? mPosNf[1].trim() : ''
+  const posNfOk = posNfNome.replace(/[^A-Za-zÀ-ÿ]/g, '').length >= 3 && !/^(?:RECLASSIFICA|ESTORNO|JUROS|MULTA|DESCONTO|TRANSFER|APLICA|RESGATE|BAIXA|ENCERRAMENTO|APURA)/i.test(posNfNome)
+  if (corpoSoTipoConta && posNfOk) {
+    entidade = tiraSufixo(posNfNome); ident = true
+  } else if (mRec) {
     entidade = tiraSufixo(mRec[1].trim()); ident = true
   } else if (mAcum && mAcum[1].trim().length >= 3) {
     entidade = tiraSufixo(mAcum[1].trim()); ident = true

@@ -226,7 +226,15 @@ function lerHistorico(h) {
   // qualquer traço (hífen, en-dash –, em-dash —, sinal −). Sem isso o prefixo comum ("SERV.
   // PREST. PROPAGANDA – CUMULATIVO ACUM. 27 –") ficava no nome e fundia clientes diferentes.
   const mAcum = corpo.match(/\bACUM(?:ULADOR)?\.?\s*\d+[\s|\-–—−]+(.+)$/i)
-  if (mRec) {
+  // "VALOR REF. <TIPO DE CONTA> NF <num> <CLIENTE>": o cliente real vem DEPOIS do número da nota
+  // quando o texto antes da NF é só o tipo de conta (adiantamento de cliente/fornecedor etc.).
+  const corpoSoTipoConta = /^(?:VALOR\s+REF(?:ERENTE)?\.?\s*(?:A\s+)?)?(?:ADIANTAMENTOS?\s+(?:DE\s+|A\s+|AO\s+|AOS\s+)?(?:FORNECEDOR(?:ES)?|CLIENTE(?:S)?)|DUPLICATAS?(?:\s+A\s+(?:PAGAR|RECEBER))?|CLIENTE(?:S)?|FORNECEDOR(?:ES)?)\s*$/i.test(corpo)
+  const mPosNf = s.match(/\bNF\.?\s*(?:N[ºo°.]*\s*)?\d{1,9}[\s.\-–—]+(.+)$/i)
+  const posNfNome = mPosNf ? mPosNf[1].trim() : ''
+  const posNfOk = posNfNome.replace(/[^A-Za-zÀ-ÿ]/g, '').length >= 3 && !/^(?:RECLASSIFICA|ESTORNO|JUROS|MULTA|DESCONTO|TRANSFER|APLICA|RESGATE|BAIXA|ENCERRAMENTO|APURA)/i.test(posNfNome)
+  if (corpoSoTipoConta && posNfOk) {
+    entidade = tiraSufixo(limparNomeEntidade(posNfNome)); ident = true
+  } else if (mRec) {
     // "VALOR REF. RECEBIMENTO <NOME> NF ..." (tira também o prefixo "ADIANTAMENTO DE FORNECEDOR/CLIENTE").
     entidade = tiraSufixo(limparNomeEntidade(mRec[1].trim())); ident = true
   } else if (mAcum && mAcum[1].trim().length >= 3) {
@@ -1498,6 +1506,26 @@ function Detalhe({ conta, tipoCta, entidadeConf = null, reg, compId, empresaId, 
       const entAtual = atual && typeof atual === 'object' ? String(atual.entidade || '').trim() : ''
       if (!atual || (entNovo && !entAtual) || (entNovo && ehNomeGenerico(entAtual) && !ehNomeGenerico(entNovo))) aberAjBaseMap[base] = v
     }
+    // RESGATE mais forte: o nomeOrig na chave vem da LEITURA do histórico, que pode MUDAR (ex.: o
+    // mesmo título ora lido "ADIANTAMENTO DE CLIENTES", ora "ADIANTAMENTO CLIENTES TOPLIFE …") — aí
+    // nem a chave-base casa e a correção manual some. Indexa também por conta·data·valor (SEM o nome),
+    // que é estável. Só aplica quando NÃO há conflito (duas entidades não-genéricas diferentes pro
+    // mesmo valor); nesse caso deixa o fluxo normal decidir. Regra de ouro: o manual prevalece.
+    const aberAjByValor = {}, valorConflito = new Set()
+    for (const [k, v] of Object.entries(aberAjMap)) {
+      const parts = String(k).split('·')
+      if (parts.length < 4) continue // legacy sem data não entra (ambíguo demais)
+      const vk = parts.slice(0, 3).join('·') // conta·data·valCents
+      const ent = v && typeof v === 'object' ? String(v.entidade || '').trim() : ''
+      if (!ent) continue
+      const cur = aberAjByValor[vk]
+      if (!cur) { aberAjByValor[vk] = v; continue }
+      const curEnt = String(cur.entidade || '').trim()
+      if (chaveNome(curEnt) === chaveNome(ent)) continue
+      if (ehNomeGenerico(curEnt) && !ehNomeGenerico(ent)) aberAjByValor[vk] = v
+      else if (!ehNomeGenerico(curEnt) && ehNomeGenerico(ent)) { /* mantém o não-genérico */ }
+      else valorConflito.add(vk) // dois não-genéricos diferentes → ambíguo, não aplica por valor
+    }
     // Nome de fornecedor dado a um lançamento de acerto (por uuid) — "Corrigir fornecedor".
     const acNomesMap = (cn?.dados?.acertoNomes && typeof cn.dados.acertoNomes === 'object') ? cn.dados.acertoNomes : {}
     const bump = l => {
@@ -1519,7 +1547,10 @@ function Detalhe({ conta, tipoCta, entidadeConf = null, reg, compId, empresaId, 
         // POR LINHA (com _srcRaz) primeiro — cada título tem sua própria NF; depois cai nas chaves
         // antigas (compat com ajustes salvos antes do _srcRaz).
         const kPorLinha = l._srcRaz ? `${kNovo}·${l._srcRaz}` : null
-        const ov = (kPorLinha && aberAjMap[kPorLinha]) || aberAjMap[kNovo] || aberAjBaseMap[kNovo] || ((abUndatedCount[kAntigo] || 0) <= 1 ? aberAjMap[kAntigo] : undefined)
+        const kValor = `${conta.conta}·${dtAb}·${valCents}` // conta·data·valor (sem o nome lido)
+        const ov = (kPorLinha && aberAjMap[kPorLinha]) || aberAjMap[kNovo] || aberAjBaseMap[kNovo]
+          || (dtAb && !valorConflito.has(kValor) ? aberAjByValor[kValor] : undefined)
+          || ((abUndatedCount[kAntigo] || 0) <= 1 ? aberAjMap[kAntigo] : undefined)
         if (ov) {
           // IGNORA override de nome GENÉRICO (ex.: "VALOR REF. TRANSF. CARTÃO", "Saldo anterior ·
           // X", "Reclassificação ·"): esses forçavam o título para um rótulo que embolava vários
