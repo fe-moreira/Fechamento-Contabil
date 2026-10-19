@@ -1484,6 +1484,20 @@ function Detalhe({ conta, tipoCta, entidadeConf = null, reg, compId, empresaId, 
     const confSet = new Set(((cn?.dados?.confiaveis) || []).map(chaveNome))
     // Ajustes por item de saldo inicial (NF/nome/histórico) — não têm razao_id.
     const aberAjMap = (cn?.dados?.aberturaAjustes && typeof cn.dados.aberturaAjustes === 'object') ? cn.dados.aberturaAjustes : {}
+    // RESGATE do nome manual do saldo anterior quando o _srcRaz mudou (ex.: o razão do mês ANTERIOR
+    // foi reimportado → os ids da origem mudaram → a chave POR LINHA `…·srcRaz` não casa mais e o
+    // nome que o usuário escreveu ficava órfão, voltando para "(não identificado)"). Indexa também
+    // pela chave-BASE (conta·data·valor·nomeOrig, SEM o srcRaz): o nome manual sobrevive à troca de
+    // razão. Regra de ouro: o que foi corrigido à mão sempre prevalece. Prefere entidade não-genérica.
+    const aberAjBaseMap = {}
+    for (const [k, v] of Object.entries(aberAjMap)) {
+      const parts = String(k).split('·')
+      const base = parts.length > 4 ? parts.slice(0, 4).join('·') : k
+      const atual = aberAjBaseMap[base]
+      const entNovo = v && typeof v === 'object' ? String(v.entidade || '').trim() : ''
+      const entAtual = atual && typeof atual === 'object' ? String(atual.entidade || '').trim() : ''
+      if (!atual || (entNovo && !entAtual) || (entNovo && ehNomeGenerico(entAtual) && !ehNomeGenerico(entNovo))) aberAjBaseMap[base] = v
+    }
     // Nome de fornecedor dado a um lançamento de acerto (por uuid) — "Corrigir fornecedor".
     const acNomesMap = (cn?.dados?.acertoNomes && typeof cn.dados.acertoNomes === 'object') ? cn.dados.acertoNomes : {}
     const bump = l => {
@@ -1505,7 +1519,7 @@ function Detalhe({ conta, tipoCta, entidadeConf = null, reg, compId, empresaId, 
         // POR LINHA (com _srcRaz) primeiro — cada título tem sua própria NF; depois cai nas chaves
         // antigas (compat com ajustes salvos antes do _srcRaz).
         const kPorLinha = l._srcRaz ? `${kNovo}·${l._srcRaz}` : null
-        const ov = (kPorLinha && aberAjMap[kPorLinha]) || aberAjMap[kNovo] || ((abUndatedCount[kAntigo] || 0) <= 1 ? aberAjMap[kAntigo] : undefined)
+        const ov = (kPorLinha && aberAjMap[kPorLinha]) || aberAjMap[kNovo] || aberAjBaseMap[kNovo] || ((abUndatedCount[kAntigo] || 0) <= 1 ? aberAjMap[kAntigo] : undefined)
         if (ov) {
           // IGNORA override de nome GENÉRICO (ex.: "VALOR REF. TRANSF. CARTÃO", "Saldo anterior ·
           // X", "Reclassificação ·"): esses forçavam o título para um rótulo que embolava vários
