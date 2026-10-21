@@ -202,7 +202,54 @@ export async function gerarLancamento(l) {
     historico: l.historico || null,
     origem: l.origem || 'outras',
     documento: l.documento || null,
+    rateio: Array.isArray(l.rateio) && l.rateio.length ? l.rateio : null, // centro(s) de custo
     usuario: l.usuario || null,
   })
   if (error) throw error
+}
+
+// Importa VÁRIOS lançamentos de uma vez (planilha), cada um como uma LINHA individual (dá para
+// excluir um por um depois). Marca origem='importado'. `itens` já vem validado/normalizado da tela.
+export async function importarLancamentos(clienteId, competencia, itens, usuario) {
+  const [m, a] = String(competencia || '').split('/').map(Number)
+  if (!m || !a) throw new Error('Competência inválida.')
+  const { data: comp } = await supabase.from('competencias').select('id, status')
+    .eq('cliente_id', clienteId).eq('ano', a).eq('mes', m).maybeSingle()
+  if (!comp) throw new Error('Abra o fechamento desta competência antes de importar.')
+  if (String(comp.status || '').toLowerCase() === 'fechado') throw new Error('Competência FECHADA — reabra o fechamento para importar.')
+  const linhas = (itens || []).map(l => ({
+    competencia_id: comp.id,
+    data: l.data || null,
+    conta_debito: l.conta_debito || null,
+    conta_credito: l.conta_credito || null,
+    valor: Number(l.valor) || 0,
+    historico: l.historico || null,
+    origem: 'importado',
+    documento: l.documento || null,
+    rateio: Array.isArray(l.rateio) && l.rateio.length ? l.rateio : null,
+    usuario: usuario || null,
+  }))
+  let n = 0
+  for (let i = 0; i < linhas.length; i += 200) {
+    const { error } = await supabase.from('lancamentos').insert(linhas.slice(i, i + 200))
+    if (error) throw error
+    n += linhas.slice(i, i + 200).length
+  }
+  return n
+}
+
+// Exclui TODOS os lançamentos importados (origem='importado') desta competência — útil para
+// refazer a importação sem apagar um por um. NÃO toca nos lançamentos de outras origens.
+export async function excluirImportados(clienteId, competencia) {
+  const [m, a] = String(competencia || '').split('/').map(Number)
+  if (!m || !a) return 0
+  const { data: comp } = await supabase.from('competencias').select('id')
+    .eq('cliente_id', clienteId).eq('ano', a).eq('mes', m).maybeSingle()
+  if (!comp) return 0
+  const { data } = await supabase.from('lancamentos').select('id').eq('competencia_id', comp.id).eq('origem', 'importado')
+  const ids = (data || []).map(l => l.id)
+  if (!ids.length) return 0
+  const { error } = await supabase.from('lancamentos').delete().in('id', ids)
+  if (error) throw error
+  return ids.length
 }

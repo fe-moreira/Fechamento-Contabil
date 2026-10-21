@@ -5,7 +5,8 @@ import InfoTela from '../components/InfoTela'
 import { useAppData } from '../lib/appData'
 import { useAuth } from '../components/AuthProvider'
 import { apurarVariacoes } from '../lib/variacoes'
-import { listar, inserir, remover, atualizar, gerarLancamento, enviarSaldoInicialContrato, anexarArquivoContrato, urlArquivoContrato, removerArquivoContrato, competenciaInicioCliente, apropriacoesDoMes, listarLancamentos, excluirLancamento, estornarApropriacao } from '../lib/outras'
+import { listar, inserir, remover, atualizar, gerarLancamento, enviarSaldoInicialContrato, anexarArquivoContrato, urlArquivoContrato, removerArquivoContrato, competenciaInicioCliente, apropriacoesDoMes, listarLancamentos, excluirLancamento, estornarApropriacao, importarLancamentos, excluirImportados } from '../lib/outras'
+import { carregarResolverCC, resolverCC, lancamentoExigeCC } from '../lib/centroCusto'
 import { cronogramaContrato, parseISO, r2 } from '../lib/apropriacao'
 import { gerarExcelTimbrado } from '../lib/excel'
 import { abrePdfTimbrado } from '../lib/pdf'
@@ -1449,9 +1450,80 @@ function PaneReceitasDiferidas({ clienteId, user, competencia, abrirGerar }) {
 
 // ================= OUTROS LANÇAMENTOS =================
 // Rótulo amigável da origem do lançamento (de onde ele foi gerado).
-const ORIGEM_LABEL = { manual: 'Avulso', outras: 'Avulso', correcao: 'Correção', sugestao: 'Sugestão', seguro: 'Seguro', despesa: 'Despesa a apropriar', receita_diferida: 'Receita diferida', importacao: 'Importação', emprestimo: 'Empréstimo', parcelamento: 'Parcelamento', equivalencia: 'Equiv. patrimonial', perdcomp: 'PER/DCOMP', jcp: 'JSCP', lalur: 'LALUR' }
+const ORIGEM_LABEL = { manual: 'Avulso', outras: 'Avulso', correcao: 'Correção', sugestao: 'Sugestão', importado: 'Importado', seguro: 'Seguro', despesa: 'Despesa a apropriar', receita_diferida: 'Receita diferida', importacao: 'Importação', emprestimo: 'Empréstimo', parcelamento: 'Parcelamento', equivalencia: 'Equiv. patrimonial', perdcomp: 'PER/DCOMP', jcp: 'JSCP', lalur: 'LALUR' }
 
-function PaneOutros({ clienteId, competencia, abrirGerar, versao, planoMap = {} }) {
+// Colunas do MODELO de importação (lidas por NOME do cabeçalho — a ordem pode variar).
+const COLS_IMPORT = [
+  { key: 'data', re: /^data/, label: 'Data' },
+  { key: 'conta_debito', re: /(conta.*d[eé]bito|^d[eé]bito|^deb)/, label: 'Conta Débito' },
+  { key: 'conta_credito', re: /(conta.*cr[eé]dito|^cr[eé]dito|^cred)/, label: 'Conta Crédito' },
+  { key: 'valor', re: /valor/, label: 'Valor' },
+  { key: 'historico', re: /(hist[oó]rico|complemento)/, label: 'Histórico' },
+  { key: 'documento', re: /(documento|^nf\b|nota|doc)/, label: 'Documento' },
+  { key: 'cc', re: /(centro.*custo|^cc\b|^c\.c)/, label: 'Centro de Custo' },
+]
+// Lê a célula de DATA (Date do Excel, serial, "dd/mm/aaaa" ou "aaaa-mm-dd") → ISO "aaaa-mm-dd".
+function parseDataCell(v) {
+  if (v instanceof Date && !isNaN(v)) { const z = n => String(n).padStart(2, '0'); return `${v.getFullYear()}-${z(v.getMonth() + 1)}-${z(v.getDate())}` }
+  const s = String(v ?? '').trim()
+  let m = /^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2,4})$/.exec(s)
+  if (m) { const a = m[3].length === 2 ? '20' + m[3] : m[3]; return `${a}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}` }
+  m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s)
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`
+  return ''
+}
+// Lê a planilha de lançamentos: acha a LINHA de cabeçalho (a que tem Débito/Crédito/Valor) e
+// devolve as linhas abaixo já mapeadas por coluna (valores crus, como texto).
+async function lerPlanilhaLancamentos(file) {
+  const XLSX = await import('xlsx')
+  const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true })
+  const ws = wb.Sheets[wb.SheetNames[0]]
+  const arr = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
+  const norm = x => String(x ?? '').trim().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+  // Linha de cabeçalho = a primeira que tem "valor" e (débito ou crédito).
+  let hi = -1
+  for (let i = 0; i < Math.min(arr.length, 30); i++) {
+    const cells = (arr[i] || []).map(norm)
+    if (cells.some(c => /valor/.test(c)) && cells.some(c => /d[eé]bito|^deb/.test(c) || /cr[eé]dito|^cred/.test(c))) { hi = i; break }
+  }
+  if (hi < 0) throw new Error('Não achei o cabeçalho. Use o MODELO (botão "Baixar modelo") com as colunas Data, Conta Débito, Conta Crédito, Valor, Histórico.')
+  const header = (arr[hi] || []).map(norm)
+  const colOf = re => header.findIndex(h => re.test(h))
+  const map = {}; for (const c of COLS_IMPORT) map[c.key] = colOf(c.re)
+  const linhas = []
+  for (let i = hi + 1; i < arr.length; i++) {
+    const r = arr[i] || []
+    const get = k => (map[k] >= 0 ? r[map[k]] : '')
+    const vazia = COLS_IMPORT.every(c => String(get(c.key) ?? '').trim() === '')
+    if (vazia) continue
+    linhas.push({
+      data: parseDataCell(get('data')),
+      conta_debito: String(get('conta_debito') ?? '').trim(),
+      conta_credito: String(get('conta_credito') ?? '').trim(),
+      valorRaw: get('valor'),
+      historico: String(get('historico') ?? '').trim(),
+      documento: String(get('documento') ?? '').trim(),
+      cc: String(get('cc') ?? '').trim(),
+    })
+  }
+  return linhas
+}
+// Gera e baixa a planilha-MODELO (cabeçalho + 1 exemplo), limpa, pronta pra preencher.
+async function baixarModeloLancamentos() {
+  const XLSX = await import('xlsx')
+  const hoje = new Date(); const z = n => String(n).padStart(2, '0')
+  const ex = `${z(hoje.getDate())}/${z(hoje.getMonth() + 1)}/${hoje.getFullYear()}`
+  const aoa = [
+    COLS_IMPORT.map(c => c.label),
+    [ex, '31101', '11201', '1500,00', 'Exemplo — despesa paga em banco', 'NF 123', ''],
+  ]
+  const ws = XLSX.utils.aoa_to_sheet(aoa)
+  ws['!cols'] = [{ wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 12 }, { wch: 40 }, { wch: 14 }, { wch: 16 }]
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Lançamentos')
+  XLSX.writeFile(wb, 'modelo_lancamentos.xlsx')
+}
+
+function PaneOutros({ clienteId, competencia, abrirGerar, versao, planoMap = {}, user }) {
   const [f, on, , setF] = useForm({ data: dataComp(competencia), conta_debito: '', conta_credito: '', valor: '', historico: '' })
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
@@ -1473,6 +1545,67 @@ function PaneOutros({ clienteId, competencia, abrirGerar, versao, planoMap = {} 
     try { await excluirLancamento(l.id); recarregar() } catch (e) { alert(e.message) }
   }
   const nomeConta = c => { if (!c) return '—'; const n = planoMap[String(c)]?.nome; return n ? `${c} · ${n}` : String(c) }
+
+  // ---- IMPORTAR LANÇAMENTOS (Excel) ----
+  const [resolverCCObj, setResolverCCObj] = useState(null)
+  const [prev, setPrev] = useState(null)      // { itens, problemas } da pré-visualização
+  const [impMsg, setImpMsg] = useState('')
+  const [impBusy, setImpBusy] = useState(false)
+  const fileRef = useRef(null)
+  useEffect(() => { if (clienteId) carregarResolverCC(clienteId).then(setResolverCCObj).catch(() => setResolverCCObj(null)) }, [clienteId])
+  const importados = rows.filter(l => l.origem === 'importado')
+  // Valida cada linha lida contra o plano, a competência e o centro de custo.
+  function validar(linhas) {
+    const planoArr = Object.values(planoMap)
+    const usaCC = !!resolverCCObj?.temCadastro
+    const itens = []
+    linhas.forEach((l, i) => {
+      const probs = []
+      const valor = num(l.valorRaw)
+      if (!l.data) probs.push('data inválida/vazia')
+      else if (!dataNaCompetencia(l.data, competencia)) probs.push(`data fora de ${competencia}`)
+      if (!l.conta_debito) probs.push('sem conta débito')
+      else if (!planoMap[l.conta_debito]) probs.push(`débito ${l.conta_debito} fora do plano`)
+      if (!l.conta_credito) probs.push('sem conta crédito')
+      else if (!planoMap[l.conta_credito]) probs.push(`crédito ${l.conta_credito} fora do plano`)
+      const eSint = erroContaSintetica(planoArr, l.conta_debito, l.conta_credito)
+      if (eSint) probs.push('conta sintética (use analítica)')
+      if (!(valor > 0)) probs.push('valor inválido')
+      let rateio = null
+      if (l.cc) {
+        const rc = resolverCC(l.cc, resolverCCObj)
+        if (rc.cod) rateio = [{ cod: rc.cod, valor }]
+        else if (rc.naoCadastrado) probs.push(`centro de custo "${l.cc}" não cadastrado`)
+      } else if (usaCC && lancamentoExigeCC(planoArr, usaCC, l.conta_debito, l.conta_credito)) {
+        probs.push('conta de resultado exige centro de custo')
+      }
+      itens.push({ n: i + 1, data: l.data, conta_debito: l.conta_debito, conta_credito: l.conta_credito, valor, historico: l.historico, documento: l.documento, cc: l.cc, rateio, probs })
+    })
+    return { itens, problemas: itens.filter(x => x.probs.length) }
+  }
+  async function escolherArquivo(e) {
+    const file = e.target.files?.[0]; if (fileRef.current) fileRef.current.value = ''
+    if (!file) return
+    setImpMsg('')
+    try {
+      const linhas = await lerPlanilhaLancamentos(file)
+      if (!linhas.length) { setImpMsg('A planilha não tem linhas de lançamento abaixo do cabeçalho.'); return }
+      setPrev(validar(linhas))
+    } catch (err) { setImpMsg('Erro ao ler a planilha: ' + err.message) }
+  }
+  async function confirmarImport() {
+    if (!prev || prev.problemas.length) return
+    setImpBusy(true)
+    try {
+      const n = await importarLancamentos(clienteId, competencia, prev.itens, user?.email)
+      setPrev(null); setImpMsg(`${n} lançamento(s) importado(s) — já entram no Status → Domínio e na conciliação.`)
+      recarregar(); setTimeout(() => setImpMsg(''), 6000)
+    } catch (err) { setImpMsg('Erro ao importar: ' + err.message) } finally { setImpBusy(false) }
+  }
+  async function limparImportados() {
+    if (!confirm(`Excluir os ${importados.length} lançamento(s) IMPORTADOS desta competência? (Os de outras origens não são tocados.)`)) return
+    try { const n = await excluirImportados(clienteId, competencia); setImpMsg(`${n} lançamento(s) importado(s) excluído(s).`); recarregar(); setTimeout(() => setImpMsg(''), 5000) } catch (e) { alert(e.message) }
+  }
   return (
     <div style={{ display: 'grid', gap: 14 }}>
       <FormCard titulo={<><i className="ti ti-pencil-plus" style={{ color: ACC.outros }} /> Lançamento avulso</>}>
@@ -1487,10 +1620,67 @@ function PaneOutros({ clienteId, competencia, abrirGerar, versao, planoMap = {} 
         <div style={{ marginTop: 14 }}>
           <button className="btn" onClick={() => abrirGerar({ data: f.data, conta_debito: f.conta_debito, conta_credito: f.conta_credito, valor: num(f.valor), historico: f.historico, origem: 'manual', documento: '' }, 'Lançamento avulso')}><i className="ti ti-file-plus" /> Gerar lançamento</button>
         </div>
+        <div style={{ borderTop: `1px solid ${theme.border}`, marginTop: 16, paddingTop: 14 }}>
+          <SecSub>Tem muitos lançamentos? <b>Importe uma planilha</b> (layout parecido com o do Domínio): cada linha vira um lançamento individual, que você pode excluir depois um por um. Baixe o modelo com as colunas certas (inclui <b>Centro de Custo</b> para quem usa).</SecSub>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 6 }}>
+            <button className="btn btn-ghost" style={{ borderColor: theme.accent, color: theme.accent }} onClick={() => baixarModeloLancamentos().catch(e => setImpMsg('Erro ao gerar o modelo: ' + e.message))}><i className="ti ti-file-download" /> Baixar modelo</button>
+            <button className="btn" onClick={() => fileRef.current?.click()}><i className="ti ti-file-spreadsheet" /> Importar Excel</button>
+            <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={escolherArquivo} />
+          </div>
+          {impMsg && <p style={{ fontSize: 12.5, color: /erro/i.test(impMsg) ? theme.red : theme.green, margin: '10px 0 0', whiteSpace: 'pre-wrap' }}>{impMsg}</p>}
+        </div>
       </FormCard>
+
+      {prev && (
+        <div onClick={() => !impBusy && setPrev(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 70 }}>
+          <div onClick={e => e.stopPropagation()} style={{ width: 'min(900px,97vw)', maxHeight: '90vh', overflow: 'auto', background: theme.card, border: `0.5px solid ${theme.cb || theme.border}`, borderRadius: 16, padding: 22 }}>
+            <h2 style={{ fontSize: 17, marginBottom: 4 }}>Pré-visualização da importação</h2>
+            <p style={{ fontSize: 12.5, color: theme.sub, margin: '0 0 12px' }}>
+              {prev.itens.length} lançamento(s) · total {money(prev.itens.reduce((s, x) => s + (Number(x.valor) || 0), 0))}
+              {prev.problemas.length > 0
+                ? <> · <b style={{ color: theme.red }}>{prev.problemas.length} com problema</b> — corrija a planilha e importe de novo.</>
+                : <> · <b style={{ color: theme.green }}>tudo certo</b> para importar em {competencia}.</>}
+            </p>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
+                <thead><tr>{['#', 'Data', 'Débito', 'Crédito', 'Valor', 'Histórico', 'CC', 'Situação'].map((h, i) => <th key={i} style={{ ...th, textAlign: i === 4 ? 'right' : 'left' }}>{h}</th>)}</tr></thead>
+                <tbody>
+                  {prev.itens.map(it => (
+                    <tr key={it.n} style={{ background: it.probs.length ? 'rgba(229,72,77,0.08)' : 'transparent' }}>
+                      <td style={{ ...td, color: theme.sub }}>{it.n}</td>
+                      <td style={{ ...td, whiteSpace: 'nowrap' }}>{brData(it.data) || '—'}</td>
+                      <td style={{ ...td, fontSize: 12 }}>{nomeConta(it.conta_debito)}</td>
+                      <td style={{ ...td, fontSize: 12 }}>{nomeConta(it.conta_credito)}</td>
+                      <td style={{ ...td, textAlign: 'right', whiteSpace: 'nowrap' }}>{money(it.valor)}</td>
+                      <td style={{ ...td, fontSize: 12, color: theme.sub, maxWidth: 240 }}>{it.historico || '—'}</td>
+                      <td style={{ ...td, fontSize: 12, color: theme.sub }}>{it.cc || '—'}</td>
+                      <td style={{ ...td, fontSize: 11.5 }}>{it.probs.length
+                        ? <span style={{ color: theme.red }}>{it.probs.join(' · ')}</span>
+                        : <span style={{ color: theme.green }}><i className="ti ti-check" /> ok</span>}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 16 }}>
+              <button className="btn btn-ghost" disabled={impBusy} onClick={() => setPrev(null)}>Cancelar</button>
+              <button className="btn" disabled={impBusy || prev.problemas.length > 0} title={prev.problemas.length > 0 ? 'Corrija as linhas com problema antes de importar.' : ''} onClick={confirmarImport}>
+                <i className="ti ti-file-import" /> {impBusy ? 'Importando…' : `Importar ${prev.itens.length} lançamento(s)`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <Card>
-        <SecTitle><i className="ti ti-list-details" style={{ color: ACC.outros }} /> Lançamentos gerados nesta competência ({rows.length})</SecTitle>
-        <SecSub>Tudo que foi contabilizado neste fechamento (de todas as abas). Dá para excluir o que estiver errado.</SecSub>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+          <SecTitle><i className="ti ti-list-details" style={{ color: ACC.outros }} /> Lançamentos gerados nesta competência ({rows.length})</SecTitle>
+          {importados.length > 0 && (
+            <button className="btn btn-ghost" style={{ fontSize: 12.5, color: theme.red, borderColor: 'rgba(229,72,77,0.4)' }} onClick={limparImportados}>
+              <i className="ti ti-trash" /> Excluir importados ({importados.length})
+            </button>
+          )}
+        </div>
+        <SecSub>Tudo que foi contabilizado neste fechamento (de todas as abas). Dá para excluir o que estiver errado — um por um, ou os importados de uma vez.</SecSub>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }}>
             <thead><tr>{['Data', 'Débito', 'Crédito', 'Valor', 'Histórico', 'Origem', ''].map((h, i) => <th key={i} style={{ ...th, textAlign: i === 3 ? 'right' : 'left' }}>{h}</th>)}</tr></thead>
