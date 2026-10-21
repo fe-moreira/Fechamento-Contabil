@@ -3064,16 +3064,20 @@ function Detalhe({ conta, tipoCta, entidadeConf = null, reg, compId, empresaId, 
       // ao mandar JUNTAR agora, tira TODOS os nomes selecionados do "isolado" — inclusive o alvo —
       // para o "é o mesmo" de agora ganhar do "não era" de antes.
       if (k) iso.delete(k)
+      // VÍNCULO FORÇADO (regra do usuário: JUNTAR tem que FUNDIR e FICAR fundido): o nome de cada
+      // linha selecionada passa a apontar para o ALVO, mesmo escrito diferente (ex.: "BRW VIAGENS
+      // TURISMO" → "BRW VIAGENS TURISMO LTDA"). Assim os blocos do MESMO fornecedor se unem e NÃO
+      // voltam a separar sozinhos nos próximos meses.
+      if (k && k !== kAlvo) aliasF[k] = alvo
       // Desfaz o desvínculo determinístico desta linha, para ela poder voltar ao grupo.
       sep.delete(sepKey(l))
       // Saldo inicial: fixa o nome no próprio item (garante o mesmo grupo).
       if (l._abertura) { const key = chaveAberturaAj(l); aberAjNovo[key] = { ...(aberAjNovo[key] || {}), entidade: alvo } }
     }
-    for (const l of acertoLinhas) sep.delete(sepKey(l))
-    // Regra do usuário: vincular cria um QUADRANTE NOVO só com o que foi selecionado — não pode
-    // re-fundir com outro bloco parecido (ex.: os HGX que você separou do MAC-LEN não voltam pra
-    // ele). Isola o nome-alvo para o bloco ficar SÓ com as linhas renomeadas (mesmo nome exato).
-    iso.add(kAlvo)
+    for (const l of acertoLinhas) { const k = chaveNome(l.leitura?.entidade || ''); if (k && k !== kAlvo) aliasF[k] = alvo; sep.delete(sepKey(l)) }
+    // O ALVO NÃO fica isolado: ele PODE absorver os outros blocos do mesmo fornecedor (é essa a
+    // intenção de "Juntar"). Tira o alvo do isolado, caso um "Não é o mesmo" antigo o tivesse posto.
+    iso.delete(kAlvo)
     // Acerto (lançamento gerado): guarda o nome por uuid.
     const acMap = { ...acertoNomes }
     for (const l of acertoLinhas) { const rid = String(l.id).replace(/^ac_/, ''); if (rid) acMap[rid] = alvo }
@@ -3123,7 +3127,10 @@ function Detalhe({ conta, tipoCta, entidadeConf = null, reg, compId, empresaId, 
     // fornecedor. Mas quando o rename vem do LÁPIS de um bloco específico (loteForn.nomeAtual setado),
     // é uma correção DELIBERADA daquele bloco — inclusive de um saldo anterior herdado/congelado:
     // a regra é o que o usuário deixou à MÃO, então aplica sempre (não barra). Ver regra do usuário.
-    const deliberadoBloco = !!loteForn?.nomeAtual
+    // DELIBERADO quando o rename vem do LÁPIS de um bloco (nomeAtual) OU da BARRA com linhas que
+    // VOCÊ selecionou de propósito (deliberado). Regra do usuário: se eu marquei e mandei corrigir,
+    // tem que aplicar no que marquei — SEM blindagem. A blindagem fica só para o caso sem seleção.
+    const deliberadoBloco = !!loteForn?.nomeAtual || !!loteForn?.deliberado
     const pulados = deliberadoBloco ? [] : (lines || []).filter(ehOutroForn)
     const aplicar = deliberadoBloco ? (lines || []) : (lines || []).filter(l => !ehOutroForn(l))
     if (!aplicar.length) { setLoteForn(null); setMsg(`Não apliquei "${nm}": as linhas são de OUTRO fornecedor (o histórico identifica outro nome). Se for o caso, corrija pela própria linha.`); return }
@@ -3974,7 +3981,7 @@ function Detalhe({ conta, tipoCta, entidadeConf = null, reg, compId, empresaId, 
           <div style={{ position: 'fixed', left: '50%', bottom: 20, transform: 'translateX(-50%)', zIndex: 60, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '10px 16px', background: theme.card, border: `1px solid ${theme.accent}`, borderRadius: 12, boxShadow: '0 8px 30px rgba(0,0,0,0.4)' }}>
             <span style={{ color: theme.text, fontSize: 13 }}><b>{selLancs.length}</b> selecionado(s) · líquido <b style={{ color: zera ? theme.green : theme.yellow }}>{money(Math.abs(net))} {net < 0 ? 'C' : net > 0 ? 'D' : ''}</b> {zera ? '(zera)' : '(não zera)'}</span>
             {/* ——— Grupo NOME (fornecedor/cliente) ——— */}
-            <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={() => setLoteForn({ lines: selLancs })}>
+            <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={() => setLoteForn({ lines: selLancs, deliberado: true })}>
               <i className="ti ti-user-edit" /> Corrigir {lab}
             </button>
             <button className="btn btn-ghost" disabled={vincaveis.length < 2} title={vincaveis.length < 2 ? `Marque 2+ linhas (com nome) para dizer que são o mesmo ${lab}.` : `É o MESMO ${lab}: deixa os selecionados no mesmo bloco (mesmo nome). NÃO baixa nada — a baixa é só o que zera. O nome oficial aparece para você confirmar. Vale para todos os meses.`} style={{ fontSize: 12.5, color: theme.accent, borderColor: theme.accent, opacity: vincaveis.length >= 2 ? 1 : 0.5, cursor: vincaveis.length >= 2 ? 'pointer' : 'not-allowed' }} onClick={() => vincaveis.length >= 2 && setLoteForn({ lines: vincaveis, vincular: true })}>
@@ -4025,7 +4032,7 @@ function Detalhe({ conta, tipoCta, entidadeConf = null, reg, compId, empresaId, 
             <span style={{ color: theme.text, fontSize: 13 }}><b>{todas.length}</b> baixada(s) marcada(s){selConf.length && selNF.length ? ' (manual + automático)' : ''}</span>
             <button className="btn" style={{ fontSize: 12.5, background: theme.yellow, borderColor: theme.yellow, color: '#1a1a1a' }} title="Reabrir as marcadas — voltam para o em aberto (de qualquer bloco)." onClick={() => { const c = selConf.slice(), n = selNF.slice(); limpar(); if (c.length) reabrirConferidos(c); if (n.length) reabrirBaixaNF(n) }}><i className="ti ti-rotate-2" /> Reabrir ({todas.length})</button>
             <span aria-hidden style={{ width: 1, alignSelf: 'stretch', background: theme.border, margin: '2px 4px' }} />
-            <button className="btn btn-ghost" disabled={!comNome.length} title={comNome.length ? 'Arrumar o nome do fornecedor destas linhas JÁ BAIXADAS — SEM reabrir. Junta blocos separados do mesmo fornecedor.' : 'Marque linhas com nome (título/pagamento/saldo anterior).'} style={{ fontSize: 12.5, opacity: comNome.length ? 1 : 0.5, cursor: comNome.length ? 'pointer' : 'not-allowed' }} onClick={() => { if (!comNome.length) return; const ls = comNome.slice(); limpar(); setLoteForn({ lines: ls }) }}><i className="ti ti-user-edit" /> Corrigir fornecedor</button>
+            <button className="btn btn-ghost" disabled={!comNome.length} title={comNome.length ? 'Arrumar o nome do fornecedor destas linhas JÁ BAIXADAS — SEM reabrir. Junta blocos separados do mesmo fornecedor.' : 'Marque linhas com nome (título/pagamento/saldo anterior).'} style={{ fontSize: 12.5, opacity: comNome.length ? 1 : 0.5, cursor: comNome.length ? 'pointer' : 'not-allowed' }} onClick={() => { if (!comNome.length) return; const ls = comNome.slice(); limpar(); setLoteForn({ lines: ls, deliberado: true }) }}><i className="ti ti-user-edit" /> Corrigir fornecedor</button>
             <button className="btn btn-ghost" disabled={comNome.length < 2} title={comNome.length >= 2 ? 'Juntar estas linhas JÁ BAIXADAS num fornecedor só (mesmo nome) — SEM reabrir. Para unir dois blocos do mesmo fornecedor escritos diferente.' : 'Marque 2+ linhas (com nome) para juntar num fornecedor só.'} style={{ fontSize: 12.5, color: theme.accent, borderColor: theme.accent, opacity: comNome.length >= 2 ? 1 : 0.5, cursor: comNome.length >= 2 ? 'pointer' : 'not-allowed' }} onClick={() => { if (comNome.length < 2) return; const ls = comNome.slice(); limpar(); setLoteForn({ lines: ls, vincular: true }) }}><i className="ti ti-users" /> Juntar {lab}</button>
             <button className="btn btn-ghost" style={{ fontSize: 12.5 }} onClick={limpar}><i className="ti ti-x" /> Limpar</button>
           </div>
