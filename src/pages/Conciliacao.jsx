@@ -88,6 +88,9 @@ const contaComNF = (nome) => {
 const RUIDO = /\b(VENDA|VENDAS|COMPRA|COMPRAS|PAGTO|PAGAMENTO|RECEBIMENTO|RECEBTO|REF|REFERENTE|NOTA|FISCAL|DUPLICATA|DUPL|BOLETO|TITULO|TÍTULO|VLR|VALOR|PARCELA|PARC|CONF|S\/|A|DE|DA|DO|DOS|DAS|E|NO|NA|EM)\b/ig
 // Remove o sufixo societário (S.A, LTDA, EIRELI, ME, EPP) e o que vier depois.
 const tiraSufixo = e => e.replace(/\s+(S[./]?\s?A\.?|LTDA\.?|EIRELI|EPP|ME)\b.*$/i, '').replace(/\s+/g, ' ').trim()
+// Tira o rabicho de REFERÊNCIA/competência e o "CONF." do fim do nome (ex.: "FULANO REF 92026",
+// "FULANO CONF. NF") — senão o MESMO fornecedor mudaria de nome a cada mês e não agruparia.
+const tiraRefConf = e => { const s = String(e || '').replace(/\s+(?:REF|CONF)\.?\b.*$/i, '').trim(); return s.length >= 3 ? s : String(e || '').trim() }
 
 // ---- Unificação de nomes parecidos (mesmo cliente/fornecedor escrito de formas diferentes) ----
 // Palavras genéricas de razão social / rubrica: não distinguem uma empresa de outra, então são
@@ -220,7 +223,7 @@ function lerHistorico(h) {
   // O nome do cliente/fornecedor vem antes do bloco fiscal (CF./NF/NOTA/RPS).
   const corpo = s.split(/\s(?:CF\b|NF\b|NOTA\s+FISCAL|RPS\b)/i)[0].trim()
   let entidade = '', ident = false
-  const mRec = corpo.match(/\b(?:RECEBIMENTO|RECEBTO|PAGAMENTO|PAGTO)\s+(?:A\s+|DE\s+|AO\s+)?(.+)$/i)
+  const mRec = corpo.match(/\b(?:RECEBIMENTO|RECEBTO|RCTO|PAGAMENTO|PAGTO)\.?\s+(?:A\s+|DE\s+|AO\s+)?(.+)$/i)
   // Fiscal integrado (SAÍDAS/serviços): "<natureza> — CUMULATIVO ACUM. N — <CLIENTE> CF. NF. Nº".
   // O CLIENTE vem DEPOIS do "ACUM. N —"; pega o que vem após o ÚLTIMO acumulador. Aceita
   // qualquer traço (hífen, en-dash –, em-dash —, sinal −). Sem isso o prefixo comum ("SERV.
@@ -245,6 +248,18 @@ function lerHistorico(h) {
   } else if (/\s[-–—−]\s/.test(corpo)) {
     // "... - ACUM. N - <NOME> CF. NF. ..." → último segmento entre travessões (qualquer traço)
     entidade = tiraSufixo(limparNomeEntidade(corpo.split(/\s[-–—−]\s/).map(x => x.trim()).filter(Boolean).slice(-1)[0])); ident = true
+  } else if (corpo.includes('|')) {
+    // Domínio separa a natureza do fornecedor/cliente com "|" (ex.: "VALOR REF. ENERGIA ELÉTRICA /
+    // ÁGUA | ELETROPAULO METROPOLITANA …"). O nome é o que vem DEPOIS do último "|".
+    const seg = tiraRefConf(corpo.split('|').map(x => x.trim()).filter(Boolean).pop() || '')
+    if (seg.length >= 3) { entidade = tiraSufixo(limparNomeEntidade(seg)); ident = true }
+  } else if (/^\s*VALOR\s+REF(?:ERENTE)?\b/i.test(corpo)) {
+    // "VALOR REF. <nome>" (sem traço/pipe) — o nome vem logo depois do "VALOR REF(ERENTE)?". Só NÃO
+    // identifica quando o que vem é uma OPERAÇÃO pura (reclassificação, estorno, juros/multa, etc.).
+    const seg = tiraRefConf(corpo.replace(/^\s*VALOR\s+REF(?:ERENTE)?\.?\s*(?:A\s+)?/i, '').trim())
+    if (seg.length >= 3 && !/^(?:RECLASSIFICA|ESTORNO|JUROS|MULTA|DESCONTO|TRANSFER|APLICA|RESGATE|BAIXA|ENCERRAMENTO|APURA)/i.test(seg)) {
+      entidade = tiraSufixo(limparNomeEntidade(seg)); ident = true
+    }
   }
   // Fallback: heurística antiga de remoção de ruído (leitura incerta).
   if (!entidade || entidade.length < 3) {
